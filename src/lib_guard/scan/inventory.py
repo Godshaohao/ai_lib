@@ -17,6 +17,12 @@ KEY_FILE_TYPES = {
     "sdf",
     "spef",
     "db",
+    "ibis",
+    "pwl",
+    "snp",
+    "touchstone",
+    "cpm",
+    "waiver",
     "gds",
     "oas",
 }
@@ -108,9 +114,11 @@ class FileClassifier:
         if name.endswith((".ibs", ".ibis")):
             return "ibis"
         if name.endswith((".s1p", ".s2p", ".s4p", ".s6p", ".s8p", ".snp")):
-            return "touchstone"
+            return "snp"
         if name.endswith(".pwl"):
             return "pwl"
+        if name.endswith(".cpm"):
+            return "cpm"
         if name.endswith((".pkg", ".package", ".json", ".yaml", ".yml")):
             return "package"
         if "waiver" in name:
@@ -129,7 +137,7 @@ class FileClassifier:
     def _domain(self, file_type: str) -> str:
         if file_type in {"lef", "liberty", "db", "verilog", "cdl"}:
             return "implementation"
-        if file_type in {"sdc", "upf", "cpf", "spef"}:
+        if file_type in {"sdc", "upf", "cpf", "spef", "ibis", "pwl", "snp", "touchstone", "cpm"}:
             return "constraint"
         if file_type in {"doc", "package", "waiver"}:
             return "documentation"

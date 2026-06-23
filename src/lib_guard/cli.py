@@ -355,7 +355,7 @@ def add_diff_parser(subparsers: Any) -> None:
 def add_file_diff_parser(subparsers: Any) -> None:
     root = subparsers.add_parser("file-diff", help="Run explicit pairwise file diff")
     sp = root.add_subparsers(dest="file_type", required=True)
-    for file_type in ["lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db"]:
+    for file_type in ["lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db", "waiver", "ibis", "pwl", "snp", "cpm"]:
         p = sp.add_parser(file_type, help=f"Compare two {file_type} files")
         p.add_argument("--old", required=True)
         p.add_argument("--new", required=True)

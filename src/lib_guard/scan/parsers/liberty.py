@@ -19,6 +19,14 @@ def _clean_name(x: str) -> str:
     return x.strip().strip('"').strip("'")
 
 
+def _clean_attr_value(value: str) -> Any:
+    cleaned = _clean_name(value)
+    lowered = cleaned.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    return cleaned
+
+
 def parse_liberty_text(text: str, source: str = '') -> dict[str, Any]:
     result: dict[str, Any] = {'source': source, 'libraries': {}, 'library_order': [], 'stats': {}}
     stack: list[tuple[str, str]] = []
@@ -36,7 +44,7 @@ def parse_liberty_text(text: str, source: str = '') -> dict[str, Any]:
         if m and current_lib:
             name = _clean_name(m.group(1)); current_cell = name
             lib = result['libraries'][current_lib]
-            lib['cells'].setdefault(name, {'name': name, 'line_start': line_no, 'area': None, 'pins': {}, 'pin_order': [], 'pg_pins': {}})
+            lib['cells'].setdefault(name, {'name': name, 'line_start': line_no, 'area': None, 'is_macro': None, 'is_pad': None, 'attrs': {}, 'attr_lines': {}, 'pins': {}, 'pin_order': [], 'pg_pins': {}})
             lib['cell_order'].append(name); stack.append(('cell', name)); continue
         m = _RE_PIN.search(line)
         if m and current_lib and current_cell:
@@ -58,7 +66,7 @@ def parse_liberty_text(text: str, source: str = '') -> dict[str, Any]:
 
         m = _RE_ATTR.match(line)
         if m:
-            key, value = m.group(1), _clean_name(m.group(2))
+            key, value = m.group(1), _clean_attr_value(m.group(2))
             if current_lib and current_cell and current_pin:
                 if key in {'direction', 'capacitance', 'function', 'related_power_pin', 'related_ground_pin'}:
                     result['libraries'][current_lib]['cells'][current_cell]['pins'][current_pin][key] = value
@@ -66,10 +74,15 @@ def parse_liberty_text(text: str, source: str = '') -> dict[str, Any]:
                 if key in {'pg_type', 'voltage_name'}:
                     result['libraries'][current_lib]['cells'][current_cell]['pg_pins'][current_pg_pin][key] = value
             elif current_lib and current_cell:
+                cell = result['libraries'][current_lib]['cells'][current_cell]
                 if key == 'area':
                     try: value = float(value)
-                    except ValueError: pass
-                    result['libraries'][current_lib]['cells'][current_cell]['area'] = value
+                    except (TypeError, ValueError): pass
+                    cell['area'] = value
+                elif key in {'is_macro', 'is_pad', 'cell_footprint'}:
+                    cell[key] = value
+                cell['attrs'][key] = value
+                cell['attr_lines'][key] = line_no
             elif current_lib and current_oc:
                 result['libraries'][current_lib]['operating_conditions'][current_oc][key] = value
 

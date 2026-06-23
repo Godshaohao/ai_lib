@@ -166,7 +166,7 @@ def render_release_html(postcheck: Mapping[str, Any], out_dir: str | Path) -> di
     attention = _release_attention_items(postcheck)
     body = (
         ui.panel(
-            "Release 结论 / Release 文件级审阅台",
+            "Release 结论",
             "检查 manifest、link/copy 结果和 release area 是否一致。",
             ui.metric_grid([
                 ("Expected", s["expected_files"], "manifest 计划文件数", "PASS"),

@@ -19,6 +19,11 @@ TYPE_LABELS = {
     "cpf": "CPF 电源意图",
     "spef": "SPEF 寄生参数",
     "db": "DB 二进制库",
+    "waiver": "Waiver 规则",
+    "ibis": "IBIS SI 模型",
+    "pwl": "PWL 波形模型",
+    "snp": "Touchstone SNP 模型",
+    "cpm": "CPM package/model",
 }
 
 TYPE_FOCUS = {
@@ -31,6 +36,11 @@ TYPE_FOCUS = {
     "cpf": "关注 power domain、power mode、isolation/level shifter/retention rule 变化。",
     "spef": "当前为轻量解析，关注 header 与 D_NET 数量等结构信号。",
     "db": "DB 为二进制文件，当前仅做 metadata/hash 级证据，不做语义解析。",
+    "waiver": "关注 waiver 条目增删、规则名和作用对象变化。",
+    "ibis": "关注 component、pin、model 和 model_type 变化。",
+    "pwl": "关注 PWL 点数、时间/值变化和异常 directive。",
+    "snp": "关注 Touchstone option line、端口数和频点数据行变化。",
+    "cpm": "关注 component、pin、方向和记录数量变化。",
 }
 
 
@@ -74,15 +84,19 @@ def _semantic_diff(old_data: Any, new_data: Any) -> dict[str, Any]:
         if isinstance(old_value, list) and isinstance(new_value, list):
             if old_value == new_value:
                 return
-            old_norm = {json.dumps(item, sort_keys=True, ensure_ascii=False, default=str) for item in old_value}
-            new_norm = {json.dumps(item, sort_keys=True, ensure_ascii=False, default=str) for item in new_value}
+            old_norm = {json.dumps(item, sort_keys=True, ensure_ascii=False, default=str): item for item in old_value}
+            new_norm = {json.dumps(item, sort_keys=True, ensure_ascii=False, default=str): item for item in new_value}
+            added_keys = sorted(set(new_norm) - set(old_norm))
+            removed_keys = sorted(set(old_norm) - set(new_norm))
             changes.append({
                 "path": path,
                 "change_type": "list_changed",
                 "old_count": len(old_value),
                 "new_count": len(new_value),
-                "added_count": len(new_norm - old_norm),
-                "removed_count": len(old_norm - new_norm),
+                "added_count": len(added_keys),
+                "removed_count": len(removed_keys),
+                "added_samples": [new_norm[key] for key in added_keys[:5]],
+                "removed_samples": [old_norm[key] for key in removed_keys[:5]],
             })
             return
         if old_value != new_value:
@@ -114,6 +128,31 @@ def _clip(value: Any, limit: int = 180) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _change_location(item: dict[str, Any]) -> str:
+    bits: list[str] = []
+    for side in ["old", "new"]:
+        value = item.get(side)
+        if isinstance(value, dict):
+            line = value.get("line") or value.get("line_start")
+            raw = value.get("raw")
+            if line:
+                bits.append(f"{side}:L{line}")
+            if raw:
+                bits.append(f"{side}: {str(raw)[:80]}")
+    for sample_key in ["removed_samples", "added_samples"]:
+        samples = item.get(sample_key)
+        if isinstance(samples, list):
+            for sample in samples[:2]:
+                if isinstance(sample, dict):
+                    line = sample.get("line") or sample.get("line_start")
+                    raw = sample.get("raw")
+                    if line:
+                        bits.append(f"{sample_key}:L{line}")
+                    if raw:
+                        bits.append(f"{sample_key}: {str(raw)[:80]}")
+    return " | ".join(bits) if bits else "-"
+
+
 def _domain_counts(changes: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for item in changes:
@@ -139,6 +178,7 @@ def _render_index(out: Path, meta: dict[str, Any], summary: dict[str, Any], sema
             "<tr>"
             f"<td>{ui.badge(item.get('change_type'), item.get('change_type'))}</td>"
             f"<td><code>{ui.esc(item.get('path', '-'))}</code></td>"
+            f"<td><code>{ui.esc(_change_location(item))}</code></td>"
             f"<td><code>{ui.esc(_clip(item.get('old')))}</code></td>"
             f"<td><code>{ui.esc(_clip(item.get('new')))}</code></td>"
             "</tr>"
@@ -177,7 +217,7 @@ def _render_index(out: Path, meta: dict[str, Any], summary: dict[str, Any], sema
             ui.button("raw_text_diff.html", "raw_text_diff.html", "primary", target="_blank"),
             ui.button("pairwise_result.json", "pairwise_result.json", target="_blank"),
         ]))
-        + ui.panel("结构化变化", "默认最多展示前 200 条，完整内容看 semantic_diff.json。", ui.filterable_table("semantic-change-table", ["类型", "路径", "旧值", "新值"], change_rows, "未发现结构化变化", "筛选路径 / 类型"))
+        + ui.panel("字段变化 / 定位", "默认最多展示前 200 条，完整内容看 semantic_diff.json；定位列尽量显示 parser 抽取到的源文件行号和原始命令。", ui.filterable_table("semantic-change-table", ["类型", "路径", "定位", "旧值", "新值"], change_rows, "未发现结构化变化", "筛选路径 / 类型"))
         + ui.collapsible_panel("Parser 限制 / 专家复核提示", "轻量 parser 不替代 EDA tool signoff。", ui.table(["Severity", "Category", "Message"], issue_rows, "未发现 parser 错误；仍需结合原始 diff 人工确认。"), open=False)
     )
     html_text = ui.review_page_shell(

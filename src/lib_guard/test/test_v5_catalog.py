@@ -193,21 +193,22 @@ class V5CatalogTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "PASS")
             html = (out / "html" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("ai_lib Library Catalog", html)
+            self.assertIn("Library Catalog", html)
             self.assertIn("Library Browser", html)
-            self.assertIn("Global Summary / 管理概览", html)
-            self.assertIn("Review Queue / 待审阅队列", html)
-            self.assertIn("Evidence Files / 证据文件", html)
-            self.assertNotIn("首屏先给结论，明细保留可追溯。", html)
+            self.assertIn("Catalog 总览", html)
+            self.assertIn("Review Tasks", html)
+            self.assertIn("Trace Evidence", html)
+            self.assertIn("Catalog 是地图", html)
+            self.assertIn("File Diff 是 Selected Diff", html)
+            self.assertNotIn("file-diff ", html)
             self.assertTrue((out / "html" / "review_state.json").exists())
             self.assertTrue((out / "html" / "review_tasks.json").exists())
-            self.assertTrue((out / "html" / "libraries" / "ucie.html").exists())
-            self.assertTrue((out / "html" / "versions" / "ucie" / "stable_20250608" / "index.html").exists())
-            library_html = (out / "html" / "libraries" / "ucie.html").read_text(encoding="utf-8")
-            self.assertIn("版本结构", library_html)
-            self.assertIn("证据", library_html)
-            self.assertIn("Catalog", library_html)
-            self.assertNotIn("input type='search'", library_html)
+            self.assertTrue((out / "html" / "libraries" / "ip_ucie" / "diff_timeline.html").exists())
+            self.assertTrue((out / "html" / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").exists())
+            library_html = (out / "html" / "libraries" / "ip_ucie" / "diff_timeline.html").read_text(encoding="utf-8")
+            self.assertIn("Diff Timeline", library_html)
+            self.assertIn("Selected Diff", library_html)
+            self.assertNotIn("done / total", library_html)
 
     def test_cli_catalog_scan_render_and_override(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -319,9 +320,9 @@ class V5CatalogTest(unittest.TestCase):
             self.assertTrue(Path(new_version["diff"]["adjacent_diff_dir"]).exists())
             diff_html = Path(new_version["diff"]["adjacent_diff_dir"]).parent / "diff_html" / "index.html"
             self.assertTrue(diff_html.exists())
-            catalog_html = work / "catalog" / "html" / "libraries" / "ucie.html"
+            catalog_html = work / "catalog" / "html" / "libraries" / "ip_ucie" / "diff_timeline.html"
             self.assertTrue(catalog_html.exists())
-            self.assertIn(str(diff_html), catalog_html.read_text(encoding="utf-8"))
+            self.assertIn(str(diff_html).replace("\\", "/"), catalog_html.read_text(encoding="utf-8"))
 
             self.assertEqual(
                 main(
@@ -420,18 +421,17 @@ class V5CatalogTest(unittest.TestCase):
 
             render_catalog_html(catalog_path, out / "html")
             html = (out / "html" / "index.html").read_text(encoding="utf-8")
-            self.assertIn(str(scan_html), html)
+            self.assertIn(str(scan_html).replace("\\", "/"), html)
             self.assertNotIn(str(console_html), html)
-            self.assertIn(str(diff_html), html)
+            self.assertIn(str(diff_html).replace("\\", "/"), html)
             self.assertIn("Release", html)
             review_state = json.loads((out / "html" / "review_state.json").read_text(encoding="utf-8"))
             review_version = review_state["libraries"][0]["versions"][0]
             self.assertEqual(review_version["scan_status"], "SCAN_PASS")
             self.assertEqual(review_version["diff_status"], "DIFF_REVIEW")
             self.assertEqual(review_version["release_status"], "RELEASE_READY")
-            library_html = (out / "html" / "libraries" / "ucie.html").read_text(encoding="utf-8")
-            self.assertIn(str(diff_html), library_html)
-            self.assertIn("Diff", library_html)
+            version_html = (out / "html" / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("Selected Diff", version_html)
 
     def test_policy_path_rules_and_inventory_evidence_reduce_misclassification(self) -> None:
         with tempfile.TemporaryDirectory() as td:

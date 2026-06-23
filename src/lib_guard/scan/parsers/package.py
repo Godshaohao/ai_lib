@@ -29,7 +29,7 @@ def parse_package_file(path: str|Path)->dict[str,Any]:
     data=parse_package_data_file(path)
     return make_parser_envelope(parser_name='PackageParser',parser_version=PACKAGE_PARSER_VERSION,file=str(path),abs_path=str(Path(path).resolve()),file_type='package',data=data)
 class PackageParser(BaseParser):
-    parser_name='PackageParser'; parser_version=PACKAGE_PARSER_VERSION; parse_level='L2'; supported_file_types=['touchstone','pwl','ibis']; supported_extensions=['.s1p','.s2p','.s4p','.s6p','.s8p','.snp','.pwl','.ibs']
+    parser_name='PackageParser'; parser_version=PACKAGE_PARSER_VERSION; parse_level='L2'; supported_file_types=['package']; supported_extensions=['.pkg','.package','.json','.yaml','.yml']
     def parse(self,record,context):
         path=record_abs_path(record,context); return make_parser_envelope(parser_name=self.parser_name,parser_version=self.parser_version,file=str(get_field(record,'path',path)),abs_path=str(path),file_type=str(get_field(record,'file_type','package')),compression=get_field(record,'compression',None),data=parse_package_data_file(path),schema_version=str(get_field(context,'schema_version','1.0')))
 

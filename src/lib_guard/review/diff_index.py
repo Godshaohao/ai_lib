@@ -34,18 +34,37 @@ def _library_match(lib: Mapping[str, Any], library: str | None) -> bool:
     return library in names
 
 
-def _pairwise_counts_from_diff(diff_dir: Any) -> tuple[int, int]:
+def _file_diff_recommendation_from_diff(diff_dir: Any) -> dict[str, int | str]:
     if not diff_dir:
-        return 0, 0
+        return {"comparison_quality": "COMPARE_PENDING", "recommended_total": 0, "result_generated": 0, "needs_run": 0, "candidate_total": 0, "suppressed_total": 0}
     path = Path(str(diff_dir))
+    review = _read_json(path / "comparison_review.json", None)
+    if isinstance(review, dict) and isinstance(review.get("file_diff_recommendation"), dict):
+        rec = review["file_diff_recommendation"]
+        return {
+            "comparison_quality": rec.get("comparison_quality") or "NORMAL",
+            "recommended_total": int(rec.get("recommended_total", 0) or 0),
+            "result_generated": int(rec.get("result_generated", 0) or 0),
+            "needs_run": int(rec.get("needs_run", 0) or 0),
+            "candidate_total": int(rec.get("candidate_total", 0) or 0),
+            "suppressed_total": int(rec.get("suppressed_total", 0) or 0),
+        }
     tasks = _read_json(path / "manual_pairwise_tasks.json", None) or _read_json(path / "pairwise_diff_tasks.json", {"tasks": []}) or {"tasks": []}
-    total = len(tasks.get("tasks", []) or [])
-    done = 0
-    for item in tasks.get("tasks", []) or []:
+    raw_tasks = list(tasks.get("tasks", []) or [])
+    recommended = len(raw_tasks)
+    generated = 0
+    for item in raw_tasks:
         expected = item.get("expected_output") or item.get("out") or item.get("out_dir")
         if expected and (Path(str(expected)) / "pairwise_result.json").exists():
-            done += 1
-    return done, total
+            generated += 1
+    return {
+        "comparison_quality": "NORMAL",
+        "recommended_total": recommended,
+        "result_generated": generated,
+        "needs_run": max(recommended - generated, 0),
+        "candidate_total": recommended,
+        "suppressed_total": 0,
+    }
 
 
 def build_diff_index_from_catalog(catalog: str | Path | Mapping[str, Any], library: str | None = None) -> dict[str, Any]:
@@ -73,7 +92,7 @@ def build_diff_index_from_catalog(catalog: str | Path | Mapping[str, Any], libra
             if not old:
                 continue
             diff_dir = diff.get(dir_key)
-            done, total = _pairwise_counts_from_diff(diff_dir)
+            rec = _file_diff_recommendation_from_diff(diff_dir)
             status = diff.get(status_key) or "COMPARE_PENDING"
             comparisons.append({
                 "comparison_id": f"{mode}__{old}__{ver.get('version_id')}",
@@ -84,8 +103,12 @@ def build_diff_index_from_catalog(catalog: str | Path | Mapping[str, Any], libra
                 "status": status,
                 "diff_dir": diff_dir,
                 "diff_html": diff.get(html_key) or diff.get("diff_html"),
-                "pairwise_done": done,
-                "pairwise_total": total,
+                "comparison_quality": rec.get("comparison_quality"),
+                "recommended_total": rec.get("recommended_total"),
+                "result_generated": rec.get("result_generated"),
+                "needs_run": rec.get("needs_run"),
+                "candidate_total": rec.get("candidate_total"),
+                "suppressed_total": rec.get("suppressed_total"),
                 "release_impact": "RELEASE_CHECK_REQUIRED",
             })
     return {

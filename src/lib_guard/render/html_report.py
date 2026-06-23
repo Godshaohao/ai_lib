@@ -404,36 +404,155 @@ def _pairwise_result_for(task: Mapping[str, Any]) -> tuple[str, str, str]:
     return status, note, href
 
 
-def _pairwise_rows(tasks: Mapping[str, Any]) -> tuple[list[str], int, int]:
+def _task_priority(item: Mapping[str, Any]) -> str:
+    text = str(item.get("priority") or item.get("severity") or "P1").upper()
+    return text if text in {"P0", "P1", "P2", "P3"} else "P1"
+
+
+def _task_is_key_view(item: Mapping[str, Any]) -> bool:
+    return str(item.get("file_type") or "").lower() in {"lef", "liberty", "lib", "verilog", "cdl", "sdc", "upf", "cpf"}
+
+
+def _changed_file_total(summary: Mapping[str, Any], type_diff: Mapping[str, Any], file_diff: Mapping[str, Any], pairwise_tasks: Mapping[str, Any]) -> int:
+    for key in ["changed_files", "total_changed_files", "file_changes", "changed_file_total"]:
+        try:
+            value = int(summary.get(key, 0) or 0)
+            if value:
+                return value
+        except Exception:
+            pass
+    counts = file_diff.get("counts") or {}
+    total = 0
+    for key in ["added", "removed", "changed", "metadata_only_changed"]:
+        try:
+            total += int(counts.get(key, 0) or 0)
+        except Exception:
+            pass
+    if total:
+        return total
+    by_type = type_diff.get("by_type") or {}
+    for item in by_type.values():
+        try:
+            total += int(item.get("added_count", 0) or 0) + int(item.get("removed_count", 0) or 0) + int(item.get("changed_count", 0) or 0)
+        except Exception:
+            continue
+    if total:
+        return total
+    return len(pairwise_tasks.get("tasks", []) or [])
+
+
+def _comparison_quality(changed_total: int, file_diff: Mapping[str, Any], meta: Mapping[str, Any], issues: Mapping[str, Any]) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    counts = file_diff.get("counts") or {}
+    added = int(counts.get("added", 0) or 0)
+    removed = int(counts.get("removed", 0) or 0)
+    changed = int(counts.get("changed", 0) or 0)
+    relation = meta.get("version_relation", {}) if isinstance(meta.get("version_relation"), Mapping) else {}
+    if not (relation.get("old_version") or meta.get("old_version")) or not (relation.get("new_version") or meta.get("new_version")):
+        reasons.append("old/new version 关系不完整")
+    if changed_total >= 1000:
+        reasons.append(f"变化文件 {changed_total} 个，疑似 comparison 过大")
+        return "DIFF_EXPLOSION", reasons
+    if changed_total >= 200:
+        reasons.append(f"变化文件 {changed_total} 个，建议先确认 base / parent")
+        return "LARGE_CHANGE", reasons
+    if added + removed > max(changed * 3, 50):
+        reasons.append(f"added/removed 远大于 changed：+{added}/-{removed}/~{changed}")
+        return "PATH_RESTRUCTURE", reasons
+    for item in issues.get("issues", []) or []:
+        if str(item.get("category") or "").lower() in {"base", "version_relation", "scan_missing"}:
+            reasons.append(str(item.get("message") or item.get("title") or "需确认 comparison 证据"))
+            return "NEEDS_BASE_CONFIRM", reasons
+    return "NORMAL", reasons
+
+
+def _file_diff_recommendation(
+    meta: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    type_diff: Mapping[str, Any],
+    file_diff: Mapping[str, Any],
+    pairwise_tasks: Mapping[str, Any],
+    issues: Mapping[str, Any],
+) -> dict[str, Any]:
+    tasks = list(pairwise_tasks.get("tasks", []) or [])
+    changed_total = _changed_file_total(summary, type_diff, file_diff, pairwise_tasks)
+    quality, reasons = _comparison_quality(changed_total, file_diff, meta, issues)
+    # File Diff is recommendation, not completion. Keep only key-view P0/P1 items by default.
+    if quality in {"DIFF_EXPLOSION", "LARGE_CHANGE", "PATH_RESTRUCTURE", "NEEDS_BASE_CONFIRM"}:
+        max_items = 8
+        allowed_priorities = {"P0"}
+        allowed = [t for t in tasks if _task_is_key_view(t)] or tasks
+    else:
+        max_items = 24
+        allowed_priorities = {"P0", "P1"}
+        allowed = tasks
+    recommended: list[dict[str, Any]] = []
+    generated = 0
+    needs_run = 0
+    for item in allowed:
+        pri = _task_priority(item)
+        if pri not in allowed_priorities and len(recommended) >= max_items // 2:
+            continue
+        status, note, href = _pairwise_result_for(item)
+        is_generated = status.upper() in {"DONE", "PASS", "SAME", "DIFF"} or bool(href)
+        if is_generated:
+            generated += 1
+        else:
+            needs_run += 1
+        recommended.append({
+            "priority": pri,
+            "file_type": item.get("file_type") or "-",
+            "old_path": item.get("old_path") or item.get("old_file") or "-",
+            "new_path": item.get("new_path") or item.get("new_file") or "-",
+            "reason": item.get("reason") or item.get("review_reason") or "关键视图变化，建议打开 File Diff。",
+            "command": str(item.get("command") or ""),
+            "status": status,
+            "note": note,
+            "result_html": href,
+        })
+        if len(recommended) >= max_items:
+            break
+    candidate_total = max(changed_total, len(tasks))
+    suppressed_total = max(candidate_total - len(recommended), 0)
+    return {
+        "schema_version": "file_diff_recommendation.v1",
+        "policy": "key_view_first_not_completion",
+        "comparison_quality": quality,
+        "quality_reasons": reasons,
+        "changed_file_total": changed_total,
+        "candidate_total": candidate_total,
+        "recommended_total": len(recommended),
+        "result_generated": generated,
+        "needs_run": needs_run,
+        "suppressed_total": suppressed_total,
+        "items": recommended,
+        "suppressed_summary": [
+            {"reason": "not_recommended_by_policy", "count": suppressed_total},
+        ] if suppressed_total else [],
+    }
+
+
+def _recommendation_rows(recommendation: Mapping[str, Any]) -> list[str]:
     from lib_guard.render import product_theme as ui
 
     rows: list[str] = []
-    done = 0
-    total = 0
-    for item in tasks.get("tasks", []) or []:
-        total += 1
-        status, note, href = _pairwise_result_for(item)
-        if status.upper() in {"DONE", "PASS", "SAME", "DIFF"}:
-            done += 1
-        cmd = str(item.get("command") or "")
-        old_path = item.get("old_path") or item.get("old_file") or "-"
-        new_path = item.get("new_path") or item.get("new_file") or "-"
-        reason = item.get("reason") or item.get("review_reason") or "文件在本次 comparison 中变化，建议打开 File Diff。"
+    for item in recommendation.get("items", []) or []:
         rows.append(
             "<tr>"
+            f"<td>{ui.badge(item.get('priority'), item.get('priority'))}</td>"
             f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
-            f"<td><code>{ui.esc(old_path)}</code></td>"
-            f"<td><code>{ui.esc(new_path)}</code></td>"
-            f"<td>{ui.esc(reason)}</td>"
-            f"<td>{ui.command_chip(cmd)}</td>"
-            f"<td>{ui.badge(status)}<div class='muted'>{ui.esc(note)}</div></td>"
-            f"<td>{ui.button('Open file diff / 打开 File Diff', href, 'primary', disabled=not bool(href))}</td>"
+            f"<td><code>{ui.esc(item.get('old_path') or '-')}</code></td>"
+            f"<td><code>{ui.esc(item.get('new_path') or '-')}</code></td>"
+            f"<td>{ui.esc(item.get('reason') or '')}</td>"
+            f"<td>{ui.command_chip(item.get('command'))}</td>"
+            f"<td>{ui.badge(item.get('status') or 'FILE_DIFF_RECOMMENDED')}<div class='muted'>{ui.esc(item.get('note') or '')}</div></td>"
+            f"<td>{ui.button('打开 File Diff', item.get('result_html') or '', 'primary', disabled=not bool(item.get('result_html')))}</td>"
             "</tr>"
         )
-    return rows, done, total
+    return rows
 
 
-def _diff_review_model(diff: Path, meta: Mapping[str, Any], summary: Mapping[str, Any], type_diff: Mapping[str, Any], release_evidence: Mapping[str, Any], metadata_tasks: Mapping[str, Any], pairwise_tasks: Mapping[str, Any], issues: Mapping[str, Any]) -> dict[str, Any]:
+def _diff_review_model(diff: Path, meta: Mapping[str, Any], summary: Mapping[str, Any], type_diff: Mapping[str, Any], file_diff: Mapping[str, Any], release_evidence: Mapping[str, Any], metadata_tasks: Mapping[str, Any], pairwise_tasks: Mapping[str, Any], issues: Mapping[str, Any]) -> dict[str, Any]:
     relation = meta.get("version_relation", {}) if isinstance(meta.get("version_relation"), Mapping) else {}
     old_version = relation.get("old_version") or meta.get("old_version") or "<old>"
     new_version = relation.get("new_version") or meta.get("new_version") or "<new>"
@@ -441,29 +560,31 @@ def _diff_review_model(diff: Path, meta: Mapping[str, Any], summary: Mapping[str
     issue_items = list(issues.get("issues") or [])
     impact = _domain_impact(type_diff, release_evidence, metadata_tasks)
     changed_domains = [item["domain"] for item in impact if item.get("status") in {"CHANGED", "METADATA_ONLY"}]
-    pair_rows, done, total = _pairwise_rows(pairwise_tasks)
+    recommendation = _file_diff_recommendation(meta, summary, type_diff, file_diff, pairwise_tasks, issues)
     blockers = [i for i in issue_items if str(i.get("severity") or "").upper() in {"ERROR", "BLOCK", "BLOCKER", "FAILED"}]
-    pending = max(total - done, 0)
+    quality = recommendation["comparison_quality"]
     if blockers:
         review_level = "DIFF_BLOCKED"
         headline = f"发现 {len(blockers)} 个 Diff 阻塞项。"
-    elif pending:
-        review_level = "NEEDS_FILE_DIFF"
-        headline = f"{len(changed_domains)} 个影响域有变化，{pending} 个 File Diff 待完成。"
+    elif quality != "NORMAL":
+        review_level = quality
+        headline = f"Comparison 需确认：{'; '.join(recommendation.get('quality_reasons') or [quality])}。系统只保留重点 File Diff 建议。"
+    elif recommendation["needs_run"]:
+        review_level = "FILE_DIFF_RECOMMENDED"
+        headline = f"{len(changed_domains)} 个影响域有变化，建议查看 {recommendation['recommended_total']} 个重点文件。"
     elif changed_domains:
         review_level = "CHANGED"
-        headline = f"{len(changed_domains)} 个影响域有变化，File Diff 已闭环或无需执行。"
+        headline = f"{len(changed_domains)} 个影响域有变化，重点 File Diff 已有结果或无需运行。"
     else:
         review_level = "SAME"
         headline = "未发现需要优先处理的结构变化。"
     first_cmd = ""
-    for item in pairwise_tasks.get("tasks", []) or []:
-        st, _, _ = _pairwise_result_for(item)
-        if st.upper() not in {"DONE", "PASS", "SAME", "DIFF"}:
+    for item in recommendation.get("items", []) or []:
+        if str(item.get("status") or "").upper() not in {"DONE", "PASS", "SAME", "DIFF"}:
             first_cmd = str(item.get("command") or "")
             break
     return {
-        "schema_version": "comparison_review.v1",
+        "schema_version": "comparison_review.v2",
         "comparison_id": f"{mode}__{old_version}__{new_version}",
         "old_version": old_version,
         "new_version": new_version,
@@ -471,12 +592,12 @@ def _diff_review_model(diff: Path, meta: Mapping[str, Any], summary: Mapping[str
         "review_level": review_level,
         "headline": headline,
         "impact": impact,
-        "pairwise": {"done": done, "total": total, "pending": pending},
+        "file_diff_recommendation": recommendation,
         "issues": issue_items,
         "next_action": {
-            "label": "运行 File Diff" if first_cmd else "查看证据 / 返回 Catalog",
+            "label": "运行重点 File Diff" if first_cmd else "查看证据 / 返回 Timeline",
             "command": first_cmd,
-            "reason": "Diff 只定位变化影响域。具体文件变化在 File Diff 页面查看。" if first_cmd else "当前没有待执行的 File Diff 命令。",
+            "reason": "只对推荐队列生成命令；候选变化不做全量 File Diff。" if first_cmd else "当前没有待执行的重点 File Diff 命令。",
         },
         "evidence": {
             "diff_dir": str(diff),
@@ -487,7 +608,6 @@ def _diff_review_model(diff: Path, meta: Mapping[str, Any], summary: Mapping[str
             "manual_pairwise_tasks": str(diff / "manual_pairwise_tasks.json"),
         },
     }
-
 
 def _view_rows(view_diff: Mapping[str, Any]) -> list[str]:
     from lib_guard.render import product_theme as ui
@@ -568,41 +688,47 @@ def render_diff_html(diff_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     summary = read_json(diff / "diff_summary.json", {}) or {}
     view_diff = read_json(diff / "view_diff.json", {"views": []}) or {"views": []}
     type_diff = read_json(diff / "type_diff.json", {"by_type": {}}) or {"by_type": {}}
+    file_diff = read_json(diff / "file_diff.json", {"counts": {}}) or {"counts": {}}
     release_evidence = read_json(diff / "release_evidence_diff.json", {"by_role": {}}) or {"by_role": {}}
     metadata_tasks = read_json(diff / "metadata_review_tasks.json", {"tasks": []}) or {"tasks": []}
     pairwise_tasks = read_json(diff / "manual_pairwise_tasks.json", None) or read_json(diff / "pairwise_diff_tasks.json", {"tasks": []}) or {"tasks": []}
     issues = read_json(diff / "diff_issues.json", {"issues": []}) or {"issues": []}
-    review = _diff_review_model(diff, meta, summary, type_diff, release_evidence, metadata_tasks, pairwise_tasks, issues)
+    review = _diff_review_model(diff, meta, summary, type_diff, file_diff, release_evidence, metadata_tasks, pairwise_tasks, issues)
     write_json(out / "comparison_review.json", review)
-    pair_rows, done, total = _pairwise_rows(pairwise_tasks)
-    pending = max(total - done, 0)
+    recommendation = review["file_diff_recommendation"]
+    rec_rows = _recommendation_rows(recommendation)
     rail = ui.status_rail([
         ("Catalog", "DISCOVERED", "版本关系来自 catalog"),
         ("Scan", "SCAN_READY", "old/new scan 证据已参与比较"),
         ("Diff", review["review_level"], review["headline"]),
-        ("File Diff", "FILE_DIFF_PENDING" if pending else "FILE_DIFF_DONE" if total else "PAIRWISE_EMPTY", f"{done}/{total}"),
+        ("重点文件建议", recommendation.get("comparison_quality") or review["review_level"], f"重点 {recommendation.get('recommended_total', 0)} / 候选 {recommendation.get('candidate_total', 0)}"),
         ("Release", "RELEASE_CHECK_REQUIRED", "发布前需检查 manifest / alias"),
     ])
     attention = []
-    if pending:
-        attention.append(("WARNING", "File Diff 待完成", f"还有 {pending} 个文件对建议打开 File Diff。", "manual_pairwise_tasks.json"))
+    if recommendation.get("comparison_quality") != "NORMAL":
+        attention.append((recommendation.get("comparison_quality"), "Comparison 需确认", "变化规模或版本关系异常；不要执行全量 File Diff。", "comparison_review.json"))
+    if recommendation.get("needs_run"):
+        attention.append(("WARNING", "重点 File Diff 建议", f"有 {recommendation.get('needs_run')} 个重点文件建议运行 File Diff。", "manual_pairwise_tasks.json"))
     for item in issues.get("issues", [])[:20]:
         attention.append((item.get("severity") or "WARNING", item.get("category") or "Diff issue", item.get("message") or item.get("title") or "需确认", "diff_issues.json"))
     body = (
         ui.panel(
-            "Comparison 结论 / 结构变化总览",
+            "Comparison 结论",
             "Diff 页面只审阅一次 old → new comparison。库级多版本关系请看 Diff Timeline。",
             ui.metric_grid([
                 ("Comparison", f"{review['old_version']} → {review['new_version']}", review.get("mode"), "PASS"),
                 ("影响域", sum(1 for x in review["impact"] if x.get("status") in {"CHANGED", "METADATA_ONLY"}), "changed / metadata-only", review["review_level"]),
-                ("File Diff", f"{done}/{total}", "done / total", "FILE_DIFF_PENDING" if pending else "FILE_DIFF_DONE" if total else "PAIRWISE_EMPTY"),
+                ("重点建议", recommendation.get("recommended_total", 0), "不是全量完成度", review["review_level"]),
+                ("候选变化", recommendation.get("candidate_total", 0), "大量候选默认折叠", recommendation.get("comparison_quality")),
+                ("已生成结果", recommendation.get("result_generated", 0), "仅统计推荐队列", "PASS" if recommendation.get("result_generated") else "WARNING"),
                 ("注意项", len(attention), review["headline"], review["review_level"]),
             ])
             + ui.compact_meta([("Mode", review.get("mode")), ("Diff Dir", diff), ("Review JSON", out / "comparison_review.json")]),
         )
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["review_level"])
         + ui.panel("变化影响域", "面向使用者：先看变更影响哪个领域，再决定是否打开 File Diff。", ui.impact_grid(review["impact"]))
-        + ui.panel("File Diff 队列 / 人工任务摘要", "Diff 不嵌入单文件内容，只提供 File Diff 任务、命令和结果入口。", ui.filterable_table("pairwise-table", ["Type", "Old", "New", "原因", "命令", "状态", "结果"], pair_rows, "暂无 File Diff 任务", "筛选 type / file / status"))
+        + ui.panel("重点 File Diff 建议", "File Diff 是重点变化放大镜，不是全量差异完成度。只对 P0/P1 关键视图生成命令。", ui.filterable_table("recommend-file-diff-table", ["优先级", "Type", "Old", "New", "原因", "命令", "状态", "结果"], rec_rows, "暂无重点 File Diff 建议", "筛选 type / file / status"))
+        + ui.collapsible_panel("候选变化 / 已折叠", "候选变化不默认生成命令，避免错误 base 或大规模重组导致上千条无效 File Diff。", ui.metric_grid([("候选变化", recommendation.get("candidate_total", 0), "changed/candidate files", recommendation.get("comparison_quality")), ("已折叠", recommendation.get("suppressed_total", 0), "未进入重点队列", "WARNING" if recommendation.get("suppressed_total") else "PASS"), ("策略", recommendation.get("policy"), "key view first", "INFO")]) + ui.table(["Reason", "Count"], [f"<tr><td>{ui.esc(x.get('reason'))}</td><td>{ui.esc(x.get('count'))}</td></tr>" for x in recommendation.get("suppressed_summary", [])], "暂无折叠项"), open=False)
         + ui.panel("优先关注", "只列出会影响继续审阅的事项。", ui.attention_items(attention))
         + ui.collapsible_panel(
             "结构证据",
@@ -616,7 +742,7 @@ def render_diff_html(diff_dir: str | Path, out_dir: str | Path) -> dict[str, Any
                 ("diff_summary.json", _file_href(diff / "diff_summary.json"), "Diff 原始摘要"),
                 ("type_diff.json", _file_href(diff / "type_diff.json"), "file_type 结构变化"),
                 ("view_diff.json", _file_href(diff / "view_diff.json"), "view 变化"),
-                ("manual_pairwise_tasks.json", _file_href(diff / "manual_pairwise_tasks.json"), "File Diff 任务"),
+                ("manual_pairwise_tasks.json", _file_href(diff / "manual_pairwise_tasks.json"), "原始 File Diff 候选任务；页面只推荐重点项"),
             ]),
             open=False,
         )
@@ -628,8 +754,8 @@ def render_diff_html(diff_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         body,
         decision=review["review_level"],
         rail=rail,
-        nav="<a href='#'>Scan</a><a class='active' href='#'>Diff</a><a href='#'>File Diff</a><a href='#'>Release</a>",
-        meta=ui.compact_meta([("Old", review["old_version"]), ("New", review["new_version"]), ("Mode", review["mode"]), ("Pairwise", f"{done}/{total}")]),
+        nav="<a href='#'>Scan</a><a class='active' href='#'>Selected Diff</a><a href='#'>File Diff 从本页下钻</a><a href='#'>Release</a>",
+        meta=ui.compact_meta([("Old", review["old_version"]), ("New", review["new_version"]), ("Mode", review["mode"]), ("重点建议", recommendation.get("recommended_total", 0)), ("候选", recommendation.get("candidate_total", 0))]),
     )
     atomic_write_text(out / "index.html", html_text)
     atomic_write_text(out / "diff_report.html", html_text)
@@ -649,15 +775,16 @@ def render_diff_timeline_html(diff_index: str | Path | Mapping[str, Any], out_di
             "<tr>"
             f"<td><code>{ui.esc(item.get('mode') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('old_version') or '-')} → {ui.esc(item.get('new_version') or '-')}</td>"
-            f"<td>{ui.badge(item.get('status') or item.get('review_level') or 'UNKNOWN')}</td>"
-            f"<td>{ui.esc(item.get('pairwise_done', 0))}/{ui.esc(item.get('pairwise_total', 0))}</td>"
+            f"<td>{ui.badge(item.get('comparison_quality') or item.get('status') or item.get('review_level') or 'UNKNOWN')}</td>"
+            f"<td>{ui.esc(item.get('recommended_total', 0))} / 已生成 {ui.esc(item.get('result_generated', 0))}</td>"
+            f"<td>{ui.esc(item.get('candidate_total', 0))}</td>"
             f"<td>{ui.badge(item.get('release_impact') or 'RELEASE_CHECK_REQUIRED')}</td>"
-            f"<td>{ui.button('打开 Diff', item.get('diff_html') or item.get('href') or '', 'primary', disabled=not bool(item.get('diff_html') or item.get('href')))}</td>"
+            f"<td>{ui.button('打开 Selected Diff', item.get('diff_html') or item.get('href') or '', 'primary', disabled=not bool(item.get('diff_html') or item.get('href')))}</td>"
             "</tr>"
         )
     body = (
         ui.panel("Diff Timeline", "一个 library 的多版本、多 comparison 入口。只看关系，不展开单次 diff 明细。", ui.comparison_filter_bar() + ui.timeline(comparisons))
-        + ui.panel("Comparison 列表", "可按 mode 和状态筛选后进入 Selected Diff Review。", ui.filterable_table("comparison-table", ["Mode", "Comparison", "状态", "File Diff", "Release", "入口"], rows, "暂无 comparison", "筛选版本 / mode / status"))
+        + ui.panel("Comparison 列表", "可按 mode、Comparison 质量和重点建议进入 Selected Diff Review。", ui.filterable_table("comparison-table", ["Mode", "Comparison", "Comparison", "重点建议", "候选", "Release", "入口"], rows, "暂无 comparison", "筛选版本 / mode / status"))
         + ui.collapsible_panel("证据", "diff_index.json", ui.trace_link_list([("diff_index.json", _file_href(diff_index if not isinstance(diff_index, Mapping) else out / "diff_index.json"), "库级 diff 关系索引")]), open=False)
     )
     if isinstance(diff_index, Mapping):
@@ -668,7 +795,7 @@ def render_diff_timeline_html(diff_index: str | Path | Mapping[str, Any], out_di
         "库级版本对比关系。单次变化请进入 Selected Diff Review，文件变化请进入 File Diff。",
         body,
         decision="COMPARE_READY" if comparisons else "COMPARE_PENDING",
-        nav="<a href='#'>Catalog</a><a class='active' href='#'>Diff Timeline</a><a href='#'>File Diff</a>",
+        nav="<a href='#'>Catalog</a><a class='active' href='#'>Diff Timeline</a><a href='#'>Selected Diff</a>",
         meta=ui.compact_meta([("Library", data.get("library_id") or "-"), ("Versions", len(data.get("versions", []) or [])), ("Comparisons", len(comparisons))]),
     )
     atomic_write_text(out / "index.html", html_text)

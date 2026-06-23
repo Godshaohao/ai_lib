@@ -981,12 +981,13 @@ class V5ScanPipelineTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "PASS")
             html = (html_out / "index.html").read_text(encoding="utf-8")
-            self.assertIn("结构变化总览", html)
-            self.assertIn("人工任务摘要", html)
+            self.assertIn("Comparison 结论", html)
+            self.assertIn("重点 File Diff 建议", html)
             self.assertIn("file-diff verilog", html)
             self.assertIn("复制", html)
-            self.assertIn("Open file diff", html)
+            self.assertIn("打开 File Diff", html)
             self.assertIn("DONE", html)
+            self.assertNotIn("done / total", html)
 
     def test_file_diff_verilog_writes_pairwise_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1019,6 +1020,85 @@ class V5ScanPipelineTest(unittest.TestCase):
             html = (out / "index.html").read_text(encoding="utf-8")
             self.assertIn("单文件深度对比报告", html)
             self.assertIn("专家复核提示", html)
+
+    def test_file_diff_semantic_formats_are_structured(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            samples = {
+                "liberty": (
+                    root / "old.lib",
+                    root / "new.lib",
+                    "library(test) {\n  cell(PAD_A) {\n    area : 1.0;\n    is_macro : false;\n    is_pad : false;\n  }\n}\n",
+                    "library(test) {\n  cell(PAD_A) {\n    area : 2.0;\n    is_macro : true;\n    is_pad : true;\n  }\n}\n",
+                    ["is_macro", "is_pad"],
+                ),
+                "sdc": (
+                    root / "old.sdc",
+                    root / "new.sdc",
+                    "create_clock -name CORE -period 10 [get_ports clk]\nset_clock_uncertainty 0.1 [get_clocks CORE]\n",
+                    "create_clock -name CORE -period 8 [get_ports clk]\nset_clock_uncertainty 0.2 [get_clocks CORE]\nset_load 0.05 [get_ports data]\n",
+                    ["clocks", "period", "uncertainty", "loads"],
+                ),
+                "upf": (
+                    root / "old.upf",
+                    root / "new.upf",
+                    "create_power_domain PD_CORE -elements {u_core}\ncreate_supply_net VDD -domain PD_CORE\n",
+                    "create_power_domain PD_CORE -elements {u_core u_io}\ncreate_supply_net VDD_NEW -domain PD_CORE\nset_isolation ISO_CORE -domain PD_CORE -clamp_value 0\n",
+                    ["power_domains", "supply_nets", "isolation"],
+                ),
+                "ibis": (
+                    root / "old.ibs",
+                    root / "new.ibs",
+                    "[IBIS Ver] 5.0\n[Component] U1\n[Pin]\n1 A signal MODEL_A\n[Model] MODEL_A\nModel_type Input\n",
+                    "[IBIS Ver] 5.0\n[Component] U1\n[Pin]\n1 A signal MODEL_A\n2 Y signal MODEL_Y\n[Model] MODEL_Y\nModel_type Output\n",
+                    ["components", "pins", "models"],
+                ),
+                "pwl": (
+                    root / "old.pwl",
+                    root / "new.pwl",
+                    "0 0\n1n 1.0\n",
+                    "0 0\n1n 1.2\n2n 0\n",
+                    ["points", "point_count"],
+                ),
+                "snp": (
+                    root / "old.s2p",
+                    root / "new.s4p",
+                    "# Hz S RI R 50\n1e9 0 0 0 0 0 0 0 0\n",
+                    "# GHz S DB R 50\n1 0 0 0 0 0 0 0 0\n2 0 0 0 0 0 0 0 0\n",
+                    ["option_line", "data_line_count", "ports"],
+                ),
+                "cpm": (
+                    root / "old.cpm",
+                    root / "new.cpm",
+                    "COMPONENT U1\nPIN A INPUT\n",
+                    "COMPONENT U1\nPIN A INPUT\nPIN Y OUTPUT\n",
+                    ["components", "pins"],
+                ),
+                "waiver": (
+                    root / "old.waiver",
+                    root / "new.waiver",
+                    "waive RULE_A top/u0\n",
+                    "waive RULE_A top/u0\nwaive RULE_B top/u1\n",
+                    ["entries", "line"],
+                ),
+            }
+
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            for file_type, (old_file, new_file, old_text, new_text, expected_terms) in samples.items():
+                old_file.write_text(old_text, encoding="utf-8")
+                new_file.write_text(new_text, encoding="utf-8")
+                out = root / "out" / file_type
+
+                result = diff_pairwise_files(file_type, old_file, new_file, out)
+
+                self.assertEqual(result["status"], "DIFF", file_type)
+                semantic_text = (out / "semantic_diff.json").read_text(encoding="utf-8")
+                html = (out / "index.html").read_text(encoding="utf-8")
+                for term in expected_terms:
+                    self.assertIn(term, semantic_text, file_type)
+                self.assertIn("定位", html)
+                self.assertIn("字段变化", html)
 
     def test_file_diff_supported_types_write_review_html(self) -> None:
         samples = {
@@ -1076,6 +1156,36 @@ class V5ScanPipelineTest(unittest.TestCase):
                 "old.db",
                 "new.db",
             ),
+            "waiver": (
+                "waive RULE_A top\n",
+                "waive RULE_A top\nwaive RULE_B top\n",
+                "old.waiver",
+                "new.waiver",
+            ),
+            "ibis": (
+                "[IBIS Ver] 5.0\n[Component] U1\n[Pin]\n1 A signal MODEL_A\n",
+                "[IBIS Ver] 5.0\n[Component] U1\n[Pin]\n1 A signal MODEL_A\n2 Y signal MODEL_Y\n",
+                "old.ibs",
+                "new.ibs",
+            ),
+            "pwl": (
+                "0 0\n1n 1\n",
+                "0 0\n1n 1\n2n 0\n",
+                "old.pwl",
+                "new.pwl",
+            ),
+            "snp": (
+                "# Hz S RI R 50\n1e9 0 0 0 0 0 0 0 0\n",
+                "# Hz S RI R 50\n1e9 0 0 0 0 0 0 0 0\n2e9 0 0 0 0 0 0 0 0\n",
+                "old.s2p",
+                "new.s2p",
+            ),
+            "cpm": (
+                "COMPONENT U1\nPIN A INPUT\n",
+                "COMPONENT U1\nPIN A INPUT\nPIN Y OUTPUT\n",
+                "old.cpm",
+                "new.cpm",
+            ),
         }
         with tempfile.TemporaryDirectory() as td:
             from lib_guard.diff.file_diff import diff_pairwise_files
@@ -1102,7 +1212,7 @@ class V5ScanPipelineTest(unittest.TestCase):
         from lib_guard.cli import build_parser
 
         parser = build_parser()
-        for file_type in ["lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db"]:
+        for file_type in ["lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db", "waiver", "ibis", "pwl", "snp", "cpm"]:
             args = parser.parse_args(["file-diff", file_type, "--old", "old", "--new", "new", "--out", "out"])
             self.assertEqual(args.file_type, file_type)
 

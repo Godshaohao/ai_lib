@@ -99,7 +99,9 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             self.assertTrue((run_dir / "release_postcheck.json").exists())
             self.assertTrue((run_dir / "index.html").exists())
             html = (run_dir / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Release 文件级审阅台", html)
+            self.assertIn("Release 结论", html)
+            self.assertIn("Library 校验", html)
+            self.assertIn("证据区", html)
             self.assertIn("ucie", html)
             self.assertIn("stable_20260612", html)
 

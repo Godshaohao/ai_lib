@@ -25,7 +25,7 @@ def status_class(value: Any) -> str:
         "REVIEW", "MANUAL_REVIEW", "NEEDS_FILE_DIFF", "FILE_DIFF_RECOMMENDED", "FILE_DIFF_PENDING",
         "PAIRWISE_PENDING", "PAIRWISE_PARTIAL", "DIFF", "CHANGED", "METADATA_ONLY", "MISSING",
         "EXTRA", "UNKNOWN", "NEEDS_BASE_CONFIRM", "RELEASE_CHECK_REQUIRED", "SCAN_NEEDS_REVIEW",
-        "REVIEW_REQUIRED", "COMPARE_PENDING", "NOT_READY",
+        "REVIEW_REQUIRED", "COMPARE_PENDING", "NOT_READY", "LARGE_CHANGE", "DIFF_EXPLOSION", "PATH_RESTRUCTURE", "SCAN_EVIDENCE_INCOMPLETE",
     }
     bad = {
         "FAILED", "FAIL", "ERROR", "BLOCK", "BLOCKED", "BROKEN", "MISMATCH", "TARGET_MISMATCH",
@@ -51,11 +51,11 @@ def status_label(value: Any) -> str:
         "SCAN_BLOCKED": "Scan 阻塞", "NOT_SCANNED": "未扫描", "COMPARE_READY": "可对比",
         "COMPARE_PENDING": "待对比", "SAME": "无变化", "DIFF": "有差异", "CHANGED": "有变化",
         "NEEDS_FILE_DIFF": "建议查看 File Diff", "FILE_DIFF_RECOMMENDED": "建议 File Diff",
-        "FILE_DIFF_PENDING": "File Diff 待完成", "FILE_DIFF_DONE": "File Diff 已完成",
+        "FILE_DIFF_PENDING": "重点 File Diff 待运行", "FILE_DIFF_DONE": "重点 File Diff 已生成",
         "PAIRWISE_PENDING": "Pairwise 待完成", "PAIRWISE_PARTIAL": "Pairwise 部分完成",
-        "PAIRWISE_EMPTY": "无 Pairwise", "METADATA_ONLY": "仅 metadata", "REVIEW": "需审阅",
+        "PAIRWISE_EMPTY": "无重点建议", "METADATA_ONLY": "仅 metadata", "REVIEW": "需审阅",
         "NEEDS_REVIEW": "需审阅", "REVIEW_REQUIRED": "需审阅", "MANUAL_REVIEW": "需人工确认",
-        "NEEDS_BASE_CONFIRM": "需确认 base", "RELEASE_CHECK_REQUIRED": "发布前检查",
+        "NEEDS_BASE_CONFIRM": "需确认 base", "LARGE_CHANGE": "变化过大", "DIFF_EXPLOSION": "变化异常", "PATH_RESTRUCTURE": "疑似目录重组", "SCAN_EVIDENCE_INCOMPLETE": "Scan 证据不完整", "FILE_DIFF_RECOMMENDED": "建议查看重点文件", "RELEASE_CHECK_REQUIRED": "发布前检查",
         "RELEASED": "已发布", "RELEASE_BLOCKED": "发布阻塞", "APPLIED": "已应用", "DRY_RUN": "预演",
         "PASS_WITH_WARNING": "通过有注意项", "WARNING": "注意", "WARN": "注意", "PENDING": "待处理",
         "MISSING": "缺失", "EXTRA": "多余", "BROKEN": "断链", "MISMATCH": "不匹配",
@@ -109,7 +109,7 @@ def faceted_table(table_id: str, headers: list[str], rows: list[str], empty: str
     return filterable_table(table_id, headers, rows, empty, placeholder)
 
 
-def command_chip(command: Any, *, label: str = "复制", disabled_text: str = "待生成命令") -> str:
+def command_chip(command: Any, *, label: str = "命令", disabled_text: str = "待生成命令") -> str:
     cmd = str(command or "").strip()
     if not cmd:
         return f"<span class='cmd-chip disabled'><code>{esc(disabled_text)}</code></span>"
@@ -295,23 +295,37 @@ def next_action_panel(action: str, command: str, reason: str, *, status: Any = "
     return panel("下一步", "建议动作和命令。命令仅作为工具入口，最终判断仍需人工确认。", body)
 
 
+def _recommendation_summary(item: Mapping[str, Any]) -> str:
+    rec = item.get("file_diff_recommendation") if isinstance(item.get("file_diff_recommendation"), Mapping) else item
+    recommended = rec.get("recommended_total", rec.get("recommended", 0))
+    generated = rec.get("result_generated", rec.get("generated_total", 0))
+    candidates = rec.get("candidate_total", rec.get("changed_file_total", 0))
+    quality = rec.get("comparison_quality") or item.get("comparison_quality") or "NORMAL"
+    parts = [f"重点 {recommended}", f"已生成 {generated}"]
+    if int(candidates or 0):
+        parts.append(f"候选 {candidates}")
+    if str(quality).upper() not in {"", "NORMAL", "PASS", "OK"}:
+        parts.append(status_label(quality))
+    return " · ".join(esc(x) for x in parts)
+
+
 def timeline(comparisons: list[Mapping[str, Any]]) -> str:
     if not comparisons:
         return "<div class='empty'>暂无 comparison。</div>"
     nodes = []
     for item in comparisons:
-        status = item.get("status") or item.get("review_level") or "UNKNOWN"
+        status = item.get("comparison_quality") or item.get("status") or item.get("review_level") or "UNKNOWN"
         old_v = item.get("old_version") or "-"
         new_v = item.get("new_version") or "-"
         mode = item.get("mode") or "selected"
         href = item.get("diff_html") or item.get("href") or ""
-        open_link = button("打开 Diff", str(href), "primary", disabled=not bool(href))
+        open_link = button("打开 Selected Diff", str(href), "primary", disabled=not bool(href))
         nodes.append(
             f"<div class='timeline-card {status_class(status)}' data-mode='{esc(mode)}' data-status='{esc(status)}'>"
             f"<div class='timeline-mode'>{esc(mode)}</div>"
             f"<div class='timeline-vers'><span>{esc(old_v)}</span><b>→</b><span>{esc(new_v)}</span></div>"
             f"<div>{badge(status)}</div>"
-            f"<div class='timeline-sub'>Pairwise {esc(item.get('pairwise_done', 0))}/{esc(item.get('pairwise_total', 0))}</div>"
+            f"<div class='timeline-sub'>{_recommendation_summary(item)}</div>"
             f"{open_link}"
             "</div>"
         )
