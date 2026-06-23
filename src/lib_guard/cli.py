@@ -360,6 +360,10 @@ def add_file_diff_parser(subparsers: Any) -> None:
         p.add_argument("--old", required=True)
         p.add_argument("--new", required=True)
         p.add_argument("--out", required=True)
+        p.add_argument("--task-id")
+        p.add_argument("--library-id")
+        p.add_argument("--version-id")
+        p.add_argument("--base-version")
         p.set_defaults(func=run_file_diff)
 
 

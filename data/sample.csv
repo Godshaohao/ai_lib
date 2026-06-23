@@ -1,0 +1,5 @@
+name,status,count,owner
+catalog,PASS,48,library-owner
+scan,WARNING,11,cad-maintainer
+diff,READY,6,reviewer
+release,BLOCKED,2,integration-owner

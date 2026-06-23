@@ -142,6 +142,12 @@ class ReleaseChecker:
         }
         out.mkdir(parents=True, exist_ok=True)
         _write_json(out / "release_check.json", result)
+        try:
+            from lib_guard.review.release_result import release_result_from_check
+
+            _write_json(out / "release_result.json", release_result_from_check(result))
+        except Exception:
+            pass
         return result
 
     def _check_alias_gate(self, alias: str | None, release_readiness: Mapping[str, Any], diff_gate: Mapping[str, Any]) -> dict[str, Any]:

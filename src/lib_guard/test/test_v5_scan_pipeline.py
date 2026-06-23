@@ -965,6 +965,17 @@ class V5ScanPipelineTest(unittest.TestCase):
             ScanRunner(SimpleNamespace(**base, root_path=str(old_root), out_dir=str(old_scan), scan_id="OLD")).run()
             ScanRunner(SimpleNamespace(**base, root_path=str(new_root), out_dir=str(new_scan), scan_id="NEW")).run()
             diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
+            tasks = json.loads((diff_out / "manual_pairwise_tasks.json").read_text(encoding="utf-8"))
+            first_task = tasks["tasks"][0]
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            diff_pairwise_files(
+                first_task["file_type"],
+                first_task["old_file"],
+                first_task["new_file"],
+                first_task["expected_output"],
+                task_id=first_task["task_id"],
+            )
 
             result = render_diff_html(diff_out, html_out)
 
@@ -974,6 +985,8 @@ class V5ScanPipelineTest(unittest.TestCase):
             self.assertIn("人工任务摘要", html)
             self.assertIn("file-diff verilog", html)
             self.assertIn("复制", html)
+            self.assertIn("Open file diff", html)
+            self.assertIn("DONE", html)
 
     def test_file_diff_verilog_writes_pairwise_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -997,6 +1010,12 @@ class V5ScanPipelineTest(unittest.TestCase):
             self.assertTrue((out / "new_extract.json").exists())
             self.assertTrue((out / "semantic_diff.json").exists())
             self.assertTrue((out / "raw_text_diff.html").exists())
+            self.assertTrue((out / "pairwise_result.json").exists())
+            pairwise = json.loads((out / "pairwise_result.json").read_text(encoding="utf-8"))
+            self.assertEqual(pairwise["schema_version"], "pairwise_result.v1")
+            self.assertEqual(pairwise["status"], "DONE")
+            self.assertEqual(pairwise["result"], "DIFF")
+            self.assertGreaterEqual(pairwise["change_count"], 1)
             html = (out / "index.html").read_text(encoding="utf-8")
             self.assertIn("单文件深度对比报告", html)
             self.assertIn("专家复核提示", html)

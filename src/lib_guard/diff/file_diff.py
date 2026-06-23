@@ -4,6 +4,7 @@ from html import escape
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from datetime import datetime, timezone
 import difflib
 import hashlib
 import json
@@ -325,7 +326,21 @@ def _parse_file(file_type: str, path: Path) -> dict[str, Any]:
     }
 
 
-def diff_pairwise_files(file_type: str, old_file: str | Path, new_file: str | Path, out_dir: str | Path) -> dict[str, Any]:
+def _utc_now() -> str:
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def diff_pairwise_files(
+    file_type: str,
+    old_file: str | Path,
+    new_file: str | Path,
+    out_dir: str | Path,
+    *,
+    task_id: str | None = None,
+    library_id: str | None = None,
+    version_id: str | None = None,
+    base_version: str | None = None,
+) -> dict[str, Any]:
     old = Path(old_file)
     new = Path(new_file)
     out = Path(out_dir)
@@ -377,7 +392,25 @@ def diff_pairwise_files(file_type: str, old_file: str | Path, new_file: str | Pa
         "issues": new_result.get("issues", []),
     }
     semantic = _semantic_diff(old_extract.get("data", {}), new_extract.get("data", {}))
+    change_count = int((semantic.get("summary") or {}).get("change_count") or 0)
     issue_payload = {"schema_version": "1.0", "issues": issues, "summary": {"error": len(issues)}}
+    pairwise_result = {
+        "schema_version": "pairwise_result.v1",
+        "task_id": task_id or out.name,
+        "library_id": library_id,
+        "version_id": version_id,
+        "base_version": base_version,
+        "file_type": file_type,
+        "old_file": str(old),
+        "new_file": str(new),
+        "status": "FAILED" if status == "FAILED" else "DONE",
+        "result": status,
+        "change_count": change_count,
+        "review_result": "NEED_EXPERT_REVIEW" if status == "DIFF" else "NOT_REVIEWED",
+        "reviewer_note": "",
+        "html": str(out / "index.html"),
+        "generated_at": _utc_now(),
+    }
     _write_json(out / "file_diff_meta.json", meta)
     _write_json(out / "file_diff_summary.json", summary)
     _write_json(out / "file_diff_issues.json", issue_payload)
@@ -385,6 +418,7 @@ def diff_pairwise_files(file_type: str, old_file: str | Path, new_file: str | Pa
     _write_json(out / "old_extract.json", old_extract)
     _write_json(out / "new_extract.json", new_extract)
     _write_json(out / "semantic_diff.json", semantic)
+    _write_json(out / "pairwise_result.json", pairwise_result)
     _render_raw_text_diff(old, new, out)
     _render_index(out, meta, summary, semantic, issues)
-    return {"status": status, "out_dir": str(out), "summary": summary, "html": str(out / "index.html")}
+    return {"status": status, "out_dir": str(out), "summary": summary, "html": str(out / "index.html"), "pairwise_result": str(out / "pairwise_result.json")}

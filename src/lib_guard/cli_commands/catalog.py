@@ -438,6 +438,7 @@ def run_catalog_compare_batch(args: Namespace) -> int:
 def run_catalog_release_check(args: Namespace) -> int:
     from lib_guard.catalog.index import find_catalog_version, update_catalog_release_status
     from lib_guard.release.checker import check_release_scan
+    from lib_guard.review.release_result import release_result_from_check, write_release_result
 
     item = find_catalog_version(args.catalog, args.library, args.version)
     scan_dir = item.get("scan", {}).get("scan_dir")
@@ -449,6 +450,8 @@ def run_catalog_release_check(args: Namespace) -> int:
         diff_dir = diff.get("cumulative_diff_dir") if args.diff_mode == "cumulative" else diff.get("adjacent_diff_dir")
     result = check_release_scan(scan_dir, policy_path=args.policy, diff_dir=diff_dir)
     result_path = Path(scan_dir) / "release" / "release_check.json"
+    release_result_path = Path(scan_dir) / "release" / "release_result.json"
+    write_release_result(release_result_path, release_result_from_check(result))
     update_catalog_release_status(args.catalog, version_key=item["version_key"], action="check", status=result.get("release_check_status", "UNKNOWN"), result_path=result_path)
     print_json(result)
     return 0
@@ -458,6 +461,7 @@ def run_catalog_release_link(args: Namespace) -> int:
     from lib_guard.catalog.index import find_catalog_version, update_catalog_release_status
     from lib_guard.release.bundle import create_manifest_template_from_catalog
     from lib_guard.release.linker import link_release_from_manifest
+    from lib_guard.review.release_result import release_result_from_link, write_release_result
 
     item = find_catalog_version(args.catalog, args.library, args.version)
     scan_dir = item.get("scan", {}).get("scan_dir")
@@ -478,6 +482,8 @@ def run_catalog_release_link(args: Namespace) -> int:
         overwrite=getattr(args, "overwrite", False),
     )
     result_path = Path(scan_dir) / "release" / "release_link_result.json"
+    release_result_path = result_path.parent / "release_result.json"
+    write_release_result(release_result_path, release_result_from_link(result))
     update_catalog_release_status(
         args.catalog,
         version_key=item["version_key"],
@@ -497,6 +503,7 @@ def run_catalog_release_batch(args: Namespace) -> int:
     from lib_guard.release.bundle import create_manifest_template_from_catalog
     from lib_guard.release.linker import link_release_from_manifest
     from lib_guard.release.postcheck import verify_release_manifest
+    from lib_guard.review.release_result import release_result_from_link, write_release_result
 
     requested_versions = set(args.version or [])
     selected = []
@@ -553,6 +560,11 @@ def run_catalog_release_batch(args: Namespace) -> int:
     verify_result = None
     if bool(args.apply) and not getattr(args, "no_verify", False):
         verify_result = verify_release_manifest(manifest_path, render=not getattr(args, "no_render", False))
+    release_result_path = run_dir / "release_result.json"
+    release_html = ""
+    if verify_result and verify_result.get("html"):
+        release_html = str((verify_result.get("html") or {}).get("index_html") or "")
+    write_release_result(release_result_path, release_result_from_link(link_result, verify_result=verify_result, html=release_html))
     failures = list(link_result.get("failed_links", []) or [])
     for item in selected:
         postcheck_path = Path(verify_result["postcheck_path"]) if verify_result else None

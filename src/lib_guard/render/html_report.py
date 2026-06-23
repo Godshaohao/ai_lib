@@ -644,6 +644,21 @@ def _domain_review_task_rows(pairwise_tasks: Mapping[str, Any]) -> list[str]:
         old_path = item.get("old_path") or item.get("old_file") or "-"
         new_path = item.get("new_path") or item.get("new_file") or "-"
         why = item.get("reason") or item.get("review_reason") or "File changed in selected version diff; run content-level review outside this HTML."
+        status = item.get("status")
+        result_note = ""
+        result_link = ""
+        expected = item.get("expected_output")
+        if expected:
+            result_path = Path(str(expected)) / "pairwise_result.json"
+            result = read_json(result_path, default=None)
+            if result:
+                status = result.get("status") or "DONE"
+                result_note = f"{result.get('result') or '-'} / changes: {result.get('change_count', 0)}"
+                html_path = result.get("html") or (Path(str(expected)) / "index.html")
+                result_link = f"<div class='sub'><a class='link' href='{p_esc(_file_href(html_path))}'>Open file diff</a></div>"
+            elif (Path(str(expected)) / "file_diff_summary.json").exists():
+                status = "DONE"
+                result_link = f"<div class='sub'><a class='link' href='{p_esc(_file_href(Path(str(expected)) / 'index.html'))}'>Open file diff</a></div>"
         rows.append(
             "<tr>"
             f"<td><code>{p_esc(item.get('file_type') or '-')}</code><div class='sub'>{badge(item.get('priority'))}</div></td>"
@@ -651,7 +666,7 @@ def _domain_review_task_rows(pairwise_tasks: Mapping[str, Any]) -> list[str]:
             f"<td><code>{p_esc(new_path)}</code></td>"
             f"<td>{p_esc(why)}</td>"
             f"<td><details><summary>Show command</summary><div class='cmd'><code>{p_esc(cmd)}</code><button class='copy' onclick='copyText({_json_arg(cmd)}, this)'>Copy</button></div></details></td>"
-            f"<td>{badge(item.get('status'))}</td>"
+            f"<td>{badge(status)}<div class='sub'>{p_esc(status or '-')}</div><div class='sub'>{p_esc(result_note)}</div>{result_link}</td>"
             "</tr>"
         )
     return rows

@@ -15,6 +15,7 @@ Last Updated: 2026-06-21
 | Area | Source |
 |---|---|
 | Agent rules | `AGENT.md` |
+| Product scope | `docs/01_product_scope.md` |
 | Data and status contract | `docs/02_data_rule_contract.md` |
 | Engineering structure and runbook | `docs/03_engineering_delivery.md` |
 | UI/report boundary | `docs/04_ui_iteration.md` |
@@ -25,6 +26,14 @@ Last Updated: 2026-06-21
 ## Generated Outputs
 
 Generated scan/diff/release/catalog HTML under `work/` is preview output. The source of truth is code and JSON data under `src/lib_guard`.
+
+## Workflow Pack
+
+The reusable PD agent workflow pack has been merged into this repository in a lib_guard-specific form. Keep generic workflow helpers separate from production lib_guard renderers:
+
+- Production reports: `src/lib_guard/render/`
+- Workflow helpers: `scripts/build_ui_context.py`, `scripts/render_dashboard.py`
+- Long-term flow docs: `flows/`
 
 ## Current Open Questions
 

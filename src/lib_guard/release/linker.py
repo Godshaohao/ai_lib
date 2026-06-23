@@ -329,4 +329,10 @@ def link_release_from_manifest(
         },
     }
     _write_json(run_dir / "release_link_result.json", result)
+    try:
+        from lib_guard.review.release_result import release_result_from_link
+
+        _write_json(run_dir / "release_result.json", release_result_from_link(result))
+    except Exception:
+        pass
     return result

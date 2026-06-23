@@ -58,7 +58,15 @@ def run_diff_render(args: Namespace) -> int:
 def run_file_diff(args: Namespace) -> int:
     from lib_guard.diff.file_diff import diff_pairwise_files
 
-    result = diff_pairwise_files(args.file_type, args.old, args.new, args.out)
+    result = diff_pairwise_files(
+        args.file_type,
+        args.old,
+        args.new,
+        args.out,
+        task_id=getattr(args, "task_id", None),
+        library_id=getattr(args, "library_id", None),
+        version_id=getattr(args, "version_id", None),
+        base_version=getattr(args, "base_version", None),
+    )
     print_json(result)
     return 0 if result.get("status") in {"SAME", "DIFF"} else 2
-
