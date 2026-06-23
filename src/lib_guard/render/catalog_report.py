@@ -1,20 +1,20 @@
-"""Team-oriented catalog and version review HTML renderer."""
+"""Catalog HTML renderer using the shared Review Navigation theme.
+
+Catalog is the user entry. It should help users find a library, open the library
+Diff Timeline, then enter a selected comparison and File Diff result. Scan and
+Release remain evidence pages, not the primary navigation path.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Mapping
-import html
 import json
 import re
 
 from lib_guard.review import build_review_state, build_review_tasks
 from lib_guard.review.io import as_file_href, read_json, write_json
-from lib_guard.review.status import label, tone
-
-
-def _esc(value: Any) -> str:
-    return html.escape("" if value is None else str(value))
+from lib_guard.render import product_theme as ui
 
 
 def _safe(value: Any) -> str:
@@ -22,131 +22,278 @@ def _safe(value: Any) -> str:
     return text or "item"
 
 
-def _badge(status: Any, text: Any | None = None) -> str:
-    return f"<span class='badge {tone(status)}'>{_esc(text if text is not None else label(status))}</span>"
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
-def _button(text: str, href: str = "", *, disabled: bool = False, kind: str = "") -> str:
-    cls = f"btn {kind}".strip()
-    if disabled or not href:
-        return f"<span class='{cls} disabled'>{_esc(text)}</span>"
-    return f"<a class='{cls}' href='{_esc(href)}'>{_esc(text)}</a>"
+def _version_links(version: Mapping[str, Any]) -> Mapping[str, Any]:
+    return version.get("links") or {}
 
 
-def _trace(value: Any) -> str:
-    return f"<span class='muted trace'>{_esc(value)}</span>" if value else ""
+def _href(path: Any) -> str:
+    return as_file_href(path) if path else ""
 
 
-def _copy(command: str) -> str:
-    if not command:
-        return "<span class='muted'>需要人工确认后生成命令</span>"
-    payload = json.dumps(command, ensure_ascii=False)
-    return f"<div class='command'><code>{_esc(command)}</code><button onclick='copyText({payload}, this)'>复制</button></div>"
+def _raw_link_trace(links: Mapping[str, Any]) -> str:
+    raw = [links.get("scan_html"), links.get("diff_html"), links.get("pairwise_html"), links.get("release_html")]
+    return "".join(f"<span class='muted'>{ui.esc(item)}</span>" for item in raw if item)
 
 
-def _css() -> str:
-    return """
-:root{--ink:#172033;--muted:#667085;--line:#d9e2ec;--wash:#f6f8fb;--panel:#fff;--blue:#155eef;--green:#168253;--amber:#a15c00;--red:#c0332b;--shadow:0 14px 38px rgba(16,24,40,.08)}
-*{box-sizing:border-box} body{margin:0;background:#f7f9fc;color:var(--ink);font-family:"Microsoft YaHei","Segoe UI",Arial,sans-serif}
-.shell{max-width:1480px;margin:0 auto;padding:22px 24px 56px}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-end;margin-bottom:16px}
-h1{font-size:25px;margin:0 0 7px;font-weight:760}.sub{color:var(--muted);font-size:13px;line-height:1.55}.mini{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-.stat{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 10px;font-size:12px;color:#344054}
-.toolbar{display:grid;grid-template-columns:minmax(260px,1fr) auto;gap:12px;margin:12px 0 16px}.search{width:100%;border:1px solid var(--line);border-radius:8px;padding:11px 12px;font-size:14px;background:#fff}
-.chips{display:flex;gap:8px;flex-wrap:wrap}.chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 11px;font-size:12px;cursor:pointer}.chip.active{border-color:#9cc2ff;background:#eef5ff;color:#1849a9}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);margin:14px 0}.panel-head{padding:15px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:center}.panel-body{padding:14px 16px}
-details.panel>summary{list-style:none;cursor:pointer;padding:15px 16px;font-weight:720}details.panel>summary::-webkit-details-marker{display:none}
-.library{border:1px solid var(--line);border-radius:8px;background:#fff;margin:10px 0;overflow:hidden}.lib-main{display:grid;grid-template-columns:minmax(220px,1.25fr) 1fr .8fr .7fr auto;gap:12px;align-items:center;padding:13px 14px}.lib-title{font-size:17px;font-weight:760}.path{font-size:12px;color:var(--muted);line-height:1.55;word-break:break-all}.actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
-.versions{border-top:1px solid var(--line);background:#fbfcfe}.version{display:grid;grid-template-columns:minmax(200px,1.2fr) .7fr .7fr .7fr .7fr 1.45fr auto;gap:10px;align-items:center;padding:10px 14px;border-top:1px solid #edf1f5}.version:first-child{border-top:0}
-.badge{display:inline-flex;align-items:center;min-height:24px;border-radius:999px;border:1px solid #d0d7e2;background:#f5f7fa;color:#344054;padding:3px 8px;font-size:12px;white-space:nowrap}.badge.ok{border-color:#b7dfc8;background:#eefaf3;color:var(--green)}.badge.warn{border-color:#f1cf99;background:#fff7e8;color:var(--amber)}.badge.bad{border-color:#efb3ac;background:#fff1f0;color:var(--red)}.badge.muted{border-color:#d5dbe5;background:#f3f5f8;color:#667085}
-.btn{display:inline-flex;align-items:center;justify-content:center;min-height:30px;padding:6px 9px;border-radius:6px;border:1px solid #cfd8e6;background:#fff;color:#155eef;text-decoration:none;font-size:12px;white-space:nowrap}.btn.primary{background:#155eef;color:#fff;border-color:#155eef}.btn.disabled{color:#98a2b3;background:#f4f6f8}
-table{width:100%;border-collapse:collapse;font-size:13px}th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top}th{background:var(--wash);color:#344054}.muted{color:var(--muted);font-size:12px}.command{display:flex;gap:8px;align-items:center;max-width:680px}.command code{background:#f2f5f9;border:1px solid #dce4ee;border-radius:6px;padding:6px 8px;white-space:normal;word-break:break-word;font-size:12px}.command button{border:1px solid #b9c7da;background:#fff;border-radius:6px;padding:6px 9px;cursor:pointer}
-.review-grid{display:grid;grid-template-columns:1.25fr .85fr;gap:14px}.kv{display:grid;grid-template-columns:160px 1fr;gap:8px;font-size:13px}.kv div:nth-child(odd){color:#667085}.nav{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 0}.nav a{color:#155eef;text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 10px;font-size:12px}
-@media(max-width:980px){.toolbar,.lib-main,.version,.review-grid{grid-template-columns:1fr}.actions{justify-content:flex-start}.mini{justify-content:flex-start}}
-"""
+def _status_key(value: Any) -> str:
+    return str(value or "UNKNOWN").strip().upper()
 
 
-def _script() -> str:
-    return """
-function copyText(text, btn){navigator.clipboard&&navigator.clipboard.writeText(text); if(btn){var old=btn.textContent;btn.textContent='已复制';setTimeout(function(){btn.textContent=old},1200)}}
-function filterCatalog(){
-  var q=(document.getElementById('search').value||'').toLowerCase();
-  var active=document.querySelector('.chip.active');
-  var status=active?active.getAttribute('data-status'):'all';
-  document.querySelectorAll('.library').forEach(function(lib){
-    var text=lib.textContent.toLowerCase();
-    var hit=!q||text.indexOf(q)>=0;
-    var st=status==='all'||lib.getAttribute('data-overall')===status;
-    lib.style.display=(hit&&st)?'':'none';
-  });
-}
-function setStatusFilter(el){document.querySelectorAll('.chip').forEach(function(x){x.classList.remove('active')});el.classList.add('active');filterCatalog()}
-"""
+def _version_tags(version: Mapping[str, Any]) -> set[str]:
+    tags: set[str] = set()
+    overall = _status_key(version.get("overall_status"))
+    scan = _status_key(version.get("scan_status"))
+    diff = _status_key(version.get("diff_status"))
+    pair = _status_key(version.get("pairwise_status"))
+    release = _status_key(version.get("release_status"))
+    if overall in {"BLOCK", "BLOCKED", "FAILED", "ERROR"}:
+        tags.add("block")
+    if overall in {"REVIEW", "NEEDS_REVIEW", "MANUAL_REVIEW"} or diff in {"DIFF", "CHANGED", "REVIEW_REQUIRED"}:
+        tags.add("review")
+    if scan in {"NOT_SCANNED", "SCAN_MISSING"}:
+        tags.add("not_scanned")
+    if diff in {"DIFF", "CHANGED", "REVIEW_REQUIRED", "NEEDS_FILE_DIFF"}:
+        tags.add("changed")
+    if pair in {"PAIRWISE_PENDING", "PAIRWISE_PARTIAL", "FILE_DIFF_PENDING", "NEEDS_FILE_DIFF"}:
+        tags.add("file_diff_pending")
+    if release in {"RELEASED", "APPLIED", "PASS"}:
+        tags.add("released")
+    if not tags:
+        tags.add("clear")
+    return tags
 
 
-def _page(title: str, subtitle: str, body: str, *, nav: str = "") -> str:
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{_esc(title)}</title>
-  <style>{_css()}</style>
-</head>
-<body>
-<main class="shell">
-  <div class="top">
-    <div><h1>{_esc(title)}</h1><div class="sub">{_esc(subtitle)}</div>{nav}</div>
-  </div>
-  {body}
-</main>
-<script>{_script()}</script>
-</body>
-</html>"""
+def _library_tags(lib: Mapping[str, Any]) -> set[str]:
+    tags: set[str] = set()
+    for version in lib.get("versions", []) or []:
+        tags.update(_version_tags(version))
+    if not tags:
+        tags.add("clear")
+    return tags
 
 
-def _library_rows(state: Mapping[str, Any]) -> str:
-    rows = []
-    for lib in state.get("libraries", []) or []:
-        versions = lib.get("versions", []) or []
-        latest = lib.get("latest_version") or "-"
-        approved = lib.get("approved_version") or "-"
-        status = lib.get("overall_status") or "UNKNOWN"
-        version_rows = []
-        for ver in versions:
-            links = ver.get("links") or {}
-            pair = ver.get("pairwise_summary") or {}
-            pair_text = f"{pair.get('done', 0)}/{pair.get('total', 0)}" if pair.get("total") else label(ver.get("pairwise_status"))
-            command = str(ver.get("next_command") or "")
-            version_rows.append(
-                "<div class='version'>"
-                f"<div><b>{_esc(ver.get('version_id'))}</b><div class='path'>{_esc(ver.get('raw_path'))}</div></div>"
-                f"<div>{_badge(ver.get('scan_status'))}</div>"
-                f"<div>{_badge(ver.get('diff_status'))}</div>"
-                f"<div>{_badge(ver.get('pairwise_status'), pair_text)}</div>"
-                f"<div>{_badge(ver.get('release_status'))}</div>"
-                f"<div>{_copy(command)}<div class='muted'>{_esc(ver.get('next_reason'))}</div></div>"
-                "<div class='actions'>"
-                f"{_button('Review', links.get('version_review_html'), kind='primary')}"
-                f"{_button('Scan', as_file_href(links.get('scan_html')), disabled=not links.get('scan_html'))}"
-                f"{_button('Diff', as_file_href(links.get('diff_html')), disabled=not links.get('diff_html'))}"
-                f"{_button('Pairwise', as_file_href(links.get('pairwise_html')), disabled=not links.get('pairwise_html'))}"
-                f"{_button('Release', as_file_href(links.get('release_html')), disabled=not links.get('release_html'))}"
-                "</div>"
-                f"{_trace(links.get('scan_html'))}{_trace(links.get('diff_html'))}{_trace(links.get('release_html'))}</div>"
-            )
-        rows.append(
-            f"<section class='library' data-overall='{_esc(status)}'>"
-            "<div class='lib-main'>"
-            f"<div><div class='lib-title'>{_esc(lib.get('display_name'))}</div><div class='path'>{_esc(lib.get('library_id'))}</div></div>"
-            f"<div><b>{_esc(lib.get('vendor') or '-')}</b><div class='path'>{_esc(lib.get('middle_path') or lib.get('library_root') or '-')}</div></div>"
-            f"<div><span class='muted'>latest</span><br><b>{_esc(latest)}</b></div>"
-            f"<div><span class='muted'>current</span><br><b>{_esc(approved)}</b></div>"
-            f"<div class='actions'>{_badge(status)}<span class='stat'>{_esc(len(versions))} versions</span></div>"
-            "</div>"
-            f"<div class='versions'>{''.join(version_rows)}</div>"
-            "</section>"
+def _pairwise_text(version: Mapping[str, Any]) -> str:
+    pair = version.get("pairwise_summary") or {}
+    total = int(pair.get("total", 0) or 0)
+    done = int(pair.get("done", 0) or 0)
+    if total:
+        return f"{done}/{total}"
+    return ui.status_label(version.get("pairwise_status"))
+
+
+def _build_comparisons_for_library(lib: Mapping[str, Any]) -> list[dict[str, Any]]:
+    comparisons: list[dict[str, Any]] = []
+    versions = list(lib.get("versions", []) or [])
+    prev_version = None
+    for version in versions:
+        links = _version_links(version)
+        diff = version.get("diff") or {}
+        version_id = version.get("version_id") or version.get("version") or "-"
+        base_version = version.get("base_version") or diff.get("base_version") or diff.get("cumulative_base_version")
+        adjacent_old = diff.get("adjacent_old_version") or prev_version
+        for mode, old in [("adjacent", adjacent_old), ("base", base_version)]:
+            if not old or str(old) == str(version_id):
+                continue
+            pair = version.get("pairwise_summary") or {}
+            comparisons.append({
+                "comparison_id": f"{mode}__{old}__{version_id}",
+                "library_id": lib.get("library_id"),
+                "old_version": old,
+                "new_version": version_id,
+                "mode": mode,
+                "status": version.get("diff_status") or "COMPARE_PENDING",
+                "review_level": version.get("overall_status") or version.get("diff_status") or "UNKNOWN",
+                "diff_html": _href(links.get("diff_html")),
+                "pairwise_total": int(pair.get("total", 0) or 0),
+                "pairwise_done": int(pair.get("done", 0) or 0),
+                "release_impact": version.get("release_status") or "RELEASE_CHECK_REQUIRED",
+            })
+        prev_version = version_id
+    return comparisons
+
+
+def _render_library_diff_timeline(out: Path, lib: Mapping[str, Any]) -> str:
+    lib_id = str(lib.get("library_id") or lib.get("display_name") or "library")
+    safe = _safe(lib_id)
+    html_path = out / "libraries" / safe / "diff_timeline.html"
+    comparisons = _build_comparisons_for_library(lib)
+    (html_path.parent / "diff_index.json").write_text(json.dumps({
+        "schema_version": "library_diff_index.v1",
+        "library_id": lib_id,
+        "display_name": lib.get("display_name"),
+        "comparisons": comparisons,
+    }, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+    changed = sum(1 for c in comparisons if _status_key(c.get("status")) in {"DIFF", "CHANGED", "REVIEW_REQUIRED", "NEEDS_FILE_DIFF"})
+    pending = sum(1 for c in comparisons if int(c.get("pairwise_total", 0) or 0) > int(c.get("pairwise_done", 0) or 0))
+    nav = "<a href='../../index.html'>Catalog</a><a class='active' href='#'>Diff Timeline</a><a href='#'>Selected Diff</a><a href='#'>File Diff</a>"
+    body = (
+        ui.panel(
+            "库级 Diff Timeline",
+            "一个 library 的多版本 comparison 入口。普通用户先看这里，再进入 Selected Diff Review。",
+            ui.metric_grid([
+                ("Versions", len(lib.get("versions", []) or []), "catalog versions", "PASS"),
+                ("Comparisons", len(comparisons), "adjacent / base", "PASS" if comparisons else "WARNING"),
+                ("Changed", changed, "有变化的 comparison", "WARNING" if changed else "PASS"),
+                ("File Diff 待完成", pending, "pairwise pending", "WARNING" if pending else "PASS"),
+            ]) + ui.compact_meta([
+                ("Library", lib_id),
+                ("Vendor", lib.get("vendor") or "-"),
+                ("Path", lib.get("middle_path") or lib.get("library_root") or "-"),
+            ]),
         )
-    return "".join(rows) or "<div class='panel'><div class='panel-body muted'>暂无库。</div></div>"
+        + ui.panel("筛选 / 滑动", "横向滑动查看多个 comparison。", ui.comparison_filter_bar() + ui.timeline(comparisons))
+        + ui.collapsible_panel(
+            "Comparison 明细",
+            "用于定位每次 old → new 的状态和 File Diff 完成情况。",
+            ui.filterable_table(
+                f"cmp-{safe}",
+                ["Mode", "Old", "New", "Status", "File Diff", "Release", "Open"],
+                [
+                    "<tr>"
+                    f"<td><code>{ui.esc(c.get('mode'))}</code></td>"
+                    f"<td><code>{ui.esc(c.get('old_version'))}</code></td>"
+                    f"<td><code>{ui.esc(c.get('new_version'))}</code></td>"
+                    f"<td>{ui.badge(c.get('status'))}</td>"
+                    f"<td>{ui.esc(c.get('pairwise_done', 0))}/{ui.esc(c.get('pairwise_total', 0))}</td>"
+                    f"<td>{ui.badge(c.get('release_impact'))}</td>"
+                    f"<td>{ui.button('打开 Diff', c.get('diff_html'), 'primary', disabled=not bool(c.get('diff_html')), target='_blank')}</td>"
+                    "</tr>"
+                    for c in comparisons
+                ],
+                "暂无 comparison",
+                "筛选 old / new / mode / status",
+            ),
+            open=True,
+        )
+    )
+    html = ui.review_page_shell(
+        f"{lib.get('display_name') or lib_id} / Diff Timeline",
+        "DIFF TIMELINE",
+        "库级版本变化导航。Scan / Release 是证据页，Selected Diff 和 File Diff 是主要审阅入口。",
+        body,
+        decision="REVIEW" if changed or pending else "PASS",
+        nav=nav,
+        meta=ui.compact_meta([("Library", lib_id), ("Comparisons", len(comparisons)), ("Pending File Diff", pending)]),
+    )
+    _write_text(html_path, html)
+    return str(html_path)
+
+
+def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any) -> str:
+    links = _version_links(version)
+    version_id = str(version.get("version_id") or version.get("version") or "-")
+    is_latest = "1" if str(version_id) == str(latest) else "0"
+    command = str(version.get("next_command") or "")
+    tags = ",".join(sorted(_version_tags(version)))
+    actions = ui.action_strip([
+        ui.button("Review", _href(links.get("version_review_html")), "primary", disabled=not links.get("version_review_html"), target="_blank"),
+        ui.button("Scan", _href(links.get("scan_html")), disabled=not links.get("scan_html"), target="_blank"),
+        ui.button("Diff", _href(links.get("diff_html")), disabled=not links.get("diff_html"), target="_blank"),
+        ui.button("File Diff", _href(links.get("pairwise_html")), disabled=not links.get("pairwise_html"), target="_blank"),
+        ui.button("Release", _href(links.get("release_html")), disabled=not links.get("release_html"), target="_blank"),
+    ])
+    return (
+        f"<div class='version-row' data-tags='{ui.esc(tags)}' data-latest='{is_latest}'>"
+        f"<div><div class='version-name'>{ui.esc(version_id)}</div><div class='version-path' title='{ui.esc(version.get('raw_path'))}'>{ui.esc(version.get('raw_path') or '-')}</div></div>"
+        f"<div>{ui.badge(version.get('scan_status'))}</div>"
+        f"<div>{ui.badge(version.get('diff_status'))}</div>"
+        f"<div>{ui.badge(version.get('pairwise_status'), _pairwise_text(version))}</div>"
+        f"<div>{ui.badge(version.get('release_status'))}</div>"
+        f"<div class='version-next'>{ui.command_chip(command)}<span class='muted'>{ui.esc(version.get('next_reason') or '')}</span></div>"
+        f"<div>{actions}{_raw_link_trace(links)}</div>"
+        "</div>"
+    )
+
+
+def _library_card(out: Path, lib: Mapping[str, Any]) -> str:
+    versions = list(lib.get("versions", []) or [])
+    latest = lib.get("latest_version") or (versions[-1].get("version_id") if versions else "-")
+    approved = lib.get("approved_version") or lib.get("current_version") or "-"
+    status = lib.get("overall_status") or "UNKNOWN"
+    vendor = str(lib.get("vendor") or "Unknown")
+    middle = str(lib.get("middle_path") or lib.get("library_root") or "-")
+    stages = sorted({str(v.get("stage") or "unknown") for v in versions})
+    tags = _library_tags(lib)
+    timeline_path = _render_library_diff_timeline(out, lib)
+    actions = ui.action_strip([
+        ui.button("Diff Timeline", _href(timeline_path), "primary", target="_blank"),
+        ui.button("Latest Scan", _href((versions[-1].get("links") or {}).get("scan_html") if versions else ""), disabled=not versions or not (versions[-1].get("links") or {}).get("scan_html"), target="_blank"),
+        ui.button("Latest Diff", _href((versions[-1].get("links") or {}).get("diff_html") if versions else ""), disabled=not versions or not (versions[-1].get("links") or {}).get("diff_html"), target="_blank"),
+    ])
+    version_rows = "".join(_version_row(lib, v, latest) for v in reversed(versions))
+    return (
+        f"<section class='library-card' data-overall='{ui.esc(status)}' data-vendor='{ui.esc(vendor)}' data-stages='{ui.esc(','.join(stages))}' data-tags='{ui.esc(','.join(sorted(tags)))}'>"
+        "<div class='library-main'>"
+        f"<div><div class='library-title'>{ui.esc(lib.get('display_name') or lib.get('library_name') or lib.get('library_id'))}</div><div class='library-path' title='{ui.esc(lib.get('library_id'))}'>{ui.esc(lib.get('library_id') or '-')}</div></div>"
+        f"<div><b>{ui.esc(vendor)}</b><div class='library-path' title='{ui.esc(middle)}'>{ui.esc(middle)}</div></div>"
+        f"<div><span class='muted'>latest</span><br><b>{ui.esc(latest)}</b></div>"
+        f"<div><span class='muted'>current</span><br><b>{ui.esc(approved)}</b></div>"
+        f"<div class='library-status'>{ui.badge(status)}<span class='browser-count'>{len(versions)} versions</span>{actions}</div>"
+        "</div>"
+        f"<details class='version-drawer'><summary>Versions / 版本明细</summary><div class='version-list'>{version_rows or '<div class=\'catalog-empty\'>暂无 version</div>'}</div></details>"
+        "</section>"
+    )
+
+
+def _group_libraries(libraries: list[Mapping[str, Any]]) -> dict[tuple[str, str], list[Mapping[str, Any]]]:
+    grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for lib in libraries:
+        key = (str(lib.get("vendor") or "Unknown"), str(lib.get("middle_path") or lib.get("library_root") or "-"))
+        grouped.setdefault(key, []).append(lib)
+    return dict(sorted(grouped.items(), key=lambda kv: (kv[0][0], kv[0][1])))
+
+
+def _library_browser(out: Path, state: Mapping[str, Any]) -> str:
+    libraries = list(state.get("libraries", []) or [])
+    groups = _group_libraries(libraries)
+    group_html = []
+    for (vendor, middle), libs in groups.items():
+        cards = "".join(_library_card(out, lib) for lib in libs)
+        has_attention = any((_library_tags(lib) & {"review", "block", "file_diff_pending", "not_scanned"}) for lib in libs)
+        group_html.append(
+            f"<details class='library-group' {'open' if has_attention else ''}>"
+            f"<summary><div class='library-group-title'><b>{ui.esc(vendor)}</b><span>{ui.esc(middle)}</span></div><span class='browser-count'>{len(libs)} libraries</span></summary>"
+            f"<div class='library-group-body'>{cards}</div>"
+            "</details>"
+        )
+    return "<div class='library-browser' data-catalog-browser data-status-filter='all'>" + ("".join(group_html) or "<div class='catalog-empty'>暂无 library</div>") + "</div>"
+
+
+def _catalog_filter_panel(state: Mapping[str, Any]) -> str:
+    libraries = list(state.get("libraries", []) or [])
+    vendors = sorted({str(lib.get("vendor") or "Unknown") for lib in libraries})
+    stages = sorted({str(v.get("stage") or "unknown") for lib in libraries for v in (lib.get("versions", []) or [])})
+    vendor_opts = "<option value='all'>全部 Vendor</option>" + "".join(f"<option value='{ui.esc(v)}'>{ui.esc(v)}</option>" for v in vendors)
+    stage_opts = "<option value='all'>全部 Stage</option>" + "".join(f"<option value='{ui.esc(s)}'>{ui.esc(s)}</option>" for s in stages)
+    chips = [
+        ("all", "全部"), ("review", "需审阅"), ("block", "阻塞"), ("not_scanned", "未 Scan"),
+        ("changed", "有变化"), ("file_diff_pending", "File Diff 待完成"), ("released", "已 Release"), ("clear", "无关注项"),
+    ]
+    chip_html = "".join(f"<button type='button' class='filter-chip {'active' if k == 'all' else ''}' data-catalog-status-chip='{k}' onclick=\"setCatalogStatusFilter('{k}', this)\">{ui.esc(v)}</button>" for k, v in chips)
+    body = (
+        "<div class='search'><span>搜索</span><input id='catalog-search' type='search' placeholder='library / version / vendor / path' oninput='filterCatalogBrowser()'></div>"
+        "<div class='filter-group-title'>Vendor</div>"
+        f"<select id='catalog-vendor' onchange='filterCatalogBrowser()'>{vendor_opts}</select>"
+        "<div class='filter-group-title'>Stage</div>"
+        f"<select id='catalog-stage' onchange='filterCatalogBrowser()'>{stage_opts}</select>"
+        "<label style='display:flex;gap:8px;align-items:center;margin:10px 0;color:#667085;font-size:13px'><input id='catalog-latest' type='checkbox' onchange='filterCatalogBrowser()'> 只看 latest version</label>"
+        "<div class='filter-group-title'>状态</div>"
+        f"<div class='catalog-chips'>{chip_html}</div>"
+        "<div class='filter-group-title'>操作</div>"
+        + ui.action_strip([
+            "<button class='btn secondary' type='button' onclick=\"catalogExpand('review')\">展开关注项</button>",
+            "<button class='btn secondary' type='button' onclick=\"catalogExpand('collapse')\">折叠全部</button>",
+            "<button class='btn secondary' type='button' onclick='resetCatalogFilters()'>重置</button>",
+        ])
+        + "<div id='catalog-visible-count' class='browser-count' style='margin-top:12px'>-</div>"
+        + "<script>setTimeout(filterCatalogBrowser,0)</script>"
+    )
+    return ui.panel("筛选", "按库、版本、Vendor、Stage、状态快速定位。", body)
 
 
 def _task_rows(tasks: Mapping[str, Any]) -> list[str]:
@@ -154,181 +301,199 @@ def _task_rows(tasks: Mapping[str, Any]) -> list[str]:
     for task in tasks.get("tasks", []) or []:
         rows.append(
             "<tr>"
-            f"<td>{_badge(task.get('priority'), task.get('priority'))}</td>"
-            f"<td>{_esc(task.get('task_type'))}</td>"
-            f"<td><b>{_esc(task.get('display_name'))}</b><div class='muted'>{_esc(task.get('version_id'))}</div></td>"
-            f"<td>{_esc(task.get('reason'))}</td>"
-            f"<td>{_copy(str(task.get('command') or ''))}</td>"
+            f"<td>{ui.badge(task.get('priority'), task.get('priority'))}</td>"
+            f"<td><code>{ui.esc(task.get('task_type'))}</code></td>"
+            f"<td><b>{ui.esc(task.get('display_name'))}</b><div class='muted'>{ui.esc(task.get('version_id'))}</div></td>"
+            f"<td>{ui.esc(task.get('reason'))}</td>"
+            f"<td>{ui.command_chip(task.get('command'))}</td>"
             "</tr>"
         )
     return rows
 
 
-def _table(headers: list[str], rows: list[str], empty: str) -> str:
-    head = "".join(f"<th>{_esc(h)}</th>" for h in headers)
-    body = "".join(rows) or f"<tr><td colspan='{len(headers)}' class='muted'>{_esc(empty)}</td></tr>"
-    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
-
-
-def _summary(state: Mapping[str, Any], tasks: Mapping[str, Any]) -> dict[str, int]:
+def _summary_metrics(state: Mapping[str, Any], tasks: Mapping[str, Any]) -> list[tuple[str, Any, str, Any]]:
     libs = list(state.get("libraries", []) or [])
     versions = [v for lib in libs for v in lib.get("versions", []) or []]
-    return {
-        "libraries": len(libs),
-        "versions": len(versions),
-        "review": sum(1 for v in versions if v.get("overall_status") == "REVIEW"),
-        "block": sum(1 for v in versions if v.get("overall_status") == "BLOCK"),
-        "not_scanned": sum(1 for v in versions if v.get("scan_status") == "NOT_SCANNED"),
-        "diff_pending": sum(1 for v in versions if v.get("diff_status") in {"DIFF_PENDING", "DIFF_NOT_READY"}),
-        "pairwise_pending": sum(1 for v in versions if v.get("pairwise_status") in {"PAIRWISE_PENDING", "PAIRWISE_PARTIAL"}),
-        "tasks": len(tasks.get("tasks", []) or []),
-    }
-
-
-def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> None:
-    links = version.get("links") or {}
-    page = out / str(links.get("version_review_html"))
-    page.parent.mkdir(parents=True, exist_ok=True)
-    pair = version.get("pairwise_summary") or {}
-    nav = (
-        "<nav class='nav'>"
-        "<a href='../../../index.html'>Catalog</a>"
-        f"<a href='{_esc(as_file_href(links.get('scan_html')))}'>Scan</a>"
-        f"<a href='{_esc(as_file_href(links.get('diff_html')))}'>Diff</a>"
-        f"<a href='{_esc(as_file_href(links.get('pairwise_html')))}'>Pairwise</a>"
-        f"<a href='{_esc(as_file_href(links.get('release_html')))}'>Release</a>"
-        "</nav>"
-    )
-    kv = [
-        ("Library", lib.get("display_name")),
-        ("Vendor", lib.get("vendor") or "-"),
-        ("Path", lib.get("library_root") or "-"),
-        ("Version", version.get("version_id")),
-        ("Stage", version.get("stage")),
-        ("Parent", version.get("parent_version") or "-"),
-        ("Base", version.get("base_version") or "-"),
-        ("Raw Path", version.get("raw_path") or "-"),
+    file_diff_pending = sum(1 for v in versions if "file_diff_pending" in _version_tags(v))
+    changed = sum(1 for v in versions if "changed" in _version_tags(v))
+    return [
+        ("Libraries", len(libs), "library count", "PASS"),
+        ("Versions", len(versions), "version count", "PASS"),
+        ("Changed", changed, "有变化版本", "WARNING" if changed else "PASS"),
+        ("File Diff 待完成", file_diff_pending, "需要进入 File Diff 的版本", "WARNING" if file_diff_pending else "PASS"),
+        ("Tasks", len(tasks.get("tasks", []) or []), "自动生成的下一步任务", "WARNING" if tasks.get("tasks") else "PASS"),
     ]
-    kv_html = "<div class='kv'>" + "".join(f"<div>{_esc(k)}</div><div>{_esc(v)}</div>" for k, v in kv) + "</div>"
-    task_rows = []
-    for task in version.get("pairwise_tasks", []) or []:
-        result = task.get("result") or {}
-        task_rows.append(
-            "<tr>"
-            f"<td>{_badge(task.get('status'))}</td>"
-            f"<td>{_esc(task.get('file_type'))}</td>"
-            f"<td>{_esc(task.get('reason'))}</td>"
-            f"<td>{_copy(str(task.get('command') or ''))}</td>"
-            f"<td>{_button('Open', as_file_href(result.get('html')), disabled=not result.get('html'))}</td>"
-            "</tr>"
-        )
+
+
+def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> str:
+    lib_id = str(lib.get("library_id") or lib.get("display_name") or "library")
+    version_id = str(version.get("version_id") or version.get("version") or "version")
+    safe_lib = _safe(lib_id)
+    safe_ver = _safe(version_id)
+    page = out / "libraries" / safe_lib / "versions" / safe_ver / "index.html"
+    links = _version_links(version)
+    tags = _version_tags(version)
+    timeline = out / "libraries" / safe_lib / "diff_timeline.html"
+    rail = ui.status_rail([
+        ("Catalog", "DISCOVERED", "版本已进入 catalog"),
+        ("Scan", version.get("scan_status") or "NOT_SCANNED", "单版本证据页"),
+        ("Diff", version.get("diff_status") or "COMPARE_PENDING", "进入 Diff Timeline 选择 comparison"),
+        ("File Diff", version.get("pairwise_status") or "PAIRWISE_EMPTY", _pairwise_text(version)),
+        ("Release", version.get("release_status") or "RELEASE_CHECK_REQUIRED", "发布一致性检查"),
+    ])
     body = (
-        "<section class='panel'><div class='panel-head'><b>Status Strip</b>"
-        f"<div class='actions'>{_badge(version.get('catalog_status'))}{_badge(version.get('scan_status'))}{_badge(version.get('diff_status'))}{_badge(version.get('pairwise_status'), str(pair.get('done', 0)) + '/' + str(pair.get('total', 0)) if pair.get('total') else None)}{_badge(version.get('release_status'))}</div></div>"
-        f"<div class='panel-body review-grid'><div>{kv_html}</div><div><h3>Next Action</h3>{_badge(version.get('next_action'), version.get('next_action'))}{_copy(str(version.get('next_command') or ''))}<p class='sub'>{_esc(version.get('next_reason'))}</p></div></div></section>"
-        "<section class='panel'><div class='panel-head'><b>Evidence Links</b></div><div class='panel-body actions'>"
-        f"{_button('Scan Report', as_file_href(links.get('scan_html')), disabled=not links.get('scan_html'))}"
-        f"{_button('Diff Report', as_file_href(links.get('diff_html')), disabled=not links.get('diff_html'))}"
-        f"{_button('Pairwise Review', as_file_href(links.get('pairwise_html')), disabled=not links.get('pairwise_html'))}"
-        f"{_button('Release Report', as_file_href(links.get('release_html')), disabled=not links.get('release_html'))}"
-        f"{_button('Raw Path', as_file_href(version.get('raw_path')), disabled=not version.get('raw_path'))}"
-        "</div></section>"
-        "<section class='panel' id='pairwise'><div class='panel-head'><b>Pairwise Review Tasks</b></div><div class='panel-body'>"
-        + _table(["Status", "Type", "Reason", "Command", "Result"], task_rows, "暂无 pairwise 任务。")
-        + "</div></section>"
+        ui.panel(
+            "版本导航",
+            "普通用户优先打开 Diff Timeline；Scan / Release 作为证据页。",
+            ui.metric_grid([
+                ("Scan", ui.status_label(version.get("scan_status")), "单版本扫描", version.get("scan_status")),
+                ("Diff", ui.status_label(version.get("diff_status")), "版本变化", version.get("diff_status")),
+                ("File Diff", _pairwise_text(version), "文件级任务", version.get("pairwise_status")),
+                ("Release", ui.status_label(version.get("release_status")), "发布检查", version.get("release_status")),
+            ]) + ui.compact_meta([
+                ("Library", lib_id), ("Version", version_id), ("Raw Path", version.get("raw_path") or "-"), ("Stage", version.get("stage") or "-"),
+            ]),
+        )
+        + ui.panel("主要入口", "先看库级版本变化，再打开 Selected Diff / File Diff。", ui.action_strip([
+            ui.button("Diff Timeline", _href(timeline), "primary", target="_blank"),
+            ui.button("Scan Review", _href(links.get("scan_html")), disabled=not links.get("scan_html"), target="_blank"),
+            ui.button("Selected Diff", _href(links.get("diff_html")), disabled=not links.get("diff_html"), target="_blank"),
+            ui.button("File Diff", _href(links.get("pairwise_html")), disabled=not links.get("pairwise_html"), target="_blank"),
+            ui.button("Release Review", _href(links.get("release_html")), disabled=not links.get("release_html"), target="_blank"),
+        ]))
+        + ui.next_action_panel("下一步", str(version.get("next_command") or ""), str(version.get("next_reason") or "优先进入 Diff Timeline 查看版本变化。"), status=version.get("overall_status") or "INFO")
+        + ui.collapsible_panel("Trace Links", "证据链接默认折叠。", ui.trace_link_list([
+            ("scan_html", _href(links.get("scan_html")), "单版本 Scan Review"),
+            ("diff_html", _href(links.get("diff_html")), "Selected Diff Review"),
+            ("pairwise_html", _href(links.get("pairwise_html")), "File Diff 汇总或结果"),
+            ("release_html", _href(links.get("release_html")), "Release Review"),
+        ]), open=False)
     )
-    page.write_text(_page(f"{lib.get('display_name')} / {version.get('version_id')}", "Version Review Workspace", body, nav=nav), encoding="utf-8")
+    html = ui.review_page_shell(
+        f"{lib.get('display_name') or lib_id} / {version_id}",
+        "VERSION REVIEW",
+        "版本入口页。面向使用者的主要路径是 Diff Timeline → Selected Diff → File Diff。",
+        body,
+        decision=version.get("overall_status") or ("REVIEW" if tags - {"clear"} else "PASS"),
+        rail=rail,
+        nav=f"<a href='../../../index.html'>Catalog</a><a class='active' href='#'>Version</a><a href='../diff_timeline.html'>Diff Timeline</a>",
+        meta=ui.compact_meta([("Library", lib_id), ("Version", version_id), ("Tags", ', '.join(sorted(tags)))]),
+    )
+    _write_text(page, html)
+    return str(page)
+
+
+def _copy_version_alias(out: Path, source: str, legacy_rel: Any) -> None:
+    if not legacy_rel:
+        return
+    legacy = out / str(legacy_rel)
+    src = Path(source)
+    if legacy.resolve() == src.resolve():
+        return
+    _write_text(legacy, src.read_text(encoding="utf-8"))
 
 
 def _render_legacy_library_page(out: Path, lib: Mapping[str, Any]) -> None:
-    page = out / "libraries" / f"{_safe(lib.get('display_name'))}.html"
-    page.parent.mkdir(parents=True, exist_ok=True)
-    rows = []
-    for ver in lib.get("versions", []) or []:
-        links = ver.get("links") or {}
+    display = lib.get("display_name") or lib.get("library_name") or lib.get("library_id") or "library"
+    page = out / "libraries" / f"{_safe(display)}.html"
+    rows: list[str] = []
+    safe_lib = _safe(lib.get("library_id") or display)
+    timeline = out / "libraries" / safe_lib / "diff_timeline.html"
+    for version in lib.get("versions", []) or []:
+        links = version.get("links") or {}
+        actions = ui.action_strip([
+            ui.button("Review", _href(links.get("version_review_html")), "primary", disabled=not links.get("version_review_html"), target="_blank"),
+            ui.button("Scan", _href(links.get("scan_html")), disabled=not links.get("scan_html"), target="_blank"),
+            ui.button("Diff", _href(links.get("diff_html")), disabled=not links.get("diff_html"), target="_blank"),
+            ui.button("File Diff", _href(links.get("pairwise_html")), disabled=not links.get("pairwise_html"), target="_blank"),
+            ui.button("Release", _href(links.get("release_html")), disabled=not links.get("release_html"), target="_blank"),
+        ])
         rows.append(
             "<tr>"
-            f"<td><b>{_esc(ver.get('version_id'))}</b></td>"
-            f"<td>{_badge(ver.get('scan_status'))}</td>"
-            f"<td>{_badge(ver.get('diff_status'))}</td>"
-            f"<td>{_badge(ver.get('release_status'))}</td>"
-            f"<td>{_button('Review', '../' + str(links.get('version_review_html') or ''))}"
-            f"{_button('Scan', as_file_href(links.get('scan_html')), disabled=not links.get('scan_html'))}"
-            f"{_button('Diff', as_file_href(links.get('diff_html')), disabled=not links.get('diff_html'))}"
-            f"{_button('Release', as_file_href(links.get('release_html')), disabled=not links.get('release_html'))}"
-            f"{_trace(links.get('scan_html'))}{_trace(links.get('diff_html'))}{_trace(links.get('release_html'))}</td>"
+            f"<td><b>{ui.esc(version.get('version_id'))}</b></td>"
+            f"<td>{ui.badge(version.get('scan_status'))}</td>"
+            f"<td>{ui.badge(version.get('diff_status'))}</td>"
+            f"<td>{ui.badge(version.get('pairwise_status'), _pairwise_text(version))}</td>"
+            f"<td>{ui.badge(version.get('release_status'))}</td>"
+            f"<td>{actions}{_raw_link_trace(links)}</td>"
             "</tr>"
         )
-    body = "<section class='panel'><div class='panel-head'><b>版本结构 / 证据 / 返回 Catalog</b></div><div class='panel-body'>" + _table(["Version", "Scan", "Diff", "Release", "Action"], rows, "暂无版本") + "</div></section>"
-    page.write_text(_page(f"{lib.get('display_name')} Library Review", "Library version list", body, nav="<nav class='nav'><a href='../index.html'>Catalog</a></nav>"), encoding="utf-8")
+    body = (
+        ui.panel(
+            "版本结构 / 证据 / 返回 Catalog",
+            "兼容旧入口；新的主路径请打开 Diff Timeline。",
+            ui.action_strip([ui.button("Catalog", "../index.html", "secondary"), ui.button("Diff Timeline", _href(timeline), "primary", target="_blank")])
+            + ui.table(["Version", "Scan", "Diff", "File Diff", "Release", "Action"], rows, "暂无版本"),
+        )
+    )
+    html = ui.review_page_shell(
+        f"{display} Library Review",
+        "LIBRARY",
+        "Library compatibility page. Primary review path: Diff Timeline → Selected Diff → File Diff.",
+        body,
+        decision=lib.get("overall_status") or "REVIEW",
+        nav="<a href='../index.html'>Catalog</a><a class='active' href='#'>Library</a>",
+    )
+    _write_text(page, html)
 
 
 def render_catalog_html(
-    catalog_path: str | Path,
+    catalog_json: str | Path,
     out_dir: str | Path,
     *,
     render_library_pages: bool = True,
     max_attention_items: int = 100,
     max_report_rows: int = 16,
 ) -> dict[str, Any]:
-    catalog_file = Path(catalog_path)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    catalog = read_json(catalog_file, {}) or {}
+    catalog = read_json(catalog_json, default={}) or {}
     state = build_review_state(catalog, out_dir=out)
     tasks = build_review_tasks(state)
-    write_json(out / "review_state.json", state)
-    write_json(out / "review_tasks.json", tasks)
-
+    _ = (max_attention_items, max_report_rows)
     for lib in state.get("libraries", []) or []:
         for version in lib.get("versions", []) or []:
-            _render_version_page(out, lib, version)
+            links = version.setdefault("links", {})
+            legacy_review = links.get("version_review_html")
+            links["version_review_html"] = _render_version_page(out, lib, version)
+            _copy_version_alias(out, links["version_review_html"], legacy_review)
         if render_library_pages:
             _render_legacy_library_page(out, lib)
-
-    metrics = _summary(state, tasks)
-    stat_bar = (
-        "<div class='mini'>"
-        f"<span class='stat'>{metrics['libraries']} libraries</span>"
-        f"<span class='stat'>{metrics['versions']} versions</span>"
-        f"<span class='stat'>{metrics['review']} need review</span>"
-        f"<span class='stat'>{metrics['block']} blocked</span>"
-        "</div>"
-    )
-    manager_rows = [
-        f"<tr><td>Total libraries</td><td>{metrics['libraries']}</td></tr>",
-        f"<tr><td>Total versions</td><td>{metrics['versions']}</td></tr>",
-        f"<tr><td>Not scanned</td><td>{metrics['not_scanned']}</td></tr>",
-        f"<tr><td>Diff pending</td><td>{metrics['diff_pending']}</td></tr>",
-        f"<tr><td>Pairwise pending</td><td>{metrics['pairwise_pending']}</td></tr>",
-        f"<tr><td>Review tasks</td><td>{metrics['tasks']}</td></tr>",
-    ]
+    write_json(out / "review_state.json", state)
+    write_json(out / "review_tasks.json", tasks)
     body = (
-        stat_bar
-        + "<section class='toolbar'><input id='search' class='search' oninput='filterCatalog()' placeholder='搜索 library / vendor / path / version'>"
-        + "<div class='chips'><button class='chip active' data-status='all' onclick='setStatusFilter(this)'>全部</button><button class='chip' data-status='OK' onclick='setStatusFilter(this)'>正常</button><button class='chip' data-status='REVIEW' onclick='setStatusFilter(this)'>待审阅</button><button class='chip' data-status='BLOCK' onclick='setStatusFilter(this)'>阻断</button><button class='chip' data-status='UNKNOWN' onclick='setStatusFilter(this)'>未知</button></div></section>"
-        + "<section class='panel'><div class='panel-head'><b>Library Browser</b><span class='sub'>默认团队视图：先找库、看版本、进入证据页和复制下一步命令。</span></div><div class='panel-body'>"
-        + _library_rows(state)
-        + "</div></section>"
-        + "<details class='panel'><summary>Global Summary / 管理概览</summary><div class='panel-body'>"
-        + _table(["Metric", "Value"], manager_rows, "暂无统计")
-        + "</div></details>"
-        + "<details class='panel'><summary>Review Queue / 待审阅队列</summary><div class='panel-body'>"
-        + _table(["Priority", "Type", "Library", "Reason", "Command"], _task_rows(tasks), "暂无待审阅任务")
-        + "</div></details>"
-        + "<details class='panel'><summary>Evidence Files / 证据文件</summary><div class='panel-body actions'>"
-        + _button("catalog.json", as_file_href(catalog_file))
-        + _button("review_state.json", as_file_href(out / "review_state.json"))
-        + _button("review_tasks.json", as_file_href(out / "review_tasks.json"))
-        + "</div></details>"
+        ui.panel(
+            "Catalog 总览 / Global Summary / 管理概览",
+            "普通用户路径：搜索 library → 打开 Diff Timeline → 进入 Selected Diff → 查看 File Diff。Scan / Release 是证据页。",
+            ui.metric_grid(_summary_metrics(state, tasks)),
+        )
+        + "<div class='catalog-layout'>"
+        + f"<div class='catalog-filter-panel'>{_catalog_filter_panel(state)}</div>"
+        + f"<div>{ui.panel('Library Browser', '默认按 Vendor / 中间路径分组。版本明细折叠，避免 50 libraries / 500 versions 场景下平铺。', _library_browser(out, state))}</div>"
+        + "</div>"
+        + ui.collapsible_panel("Review Tasks / Review Queue / 待审阅队列", "系统生成的建议动作。命令用于进入 Scan / Diff / File Diff / Release，不代表自动签核。", ui.filterable_table("catalog-task-table", ["优先级", "类型", "Library / Version", "原因", "命令"], _task_rows(tasks), "暂无任务", "筛选 task / command"), open=False)
+        + ui.collapsible_panel("Trace Evidence / Evidence Files / 证据文件", "Catalog 原始证据。", ui.trace_link_list([
+            ("review_state.json", _href(out / "review_state.json"), "Catalog 页面使用的状态模型"),
+            ("review_tasks.json", _href(out / "review_tasks.json"), "建议动作列表"),
+            ("catalog.json", _href(catalog_json), "原始 catalog"),
+        ]), open=False)
     )
-    html_text = _page("ai_lib Library Catalog", f"Last updated: {state.get('generated_at')}", body)
-    (out / "index.html").write_text(html_text, encoding="utf-8")
+    html = ui.review_page_shell(
+        "ai_lib Library Catalog",
+        "CATALOG",
+        "库版本变化导航入口。主要价值是找到版本变化和 File Diff 入口。",
+        body,
+        decision="REVIEW" if tasks.get("tasks") else "PASS",
+        nav="<a class='active' href='#'>Catalog</a><a href='#'>Diff Timeline</a><a href='#'>Selected Diff</a><a href='#'>File Diff</a><a href='#'>Release</a>",
+        meta=ui.compact_meta([("Libraries", len(state.get("libraries", []) or [])), ("Tasks", len(tasks.get("tasks", []) or []))]),
+    )
+    index = out / "index.html"
+    _write_text(index, html)
     return {
         "status": "PASS",
-        "catalog_path": str(catalog_file),
+        "catalog_path": str(catalog_json),
         "html_dir": str(out),
-        "index_html": str(out / "index.html"),
+        "index_html": str(index),
         "review_state": str(out / "review_state.json"),
         "review_tasks": str(out / "review_tasks.json"),
     }
