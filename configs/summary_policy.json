@@ -1,0 +1,18 @@
+{
+  "affected_summary_map": {
+    "lef": ["lef_summary", "macro_summary", "port_summary"],
+    "liberty": ["liberty_summary", "macro_summary", "port_summary"],
+    "verilog": ["verilog_summary", "port_summary"],
+    "systemverilog": ["verilog_summary", "port_summary"],
+    "cdl": ["cdl_summary", "port_summary"],
+    "sdc": ["sdc_summary"],
+    "upf": ["upf_summary"],
+    "cpf": ["cpf_summary"],
+    "spef": ["spef_summary"],
+    "package": ["package_summary"],
+    "ibis": ["package_summary"],
+    "touchstone": ["package_summary"],
+    "waiver": ["waiver_summary"],
+    "doc": ["doc_summary"]
+  }
+}

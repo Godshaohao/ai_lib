@@ -1,0 +1,67 @@
+{
+  "required_views": {
+    "ip": ["verilog"],
+    "hard_ip": ["verilog", "lef", "liberty"],
+    "stdcell": ["liberty", "db", "lef", "gds", "verilog", "cdl"],
+    "sram": ["liberty", "db", "lef", "gds", "verilog", "cdl"]
+  },
+  "optional_views": {
+    "ip": ["cdl", "db", "sdc", "upf", "sdf", "waiver", "doc"],
+    "hard_ip": ["sdc", "upf", "sdf", "spef", "db", "ibis", "package", "waiver", "doc"],
+    "stdcell": ["doc", "waiver"],
+    "sram": ["sdf", "doc", "waiver"]
+  },
+  "validation_levels": {
+    "lef": "parsed_required",
+    "liberty": "parsed_required",
+    "verilog": "parsed_required",
+    "cdl": "parsed_required",
+    "sdc": "parsed_required",
+    "upf": "parsed_required",
+    "cpf": "parsed_required",
+    "sdf": "parsed_preferred",
+    "spef": "parsed_preferred",
+    "ibis": "parsed_preferred",
+    "touchstone": "parsed_preferred",
+    "pwl": "parsed_preferred",
+    "package": "parsed_preferred",
+    "waiver": "parsed_preferred",
+    "db": "metadata_required",
+    "gds": "metadata_required",
+    "oas": "metadata_required",
+    "ndm": "metadata_required",
+    "doc": "doc_review_required",
+    "unknown": "pass_through_allowed"
+  },
+  "required_docs": ["readme", "release_note"],
+  "allow_warning": true,
+  "block_on_parser_failed": true,
+  "block_on_integrity_error": true,
+  "link_views": ["verilog", "lef", "liberty", "db", "cdl", "sdc", "upf", "cpf", "doc"],
+  "alias_gate": {
+    "stage": {
+      "required_release_level": "L0",
+      "allow_warning": true,
+      "require_diff": false
+    },
+    "current": {
+      "required_release_level": "L1",
+      "allow_warning": true,
+      "require_diff": true,
+      "require_adjacent_diff_for_hotfix": true
+    },
+    "approved": {
+      "required_release_level": "L2",
+      "allow_warning": false,
+      "require_p2_deep_diff": true,
+      "require_manual_review_closed": true
+    }
+  },
+  "doc_policy": {
+    "always_parse": true,
+    "l0_missing_doc_severity": "warning",
+    "l1_missing_release_note_severity": "error",
+    "l2_missing_release_note_severity": "blocker",
+    "require_hotfix_release_note": true
+  }
+}

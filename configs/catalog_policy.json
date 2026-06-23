@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0",
+  "library_type": "ip",
+  "library_name": "ucie",
+  "discovery": {
+    "mode": "map_first",
+    "library_map": null,
+    "pattern_fallback": true,
+    "max_depth": 6,
+    "patterns": [
+      {
+        "pattern": "{vendor}/{category}/{library}/{version}",
+        "library_id_template": "{vendor}.{category}.{library}"
+      },
+      {
+        "pattern": "{vendor}/{library}/{version}",
+        "library_id_template": "{vendor}.{library}"
+      }
+    ]
+  },
+  "ignore_dirs": [
+    ".git",
+    "__pycache__",
+    "work",
+    "source_package"
+  ],
+  "version_path_rules": [
+    {
+      "pattern": "{version}"
+    },
+    {
+      "pattern": "{library}/{version}"
+    },
+    {
+      "pattern": "bundles/{library}/releases/{version}"
+    },
+    {
+      "pattern": "raw/{library}/{version}"
+    }
+  ],
+  "marker_files": [
+    "README",
+    "README.md",
+    "VERSION",
+    "release_note.txt",
+    "CHANGELOG.md"
+  ],
+  "stage_rules": [
+    {
+      "match": "*initial*",
+      "stage": "initial"
+    },
+    {
+      "match": "*stable*",
+      "stage": "stable"
+    },
+    {
+      "match": "*final*",
+      "stage": "final"
+    },
+    {
+      "match": "*ad-hoc*",
+      "stage": "ad-hoc"
+    },
+    {
+      "match": "*adhoc*",
+      "stage": "ad-hoc"
+    }
+  ]
+}

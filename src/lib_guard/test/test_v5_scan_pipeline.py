@@ -1,0 +1,1400 @@
+﻿from __future__ import annotations
+
+import json
+import gzip
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+
+class V5ScanPipelineTest(unittest.TestCase):
+    def test_scan_pipeline_writes_core_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a, output y); assign y = a; endmodule\n", encoding="utf-8")
+            (root / "README.md").write_text("release note\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            result = ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="signature",
+                    scan_id="20260531_000001",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=False,
+                    no_cache=False,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+
+            self.assertEqual(result.status, "PASS")
+            self.assertTrue((out / "scan_meta.json").exists())
+            self.assertTrue((out / "file_inventory.json").exists())
+            self.assertTrue((out / "parser_manifest.json").exists())
+            self.assertTrue((out / "parser_results.json").exists())
+            self.assertTrue((out / "summary" / "parser_quality.json").exists())
+            self.assertTrue((out / "summary" / "release_readiness.json").exists())
+            self.assertFalse((out / "summaries").exists())
+            self.assertTrue((out / "signatures" / "signatures.json").exists())
+
+            meta = json.loads((out / "scan_meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["library_id"], "ip/demo/v1")
+            parser_results = json.loads((out / "parser_results.json").read_text(encoding="utf-8"))
+            for result in parser_results.values():
+                self.assertEqual(result["result_type"], "parser_result")
+                self.assertIn("parser_name", result)
+                self.assertNotIn("parser", result)
+                self.assertEqual(result["parser_version"], "2.0")
+
+            parser_manifest = json.loads((out / "parser_manifest.json").read_text(encoding="utf-8"))
+            tasks = [
+                task
+                for item in parser_manifest["files"]
+                for task in item["parser_tasks"]
+                if task.get("parser_name")
+            ]
+            self.assertEqual(tasks, [])
+
+    def test_full_scan_runs_key_eda_parsers(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a, output y); assign y = a; endmodule\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="full",
+                    scan_id="20260531_000001_full",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=False,
+                    no_cache=False,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+
+            parser_results = json.loads((out / "parser_results.json").read_text(encoding="utf-8"))
+            self.assertTrue((out / "parser_results" / "verilog").exists())
+            for result in parser_results.values():
+                self.assertEqual(result["result_type"], "parser_result")
+                self.assertIn("parser_name", result)
+                self.assertNotIn("parser", result)
+                self.assertEqual(result["parser_version"], "2.0")
+
+            parser_manifest = json.loads((out / "parser_manifest.json").read_text(encoding="utf-8"))
+            tasks = [
+                task
+                for item in parser_manifest["files"]
+                for task in item["parser_tasks"]
+                if task.get("parser_name")
+            ]
+            self.assertEqual(len(tasks), 1)
+            task = tasks[0]
+            self.assertEqual(task["parser_name"], "VerilogParser")
+            self.assertEqual(task["parser_version"], "2.0")
+            self.assertEqual(task["parser_schema_version"], "1.0")
+            self.assertIn("parser_version=2.0", task["cache_key"])
+            self.assertIn("parser_schema_version=1.0", task["cache_key"])
+            self.assertEqual(task["cache_status"], "MISS")
+            self.assertIn(task["result_status"], {"PASS", "PASS_EMPTY"})
+            self.assertTrue(task["result_path"].startswith("parser_results/verilog/"))
+            self.assertTrue((out / task["result_path"]).exists())
+
+    def test_scan_classifies_gzip_files_and_writes_typed_parser_results(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            with gzip.open(root / "block.lef.gz", "wt", encoding="utf-8") as fh:
+                fh.write("VERSION 5.8 ;\nMACRO NAND2\nEND NAND2\n")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="full",
+                    scan_id="20260531_000010",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=False,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+
+            inventory = json.loads((out / "file_inventory.json").read_text(encoding="utf-8"))
+            record = inventory["files"][0]
+            self.assertEqual(record["extension"], ".gz")
+            self.assertEqual(record["combined_extension"], ".lef.gz")
+            self.assertEqual(record["compression"], "gzip")
+            self.assertEqual(record["file_type"], "lef")
+
+            manifest = json.loads((out / "parser_manifest.json").read_text(encoding="utf-8"))
+            task = manifest["files"][0]["parser_tasks"][0]
+            self.assertEqual(task["parser_name"], "LefParser")
+            self.assertTrue(task["result_path"].startswith("parser_results/lef/"))
+            result = json.loads((out / task["result_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(result["result_type"], "parser_result")
+            self.assertEqual(result["compression"], "gzip")
+            self.assertEqual(result["file_type"], "lef")
+
+    def test_parser_cache_is_v2_isolated_and_manifest_reports_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out1 = Path(td) / "scan_out_1"
+            out2 = Path(td) / "scan_out_2"
+            cache = Path(td) / "cache"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            base = dict(
+                root_path=str(root),
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="full",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(cache),
+                skip_cache=False,
+                no_cache=False,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, out_dir=str(out1), scan_id="20260531_000011")).run()
+            ScanRunner(SimpleNamespace(**base, out_dir=str(out2), scan_id="20260531_000012")).run()
+
+            manifest = json.loads((out2 / "parser_manifest.json").read_text(encoding="utf-8"))
+            task = manifest["files"][0]["parser_tasks"][0]
+            self.assertEqual(task["cache_status"], "HIT")
+            self.assertEqual(task["result_status"], "PASS")
+            self.assertIn("parser_version=2.0", task["cache_key"])
+            self.assertIn("parser_schema_version=1.0", task["cache_key"])
+
+    def test_progress_v2_and_parser_task_list_are_written(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+            (root / "empty.lef").write_text("VERSION 5.8 ;\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="full",
+                    scan_id="20260531_000016",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=False,
+                    no_progress=True,
+                    progress_interval=1,
+                    parse_jobs=1,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+
+            task_list = json.loads((out / "parser_task_list.json").read_text(encoding="utf-8"))
+            self.assertEqual(task_list["task_count"], 2)
+            self.assertEqual(task_list["parse_jobs"], 1)
+            task = task_list["tasks"][0]
+            self.assertIn("task_id", task)
+            self.assertIn("cache_key", task)
+            self.assertIn("priority", task)
+            self.assertIn("estimated_cost", task)
+
+            latest = json.loads((out / "logs" / "scan_progress_latest.json").read_text(encoding="utf-8"))
+            self.assertEqual(latest["stage"], "finish")
+            self.assertIn("by_type", latest)
+            self.assertIn("summary", latest)
+            self.assertIn("active_workers", latest)
+            self.assertEqual(latest["summary"]["completed"], 2)
+            self.assertEqual(latest["summary"]["pass_empty"], 1)
+            self.assertEqual(latest["by_type"]["lef"]["pass_empty"], 1)
+
+            events = [
+                json.loads(line)["event"]
+                for line in (out / "logs" / "scan_progress.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertIn("task_start", events)
+            self.assertIn("task_finish", events)
+
+    def test_scan_writes_incremental_parser_outputs_and_status_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.cli import build_scan_status
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="full",
+                    scan_id="20260531_000017",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=False,
+                    no_progress=True,
+                    progress_interval=1,
+                    parse_jobs=1,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+
+            task_list = json.loads((out / "parser_task_list.json").read_text(encoding="utf-8"))
+            manifest = json.loads((out / "parser_manifest.json").read_text(encoding="utf-8"))
+            task = manifest["files"][0]["parser_tasks"][0]
+            self.assertEqual(task_list["task_count"], 1)
+            self.assertTrue((out / task["result_path"]).exists())
+
+            status = build_scan_status(out)
+            self.assertEqual(status["status"], "FINISHED")
+            self.assertEqual(status["summary"]["completed"], 1)
+            self.assertTrue(status["outputs"]["parser_manifest"])
+            self.assertTrue(status["outputs"]["parser_results_dir"])
+
+    def test_parallel_parse_jobs_match_serial_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            serial = Path(td) / "serial"
+            parallel = Path(td) / "parallel"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+            (root / "block.lef").write_text("VERSION 5.8 ;\nMACRO NAND2\nEND NAND2\n", encoding="utf-8")
+            (root / "empty.sdc").write_text("# no known SDC commands\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            base = dict(
+                root_path=str(root),
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="release",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, out_dir=str(serial), scan_id="20260531_SERIAL", parse_jobs=1)).run()
+            ScanRunner(SimpleNamespace(**base, out_dir=str(parallel), scan_id="20260531_PARALLEL", parse_jobs=4)).run()
+            def load(scan: Path, rel: str):
+                return json.loads((scan / rel).read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                self._normalize_parser_results(load(serial, "parser_results.json")),
+                self._normalize_parser_results(load(parallel, "parser_results.json")),
+            )
+            self.assertEqual(
+                self._normalize_manifest(load(serial, "parser_manifest.json")),
+                self._normalize_manifest(load(parallel, "parser_manifest.json")),
+            )
+            self.assertEqual(
+                self._normalize_quality(load(serial, "summary/parser_quality.json")),
+                self._normalize_quality(load(parallel, "summary/parser_quality.json")),
+            )
+            self.assertEqual(
+                self._normalize_readiness(load(serial, "summary/release_readiness.json")),
+                self._normalize_readiness(load(parallel, "summary/release_readiness.json")),
+            )
+            latest = load(parallel, "logs/scan_progress_latest.json")
+            self.assertEqual(latest["summary"]["completed"], 3)
+            self.assertIn("active_workers", latest)
+            progress_events = [
+                json.loads(line)
+                for line in (parallel / "logs" / "scan_progress.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertTrue(any(len(event.get("active_workers", [])) > 1 for event in progress_events))
+
+    def _normalize_parser_results(self, data):
+        out = {}
+        for key, value in sorted(data.items()):
+            clean = dict(value)
+            clean.pop("abs_path", None)
+            out[key] = clean
+        return out
+
+    def _normalize_manifest(self, data):
+        items = []
+        for file_entry in data.get("files", []):
+            for task in file_entry.get("parser_tasks", []):
+                if not task.get("parser_name"):
+                    continue
+                clean = {
+                    "file": file_entry.get("file"),
+                    "file_type": file_entry.get("file_type"),
+                    "parser_name": task.get("parser_name"),
+                    "result_status": task.get("result_status"),
+                    "cache_status": task.get("cache_status"),
+                    "result_path": task.get("result_path"),
+                }
+                items.append(clean)
+        return sorted(items, key=lambda item: (item["file"], item["parser_name"]))
+
+    def _normalize_quality(self, data):
+        return {
+            parser["parser_name"]: {
+                "status": parser.get("status"),
+                "file_count": parser.get("file_count"),
+                "parsed_count": parser.get("parsed_count"),
+                "failed_count": parser.get("failed_count"),
+                "pass_empty_count": parser.get("pass_empty_count"),
+                "object_count": parser.get("object_count"),
+            }
+            for parser in data.get("parsers", [])
+        }
+
+    def _normalize_readiness(self, data):
+        return {
+            "bundle_status": data.get("bundle_status"),
+            "release_channel": data.get("release_channel"),
+            "blocking": [(item.get("category"), item.get("file_type"), item.get("severity")) for item in data.get("blocking_items", [])],
+            "manual": [(item.get("approval_scope"), item.get("file_type"), item.get("risk_level")) for item in data.get("manual_review_items", [])],
+        }
+
+    def test_non_doc_pass_empty_stays_out_of_scan_issues(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            (root / "empty.v").write_text("// no modules here\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            result = ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="full",
+                    scan_id="20260531_000013",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=False,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+
+            self.assertEqual(result.status, "PASS")
+            manifest = json.loads((out / "parser_manifest.json").read_text(encoding="utf-8"))
+            task = manifest["files"][0]["parser_tasks"][0]
+            self.assertEqual(task["result_status"], "PASS_EMPTY")
+
+            parser_quality = json.loads((out / "summary" / "parser_quality.json").read_text(encoding="utf-8"))
+            self.assertEqual(parser_quality["status"], "PASS_WITH_WARNING")
+            self.assertEqual(parser_quality["parsers"][0]["pass_empty_count"], 1)
+
+            issues = json.loads((out / "scan_issues.json").read_text(encoding="utf-8"))
+            self.assertEqual(issues["summary"]["warning"], 0)
+            self.assertEqual(issues["issues"], [])
+
+    def test_scan_writes_release_readiness_components(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            (root / "empty.v").write_text("// required view exists but parser extracts no module\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="release",
+                    scan_id="20260531_000014",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=False,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+
+            readiness = json.loads((out / "summary" / "release_readiness.json").read_text(encoding="utf-8"))
+            self.assertEqual(readiness["bundle_status"], "BLOCK")
+            self.assertEqual(readiness["release_channel"], "blocked")
+            self.assertEqual(len(readiness["components"]), 1)
+            component = readiness["components"][0]
+            self.assertEqual(component["component_id"], "ip/demo/v1")
+            self.assertEqual(component["release_channel"], "blocked")
+            self.assertIn("verilog", component["required_views"])
+            self.assertEqual(component["required_view_results"]["verilog"]["status"], "BLOCK")
+            self.assertEqual(component["required_view_results"]["verilog"]["parser_status"], "PASS_EMPTY")
+            self.assertTrue(readiness["blocking_items"])
+            self.assertTrue(readiness["manual_review_items"])
+
+    def test_release_check_uses_release_readiness_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            (root / "empty.v").write_text("// no modules\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.release.checker import check_release_scan
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="release",
+                    scan_id="20260531_000015",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=False,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+            result = check_release_scan(out, policy_path="configs/release_policy.json")
+
+            self.assertEqual(result["release_check_status"], "BLOCK")
+            self.assertEqual(result["release_readiness"]["bundle_status"], "BLOCK")
+            self.assertTrue(any(issue["category"] == "release_readiness" for issue in result["issues"]))
+            self.assertFalse(any(issue["category"] == "summary" for issue in result["issues"]))
+
+    def test_release_link_force_records_override_and_applies_blocked_release(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            scan = Path(td) / "scan"
+            release_root = Path(td) / "release_area"
+            policy = Path(td) / "release_policy.json"
+            root.mkdir()
+            (root / "empty.v").write_text("// no modules\n", encoding="utf-8")
+            policy.write_text(
+                json.dumps(
+                    {
+                        "required_views": {"ip": ["verilog"]},
+                        "require_doc_types": [],
+                        "require_signatures": False,
+                        "require_summaries": False,
+                        "release_link_mode": "copy",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.release.linker import link_release_from_scan
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(scan),
+                    library_type="ip",
+                    library_name="demo",
+                    version="hotfix_v1.0.1",
+                    scan_mode="release",
+                    scan_id="FORCE",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=True,
+                    no_progress=True,
+                    progress_interval=1,
+                    parse_jobs=1,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+            blocked = link_release_from_scan(scan, release_root, alias="current", dry_run=False, policy_path=policy)
+            self.assertEqual(blocked["status"], "BLOCKED")
+
+            forced = link_release_from_scan(
+                scan,
+                release_root,
+                alias="current",
+                dry_run=False,
+                policy_path=policy,
+                force=True,
+                force_reason="manual waiver approved for emergency hotfix",
+            )
+
+            self.assertEqual(forced["status"], "FORCED_DONE")
+            self.assertTrue((release_root / "ip" / "demo" / "hotfix_v1.0.1").exists())
+            override = json.loads((scan / "release" / "release_override.json").read_text(encoding="utf-8"))
+            self.assertTrue(override["force"])
+            self.assertEqual(override["force_reason"], "manual waiver approved for emergency hotfix")
+
+    def test_release_link_blocks_existing_target_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            scan = Path(td) / "scan"
+            release_root = Path(td) / "release_area"
+            policy = Path(td) / "release_policy.json"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+            policy.write_text(
+                json.dumps(
+                    {
+                        "required_views": {"ip": ["verilog"]},
+                        "require_doc_types": [],
+                        "require_signatures": False,
+                        "require_summaries": False,
+                        "release_link_mode": "copy",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.release.linker import link_release_from_scan
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(scan),
+                    library_type="ip",
+                    library_name="demo",
+                    version="stable_v1",
+                    scan_mode="release",
+                    scan_id="OVERWRITE",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=True,
+                    no_progress=True,
+                    progress_interval=1,
+                    parse_jobs=1,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+            first = link_release_from_scan(scan, release_root, alias="current", dry_run=False, policy_path=policy)
+            second = link_release_from_scan(scan, release_root, alias="current", dry_run=False, policy_path=policy)
+            third = link_release_from_scan(scan, release_root, alias="current", dry_run=False, policy_path=policy, overwrite=True)
+
+            self.assertEqual(first["status"], "DONE")
+            self.assertEqual(second["status"], "BLOCKED")
+            self.assertTrue(second["release_dir_check"]["target_exists"])
+            self.assertEqual(third["status"], "DONE")
+
+    def test_diff_scan_reports_inventory_and_summary_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_root = Path(td) / "old_raw"
+            new_root = Path(td) / "new_raw"
+            old_out = Path(td) / "old_scan"
+            new_out = Path(td) / "new_scan"
+            old_root.mkdir()
+            new_root.mkdir()
+            (old_root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+            (new_root / "top.v").write_text("module top(input a); endmodule\n// metadata comment change\n", encoding="utf-8")
+            (new_root / "block.lef").write_text("VERSION 5.8 ;\nMACRO NAND2\nEND NAND2\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            base = dict(
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="signature",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, root_path=str(old_root), out_dir=str(old_out), scan_id="OLD")).run()
+            ScanRunner(SimpleNamespace(**base, root_path=str(new_root), out_dir=str(new_out), scan_id="NEW")).run()
+
+            result = diff_scan_outputs(old_out, new_out)
+            self.assertEqual(result["status"], "DIFF")
+            self.assertIn("block.lef", result["inventory"]["added"])
+            self.assertIn("top.v", result["inventory"]["changed"])
+            self.assertTrue(result["summary"]["changed_files"] >= 1)
+
+    def test_diff_scan_writes_p0_release_bundle_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_root = Path(td) / "old_raw"
+            new_root = Path(td) / "new_raw"
+            old_out = Path(td) / "old_scan"
+            new_out = Path(td) / "new_scan"
+            diff_out = Path(td) / "diff_out"
+            old_root.mkdir()
+            new_root.mkdir()
+            (old_root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+            (new_root / "top.v").write_text("// parser empty after risky hotfix\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            base = dict(
+                library_type="ip",
+                library_name="demo",
+                scan_mode="release",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, root_path=str(old_root), out_dir=str(old_out), scan_id="OLD", version="full_v1.0")).run()
+            ScanRunner(SimpleNamespace(**base, root_path=str(new_root), out_dir=str(new_out), scan_id="NEW", version="hotfix_v1.0.1")).run()
+            result = diff_scan_outputs(
+                old_out,
+                new_out,
+                out_path=diff_out,
+                version_relation={
+                    "diff_mode": "adjacent",
+                    "new_version_type": "hotfix",
+                    "parent_version": "full_v1.0",
+                    "base_version": "full_v1.0",
+                    "release_line": "v1.0",
+                },
+            )
+
+            self.assertEqual(result["status"], "BLOCK")
+            self.assertEqual(result["version_relation"]["new_version_type"], "hotfix")
+            self.assertTrue((diff_out / "diff_meta.json").exists())
+            self.assertTrue((diff_out / "diff_summary.json").exists())
+            self.assertTrue((diff_out / "file_diff.json").exists())
+            self.assertTrue((diff_out / "component_diff.json").exists())
+            self.assertTrue((diff_out / "release_readiness_diff.json").exists())
+            self.assertTrue((diff_out / "diff_issues.json").exists())
+            self.assertTrue((diff_out / "diff_report.md").exists())
+            summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
+            self.assertNotIn("changed_summaries", summary)
+
+            readiness = json.loads((diff_out / "release_readiness_diff.json").read_text(encoding="utf-8"))
+            self.assertEqual(readiness["bundle_status"]["old"], "PASS")
+            self.assertEqual(readiness["bundle_status"]["new"], "BLOCK")
+            issues = json.loads((diff_out / "diff_issues.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(item["severity"] == "blocker" and item["category"] == "release_readiness" for item in issues["issues"]))
+
+    def test_version_index_resolves_adjacent_and_cumulative_diff_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            full_root = Path(td) / "full_raw"
+            hotfix_root = Path(td) / "hotfix_raw"
+            full_out = Path(td) / "full_scan"
+            hotfix_out = Path(td) / "hotfix_scan"
+            work = Path(td) / "work"
+            full_root.mkdir()
+            hotfix_root.mkdir()
+            (full_root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+            (hotfix_root / "top.v").write_text("module top(input a, output y); endmodule\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.version.index import register_scan_version, resolve_adjacent_pair, resolve_cumulative_pair
+
+            base = dict(
+                library_type="ip",
+                library_name="demo",
+                scan_mode="release",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, root_path=str(full_root), out_dir=str(full_out), scan_id="FULL", version="full_v1.0")).run()
+            ScanRunner(SimpleNamespace(**base, root_path=str(hotfix_root), out_dir=str(hotfix_out), scan_id="HOTFIX", version="hotfix_v1.0.1")).run()
+            register_scan_version(full_out, workdir=work, version_id="full_v1.0", version_type="full", release_line="v1.0")
+            register_scan_version(hotfix_out, workdir=work, version_id="hotfix_v1.0.1", version_type="hotfix", release_line="v1.0", parent_version="full_v1.0", base_version="full_v1.0")
+
+            adjacent = resolve_adjacent_pair("ip/demo", "hotfix_v1.0.1", workdir=work)
+            cumulative = resolve_cumulative_pair("ip/demo", "hotfix_v1.0.1", workdir=work)
+
+            self.assertEqual(Path(adjacent["old_scan"]), full_out)
+            self.assertEqual(Path(adjacent["new_scan"]), hotfix_out)
+            self.assertEqual(adjacent["version_relation"]["diff_mode"], "adjacent")
+            self.assertEqual(Path(cumulative["old_scan"]), full_out)
+            self.assertEqual(Path(cumulative["new_scan"]), hotfix_out)
+            self.assertEqual(cumulative["version_relation"]["diff_mode"], "cumulative")
+
+    def test_version_register_supports_raw_root_and_requires_scan_for_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw_full = Path(td) / "raw_full"
+            raw_hotfix = Path(td) / "raw_hotfix"
+            work = Path(td) / "work"
+            raw_full.mkdir()
+            raw_hotfix.mkdir()
+
+            from lib_guard.version.index import register_scan_version, resolve_adjacent_pair
+
+            register_scan_version(
+                None,
+                workdir=work,
+                library_id="project_x/bundle_a",
+                version_id="full_v1.0",
+                version_type="full",
+                release_line="v1.0",
+                raw_root=raw_full,
+            )
+            register_scan_version(
+                None,
+                workdir=work,
+                library_id="project_x/bundle_a",
+                version_id="hotfix_v1.0.1",
+                version_type="hotfix",
+                release_line="v1.0",
+                parent_version="full_v1.0",
+                base_version="full_v1.0",
+                raw_root=raw_hotfix,
+            )
+
+            with self.assertRaisesRegex(ValueError, "raw_root.*no scan_dir"):
+                resolve_adjacent_pair("project_x/bundle_a", "hotfix_v1.0.1", workdir=work)
+
+            data = json.loads((work / "index" / "version_history" / "index.json").read_text(encoding="utf-8"))
+            record = data["libraries"]["project_x/bundle_a"]["versions"]["hotfix_v1.0.1"]
+            self.assertEqual(record["raw_root"], str(raw_hotfix))
+            self.assertIsNone(record["scan_dir"])
+
+    def test_release_check_consumes_blocking_diff_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            scan = Path(td) / "scan"
+            diff = Path(td) / "diff"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.release.checker import check_release_scan
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(scan),
+                    library_type="ip",
+                    library_name="demo",
+                    version="hotfix_v1.0.1",
+                    scan_mode="release",
+                    scan_id="HOTFIX",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=True,
+                    no_progress=True,
+                    progress_interval=1,
+                    parse_jobs=1,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+            diff.mkdir()
+            (diff / "diff_summary.json").write_text(json.dumps({"status": "BLOCK", "risk_level": "blocker"}), encoding="utf-8")
+            (diff / "diff_issues.json").write_text(json.dumps({"issues": [{"severity": "blocker", "category": "object_diff", "title": "Port removed", "message": "port removed"}]}), encoding="utf-8")
+
+            result = check_release_scan(scan, policy_path="configs/release_policy.json", diff_dir=diff)
+
+            self.assertEqual(result["release_check_status"], "BLOCK")
+            self.assertTrue(any(issue["category"] == "diff" for issue in result["issues"]))
+            self.assertEqual(result["diff_gate"]["status"], "BLOCK")
+
+    def test_governance_diff_writes_pairwise_tasks_without_object_gate_block(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_root = Path(td) / "old_raw"
+            new_root = Path(td) / "new_raw"
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            diff_out = Path(td) / "diff"
+            old_root.mkdir()
+            new_root.mkdir()
+            (old_root / "block.lef").write_text("VERSION 5.8 ;\nMACRO A\n  SIZE 1 BY 1 ;\n  PIN P\n    DIRECTION INPUT ;\n  END P\nEND A\nMACRO B\nEND B\n", encoding="utf-8")
+            (new_root / "block.lef").write_text("VERSION 5.8 ;\nMACRO A\n  SIZE 1 BY 2 ;\nEND A\n", encoding="utf-8")
+            (old_root / "top.v").write_text("module top(a, data);\ninput a;\noutput [31:0] data;\nendmodule\n", encoding="utf-8")
+            (new_root / "top.v").write_text("module top(data);\noutput [63:0] data;\nendmodule\n", encoding="utf-8")
+            (old_root / "cell.lib").write_text("library(L) {\n  cell(INV_X1) {\n    pin(A) {\n      direction : input;\n    }\n  }\n}\n", encoding="utf-8")
+            (new_root / "cell.lib").write_text("library(L) {\n}\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            base = dict(
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="release",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, root_path=str(old_root), out_dir=str(old_scan), scan_id="OLD")).run()
+            ScanRunner(SimpleNamespace(**base, root_path=str(new_root), out_dir=str(new_scan), scan_id="NEW")).run()
+            result = diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
+
+            self.assertEqual(result["status"], "DIFF")
+            self.assertFalse((diff_out / "parser_result_diff" / "lef_diff.json").exists())
+            tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
+            self.assertGreaterEqual(len(tasks["tasks"]), 3)
+            commands = "\n".join(task["command"] for task in tasks["tasks"])
+            self.assertIn("file-diff lef", commands)
+            self.assertIn("file-diff verilog", commands)
+            self.assertIn("file-diff liberty", commands)
+            status = json.loads((diff_out / "pairwise_diff_task_status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["summary"]["pending"], len(tasks["tasks"]))
+            issues = json.loads((diff_out / "diff_issues.json").read_text(encoding="utf-8"))
+            self.assertFalse(any(item["category"] == "object_diff" for item in issues["issues"]))
+            summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["pairwise_tasks"], len(tasks["tasks"]))
+            self.assertTrue((diff_out / "view_diff.json").exists())
+            self.assertTrue((diff_out / "type_diff.json").exists())
+            self.assertTrue((diff_out / "release_evidence_diff.json").exists())
+            self.assertTrue((diff_out / "metadata_review_tasks.json").exists())
+            self.assertTrue((diff_out / "manual_pairwise_tasks.json").exists())
+            view_diff = json.loads((diff_out / "view_diff.json").read_text(encoding="utf-8"))
+            self.assertEqual(view_diff["status"], "PASS")
+            type_diff = json.loads((diff_out / "type_diff.json").read_text(encoding="utf-8"))
+            self.assertIn("lef", type_diff["by_type"])
+            self.assertIn("verilog", type_diff["by_type"])
+            manual_tasks = json.loads((diff_out / "manual_pairwise_tasks.json").read_text(encoding="utf-8"))
+            self.assertEqual(manual_tasks["summary"]["total"], len(tasks["tasks"]))
+            self.assertEqual(summary["view_changes"], view_diff["summary"]["changed"])
+            self.assertEqual(summary["type_changes"], type_diff["summary"]["changed_types"])
+
+    def test_diff_render_writes_html_with_pairwise_task_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_root = Path(td) / "old_raw"
+            new_root = Path(td) / "new_raw"
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            diff_out = Path(td) / "diff"
+            html_out = Path(td) / "diff_html"
+            old_root.mkdir()
+            new_root.mkdir()
+            (old_root / "top.v").write_text("module top(a, data);\ninput a;\noutput [31:0] data;\nendmodule\n", encoding="utf-8")
+            (new_root / "top.v").write_text("module top(data);\noutput [63:0] data;\nendmodule\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+            from lib_guard.render.html_report import render_diff_html
+
+            base = dict(
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="release",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, root_path=str(old_root), out_dir=str(old_scan), scan_id="OLD")).run()
+            ScanRunner(SimpleNamespace(**base, root_path=str(new_root), out_dir=str(new_scan), scan_id="NEW")).run()
+            diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
+
+            result = render_diff_html(diff_out, html_out)
+
+            self.assertEqual(result["status"], "PASS")
+            html = (html_out / "index.html").read_text(encoding="utf-8")
+            self.assertIn("结构变化总览", html)
+            self.assertIn("人工任务摘要", html)
+            self.assertIn("file-diff verilog", html)
+            self.assertIn("复制", html)
+
+    def test_file_diff_verilog_writes_pairwise_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_file = Path(td) / "old.v"
+            new_file = Path(td) / "new.v"
+            out = Path(td) / "pair"
+            old_file.write_text("module top(a);\ninput a;\nendmodule\n", encoding="utf-8")
+            new_file.write_text("module top(a,b);\ninput a;\noutput b;\nendmodule\n", encoding="utf-8")
+
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            result = diff_pairwise_files("verilog", old_file, new_file, out)
+
+            self.assertEqual(result["status"], "DIFF")
+            self.assertTrue((out / "file_diff_summary.json").exists())
+            detail = json.loads((out / "file_diff_detail.json").read_text(encoding="utf-8"))
+            self.assertEqual(detail["file_type"], "verilog")
+            self.assertIn("modules", json.dumps(detail, ensure_ascii=False))
+            self.assertTrue((out / "index.html").exists())
+            self.assertTrue((out / "old_extract.json").exists())
+            self.assertTrue((out / "new_extract.json").exists())
+            self.assertTrue((out / "semantic_diff.json").exists())
+            self.assertTrue((out / "raw_text_diff.html").exists())
+            html = (out / "index.html").read_text(encoding="utf-8")
+            self.assertIn("单文件深度对比报告", html)
+            self.assertIn("专家复核提示", html)
+
+    def test_file_diff_supported_types_write_review_html(self) -> None:
+        samples = {
+            "lef": (
+                "VERSION 5.8 ;\nMACRO U\n  SIZE 1 BY 1 ;\nEND U\n",
+                "VERSION 5.8 ;\nMACRO U\n  SIZE 2 BY 1 ;\nEND U\n",
+                "old.lef",
+                "new.lef",
+            ),
+            "liberty": (
+                "library(test) { cell(U) { pin(A) { direction : input; } } }\n",
+                "library(test) { cell(U) { pin(A) { direction : input; } pin(Y) { direction : output; } } }\n",
+                "old.lib",
+                "new.lib",
+            ),
+            "verilog": (
+                "module top(input a); endmodule\n",
+                "module top(input a, output y); endmodule\n",
+                "old.v",
+                "new.v",
+            ),
+            "cdl": (
+                ".SUBCKT U A VSS\nM1 A A VSS VSS N\n.ENDS U\n",
+                ".SUBCKT U A Y VSS\nM1 Y A VSS VSS N\n.ENDS U\n",
+                "old.cdl",
+                "new.cdl",
+            ),
+            "sdc": (
+                "create_clock -name CLK -period 10 [get_ports clk]\n",
+                "create_clock -name CLK -period 8 [get_ports clk]\n",
+                "old.sdc",
+                "new.sdc",
+            ),
+            "upf": (
+                "create_power_domain PD_CORE -elements {u_core}\n",
+                "create_power_domain PD_CORE -elements {u_core u_io}\n",
+                "old.upf",
+                "new.upf",
+            ),
+            "cpf": (
+                "create_power_domain PD_CORE -instances u_core\n",
+                "create_power_domain PD_CORE -instances {u_core u_io}\n",
+                "old.cpf",
+                "new.cpf",
+            ),
+            "spef": (
+                "*SPEF \"IEEE 1481-1998\"\n*DESIGN \"top\"\n*D_NET net1 1.0\n",
+                "*SPEF \"IEEE 1481-1998\"\n*DESIGN \"top\"\n*D_NET net1 1.0\n*D_NET net2 2.0\n",
+                "old.spef",
+                "new.spef",
+            ),
+            "db": (
+                "old db placeholder\n",
+                "new db placeholder with changed size\n",
+                "old.db",
+                "new.db",
+            ),
+        }
+        with tempfile.TemporaryDirectory() as td:
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            for file_type, (old_text, new_text, old_name, new_name) in samples.items():
+                old_file = Path(td) / file_type / old_name
+                new_file = Path(td) / file_type / new_name
+                old_file.parent.mkdir(parents=True, exist_ok=True)
+                old_file.write_text(old_text, encoding="utf-8")
+                new_file.write_text(new_text, encoding="utf-8")
+                out = Path(td) / "out" / file_type
+
+                result = diff_pairwise_files(file_type, old_file, new_file, out)
+
+                self.assertIn(result["status"], {"SAME", "DIFF", "FAILED"})
+                html = (out / "index.html").read_text(encoding="utf-8")
+                self.assertIn("单文件深度对比报告", html)
+                self.assertIn("结构化变化", html)
+                self.assertIn("原始文本差异", html)
+                self.assertIn(file_type, html)
+                self.assertNotIn("鍗曟枃浠", html)
+
+    def test_file_diff_cli_exposes_all_review_types(self) -> None:
+        from lib_guard.cli import build_parser
+
+        parser = build_parser()
+        for file_type in ["lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db"]:
+            args = parser.parse_args(["file-diff", file_type, "--old", "old", "--new", "new", "--out", "out"])
+            self.assertEqual(args.file_type, file_type)
+
+    def test_short_cli_expands_catalog_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            catalog = workspace / "catalog" / "catalog.json"
+            old_file = raw / "ucie" / "initial_20250601" / "lef" / "ucie.lef"
+            new_file = raw / "ucie" / "stable_20250608" / "lef" / "ucie.lef"
+            old_file.parent.mkdir(parents=True, exist_ok=True)
+            new_file.parent.mkdir(parents=True, exist_ok=True)
+            old_file.write_text("MACRO U\nEND U\n", encoding="utf-8")
+            new_file.write_text("MACRO U\n  SIZE 2 BY 1 ;\nEND U\n", encoding="utf-8")
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "libraries": [
+                            {
+                                "library_id": "ucie",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {"version_id": "initial_20250601", "version_key": "ip/ucie/initial_20250601", "raw_path": str(raw / "ucie" / "initial_20250601")},
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/ucie/stable_20250608",
+                                        "raw_path": str(raw / "ucie" / "stable_20250608"),
+                                        "diff": {"adjacent_old_version": "initial_20250601"},
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            from lib_guard.short_cli import build_cli_command, build_cli_commands, write_default_config
+
+            write_default_config(workspace, raw_root=raw)
+
+            catalog_cmds = build_cli_commands(["catalog"], cwd=workspace)
+            self.assertEqual(len(catalog_cmds), 1)
+            self.assertEqual(catalog_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+
+            catalog_lib_cmds = build_cli_commands(["catalog", "ucie"], cwd=workspace)
+            self.assertEqual(len(catalog_lib_cmds), 1)
+            self.assertEqual(catalog_lib_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+            self.assertIn("--library", catalog_lib_cmds[0])
+            self.assertIn("ucie", catalog_lib_cmds[0])
+
+            all_scan_cmds = build_cli_commands(["scan"], cwd=workspace)
+            self.assertEqual(len(all_scan_cmds), 1)
+            self.assertEqual(all_scan_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+
+            full_catalog_cmds = build_cli_commands(["catalog", "--full"], cwd=workspace)
+            self.assertEqual(full_catalog_cmds[0][:2], ["catalog", "scan"])
+            self.assertIn("--full", full_catalog_cmds[0])
+
+            with self.assertRaises(ValueError) as scan_error:
+                build_cli_commands(["scan", "ucie"], cwd=workspace)
+            self.assertIn("scan 'ucie' is ambiguous", str(scan_error.exception))
+
+            lib_scan_cmds = build_cli_commands(["scan", "ucie", "--all-versions"], cwd=workspace)
+            self.assertEqual(lib_scan_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+            self.assertIn("--library", lib_scan_cmds[0])
+            self.assertIn("ucie", lib_scan_cmds[0])
+            self.assertEqual(lib_scan_cmds[1][0], "run-batch")
+            self.assertIn("--library", lib_scan_cmds[1])
+            self.assertIn("ucie", lib_scan_cmds[1])
+            self.assertNotIn("--version", lib_scan_cmds[1])
+            self.assertIn("--parse-jobs", lib_scan_cmds[1])
+            self.assertIn("8", lib_scan_cmds[1])
+
+            version_scan_cmds = build_cli_commands(["scan", "ucie", "stable_20250608"], cwd=workspace)
+            self.assertEqual(version_scan_cmds[1][:5], ["run", "--catalog", str(catalog), "--library", "ucie"])
+            self.assertIn("--version", version_scan_cmds[1])
+            self.assertIn("stable_20250608", version_scan_cmds[1])
+            self.assertIn("--parse-jobs", version_scan_cmds[1])
+            self.assertIn("8", version_scan_cmds[1])
+
+            scan_cmd = build_cli_command(["scan", "ucie", "stable_20250608"], cwd=workspace)
+            self.assertEqual(scan_cmd, version_scan_cmds[-1])
+
+            file_diff_cmd = build_cli_command(["file-diff", "ucie", "stable_20250608", "lef/ucie.lef"], cwd=workspace)
+            self.assertEqual(file_diff_cmd[0:2], ["file-diff", "lef"])
+            self.assertIn(str(old_file), file_diff_cmd)
+            self.assertIn(str(new_file), file_diff_cmd)
+
+            diff_cmds = build_cli_commands(["diff", "ucie", "stable_20250608"], cwd=workspace)
+            self.assertEqual(len(diff_cmds), 1)
+            self.assertEqual(diff_cmds[0][0], "compare")
+            self.assertNotIn("--scan-if-missing", diff_cmds[0])
+
+            refresh_diff_cmds = build_cli_commands(["diff", "ucie", "stable_20250608", "--refresh-catalog"], cwd=workspace)
+            self.assertEqual(refresh_diff_cmds[0][:2], ["catalog", "scan"])
+            self.assertEqual(refresh_diff_cmds[-1][0], "compare")
+
+            explicit_diff_cmds = build_cli_commands(["diff", "ucie", "stable_20250608", "--base", "initial_20250601", "--auto-scan"], cwd=workspace)
+            self.assertEqual(len(explicit_diff_cmds), 1)
+            self.assertEqual(explicit_diff_cmds[0][0], "compare")
+            self.assertIn("--scan-if-missing", explicit_diff_cmds[0])
+            self.assertIn("--parse-jobs", explicit_diff_cmds[0])
+            self.assertIn("8", explicit_diff_cmds[0])
+            self.assertIn("--base", explicit_diff_cmds[-1])
+
+    def test_short_cli_can_use_env_config_without_repeating_config_arg(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            caller = workspace.parent / f"{workspace.name}_caller"
+            caller.mkdir()
+            raw = workspace / "raw"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(json.dumps({"schema_version": "1.0", "libraries": []}), encoding="utf-8")
+
+            from lib_guard.short_cli import build_cli_commands, write_default_config
+
+            config = write_default_config(workspace, raw_root=raw)
+            with patch.dict(os.environ, {"LIB_GUARD_CONFIG": str(config)}):
+                scan_cmds = build_cli_commands(["scan"], cwd=caller)
+
+            self.assertEqual(len(scan_cmds), 1)
+            self.assertEqual(scan_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+            self.assertIn(str(catalog.parent), scan_cmds[0])
+
+    def test_csh_short_command_wrapper_is_available(self) -> None:
+        root = Path(__file__).resolve().parents[3]
+        wrapper = root / "scripts" / "lg.csh"
+
+        self.assertTrue(wrapper.exists())
+        text = wrapper.read_text(encoding="utf-8")
+        self.assertIn("lib_guard.short_cli", text)
+        self.assertIn("PYTHONPATH", text)
+
+    def test_short_cli_help_shows_minimal_workflow_examples(self) -> None:
+        from lib_guard.short_cli import _build_parser
+
+        help_text = _build_parser().format_help()
+
+        self.assertIn("Examples", help_text)
+        self.assertIn("lg.csh scan", help_text)
+        self.assertIn("lg.ps1 scan", help_text)
+
+    def test_catalog_workflow_does_not_trigger_summary_rebuild(self) -> None:
+        import inspect
+
+        from lib_guard.cli_commands.catalog import run_catalog_workflow
+
+        source = inspect.getsource(run_catalog_workflow)
+        self.assertNotIn("rebuild_summary_from_scan", source)
+        self.assertNotIn("rebuilt_summaries", source)
+        self.assertNotIn("developer_artifacts", source)
+
+    def test_scan_signature_uses_smart_hash_policy_for_heavy_eda_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+            (root / "block.lef").write_text("VERSION 5.8 ;\nMACRO B\nEND B\n", encoding="utf-8")
+            (root / "cell.lib").write_text("library(test) { cell(B) { area : 1; } }\n", encoding="utf-8")
+            (root / "README.md").write_text("release note\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="stable_20250608",
+                    scan_mode="signature",
+                    scan_id="SMART",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=True,
+                    no_progress=True,
+                    progress_interval=1,
+                    parse_jobs=1,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+
+            inventory = json.loads((out / "file_inventory.json").read_text(encoding="utf-8"))
+            by_path = {item["path"]: item for item in inventory["files"]}
+            self.assertEqual(by_path["block.lef"]["hash_status"], "SKIPPED_BY_SMART_POLICY")
+            self.assertIsNone(by_path["block.lef"].get("hash"))
+            self.assertEqual(by_path["cell.lib"]["hash_status"], "SKIPPED_BY_SMART_POLICY")
+            self.assertEqual(by_path["top.v"]["hash_status"], "CALCULATED")
+            self.assertIn("sha256:", by_path["top.v"].get("hash", ""))
+            version_profile = json.loads((out / "version_profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(version_profile["hash_policy"]["policy"], "smart")
+            self.assertIn("version_kind", version_profile)
+
+    def test_governance_diff_pairs_unique_added_removed_file_type(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_root = Path(td) / "old_raw"
+            new_root = Path(td) / "new_raw"
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            diff_out = Path(td) / "diff"
+            (old_root / "old_view").mkdir(parents=True)
+            (new_root / "new_view").mkdir(parents=True)
+            (old_root / "old_view" / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+            (new_root / "new_view" / "top.v").write_text("module top(input a, output b); endmodule\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            base = dict(
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="release",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, root_path=str(old_root), out_dir=str(old_scan), scan_id="OLD")).run()
+            ScanRunner(SimpleNamespace(**base, root_path=str(new_root), out_dir=str(new_scan), scan_id="NEW")).run()
+            diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
+
+            tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
+            self.assertEqual(tasks["summary"]["by_type"]["verilog"], 1)
+            self.assertEqual(tasks["tasks"][0]["pairing_confidence"], "unique_file_type")
+            self.assertIn("file-diff verilog", tasks["tasks"][0]["command"])
+
+    def test_legacy_extractor_paths_are_removed(self) -> None:
+        import importlib
+
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("lib_guard.scan.extractors")
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("lib_guard.extractors.verilog_extractor")
+
+    def test_scanner_services_do_not_include_summary_builders(self) -> None:
+        from lib_guard.scan.scanner import ScannerServices
+
+        self.assertNotIn("summary_builders", ScannerServices.__dataclass_fields__)
+        self.assertNotIn("extractors", ScannerServices.__dataclass_fields__)
+
+    def test_parser_file_apis_output_v2_result_without_legacy_parser_key(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            samples = {
+                "verilog": (Path(td) / "top.v", "module top(input a); endmodule\n"),
+                "lef": (Path(td) / "block.lef", "VERSION 5.8 ;\nMACRO NAND2\nEND NAND2\n"),
+                "liberty": (Path(td) / "cell.lib", "library(test) { cell(NAND2) { area : 1.0; } }\n"),
+                "cdl": (Path(td) / "netlist.cdl", ".SUBCKT INV A Y VDD VSS\nM1 Y A VDD VDD pmos\n.ENDS INV\n"),
+                "sdc": (Path(td) / "block.sdc", "create_clock -name clk -period 1.0 [get_ports clk]\n"),
+                "upf": (Path(td) / "block.upf", "create_power_domain PD_TOP\n"),
+                "cpf": (Path(td) / "block.cpf", "create_power_domain PD_TOP\n"),
+                "spef": (Path(td) / "block.spef", "*SPEF \"IEEE 1481-1998\"\n*D_NET net1 0.1\n"),
+                "filelist": (Path(td) / "files.f", "+incdir+rtl\nrtl/top.v\n"),
+                "package": (Path(td) / "model.s2p", "# Hz S RI R 50\n1 0 0 0 0\n"),
+                "waiver": (Path(td) / "rules.waiver", "waive RULE_A top\n"),
+                "db": (Path(td) / "lib.db", "binary-placeholder"),
+            }
+            for path, text in samples.values():
+                path.write_text(text, encoding="utf-8")
+
+            from lib_guard.scan.parsers.verilog import parse_verilog_file
+            from lib_guard.scan.parsers.lef import parse_lef_file
+            from lib_guard.scan.parsers.liberty import parse_liberty_file
+            from lib_guard.scan.parsers.cdl import parse_cdl_file
+            from lib_guard.scan.parsers.sdc import parse_sdc_file
+            from lib_guard.scan.parsers.upf import parse_upf_file
+            from lib_guard.scan.parsers.cpf import parse_cpf_file
+            from lib_guard.scan.parsers.spef import parse_spef_file
+            from lib_guard.scan.parsers.filelist import parse_filelist_file
+            from lib_guard.scan.parsers.package import parse_package_file, parse_touchstone_file
+            from lib_guard.scan.parsers.waiver import parse_waiver_file
+            from lib_guard.scan.parsers.db import parse_db_file
+
+            for result, parser_name, file_type in [
+                (parse_verilog_file(samples["verilog"][0]), "VerilogParser", "verilog"),
+                (parse_lef_file(samples["lef"][0]), "LefParser", "lef"),
+                (parse_liberty_file(samples["liberty"][0]), "LibertyParser", "liberty"),
+                (parse_cdl_file(samples["cdl"][0]), "CdlParser", "cdl"),
+                (parse_sdc_file(samples["sdc"][0]), "SdcParser", "sdc"),
+                (parse_upf_file(samples["upf"][0]), "UpfParser", "upf"),
+                (parse_cpf_file(samples["cpf"][0]), "CpfParser", "cpf"),
+                (parse_spef_file(samples["spef"][0]), "SpefParser", "spef"),
+                (parse_filelist_file(samples["filelist"][0]), "FilelistParser", "filelist"),
+                (parse_package_file(samples["package"][0]), "PackageParser", "package"),
+                (parse_touchstone_file(samples["package"][0]), "PackageParser", "touchstone"),
+                (parse_waiver_file(samples["waiver"][0]), "WaiverParser", "waiver"),
+                (parse_db_file(samples["db"][0]), "DbParser", "db"),
+            ]:
+                self.assertEqual(result["result_type"], "parser_result")
+                self.assertEqual(result["parser_name"], parser_name)
+                self.assertEqual(result["parser_version"], "2.0")
+                self.assertEqual(result["parser_schema_version"], "1.0")
+                self.assertEqual(result["file_type"], file_type)
+                self.assertEqual(result["compression"], None)
+                self.assertIn(result["status"], {"PASS", "PASS_EMPTY", "METADATA_ONLY"})
+                self.assertIn("object_count", result["stats"])
+                self.assertNotIn("parser", result)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
