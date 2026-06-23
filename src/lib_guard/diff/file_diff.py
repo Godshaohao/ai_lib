@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from html import escape
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -77,16 +76,14 @@ def _semantic_diff(old_data: Any, new_data: Any) -> dict[str, Any]:
                 return
             old_norm = {json.dumps(item, sort_keys=True, ensure_ascii=False, default=str) for item in old_value}
             new_norm = {json.dumps(item, sort_keys=True, ensure_ascii=False, default=str) for item in new_value}
-            changes.append(
-                {
-                    "path": path,
-                    "change_type": "list_changed",
-                    "old_count": len(old_value),
-                    "new_count": len(new_value),
-                    "added_count": len(new_norm - old_norm),
-                    "removed_count": len(old_norm - new_norm),
-                }
-            )
+            changes.append({
+                "path": path,
+                "change_type": "list_changed",
+                "old_count": len(old_value),
+                "new_count": len(new_value),
+                "added_count": len(new_norm - old_norm),
+                "removed_count": len(old_norm - new_norm),
+            })
             return
         if old_value != new_value:
             changes.append({"path": path or "$", "change_type": "changed", "old": old_value, "new": new_value})
@@ -96,21 +93,15 @@ def _semantic_diff(old_data: Any, new_data: Any) -> dict[str, Any]:
     for item in changes:
         change_type = str(item.get("change_type"))
         by_type[change_type] = by_type.get(change_type, 0) + 1
-    return {
-        "schema_version": "1.0",
-        "status": "SAME" if not changes else "DIFF",
-        "summary": {"change_count": len(changes), "by_type": dict(sorted(by_type.items()))},
-        "changes": changes[:1000],
-        "truncated": len(changes) > 1000,
-    }
+    return {"schema_version": "1.0", "status": "SAME" if not changes else "DIFF", "summary": {"change_count": len(changes), "by_type": dict(sorted(by_type.items()))}, "changes": changes[:1000], "truncated": len(changes) > 1000}
 
 
 def _render_raw_text_diff(old: Path, new: Path, out: Path) -> None:
     diff_html = difflib.HtmlDiff(wrapcolumn=120).make_file(
         _read_text(old),
         _read_text(new),
-        fromdesc=escape(str(old)),
-        todesc=escape(str(new)),
+        fromdesc=str(old),
+        todesc=str(new),
         context=True,
         numlines=3,
         charset="utf-8",
@@ -118,20 +109,9 @@ def _render_raw_text_diff(old: Path, new: Path, out: Path) -> None:
     _write_text(out / "raw_text_diff.html", diff_html)
 
 
-def _clip(value: Any, limit: int = 220) -> str:
+def _clip(value: Any, limit: int = 180) -> str:
     text = json.dumps(value, ensure_ascii=False, default=str)
     return text if len(text) <= limit else text[: limit - 1] + "…"
-
-
-def _status_class(status: Any) -> str:
-    text = str(status or "").upper()
-    if text in {"PASS", "SAME"}:
-        return "ok"
-    if text in {"FAILED", "BLOCK", "ERROR"}:
-        return "bad"
-    if text in {"METADATA_ONLY", "UNSUPPORTED"}:
-        return "muted"
-    return "warn"
 
 
 def _domain_counts(changes: list[dict[str, Any]]) -> dict[str, int]:
@@ -140,151 +120,77 @@ def _domain_counts(changes: list[dict[str, Any]]) -> dict[str, int]:
         path = str(item.get("path") or "$")
         domain = path.split(".", 1)[0] or "$"
         counts[domain] = counts.get(domain, 0) + 1
-    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8])
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:12])
 
 
 def _render_index(out: Path, meta: dict[str, Any], summary: dict[str, Any], semantic: dict[str, Any], issues: list[dict[str, Any]]) -> None:
+    from lib_guard.render import product_theme as ui
+
     file_type = str(summary.get("file_type") or meta.get("file_type") or "unknown")
-    changes = list(semantic.get("changes", []) or [])
-    domain_rows = "".join(f"<tr><td>{escape(k)}</td><td>{v}</td></tr>" for k, v in _domain_counts(changes).items())
-    rows = []
-    for item in changes[:100]:
-        rows.append(
-            "<tr>"
-            f"<td><span class=\"pill\">{escape(str(item.get('change_type', '-')))}</span></td>"
-            f"<td><code>{escape(str(item.get('path', '-')))}</code></td>"
-            f"<td><code>{escape(_clip(item.get('old')))}</code></td>"
-            f"<td><code>{escape(_clip(item.get('new')))}</code></td>"
-            "</tr>"
-        )
-    issue_items = "".join(
-        f"<li>{escape(str(item.get('title') or item.get('message') or item))}</li>"
-        for item in issues
-    ) or "<li>未发现 parser 执行错误；仍需结合原始 diff 做人工复核。</li>"
     status = str(summary.get("status") or "UNKNOWN")
+    changes = list(semantic.get("changes", []) or [])
+    change_count = int((semantic.get("summary") or {}).get("change_count") or 0)
     parser_status = f"{summary.get('old_parser_status')} / {summary.get('new_parser_status')}"
     evidence_mode = "metadata-only" if file_type == "db" or "METADATA_ONLY" in parser_status else "structured + raw"
-    metadata_note = ""
-    if evidence_mode == "metadata-only":
-        metadata_note = "<div class=\"notice\">该类型当前为 metadata-only 审阅：页面展示文件元信息、结构哈希与原始文本差异入口，不给出内容级语义结论。</div>"
-
-    html = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <title>单文件深度对比报告</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      --ink:#17202a; --muted:#667085; --line:#d9e1ec; --panel:#ffffff;
-      --wash:#f6f8fb; --accent:#1f5e8c; --good:#157347; --warn:#946200; --bad:#b42318;
-      --shadow:0 18px 54px rgba(31,50,74,.10);
-    }}
-    * {{ box-sizing:border-box; }}
-    body {{
-      margin:0; font-family:"Microsoft YaHei","Segoe UI",Arial,sans-serif; color:var(--ink);
-      background:linear-gradient(180deg,#edf3f8 0,#fafbfc 360px,#fff 100%);
-    }}
-    main {{ max-width:1240px; margin:0 auto; padding:34px 26px 64px; }}
-    header {{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:22px; align-items:end; padding:14px 0 22px; }}
-    h1 {{ margin:0 0 9px; font-size:30px; font-weight:760; letter-spacing:0; }}
-    h2 {{ margin:0 0 14px; font-size:18px; font-weight:720; }}
-    .sub {{ color:var(--muted); font-size:13px; line-height:1.7; max-width:820px; }}
-    .badge {{ display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:999px; padding:7px 10px; background:#fff; color:#344054; font-size:12px; }}
-    .badge.ok {{ color:var(--good); border-color:#b7dfc8; background:#f2fbf5; }}
-    .badge.warn {{ color:var(--warn); border-color:#ead39a; background:#fff8e8; }}
-    .badge.bad {{ color:var(--bad); border-color:#f3b8b3; background:#fff1f0; }}
-    .badge.muted {{ color:#475467; border-color:#cfd8e3; background:#f4f6f8; }}
-    .grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:12px 0 18px; }}
-    .tile,.panel {{ background:rgba(255,255,255,.95); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }}
-    .tile {{ padding:15px 16px; min-height:92px; }}
-    .tile span {{ display:block; color:var(--muted); font-size:12px; }}
-    .tile b {{ display:block; margin-top:8px; font-size:22px; font-weight:760; word-break:break-word; }}
-    .panel {{ padding:20px; margin:16px 0; }}
-    .split {{ display:grid; grid-template-columns:1.1fr .9fr; gap:16px; }}
-    table {{ width:100%; border-collapse:collapse; font-size:13px; }}
-    th,td {{ border-bottom:1px solid var(--line); padding:10px 11px; text-align:left; vertical-align:top; }}
-    th {{ color:#344054; background:var(--wash); font-weight:680; }}
-    code {{ white-space:pre-wrap; word-break:break-word; font-family:Consolas,"SFMono-Regular",monospace; font-size:12px; }}
-    .actions {{ display:flex; flex-wrap:wrap; gap:8px; }}
-    .actions a {{ display:inline-flex; align-items:center; min-height:34px; padding:8px 11px; border-radius:6px; border:1px solid var(--line); color:var(--accent); text-decoration:none; background:white; font-size:13px; }}
-    .pill {{ display:inline-flex; padding:4px 8px; border-radius:999px; background:#eef4ff; color:#194185; font-size:12px; }}
-    .notice {{ margin:12px 0 18px; padding:12px 14px; border:1px solid #ead39a; border-radius:8px; background:#fff8e8; color:#6f4f00; font-size:13px; }}
-    ul {{ margin:0; padding-left:18px; color:#344054; line-height:1.75; font-size:13px; }}
-    @media (max-width:900px) {{ header,.split,.grid {{ grid-template-columns:1fr; }} main {{ padding:22px 14px 46px; }} }}
-  </style>
-</head>
-<body>
-<main>
-  <header>
-    <div>
-      <h1>单文件深度对比报告</h1>
-      <div class="sub">{escape(TYPE_LABELS.get(file_type, file_type))} · {escape(TYPE_FOCUS.get(file_type, "用于定位两份文件之间的结构化变化与原始证据。"))}</div>
-    </div>
-    <span class="badge {_status_class(status)}">{escape(status)}</span>
-  </header>
-
-  <section class="grid">
-    <div class="tile"><span>文件类型</span><b>{escape(file_type)}</b></div>
-    <div class="tile"><span>结构化变化</span><b>{escape(str((semantic.get("summary") or {}).get("change_count", 0)))}</b></div>
-    <div class="tile"><span>Parser 状态</span><b>{escape(parser_status)}</b></div>
-    <div class="tile"><span>证据模式</span><b>{escape(evidence_mode)}</b></div>
-  </section>
-  {metadata_note}
-
-  <section class="split">
-    <div class="panel">
-      <h2>对比对象</h2>
-      <table>
-        <tr><th>旧文件</th><td>{escape(str(meta.get("old_file")))}</td></tr>
-        <tr><th>新文件</th><td>{escape(str(meta.get("new_file")))}</td></tr>
-        <tr><th>旧结构哈希</th><td><code>{escape(str(summary.get("old_hash")))}</code></td></tr>
-        <tr><th>新结构哈希</th><td><code>{escape(str(summary.get("new_hash")))}</code></td></tr>
-      </table>
-    </div>
-    <div class="panel">
-      <h2>变化域分布</h2>
-      <table><thead><tr><th>域</th><th>变化数</th></tr></thead><tbody>{domain_rows or '<tr><td colspan="2">未发现结构化变化。</td></tr>'}</tbody></table>
-    </div>
-  </section>
-
-  <section class="panel">
-    <h2>证据文件</h2>
-    <div class="actions">
-      <a href="old_extract.json">旧文件 extract</a>
-      <a href="new_extract.json">新文件 extract</a>
-      <a href="semantic_diff.json">结构化变化 JSON</a>
-      <a href="raw_text_diff.html">原始文本差异</a>
-      <a href="file_diff_detail.json">完整明细 JSON</a>
-    </div>
-  </section>
-
-  <section class="panel">
-    <h2>结构化变化</h2>
-    <table>
-      <thead><tr><th>类型</th><th>路径</th><th>旧值</th><th>新值</th></tr></thead>
-      <tbody>{''.join(rows) or '<tr><td colspan="4">未发现结构化变化。</td></tr>'}</tbody>
-    </table>
-  </section>
-
-  <section class="panel">
-    <h2>专家复核提示</h2>
-    <ul>
-      <li>本页用于 pairwise 人工复核，不替代正式 release gate 或签核。</li>
-      <li>结构化变化来自轻量 parser，复杂语法、include 展开、EDA 工具语义需由专家确认。</li>
-      <li>DB/GDS/OAS 等二进制或大型版图文件默认只做 metadata/hash 级证据，内容级检查应接入专用工具。</li>
-    </ul>
-  </section>
-
-  <section class="panel">
-    <h2>Parser 限制说明</h2>
-    <ul>{issue_items}</ul>
-  </section>
-</main>
-</body>
-</html>
-"""
-    _write_text(out / "index.html", html)
+    domain_rows = [f"<tr><td><code>{ui.esc(k)}</code></td><td>{ui.esc(v)}</td></tr>" for k, v in _domain_counts(changes).items()]
+    change_rows = []
+    for item in changes[:200]:
+        change_rows.append(
+            "<tr>"
+            f"<td>{ui.badge(item.get('change_type'), item.get('change_type'))}</td>"
+            f"<td><code>{ui.esc(item.get('path', '-'))}</code></td>"
+            f"<td><code>{ui.esc(_clip(item.get('old')))}</code></td>"
+            f"<td><code>{ui.esc(_clip(item.get('new')))}</code></td>"
+            "</tr>"
+        )
+    issue_rows = [
+        "<tr>"
+        f"<td>{ui.badge(item.get('severity') or 'WARNING')}</td>"
+        f"<td>{ui.esc(item.get('category') or 'parser')}</td>"
+        f"<td>{ui.esc(item.get('title') or item.get('message') or item)}</td>"
+        "</tr>"
+        for item in issues
+    ]
+    rail = ui.status_rail([
+        ("Diff", "NEEDS_FILE_DIFF", "本页由 Diff 任务进入"),
+        ("File Diff", status, f"结构化变化 {change_count}"),
+        ("Raw Diff", "READY", "可打开 raw_text_diff.html"),
+        ("Review", "MANUAL_REVIEW" if status == "DIFF" else "SAME", "最终结论由使用者确认"),
+    ])
+    body = (
+        ui.panel(
+            "File Diff 结论 / 单文件深度对比报告",
+            "单文件深度页只服务一个 old_file → new_file。Diff 主页面只保留任务和入口。",
+            ui.metric_grid([
+                ("file_type", file_type, TYPE_LABELS.get(file_type, file_type), status),
+                ("结构化变化", change_count, "semantic_diff.json", status),
+                ("Parser", parser_status, "old / new", "WARNING" if "FAILED" in parser_status else "PASS"),
+                ("证据模式", evidence_mode, "structured + raw / metadata-only", "METADATA_ONLY" if evidence_mode == "metadata-only" else "PASS"),
+            ])
+            + ui.compact_meta([("Old", meta.get("old_file")), ("New", meta.get("new_file")), ("Focus", TYPE_FOCUS.get(file_type, "人工复核文件变化。"))]),
+        )
+        + ui.panel("变化域分布", "用于快速定位变化集中在哪些结构域。", ui.table(["域", "变化数"], domain_rows, "未发现结构化变化"))
+        + ui.panel("证据入口", "File Diff 保持独立页面，原始文本差异也独立打开。", ui.action_strip([
+            ui.button("old_extract.json", "old_extract.json", target="_blank"),
+            ui.button("new_extract.json", "new_extract.json", target="_blank"),
+            ui.button("semantic_diff.json", "semantic_diff.json", target="_blank"),
+            ui.button("raw_text_diff.html", "raw_text_diff.html", "primary", target="_blank"),
+            ui.button("pairwise_result.json", "pairwise_result.json", target="_blank"),
+        ]))
+        + ui.panel("结构化变化", "默认最多展示前 200 条，完整内容看 semantic_diff.json。", ui.filterable_table("semantic-change-table", ["类型", "路径", "旧值", "新值"], change_rows, "未发现结构化变化", "筛选路径 / 类型"))
+        + ui.collapsible_panel("Parser 限制 / 专家复核提示", "轻量 parser 不替代 EDA tool signoff。", ui.table(["Severity", "Category", "Message"], issue_rows, "未发现 parser 错误；仍需结合原始 diff 人工确认。"), open=False)
+    )
+    html_text = ui.review_page_shell(
+        "File Diff / 单文件深度对比报告",
+        "FILE DIFF",
+        f"{TYPE_LABELS.get(file_type, file_type)} · {TYPE_FOCUS.get(file_type, '用于定位两份文件之间的结构化变化与原始证据。')}",
+        body,
+        decision=status,
+        rail=rail,
+        nav="<a href='#'>Diff</a><a class='active' href='#'>File Diff</a><a href='raw_text_diff.html'>Raw Text Diff</a>",
+        meta=ui.compact_meta([("file_type", file_type), ("changes", change_count), ("status", status)]),
+    )
+    _write_text(out / "index.html", html_text)
 
 
 def _record(path: Path, file_type: str) -> dict[str, Any]:
@@ -293,37 +199,32 @@ def _record(path: Path, file_type: str) -> dict[str, Any]:
     combined = suffix
     if name.lower().endswith(".gz"):
         combined = Path(name[:-3]).suffix.lower() + ".gz"
-    return {
-        "path": name,
-        "abs_path": str(path.resolve()),
-        "name": name,
-        "extension": suffix,
-        "combined_extension": combined,
-        "compression": "gzip" if suffix == ".gz" else None,
-        "file_type": file_type,
-        "is_key_file": True,
+    return {"path": name, "abs_path": str(path.resolve()), "name": name, "extension": suffix, "combined_extension": combined, "compression": "gzip" if suffix == ".gz" else None, "file_type": file_type, "is_key_file": True}
+
+
+def _fallback_parse(file_type: str, path: Path, status: str = "PASS") -> dict[str, Any]:
+    lines = _read_text(path)
+    data = {
+        "line_count": len(lines),
+        "non_empty_count": sum(1 for x in lines if x.strip()),
+        "head": lines[:20],
+        "sha256_text": hashlib.sha256("\n".join(lines).encode("utf-8", errors="replace")).hexdigest(),
     }
+    return {"schema_version": "1.0", "result_type": "parser_result", "parser_name": "FallbackTextParser", "file": str(path), "file_type": file_type, "status": status, "data": data, "issues": []}
 
 
 def _parse_file(file_type: str, path: Path) -> dict[str, Any]:
-    from lib_guard.scan.parser_registry import ParserRegistry
-
-    registry = ParserRegistry.default(None)
-    context = SimpleNamespace(root_path=str(path.parent), schema_version="1.0", scan_mode="file-diff")
-    record = _record(path, file_type)
-    for parser in registry.all():
-        if parser.can_parse(record, context):
-            return parser.parse(record, context)
-    return {
-        "schema_version": "1.0",
-        "result_type": "parser_result",
-        "parser_name": "UnsupportedParser",
-        "file": str(path),
-        "file_type": file_type,
-        "status": "UNSUPPORTED",
-        "data": {},
-        "issues": [{"severity": "warning", "message": f"unsupported pairwise file type: {file_type}"}],
-    }
+    try:
+        from lib_guard.scan.parser_registry import ParserRegistry
+        registry = ParserRegistry.default(None)
+        context = SimpleNamespace(root_path=str(path.parent), schema_version="1.0", scan_mode="file-diff")
+        record = _record(path, file_type)
+        for parser in registry.all():
+            if parser.can_parse(record, context):
+                return parser.parse(record, context)
+    except Exception as exc:
+        return _fallback_parse(file_type, path, status="PASS") | {"issues": [{"severity": "warning", "category": "parser_fallback", "message": f"使用 fallback parser: {type(exc).__name__}"}]}
+    return {"schema_version": "1.0", "result_type": "parser_result", "parser_name": "UnsupportedParser", "file": str(path), "file_type": file_type, "status": "UNSUPPORTED", "data": {}, "issues": [{"severity": "warning", "category": "unsupported", "message": f"unsupported pairwise file type: {file_type}"}]}
 
 
 def _utc_now() -> str:
@@ -349,68 +250,22 @@ def diff_pairwise_files(
     old_hash = _stable_hash(old_result.get("data", {}))
     new_hash = _stable_hash(new_result.get("data", {}))
     status = "SAME" if old_hash == new_hash else "DIFF"
-    issues = []
-    if str(old_result.get("status")).upper() == "FAILED" or str(new_result.get("status")).upper() == "FAILED":
-        status = "FAILED"
-        issues.append({"severity": "error", "category": "parser", "title": "Parser failed", "message": "old or new parser failed"})
-
-    meta = {
-        "schema_version": "1.0",
-        "diff_type": "pairwise_file_diff",
-        "file_type": file_type,
-        "old_file": str(old),
-        "new_file": str(new),
-    }
-    summary = {
-        "schema_version": "1.0",
-        "status": status,
-        "file_type": file_type,
-        "old_parser_status": old_result.get("status"),
-        "new_parser_status": new_result.get("status"),
-        "old_hash": old_hash,
-        "new_hash": new_hash,
-        "changed": old_hash != new_hash,
-    }
-    detail = {
-        "schema_version": "1.0",
-        "file_type": file_type,
-        "old": old_result,
-        "new": new_result,
-    }
-    old_extract = {
-        "schema_version": "1.0",
-        "file_type": file_type,
-        "parser_status": old_result.get("status"),
-        "data": old_result.get("data", {}),
-        "issues": old_result.get("issues", []),
-    }
-    new_extract = {
-        "schema_version": "1.0",
-        "file_type": file_type,
-        "parser_status": new_result.get("status"),
-        "data": new_result.get("data", {}),
-        "issues": new_result.get("issues", []),
-    }
+    issues: list[dict[str, Any]] = []
+    for res, side in [(old_result, "old"), (new_result, "new")]:
+        for issue in res.get("issues", []) or []:
+            issues.append({"severity": issue.get("severity") or "warning", "category": issue.get("category") or "parser", "title": f"{side} parser issue", "message": issue.get("message") or str(issue)})
+        if str(res.get("status")).upper() == "FAILED":
+            status = "FAILED"
+            issues.append({"severity": "error", "category": "parser", "title": "Parser failed", "message": f"{side} parser failed"})
+    meta = {"schema_version": "1.0", "diff_type": "pairwise_file_diff", "file_type": file_type, "old_file": str(old), "new_file": str(new)}
+    summary = {"schema_version": "1.0", "status": status, "file_type": file_type, "old_parser_status": old_result.get("status"), "new_parser_status": new_result.get("status"), "old_hash": old_hash, "new_hash": new_hash, "changed": old_hash != new_hash}
+    old_extract = {"schema_version": "1.0", "file_type": file_type, "parser_status": old_result.get("status"), "data": old_result.get("data", {}), "issues": old_result.get("issues", [])}
+    new_extract = {"schema_version": "1.0", "file_type": file_type, "parser_status": new_result.get("status"), "data": new_result.get("data", {}), "issues": new_result.get("issues", [])}
     semantic = _semantic_diff(old_extract.get("data", {}), new_extract.get("data", {}))
     change_count = int((semantic.get("summary") or {}).get("change_count") or 0)
-    issue_payload = {"schema_version": "1.0", "issues": issues, "summary": {"error": len(issues)}}
-    pairwise_result = {
-        "schema_version": "pairwise_result.v1",
-        "task_id": task_id or out.name,
-        "library_id": library_id,
-        "version_id": version_id,
-        "base_version": base_version,
-        "file_type": file_type,
-        "old_file": str(old),
-        "new_file": str(new),
-        "status": "FAILED" if status == "FAILED" else "DONE",
-        "result": status,
-        "change_count": change_count,
-        "review_result": "NEED_EXPERT_REVIEW" if status == "DIFF" else "NOT_REVIEWED",
-        "reviewer_note": "",
-        "html": str(out / "index.html"),
-        "generated_at": _utc_now(),
-    }
+    pairwise_result = {"schema_version": "pairwise_result.v1", "task_id": task_id or out.name, "library_id": library_id, "version_id": version_id, "base_version": base_version, "file_type": file_type, "old_file": str(old), "new_file": str(new), "status": "FAILED" if status == "FAILED" else "DONE", "result": status, "change_count": change_count, "review_result": "NEED_EXPERT_REVIEW" if status == "DIFF" else "NOT_REVIEWED", "reviewer_note": "", "html": str(out / "index.html"), "generated_at": _utc_now()}
+    detail = {"schema_version": "1.0", "file_type": file_type, "old": old_result, "new": new_result}
+    issue_payload = {"schema_version": "1.0", "issues": issues, "summary": {"error": sum(1 for i in issues if str(i.get('severity')).lower() == 'error'), "warning": sum(1 for i in issues if str(i.get('severity')).lower() != 'error')}}
     _write_json(out / "file_diff_meta.json", meta)
     _write_json(out / "file_diff_summary.json", summary)
     _write_json(out / "file_diff_issues.json", issue_payload)

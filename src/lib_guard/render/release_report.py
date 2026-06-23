@@ -1,4 +1,8 @@
-"""HTML renderer for manifest-driven release verification."""
+"""Chinese Release Review HTML renderer.
+
+Release Review answers whether manifest/link/postcheck evidence is consistent.
+It does not replace human signoff.
+"""
 
 from __future__ import annotations
 
@@ -17,16 +21,10 @@ def _href(path: Any) -> str:
     try:
         p = Path(text)
         if p.is_absolute():
-            return p.as_uri()
+            return p.resolve().as_uri()
     except Exception:
         pass
     return text.replace("\\", "/")
-
-
-def _counts_text(counts: Mapping[str, Any]) -> str:
-    if not counts:
-        return "-"
-    return " / ".join(f"{k}:{v}" for k, v in sorted(counts.items())[:10])
 
 
 def _issue_counts_by_library(issues: list[Mapping[str, Any]]) -> dict[str, Counter[str]]:
@@ -37,53 +35,54 @@ def _issue_counts_by_library(issues: list[Mapping[str, Any]]) -> dict[str, Count
     return grouped
 
 
-def _release_brief_items(postcheck: Mapping[str, Any]) -> list[tuple[str, Any, str, Any]]:
+def _release_review_model(postcheck: Mapping[str, Any]) -> dict[str, Any]:
     summary = postcheck.get("summary", {}) or {}
-    issue_count = sum(
-        int(summary.get(key, 0) or 0)
-        for key in ["missing_files", "broken_links", "target_mismatch", "extra_files"]
-    )
-    return [
-        ("Release ID", postcheck.get("release_id") or "-", "release run identifier", postcheck.get("status") or "UNKNOWN"),
-        ("Alias", postcheck.get("alias") or "-", "target alias such as current/stage", "PASS"),
-        ("Release Root", postcheck.get("release_root") or "-", "release area root", "PASS" if postcheck.get("release_root") else "WARNING"),
-        ("Manifest", postcheck.get("manifest_path") or "-", "release_manifest.json", "PASS" if postcheck.get("manifest_path") else "WARNING"),
-        ("Postcheck", postcheck.get("postcheck_path") or "-", "release_postcheck.json", "PASS" if postcheck.get("postcheck_path") else "WARNING"),
-        ("Libraries", summary.get("expected_libraries", 0), "libraries in manifest", "PASS"),
-        ("Expected Files", summary.get("expected_files", 0), "planned file-level release entries", "PASS"),
-        ("Linked Files", summary.get("linked_files", 0), "files found in release area", postcheck.get("status") or "UNKNOWN"),
-        ("Issues", issue_count, "missing / broken / mismatch / extra", "WARNING" if issue_count else "PASS"),
-    ]
-
-
-def _release_summary_tiles(postcheck: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    summary = postcheck.get("summary", {}) or {}
-    specs = [
-        ("Expected files", "manifest scope", "expected_files", "PASS", "File-level entries planned by the release manifest."),
-        ("Linked files", "release area", "linked_files", postcheck.get("status") or "UNKNOWN", "Files present after link/copy operation."),
-        ("Missing files", "needs review", "missing_files", "MISSING", "Manifest files not found in release area."),
-        ("Broken links", "needs review", "broken_links", "BROKEN", "Symlinks that do not resolve."),
-        ("Mismatches", "needs review", "target_mismatch", "MISMATCH", "Release target does not match manifest source."),
-        ("Extra files", "needs review", "extra_files", "EXTRA", "Files in release area not covered by manifest."),
-        ("Unknown types", "classifier", "unknown_file_types", "WARNING", "Released files still classified as unknown."),
-    ]
-    items: list[Mapping[str, Any]] = []
-    for title, subtitle, key, status_when_nonzero, hint in specs:
-        count = int(summary.get(key, 0) or 0)
-        status = "PASS" if key not in {"linked_files"} and count == 0 and status_when_nonzero != "PASS" else status_when_nonzero
-        if key in {"expected_files", "linked_files"}:
-            status = status_when_nonzero
-        items.append(
-            {
-                "title": title,
-                "subtitle": subtitle,
-                "status": status,
-                "status_label": "review" if status in {"MISSING", "BROKEN", "MISMATCH", "EXTRA", "WARNING"} and count else "ok",
-                "count": count,
-                "hint": hint,
-            }
-        )
-    return items
+    issue_count = sum(int(summary.get(key, 0) or 0) for key in ["missing_files", "broken_links", "target_mismatch", "extra_files"])
+    status = str(postcheck.get("status") or "UNKNOWN").upper()
+    if status in {"FAILED", "BLOCK", "BLOCKED"}:
+        decision = "RELEASE_BLOCKED"
+        headline = "Release postcheck 失败，需要先处理发布结果。"
+    elif issue_count:
+        decision = "PASS_WITH_WARNING"
+        headline = f"Release 基本完成，但有 {issue_count} 个发布注意项。"
+    elif status == "PASS":
+        decision = "PASS"
+        headline = "Release postcheck 通过，manifest 和 release area 一致。"
+    else:
+        decision = "RELEASE_CHECK_REQUIRED"
+        headline = "Release 状态未确认，需要查看 manifest / postcheck。"
+    next_command = ""
+    if issue_count:
+        next_label = "检查发布注意项"
+        next_reason = "优先检查 missing / broken / mismatch / extra。"
+    else:
+        next_label = "返回 Catalog / 通知使用者"
+        next_reason = "发布检查没有发现优先阻塞项。"
+    return {
+        "schema_version": "release_review.v1",
+        "decision": decision,
+        "headline": headline,
+        "release_id": postcheck.get("release_id"),
+        "alias": postcheck.get("alias"),
+        "release_root": postcheck.get("release_root"),
+        "release_dir": postcheck.get("release_dir"),
+        "summary": {
+            "expected_files": int(summary.get("expected_files", 0) or 0),
+            "linked_files": int(summary.get("linked_files", 0) or 0),
+            "missing_files": int(summary.get("missing_files", 0) or 0),
+            "broken_links": int(summary.get("broken_links", 0) or 0),
+            "target_mismatch": int(summary.get("target_mismatch", 0) or 0),
+            "extra_files": int(summary.get("extra_files", 0) or 0),
+            "unknown_file_types": int(summary.get("unknown_file_types", 0) or 0),
+            "expected_libraries": int(summary.get("expected_libraries", 0) or 0),
+        },
+        "next_action": {"label": next_label, "command": next_command, "reason": next_reason},
+        "evidence": {
+            "manifest": postcheck.get("manifest_path"),
+            "link_result": postcheck.get("link_result_path"),
+            "postcheck": postcheck.get("postcheck_path"),
+        },
+    }
 
 
 def _release_attention_items(postcheck: Mapping[str, Any]) -> list[tuple[Any, str, str, str]]:
@@ -104,131 +103,111 @@ def _release_attention_items(postcheck: Mapping[str, Any]) -> list[tuple[Any, st
     return items
 
 
-def _library_verification_rows(postcheck: Mapping[str, Any]) -> list[str]:
-    from lib_guard.render.product_theme import badge, esc
+def _library_rows(postcheck: Mapping[str, Any]) -> list[str]:
+    from lib_guard.render import product_theme as ui
 
     issues_by_lib = _issue_counts_by_library(list(postcheck.get("issues", []) or []))
     rows: list[str] = []
     for item in postcheck.get("libraries", []) or []:
         lib = str(item.get("library_name") or "unknown")
         counts = issues_by_lib.get(lib, Counter())
-        evidence = []
-        if item.get("scan_html"):
-            evidence.append(f"<a class='evidence-link compact' href='{esc(_href(item.get('scan_html')))}'>Scan</a>")
-        if item.get("diff_html"):
-            evidence.append(f"<a class='evidence-link compact' href='{esc(_href(item.get('diff_html')))}'>Diff</a>")
-        evidence_html = "".join(evidence) or '<span class="muted">-</span>'
+        evidence = ui.action_strip([
+            ui.button("Scan", _href(item.get("scan_html")), disabled=not item.get("scan_html"), target="_blank"),
+            ui.button("Diff", _href(item.get("diff_html")), disabled=not item.get("diff_html"), target="_blank"),
+        ])
         rows.append(
             "<tr>"
-            f"<td><b>{esc(lib)}</b><div class='sub'>{esc(item.get('version_id') or '-')}</div></td>"
-            f"<td>{esc(item.get('expected_files', 0))}</td>"
-            f"<td>{esc(item.get('linked_files', 0))}</td>"
-            f"<td>{badge('MISSING', counts.get('missing_file', 0))}</td>"
-            f"<td>{badge('BROKEN', counts.get('broken_link', 0))}</td>"
-            f"<td>{badge('MISMATCH', counts.get('target_mismatch', 0))}</td>"
-            f"<td>{badge('EXTRA', counts.get('extra_file', 0))}</td>"
-            f"<td>{badge(item.get('link_status') or 'UNKNOWN')}</td>"
-            f"<td>{badge('PASS' if item.get('target_match') else 'MISMATCH')}</td>"
-            f"<td>{esc(_counts_text(item.get('file_type_counts', {}) or {}))}</td>"
-            f"<td>{evidence_html}</td>"
+            f"<td><b>{ui.esc(lib)}</b><div class='muted'>{ui.esc(item.get('version_id') or '-')}</div></td>"
+            f"<td>{ui.esc(item.get('expected_files', 0))}</td>"
+            f"<td>{ui.esc(item.get('linked_files', 0))}</td>"
+            f"<td>{ui.quiet_badge('MISSING', counts.get('missing_file', 0))}</td>"
+            f"<td>{ui.quiet_badge('BROKEN', counts.get('broken_link', 0))}</td>"
+            f"<td>{ui.quiet_badge('MISMATCH', counts.get('target_mismatch', 0))}</td>"
+            f"<td>{ui.quiet_badge('EXTRA', counts.get('extra_file', 0))}</td>"
+            f"<td>{ui.badge(item.get('link_status') or 'UNKNOWN')}</td>"
+            f"<td>{ui.badge('TARGET_MATCH' if item.get('target_match') else 'TARGET_MISMATCH')}</td>"
+            f"<td>{evidence}</td>"
             "</tr>"
         )
     return rows
 
 
-def _release_trace_links(postcheck: Mapping[str, Any]) -> list[tuple[str, Any, str]]:
-    return [
-        ("release_manifest.json", _href(postcheck.get("manifest_path")), "planned file-level release entries"),
-        ("release_link_result.json", _href(postcheck.get("link_result_path")), "link/copy dry-run or apply result"),
-        ("release_postcheck.json", _href(postcheck.get("postcheck_path")), "post-release verification result"),
-    ]
+def _issue_rows(postcheck: Mapping[str, Any]) -> list[str]:
+    from lib_guard.render import product_theme as ui
 
-
-def _full_issue_rows(postcheck: Mapping[str, Any]) -> list[str]:
-    from lib_guard.render.product_theme import badge, esc
-
-    rows: list[str] = []
+    rows = []
     for issue in postcheck.get("issues", []) or []:
         rows.append(
             "<tr>"
-            f"<td>{badge(issue.get('severity') or issue.get('category') or 'WARNING')}</td>"
-            f"<td><code>{esc(issue.get('category') or '-')}</code></td>"
-            f"<td>{esc(issue.get('library_name') or 'release_area')}</td>"
-            f"<td>{esc(issue.get('message') or '')}</td>"
+            f"<td>{ui.badge(issue.get('severity') or issue.get('category') or 'WARNING')}</td>"
+            f"<td><code>{ui.esc(issue.get('category') or '-')}</code></td>"
+            f"<td>{ui.esc(issue.get('library_name') or 'release_area')}</td>"
+            f"<td>{ui.esc(issue.get('message') or '')}</td>"
             "</tr>"
         )
     return rows
 
 
 def render_release_html(postcheck: Mapping[str, Any], out_dir: str | Path) -> dict[str, Any]:
-    from lib_guard.render.product_theme import (
-        attention_items,
-        brief_grid,
-        collapsible_panel,
-        page_shell,
-        panel,
-        table,
-        tile_grid,
-        trace_link_list,
-    )
+    from lib_guard.render import product_theme as ui
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-
-    attention = attention_items(_release_attention_items(postcheck))
-    summary = tile_grid(_release_summary_tiles(postcheck))
-    evidence_drawer = (
-        trace_link_list(_release_trace_links(postcheck))
-        + collapsible_panel(
-            "Raw Issue Table / 原始问题表",
-            "Full missing / broken / mismatch / extra issue evidence.",
-            table(["Severity", "Category", "Library", "Message"], _full_issue_rows(postcheck), "No release issues"),
-            open=bool(postcheck.get("issues")),
-        )
-    )
+    review = _release_review_model(postcheck)
+    (out / "release_review.json").write_text(json.dumps(review, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+    s = review["summary"]
+    rail = ui.status_rail([
+        ("Catalog", "DISCOVERED", "发布版本来自 catalog"),
+        ("Scan", "SCAN_READY", "发布基于已扫描版本"),
+        ("Diff", "REVIEW", "发布前应查看对应 Diff / File Diff"),
+        ("File Diff", "REVIEW", "必要时查看文件级结果"),
+        ("Release", review["decision"], review["headline"]),
+    ])
+    attention = _release_attention_items(postcheck)
     body = (
-        "<span class='compat-token'>Release 文件级审阅台</span>"
-        + panel(
-            "Release Brief / 发布概览",
-            "Confirm release_id, alias, release_root and evidence files before reading the verification result.",
-            brief_grid(_release_brief_items(postcheck)),
+        ui.panel(
+            "Release 结论 / Release 文件级审阅台",
+            "检查 manifest、link/copy 结果和 release area 是否一致。",
+            ui.metric_grid([
+                ("Expected", s["expected_files"], "manifest 计划文件数", "PASS"),
+                ("Linked", s["linked_files"], "release area 已存在文件", review["decision"]),
+                ("Missing", s["missing_files"], "manifest 有但 release area 缺失", "MISSING" if s["missing_files"] else "PASS"),
+                ("Mismatch", s["target_mismatch"], "目标与 manifest source 不一致", "MISMATCH" if s["target_mismatch"] else "PASS"),
+                ("Extra", s["extra_files"], "release area 多余文件", "EXTRA" if s["extra_files"] else "PASS"),
+            ])
+            + ui.compact_meta([
+                ("Release ID", review.get("release_id")), ("Alias", review.get("alias")), ("Release Root", review.get("release_root")), ("Release Dir", review.get("release_dir")),
+            ]),
         )
-        + panel(
-            "Verification Summary / 校验摘要",
-            "File-level release verification: expected, linked, missing, broken, mismatch and extra.",
-            summary,
-        )
-        + panel(
-            "Release Attention / 发布关注",
-            "Only missing, broken, mismatch, extra and manual-review issues are surfaced here.",
-            attention,
-        )
-        + panel(
-            "Library Verification Table / 库级校验表",
-            "One row per library; full file-level evidence stays folded below.",
-            table(
-                ["Library", "Expected", "Linked", "Missing", "Broken", "Mismatch", "Extra", "Link", "Target", "File Types", "Evidence"],
-                _library_verification_rows(postcheck),
-                "No libraries in release postcheck",
-            ),
-        )
-        + collapsible_panel(
-            "Evidence Drawer / 证据抽屉",
-            "Manifest, link result, postcheck JSON and raw issue rows are trace evidence.",
-            evidence_drawer,
+        + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["decision"])
+        + ui.panel("发布注意项", "只列出 missing / broken / mismatch / extra / manual_review。", ui.attention_items(attention))
+        + ui.panel("Library 校验", "一行一个 library。文件级明细仍以 manifest / postcheck JSON 为准。", ui.filterable_table("release-lib-table", ["Library", "Expected", "Linked", "Missing", "Broken", "Mismatch", "Extra", "Link", "Target", "Evidence"], _library_rows(postcheck), "暂无 library", "筛选 library / version / status"))
+        + ui.collapsible_panel(
+            "证据区",
+            "发布原始证据默认折叠。",
+            ui.trace_link_list([
+                ("release_review.json", _href(out / "release_review.json"), "本页面使用的发布审阅模型"),
+                ("release_manifest.json", _href(postcheck.get("manifest_path")), "计划发布文件"),
+                ("release_link_result.json", _href(postcheck.get("link_result_path")), "link/copy 结果"),
+                ("release_postcheck.json", _href(postcheck.get("postcheck_path")), "postcheck 结果"),
+            ])
+            + ui.filterable_table("release-issues", ["Severity", "Category", "Library", "Message"], _issue_rows(postcheck), "暂无 release issue", "筛选 issue"),
             open=False,
         )
     )
-    html_text = page_shell(
-        "lib_guard 发布校验审阅台",
+    html_text = ui.review_page_shell(
+        f"{review.get('release_id') or 'Release'} / {review.get('alias') or '-'}",
         "RELEASE REVIEW",
-        f"{postcheck.get('release_id') or 'release'} | alias={postcheck.get('alias') or '-'} | status={postcheck.get('status') or 'UNKNOWN'}",
+        review["headline"],
         body,
-        nav="<a class='active' href='#'>Brief</a><a href='#'>Verify</a><a href='#'>Attention</a><a href='#'>Evidence</a>",
+        decision=review["decision"],
+        rail=rail,
+        nav="<a href='#'>Scan</a><a href='#'>Diff</a><a href='#'>File Diff</a><a class='active' href='#'>Release</a>",
+        meta=ui.compact_meta([("Alias", review.get("alias")), ("Expected", s["expected_files"]), ("Linked", s["linked_files"]), ("Issues", len(attention))]),
     )
     index = out / "index.html"
     index.write_text(html_text, encoding="utf-8")
-    return {"status": "PASS", "html_dir": str(out), "index_html": str(index)}
+    return {"status": "PASS", "html_dir": str(out), "index_html": str(index), "release_review": str(out / "release_review.json")}
 
 
 def render_release_html_from_json(postcheck_json: str | Path, out_dir: str | Path) -> dict[str, Any]:
