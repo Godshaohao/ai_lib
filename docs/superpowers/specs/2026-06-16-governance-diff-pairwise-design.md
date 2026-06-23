@@ -2,6 +2,22 @@
 
 Date: 2026-06-16
 
+Status update: 2026-06-23
+
+The current implementation follows the v6 recommendation model:
+
+```text
+Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff
+```
+
+Catalog no longer directly exposes full File Diff command lists. Selected Diff owns the key File Diff recommendation queue, and large or ambiguous comparisons require base/comparison confirmation before broad command generation.
+
+Implemented pairwise types now include:
+
+```text
+lef, liberty, verilog, cdl, sdc, upf, cpf, spef, db, waiver, ibis, pwl, snp, cpm
+```
+
 ## Purpose
 
 `lib_guard compare` should be a governance gate, not a full EDA file diff viewer. It should decide whether a library version can move to the next stage and provide enough evidence for manual review. Detailed LEF, Liberty, Verilog, SDC, and related file comparisons should be handled by pairwise file diff commands that compare one old file with one new file.

@@ -33,6 +33,11 @@ Use file type to choose the comparison strategy:
 | CDL/SPICE | Did subckts, pins, instances, or models change? | Structural parser diff |
 | SDC | Did clocks, constraints, exceptions, IO delays, or groups change? | Structural diff when available |
 | UPF/CPF | Did power domains, supplies, isolation, retention, or level shifters change? | Structural diff when available |
+| Waiver | Did waiver rules, IDs, scopes, or review obligations change? | Evidence/structural diff |
+| IBIS | Did components, pins, models, model types, or version metadata change? | Structural parser diff |
+| PWL | Did waveform points, time/value pairs, or directives change? | Structural parser diff |
+| SNP/Touchstone | Did option line, port count, frequency rows, or data rows change? | Structural parser diff |
+| CPM | Did component, pin, direction, or record counts change? | Structural parser diff |
 | DB/GDS/OAS | Did metadata, hash, size, timestamp, or layer summary change? | Metadata-only review |
 | Doc/Release Note/Waiver | Did release evidence or review obligations change? | Evidence diff |
 | Unknown | Is the file relevant to release evidence or view coverage? | Manual review |
@@ -92,6 +97,7 @@ Ask before executing:
 - Large-file deep diff.
 - Large pairwise batches.
 - Long runtime analysis.
+- Full File Diff command generation for large or uncertain comparisons before base/comparison is confirmed.
 
 Never execute automatically:
 
@@ -108,9 +114,21 @@ For structural files, focus on domain objects:
 
 - Verilog: module, port, direction, width, instance.
 - LEF: macro, pin, direction, layer, size.
-- Liberty: cell, pin, corner, timing arc.
+- Liberty: cell, pin, corner, timing arc, `is_macro`, `is_pad`.
 - CDL: subckt, pin, instance.
-- SDC/UPF/CPF: clock, constraint, power-domain semantics.
+- SDC: clock, generated clock, uncertainty, load, driving cell, IO delay, group, exception.
+- UPF/CPF: power domain, supply, isolation, level shifter, retention, power state.
+- Waiver/IBIS/PWL/SNP/CPM: use the dedicated parser evidence when available.
+
+## v6 Recommendation Model
+
+The product flow is:
+
+```text
+Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff
+```
+
+Do not present File Diff as `done/total`. Selected Diff should recommend the key files to review and suppress full command batches when the comparison is too large or the base/comparison is uncertain.
 
 For binary layout/database files, report metadata-only limits clearly.
 

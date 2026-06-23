@@ -1,5 +1,21 @@
 # lib_guard 当前代码架构与库管理流程说明
 
+## v6 Review Navigation Update
+
+Current UI and review flow:
+
+```text
+Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff
+```
+
+- Catalog is the asset map and report hub. It should not directly expand full File Diff commands.
+- Diff Timeline lists comparison candidates for a library.
+- Selected Diff is the main comparison review page and owns the key File Diff recommendation queue.
+- File Diff is a focused recommendation model, not a `done/total` completion model.
+- Large or ambiguous comparisons should ask the reviewer to confirm base/comparison before generating commands.
+- File Diff output should include `summary.json`, `semantic_diff.json`, `raw_text_diff.html`, and an HTML page with field changes and location hints.
+- v6 pairwise types: `lef`, `liberty`, `verilog`, `cdl`, `sdc`, `upf`, `cpf`, `spef`, `db`, `waiver`, `ibis`, `pwl`, `snp`, `cpm`.
+
 更新时间：2026-06-17  
 适用版本：lib_guard v5 当前工作区代码
 

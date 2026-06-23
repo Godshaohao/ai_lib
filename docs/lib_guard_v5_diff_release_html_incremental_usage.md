@@ -1,5 +1,32 @@
 # lib_guard v5 diff/release/html incremental notes
 
+## v6 Selected Diff And File Diff Update
+
+The current diff/release/html flow includes the v6 navigation and recommendation model:
+
+- Catalog no longer directly enters File Diff.
+- Diff Timeline groups comparisons before one Selected Diff is opened.
+- Selected Diff owns the key File Diff recommendation queue.
+- File Diff is not a completion model and should not render `File Diff 2/5` or `done/total`.
+- Large or ambiguous changes require base/comparison confirmation before command generation.
+- File Diff output includes `summary.json`, `semantic_diff.json`, `raw_text_diff.html`, and `index.html`.
+
+New pairwise types:
+
+```text
+waiver
+ibis
+pwl
+snp
+cpm
+```
+
+Semantic parser upgrades:
+
+- Liberty: `is_macro`, `is_pad`, and cell attributes.
+- SDC: clocks, generated clocks, uncertainty, loads, driving cells, IO delays, and grouping/exception command evidence.
+- UPF: power domains, supply nets/ports, domain supply, isolation, level shifters, retention, and power-state evidence.
+
 本说明对应旧增量包 `lib_guard_v5_diff_raw_p2_incremental.part001-of002.json` 和 `lib_guard_v5_diff_raw_p2_incremental.part002-of002.json` 之后的新一轮增量修改。
 
 ## 本次增量文件
@@ -329,7 +356,7 @@ python -m unittest discover -s "$PROJ/src/lib_guard/test" -p "test*.py"
 期望：
 
 ```text
-Ran 23 tests
+Ran 60 tests
 OK
 ```
 

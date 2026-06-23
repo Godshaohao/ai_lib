@@ -264,6 +264,23 @@ spef
 db
 ```
 
+v6 also supports:
+
+```text
+waiver
+ibis
+pwl
+snp
+cpm
+```
+
+Current File Diff routing rule:
+
+- Catalog does not directly expose full File Diff command lists.
+- Open Diff Timeline from Catalog, then open Selected Diff for one comparison.
+- Run File Diff from Selected Diff's key recommendation queue, or manually for a known old/new file pair during debugging.
+- Large or ambiguous comparisons should confirm base/comparison first and should not generate a full File Diff command batch.
+
 策略：
 
 - Verilog：关注 module/port 增删、方向变化、位宽变化。
@@ -435,7 +452,28 @@ python -m lib_guard.cli file-diff lef \
   --old $OLD_VERSION_ROOT/lef/ucie.lef \
   --new $NEW_VERSION_ROOT/lef/ucie.lef \
   --out $WORK/file_diff/ucie/stable_20250608/lef_ucie
+
+python -m lib_guard.cli file-diff sdc \
+  --old $OLD_VERSION_ROOT/sdc/ucie.sdc \
+  --new $NEW_VERSION_ROOT/sdc/ucie.sdc \
+  --out $WORK/file_diff/ucie/stable_20250608/sdc_ucie
+
+python -m lib_guard.cli file-diff ibis \
+  --old $OLD_VERSION_ROOT/model/old.ibs \
+  --new $NEW_VERSION_ROOT/model/new.ibs \
+  --out $WORK/file_diff/ucie/stable_20250608/ibis_model
 ```
+
+Expected File Diff outputs:
+
+```text
+summary.json
+semantic_diff.json
+raw_text_diff.html
+index.html
+```
+
+The HTML should show field changes and location hints when parser evidence contains `line`, `line_start`, or `raw`.
 
 Release：
 

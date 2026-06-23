@@ -5,9 +5,9 @@
 ```text
 Project: lib_guard
 Mode: Engineering
-Current Focus: Catalog-driven library/package management, scan/diff/release evidence, and HTML review pages
-Latest Stable Output: catalog -> scan -> diff -> release file-level link workflow
-Last Updated: 2026-06-21
+Current Focus: Catalog-driven library/package management, Selected Diff review, recommended File Diff, and release evidence
+Latest Stable Output: catalog -> scan -> diff timeline -> selected diff -> recommended file-diff -> release workflow
+Last Updated: 2026-06-23
 ```
 
 ## Source Map
@@ -22,10 +22,19 @@ Last Updated: 2026-06-21
 | UI handoff source/context/view-model | `docs/05_ui_handoff.md` |
 | Catalog workflow details | `docs/lib_guard_v5_catalog_workflow.md` |
 | Current architecture summary | `docs/lib_guard_current_architecture_and_library_management.md` |
+| v5/v6 patch bundle | `docs/lib_guard_v5_v6_patch_bundle.md` |
 
 ## Generated Outputs
 
 Generated scan/diff/release/catalog HTML under `work/` is preview output. The source of truth is code and JSON data under `src/lib_guard`.
+
+## Current Review Navigation
+
+```text
+Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff
+```
+
+Catalog is an asset map and report hub. Direct File Diff command lists are intentionally kept out of Catalog; File Diff commands appear only inside Selected Diff's key recommendation queue. The current model does not use `File Diff 2/5` or `done/total` completion counters.
 
 ## Workflow Pack
 

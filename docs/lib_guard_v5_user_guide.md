@@ -1,5 +1,16 @@
 # lib_guard v5 使用文档
 
+## v6 Current Update
+
+This guide was written for v5. The current code also includes the v6 review-navigation and File Diff upgrade:
+
+- Catalog is a navigation map. It does not directly expose full File Diff command lists.
+- The primary review route is `Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff`.
+- File Diff is recommendation-based and no longer uses `File Diff 2/5` or `done/total` counters.
+- Large or ambiguous comparisons first require base/comparison confirmation.
+- Pairwise File Diff supports `lef`, `liberty`, `verilog`, `cdl`, `sdc`, `upf`, `cpf`, `spef`, `db`, `waiver`, `ibis`, `pwl`, `snp`, and `cpm`.
+- Liberty extracts `is_macro` and `is_pad`; SDC/UPF now include semantic fields; waiver/IBIS/PWL/SNP/CPM parsers are wired into scan and File Diff.
+
 本文档说明 lib_guard v5 当前项目如何配置、启动和执行 release guard 流程。目标读者是不熟悉代码的人，也包括后续回看时的自己。
 
 ## 1. 工具定位
@@ -620,6 +631,6 @@ $env:PYTHONPATH = "src"
 当前已验证：
 
 ```text
-Ran 25 tests
+Ran 60 tests
 OK
 ```

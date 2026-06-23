@@ -104,6 +104,8 @@ Catalog view model rules:
 - Manual confirmation must stay limited to `stage unknown`, unclear `parent/base`, scan blocked, and release blocked.
 - Catalog should link to Scan/Diff/Release reports instead of duplicating their detail.
 - `raw_path`, `scan_dir`, `scan_html`, `diff_html`, and `release_html` are navigation/evidence fields, not page conclusions.
+- Catalog is not the File Diff command surface. It should route the reviewer to Diff Timeline and Selected Diff; File Diff commands appear only in Selected Diff's key recommendation queue.
+- Catalog copy should describe File Diff as a focused downstream review, not as `done/total` progress.
 
 ### Scan View Model
 
@@ -203,6 +205,40 @@ Diff view model rules:
 - Verilog/LEF/Liberty/CDL/SDC/UPF/CPF require domain-level pairwise review when needed.
 - DB/GDS/OAS and other binary artifacts are metadata-only unless an external pairwise tool is provided.
 - Release note, waiver, README, and doc changes are release evidence changes, not ordinary text diff.
+- Selected Diff owns recommended File Diff commands. Large or uncertain comparisons should ask for base/comparison confirmation and avoid generating a full File Diff batch.
+- File Diff recommendation status should use review-oriented labels such as `pending`, `recommended`, `generated`, or `metadata-only`; do not render `File Diff 2/5` or `done/total`.
+
+### File Diff View Model
+
+Source file:
+
+```text
+src/lib_guard/diff/file_diff.py
+```
+
+Primary outputs:
+
+```text
+summary.json
+semantic_diff.json
+raw_text_diff.html
+index.html
+```
+
+Supported types:
+
+```text
+lef, liberty, verilog, cdl, sdc, upf, cpf, spef, db, waiver, ibis, pwl, snp, cpm
+```
+
+File Diff view model rules:
+
+- Lead with the semantic change count and domain breakdown.
+- Show structured field changes with best-effort source location from `line`, `line_start`, and `raw`.
+- Keep raw text diff available as evidence, but do not make it the primary conclusion when parser evidence exists.
+- Mark DB and other unsupported binary formats as metadata-only.
+- For Liberty, surface `is_macro` and `is_pad` changes.
+- For SDC/UPF, show semantic field differences before command-count differences when present.
 
 ### Release View Model
 

@@ -9,6 +9,14 @@ description: Use when selected library versions have already been reviewed and C
 
 Build a file-level release manifest only after the user has selected versions for release. The manifest is an orchestration artifact, not a release approval decision.
 
+Before building the manifest, use the current review route when diff evidence is needed:
+
+```text
+Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff
+```
+
+Do not use the release manifest flow as a shortcut to launch full File Diff batches. File Diff commands belong in Selected Diff's key recommendation queue.
+
 The target layout is view-level:
 
 ```text

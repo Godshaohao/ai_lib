@@ -1,5 +1,15 @@
 # lib_guard v5 catalog 工作流
 
+## v6 Navigation Note
+
+The current review navigation is:
+
+```text
+Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff
+```
+
+Catalog remains the asset entry page, but it no longer directly opens or expands full File Diff command lists. File Diff commands are generated only inside Selected Diff's key recommendation queue. Large or ambiguous changes first require base/comparison confirmation.
+
 `catalog` 是 v5 的库资产入口。它先发现 raw root 下面有哪些库和版本，再驱动 scan、diff、HTML 控制台和 release dry-run。目标是让用户少拼长命令，先看一个总入口页面，再进入具体报告。
 
 ## 1. 发现库资产
@@ -80,6 +90,13 @@ $WORK/catalog/html/index.html
 - 下一步推荐动作
 
 后续不需要记住多个 HTML 的路径，优先从 catalog HTML 跳转。
+
+Current v6 route:
+
+1. Open Catalog.
+2. Open a library Diff Timeline.
+3. Open one Selected Diff.
+4. Run recommended File Diff only for key files shown by Selected Diff.
 
 ## 4. 人工修正误判
 

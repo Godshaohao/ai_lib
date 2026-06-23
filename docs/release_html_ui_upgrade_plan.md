@@ -1,5 +1,15 @@
 # lib_guard Release HTML UI Upgrade Plan
 
+## Current Status
+
+The release HTML plan remains scoped to release verification, but the surrounding review UI now uses the v6 navigation model:
+
+```text
+Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff -> Release
+```
+
+Release HTML should continue to show manifest/link/postcheck evidence. It should not become the File Diff launcher. File Diff commands belong in Selected Diff's key recommendation queue.
+
 ## Scope
 
 This plan updates `src/lib_guard/render/release_report.py` UI only.
