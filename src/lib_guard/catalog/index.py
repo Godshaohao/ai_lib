@@ -158,6 +158,79 @@ def _version_type(stage: str) -> str:
     return "daily"
 
 
+def _coerce_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = re.split(r"[,;\s]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = [value]
+    return [str(item).strip() for item in raw_items if str(item).strip()]
+
+
+def _sync_diff_target(
+    diff: dict[str, Any],
+    *,
+    target: str | None,
+    status_key: str,
+    version_key: str,
+    dir_key: str,
+    html_key: str,
+) -> None:
+    previous_target = diff.get(version_key)
+    if not target:
+        diff[status_key] = "NOT_APPLICABLE"
+        diff[version_key] = None
+        diff[dir_key] = None
+        diff[html_key] = None
+        return
+    if previous_target != target:
+        diff[status_key] = "PENDING"
+        diff[dir_key] = None
+        diff[html_key] = None
+    elif diff.get(status_key) in {None, "NOT_APPLICABLE"}:
+        diff[status_key] = "PENDING"
+    diff[version_key] = target
+
+
+def _sync_version_relation_fields(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep new relation semantics and legacy diff fields consistent."""
+
+    version_id = str(item.get("version_id") or "")
+    lineage = dict(item.get("lineage", {}) or {})
+    diff = dict(item.get("diff", {}) or {})
+
+    previous_effective = item.get("previous_effective_version") or lineage.get("parent_candidate") or diff.get("adjacent_old_version")
+    base_full = item.get("base_full_version") or item.get("base_version") or lineage.get("base_candidate") or diff.get("cumulative_base_version")
+    previous_effective = str(previous_effective) if previous_effective else None
+    base_full = str(base_full) if base_full else None
+
+    if previous_effective:
+        item["previous_effective_version"] = previous_effective
+        lineage["parent_candidate"] = previous_effective
+    if base_full:
+        item["base_full_version"] = base_full
+        item["base_version"] = base_full
+        lineage["base_candidate"] = base_full
+    item["lineage"] = lineage
+
+    cumulative_target = base_full if base_full and base_full != version_id else None
+    _sync_diff_target(diff, target=previous_effective, status_key="adjacent_status", version_key="adjacent_old_version", dir_key="adjacent_diff_dir", html_key="adjacent_diff_html")
+    _sync_diff_target(diff, target=cumulative_target, status_key="cumulative_status", version_key="cumulative_base_version", dir_key="cumulative_diff_dir", html_key="cumulative_diff_html")
+    if bool(item.get("manual_review")) and cumulative_target:
+        _sync_diff_target(diff, target=cumulative_target, status_key="base_status", version_key="base_version", dir_key="base_diff_dir", html_key="base_diff_html")
+    elif not bool(item.get("manual_review")):
+        diff.setdefault("base_status", "NOT_APPLICABLE")
+        diff.setdefault("base_version", None)
+        diff.setdefault("base_diff_dir", None)
+        diff.setdefault("base_diff_html", None)
+    item["diff"] = diff
+    item.setdefault("compare_default", "previous_effective" if previous_effective else "full_baseline" if cumulative_target else "none")
+    return item
+
+
 def _count_files(path: Path, limit: int = 5000) -> int:
     count = 0
     for item in path.rglob("*"):
@@ -606,14 +679,28 @@ def _apply_overrides(version: dict[str, Any], overrides: Mapping[str, Any]) -> d
         ("standalone", "standalone"),
         ("base_required", "base_required"),
         ("base_version", "base_version"),
+        ("base_full_version", "base_full_version"),
+        ("previous_effective_version", "previous_effective_version"),
+        ("compare_default", "compare_default"),
+        ("current_effective", "current_effective"),
     ]:
         if src in manual and manual[src] is not None:
             item[dst] = manual[src]
-    if "parent_version" in manual:
-        item.setdefault("lineage", {})["parent_candidate"] = manual.get("parent_version")
+    if "update_scope" in item:
+        item["update_scope"] = _coerce_list(item.get("update_scope"))
+    if "base_version" in manual and "base_full_version" not in manual:
+        item["base_full_version"] = manual.get("base_version")
+    if "base_full_version" in manual and "base_version" not in manual:
+        item["base_version"] = manual.get("base_full_version")
+    if "parent_version" in manual and "previous_effective_version" not in manual:
+        item["previous_effective_version"] = manual.get("parent_version")
+    parent_value = manual.get("previous_effective_version") if "previous_effective_version" in manual else manual.get("parent_version")
+    if parent_value is not None:
+        item.setdefault("lineage", {})["parent_candidate"] = parent_value
         item.setdefault("lineage", {})["source"] = "manual"
-    if "base_version" in manual:
-        item.setdefault("lineage", {})["base_candidate"] = manual.get("base_version")
+    base_value = manual.get("base_full_version") if "base_full_version" in manual else manual.get("base_version")
+    if base_value is not None:
+        item.setdefault("lineage", {})["base_candidate"] = base_value
         item.setdefault("lineage", {})["source"] = "manual"
     notes = list(item.get("notes", []) or [])
     notes.extend(manual.get("notes", []) or [])
@@ -624,7 +711,7 @@ def _apply_overrides(version: dict[str, Any], overrides: Mapping[str, Any]) -> d
         item["manual_review"] = bool(manual.get("manual_review", False))
     elif item.get("stage") != "unknown" and "manual_review" in manual:
         item["manual_review"] = bool(manual.get("manual_review"))
-    return item
+    return _sync_version_relation_fields(item)
 
 
 def _apply_runtime(version: dict[str, Any], runtime_state: Mapping[str, Any]) -> dict[str, Any]:
@@ -633,7 +720,7 @@ def _apply_runtime(version: dict[str, Any], runtime_state: Mapping[str, Any]) ->
     for nested in ["scan", "diff", "release"]:
         if isinstance(runtime.get(nested), Mapping):
             item.setdefault(nested, {}).update(runtime[nested])
-    return item
+    return _sync_version_relation_fields(item)
 
 
 def _library_match_names(lib: Mapping[str, Any]) -> set[str]:
@@ -687,7 +774,13 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
                 "classification_evidence": {},
                 "classification_risks": ["classification_failed"],
             }
-        if package_info.get("base_required") and not package_info.get("standalone"):
+        package_type = str(package_info.get("package_type") or "UNKNOWN_PACKAGE")
+        update_scope = _coerce_list(package_info.get("update_scope", []))
+        standalone = bool(package_info.get("standalone")) or package_type == "FULL_PACKAGE"
+        base_required = bool(package_info.get("base_required"))
+        previous_effective_version = parent
+        base_full_version = version_id if standalone else (base if version_id != base else None)
+        if base_required and not standalone and not base_full_version:
             manual_review = True
         version = {
             "version_key": version_key,
@@ -699,18 +792,22 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
             "raw_path": item["raw_path"],
             "library_root": item.get("library_root") or library_root,
             "version_path": item["raw_path"],
-            "package_type": package_info.get("package_type"),
-            "update_scope": package_info.get("update_scope", []),
-            "standalone": bool(package_info.get("standalone")),
-            "base_required": bool(package_info.get("base_required")),
-            "base_version": None,
+            "package_type": package_type,
+            "update_scope": update_scope,
+            "standalone": standalone,
+            "base_required": base_required,
+            "base_version": base_full_version,
+            "base_full_version": base_full_version,
+            "previous_effective_version": previous_effective_version,
+            "compare_default": "previous_effective" if previous_effective_version else "none",
+            "current_effective": False,
             "classification_confidence": package_info.get("classification_confidence"),
             "classification_evidence": package_info.get("classification_evidence", {}),
             "classification_risks": package_info.get("classification_risks", []),
             "detected": item["detected"],
             "lineage": {
                 "parent_candidate": parent,
-                "base_candidate": base if version_id != base else None,
+                "base_candidate": base_full_version,
                 "previous_final_candidate": previous_by_stage.get("final"),
                 "confidence": "HIGH" if item.get("detected", {}).get("confidence", 0) >= 0.7 else "LOW",
                 "source": lineage_source,
@@ -721,12 +818,12 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
                 "adjacent_old_version": parent,
                 "adjacent_diff_dir": None,
                 "adjacent_diff_html": None,
-                "cumulative_status": "PENDING" if base and version_id != base else "NOT_APPLICABLE",
-                "cumulative_base_version": base if version_id != base else None,
+                "cumulative_status": "PENDING" if base_full_version and base_full_version != version_id else "NOT_APPLICABLE",
+                "cumulative_base_version": base_full_version if base_full_version and base_full_version != version_id else None,
                 "cumulative_diff_dir": None,
                 "cumulative_diff_html": None,
-                "base_status": "PENDING" if manual_review and base and version_id != base else "NOT_APPLICABLE",
-                "base_version": base if manual_review and version_id != base else None,
+                "base_status": "PENDING" if manual_review and base_full_version and base_full_version != version_id else "NOT_APPLICABLE",
+                "base_version": base_full_version if manual_review and base_full_version and base_full_version != version_id else None,
                 "base_diff_dir": None,
                 "base_diff_html": None,
             },
@@ -735,6 +832,7 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
             "manual_review": manual_review,
             "notes": [],
         }
+        version = _sync_version_relation_fields(version)
         version = _apply_overrides(version, overrides)
         version = _apply_runtime(version, runtime_state)
         versions.append(version)
@@ -1076,6 +1174,14 @@ def apply_catalog_override(
     release_line: str | None = None,
     display_name: str | None = None,
     manual_review: bool | None = None,
+    package_type: str | None = None,
+    update_scope: str | list[str] | tuple[str, ...] | None = None,
+    standalone: bool | None = None,
+    base_required: bool | None = None,
+    base_full_version: str | None = None,
+    previous_effective_version: str | None = None,
+    compare_default: str | None = None,
+    current_effective: bool | None = None,
     note: str | None = None,
     updated_by: str | None = None,
 ) -> dict[str, Any]:
@@ -1089,9 +1195,18 @@ def apply_catalog_override(
         ("base_version", base_version),
         ("release_line", release_line),
         ("display_name", display_name),
+        ("package_type", package_type),
+        ("base_full_version", base_full_version),
+        ("previous_effective_version", previous_effective_version),
+        ("compare_default", compare_default),
     ]:
         if value is not None:
             item[key] = value
+    if update_scope is not None:
+        item["update_scope"] = _coerce_list(update_scope)
+    for key, value in [("standalone", standalone), ("base_required", base_required), ("current_effective", current_effective)]:
+        if value is not None:
+            item[key] = bool(value)
     if manual_review is not None:
         item["manual_review"] = manual_review
     if note:

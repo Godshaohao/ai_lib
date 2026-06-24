@@ -27,11 +27,52 @@ KEY_FILE_TYPES = {
     "oas",
 }
 
+DEFAULT_SCAN_IGNORE_DIRS = {
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    "catalog",
+    "diff",
+    "index",
+    "pages",
+    "release_area",
+    "reports",
+    "scan_out",
+    "source_package",
+    "work",
+    "tmp",
+    "temp",
+}
+
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _split_name_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = value.replace(";", ",").split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = [value]
+    return [str(item).strip().lower() for item in raw_items if str(item).strip()]
+
+
+def _scan_ignore_dirs(config: Any = None, context: Any = None) -> set[str]:
+    """Return directory names that inventory scan should never recurse into."""
+
+    names = set(DEFAULT_SCAN_IGNORE_DIRS)
+    for obj in (config, context):
+        if obj is None:
+            continue
+        names.update(_split_name_list(_get(obj, "ignore_dirs", None)))
+        names.update(_split_name_list(_get(obj, "scan_ignore_dirs", None)))
+    return names
 
 
 class FileWalker:
@@ -40,8 +81,9 @@ class FileWalker:
 
     def walk(self, root_path: str | Path, context: Any = None) -> Iterator[dict[str, Any]]:
         root = Path(root_path).resolve()
+        ignore_dirs = _scan_ignore_dirs(self.config, context)
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in {".git", "__pycache__", ".pytest_cache"}]
+            dirnames[:] = [d for d in dirnames if d.lower() not in ignore_dirs]
             for name in sorted(filenames):
                 abs_path = Path(dirpath) / name
                 try:

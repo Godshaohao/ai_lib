@@ -7,8 +7,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 import json
+import logging
 
 from .common import auto_scan_id, default_cache_dir, default_state_dir, print_json
+
+
+LOGGER = logging.getLogger("lib_guard")
 
 
 def library_id_from_args(args: Namespace) -> str:

@@ -6,6 +6,7 @@ from typing import Any
 from datetime import datetime, timezone
 import difflib
 import hashlib
+import gzip
 import json
 
 
@@ -54,8 +55,21 @@ def _stable_hash(data: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _is_gzip_file(path: Path) -> bool:
+    if path.suffix.lower() == ".gz":
+        return True
+    try:
+        with path.open("rb") as fh:
+            return fh.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
+
+
 def _read_text(path: Path) -> list[str]:
     try:
+        if _is_gzip_file(path):
+            with gzip.open(path, "rt", encoding="utf-8", errors="replace") as fh:
+                return fh.read().splitlines()
         return path.read_text(encoding="utf-8", errors="replace").splitlines()
     except Exception as exc:
         return [f"<read failed: {type(exc).__name__}: {exc}>"]

@@ -221,6 +221,24 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--fast", action="store_true", help="Directory-only catalog refresh. This is the default for short commands.")
     p.add_argument("--with-evidence", action="store_true", help="Collect lightweight file-type evidence for discovered versions; slower on large RAW trees.")
 
+    p = sub.add_parser("override", help="Manually confirm package relation for one catalog version")
+    p.add_argument("library")
+    p.add_argument("version")
+    p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"])
+    p.add_argument("--parent", help="Legacy alias for --previous-effective")
+    p.add_argument("--base", help="Legacy alias for --base-full")
+    p.add_argument("--package-type", choices=["FULL_PACKAGE", "PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "UNKNOWN_PACKAGE"])
+    p.add_argument("--update-scope", help="Comma/space separated scope, e.g. lib,lef")
+    p.add_argument("--standalone", action="store_true", default=None)
+    p.add_argument("--base-required", action="store_true", default=None)
+    p.add_argument("--base-full", dest="base_full_version", help="Nearest confirmed full package baseline")
+    p.add_argument("--previous-effective", dest="previous_effective_version", help="Previous accepted/effective version used as default diff target")
+    p.add_argument("--compare-default", choices=["previous_effective", "full_baseline", "none"])
+    p.add_argument("--current-effective", action="store_true", default=None)
+    p.add_argument("--manual-review", action="store_true", default=None)
+    p.add_argument("--note")
+    p.add_argument("--updated-by", default="short_cli")
+
     root_library = sub.add_parser("library", help="Discover and apply the confirmed library registry")
     lsp = root_library.add_subparsers(dest="library_cmd", required=True)
     p = lsp.add_parser("discover", help="Discover candidate library roots from RAW and write editable library.list")
@@ -368,6 +386,44 @@ def _library_apply_command(cfg: dict[str, str], args: Any) -> list[str]:
     ]
 
 
+def _override_command(cfg: dict[str, str], args: Any) -> list[str]:
+    data = _catalog_data(cfg)
+    lib = _find_library(data, args.library)
+    version_key = f"{lib.get('library_type') or cfg['library_type']}/{lib.get('library_name')}/{args.version}"
+    command = [
+        "catalog",
+        "override",
+        "--catalog",
+        cfg["catalog"],
+        "--version",
+        version_key,
+        "--updated-by",
+        args.updated_by,
+    ]
+    for opt, value in [
+        ("--stage", args.stage),
+        ("--parent", args.parent),
+        ("--base", args.base),
+        ("--package-type", args.package_type),
+        ("--update-scope", args.update_scope),
+        ("--base-full", args.base_full_version),
+        ("--previous-effective", args.previous_effective_version),
+        ("--compare-default", args.compare_default),
+        ("--note", args.note),
+    ]:
+        if value is not None:
+            command.extend([opt, str(value)])
+    for opt, value in [
+        ("--standalone", args.standalone),
+        ("--base-required", args.base_required),
+        ("--current-effective", args.current_effective),
+        ("--manual-review", args.manual_review),
+    ]:
+        if value:
+            command.append(opt)
+    return command
+
+
 def _scan_batch_command(
     cfg: dict[str, str],
     library: str | None,
@@ -437,6 +493,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
                 with_evidence=bool(getattr(args, "with_evidence", False)),
             )
         ]
+    if args.short_command == "override":
+        return [_override_command(cfg, args)]
     if args.short_command == "scan":
         with_evidence = bool(getattr(args, "with_evidence", False))
         if args.library and args.version:
