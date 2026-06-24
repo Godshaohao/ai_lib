@@ -539,3 +539,111 @@ discover -s src/lib_guard/test: Ran 57 tests OK
 - `configs/catalog_policy.json`：默认发现策略。
 - `scripts/lg.csh`：真实 csh 环境入口。
 
+## 13. Short CLI csh shortcuts
+
+Daily csh entry should stay short and catalog-driven:
+
+```csh
+$PROJ/scripts/lg.csh cat
+$PROJ/scripts/lg.csh scan <library> <version>
+$PROJ/scripts/lg.csh cmp <library> <version> --base <base_version> --scan-if-missing
+$PROJ/scripts/lg.csh fd <library> <version> lef/<file>.lef --base <base_version>
+$PROJ/scripts/lg.csh fd <library> <version> model/<file>.ibs --base <base_version>
+$PROJ/scripts/lg.csh fd <library> <version> touch/<file>.s2p --type snp --base <base_version>
+$PROJ/scripts/lg.csh rel <library> <version> --check-first
+```
+
+Shortcut mapping:
+
+```text
+cat -> catalog
+cmp -> diff
+fd  -> file-diff
+rel -> release
+```
+
+Use `--dry-run` before expensive scan or diff work:
+
+```csh
+$PROJ/scripts/lg.csh --dry-run cmp <library> <version> --base <base_version>
+$PROJ/scripts/lg.csh --dry-run fd <library> <version> waiver/<file>.waiver --base <base_version>
+```
+
+`file-diff` relpath is always relative to the selected catalog version `raw_path`,
+not relative to `$RAW` and not an absolute path. The short CLI normalizes `/` and
+`\` separators before joining the relpath to old/new catalog `raw_path` values.
+
+Supported pairwise file-diff types through `lg.csh fd`:
+
+```text
+lef liberty verilog cdl sdc upf cpf spef db waiver ibis pwl snp cpm
+```
+
+When catalog cannot infer the old version, pass `--base <base_version>`.
+
+## 14. Desktop UI and command text audit
+
+Run this smoke set after UI, short CLI, or report-rendering changes. This section
+uses the current short command model and intentionally checks desktop output only.
+
+### 14.1 User-facing command rules
+
+Preferred csh commands:
+
+```csh
+$PROJ/scripts/lg.csh cat
+$PROJ/scripts/lg.csh scan <library> <version>
+$PROJ/scripts/lg.csh cmp <library> <version> --base <base_version> --scan-if-missing
+$PROJ/scripts/lg.csh fd <library> <version> <relpath> --base <base_version> --type <file_type>
+$PROJ/scripts/lg.csh rel <library> <version> --check-first
+```
+
+Expected report behavior:
+
+- Catalog shows navigation and examples, not a full File Diff command list.
+- Scan next action uses `cmp`, not stale `lg diff` wording.
+- Selected Diff is the only normal place for key File Diff recommendations.
+- Effective Compare File Diff commands include `--type`.
+- Large or ambiguous comparisons ask the reviewer to confirm base/comparison before
+  generating focused File Diff recommendations.
+
+### 14.2 Desktop HTML smoke targets
+
+Generate or open the representative pages:
+
+```text
+work/ui_desktop_audit/catalog/html/index.html
+work/ui_desktop_audit/scan_html/index.html
+work/ui_desktop_audit/diff_html/index.html
+work/ui_desktop_audit/effective_E3.html
+work/ui_desktop_audit/compare_E2_vs_E3/index.html
+work/ui_desktop_audit/release_preview/index.html
+work/ui_desktop_audit/release_html/index.html
+```
+
+Search generated HTML for stale UI strings:
+
+```powershell
+rg -n "\$PROJ/scripts/lg\.csh file-diff|python -m lib_guard\.cli file-diff|\blg diff\b|Old Target|New Target|Changed Files|Risk Review|Deep Diff Commands|done/total|File Diff 2/5|TODO|TBD|FIXME|Lorem ipsum|not set" work\ui_desktop_audit -g "*.html"
+```
+
+The command should return no user-facing HTML matches. JSON debug fields may still
+contain `low_level_command` for traceability, but those should not be the primary
+visible command in reports.
+
+### 14.3 Verification commands
+
+```powershell
+$env:PYTHONPATH='src'
+& 'C:\Users\Polaris\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m compileall -q src\lib_guard
+& 'C:\Users\Polaris\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -b -s src\lib_guard\test -p 'test_*.py'
+& 'C:\Users\Polaris\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m lib_guard.short_cli --help
+```
+
+Current expected unittest result:
+
+```text
+Ran 76 tests
+OK
+```
+

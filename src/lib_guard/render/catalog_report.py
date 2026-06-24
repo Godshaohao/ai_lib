@@ -21,6 +21,13 @@ from lib_guard.review import build_review_state, build_review_tasks
 from lib_guard.review.io import as_file_href, read_json, write_json
 from lib_guard.render import product_theme as ui
 
+try:
+    from lib_guard.effective.compare import discover_compare_reports
+    from lib_guard.effective.pointer import mark_current_effective_items
+except Exception:  # pragma: no cover - optional effective workflow import
+    discover_compare_reports = None
+    mark_current_effective_items = None
+
 
 def _safe(value: Any) -> str:
     text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "item")).strip("._")
@@ -296,7 +303,7 @@ def _library_match_keys(lib: Mapping[str, Any]) -> set[str]:
 
 def _effective_search_roots(out: Path) -> list[Path]:
     roots = []
-    for root in [out / "effective", out.parent / "effective", out.parent.parent / "effective"]:
+    for root in [out / "libraries", out / "effective", out.parent / "effective", out.parent.parent / "effective"]:
         if root not in roots and root.exists():
             roots.append(root)
     return roots
@@ -353,6 +360,8 @@ def _discover_effective_reports(out: Path, libraries: list[Mapping[str, Any]]) -
             by_key.setdefault(canonical, []).append(item)
     for items in by_key.values():
         items.sort(key=lambda x: str(x.get("created_at") or x.get("effective_id") or ""))
+    if mark_current_effective_items is not None:
+        by_key = mark_current_effective_items(out, by_key)
     return by_key
 
 
@@ -362,6 +371,9 @@ def _effective_items_for_lib(effective_by_lib: Mapping[str, list[dict[str, Any]]
 
 
 def _latest_effective_item(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for item in items:
+        if item.get("is_current_effective") or item.get("effective_status") == "current":
+            return item
     return items[-1] if items else None
 
 
@@ -459,7 +471,7 @@ def _effective_summary_panel(out: Path, effective_items: list[dict[str, Any]], *
         )
     return (
         "<div class='effective-summary'>"
-        f"<div class='effective-head'><div><div class='muted'>Current Effective</div><h3 title='{ui.esc(latest.get('effective_id'))}'>{ui.esc(latest.get('effective_id') or '-')}</h3></div>{actions}</div>"
+            f"<div class='effective-head'><div><div class='muted'>当前 Effective</div><h3 title='{ui.esc(latest.get('effective_id'))}'>{ui.esc(latest.get('effective_id') or '-')}</h3></div>{actions}</div>"
         + ui.metric_grid([
             ("有效文件", latest.get("file_count", 0), "effective_files", "PASS"),
             ("组件", latest.get("component_count", 0), "base + updates", "PASS"),
@@ -484,7 +496,7 @@ def _effective_snapshot_rows(out: Path, effective_items: list[dict[str, Any]]) -
             f"<td>{ui.esc(', '.join(str(v) for v in item.get('accepted_updates', []) or []) or '-')}</td>"
             f"<td>{ui.esc(item.get('file_count', 0))}</td>"
             f"<td>{ui.badge('RISK' if item.get('conflict_count') else 'OK', item.get('conflict_count', 0))}</td>"
-            f"<td>{ui.action_strip([ui.button('Effective', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('Release Preview', _href(item.get('release_preview')), 'secondary', disabled=not bool(item.get('release_preview')), target='_blank')])}</td>"
+            f"<td>{ui.action_strip([ui.button('Effective 详情', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('Release Preview', _href(item.get('release_preview')), 'secondary', disabled=not bool(item.get('release_preview')), target='_blank')])}</td>"
             "</tr>"
         )
     return rows
@@ -501,8 +513,8 @@ def _version_ledger_rows(lib: Mapping[str, Any], effective_items: list[dict[str,
         rows.append(
             "<tr>"
             f"<td><b title='{ui.esc(version_id)}'>{ui.esc(version_id)}</b><div class='muted'>{ui.esc(version.get('stage') or '-')}</div></td>"
-            f"<td>{ui.button('Scan', _href(links.get('scan_html')), 'secondary', disabled=not bool(links.get('scan_html')), target='_blank')}</td>"
-            f"<td>{ui.button('Diff', _href(links.get('diff_html')), 'secondary', disabled=not bool(links.get('diff_html')), target='_blank')}</td>"
+            f"<td>{ui.button('Scan 证据', _href(links.get('scan_html')), 'secondary', disabled=not bool(links.get('scan_html')), target='_blank')}</td>"
+            f"<td>{ui.button('Diff 证据', _href(links.get('diff_html')), 'secondary', disabled=not bool(links.get('diff_html')), target='_blank')}</td>"
             f"<td>{ui.button(effective_label, _href(latest_ref.get('html')), 'primary' if latest_ref else 'secondary', disabled=not bool(latest_ref.get('html')), target='_blank')}</td>"
             f"<td>{ui.button('Release Preview', _href(latest_ref.get('release_preview')), 'secondary', disabled=not bool(latest_ref.get('release_preview')), target='_blank')}</td>"
             "</tr>"
@@ -510,8 +522,33 @@ def _version_ledger_rows(lib: Mapping[str, Any], effective_items: list[dict[str,
     return rows
 
 
-def _compare_index_rows(lib: Mapping[str, Any]) -> list[str]:
+def _compare_target_label(target: Mapping[str, Any]) -> str:
+    if not isinstance(target, Mapping):
+        return "-"
+    return str(target.get("label") or f"{target.get('type') or 'target'}:{target.get('id') or '-'}")
+
+
+def _compare_index_rows(lib: Mapping[str, Any], compare_items: list[dict[str, Any]] | None = None) -> list[str]:
     rows = []
+    for item in compare_items or []:
+        old_label = _compare_target_label(item.get("old_target", {}) or {})
+        new_label = _compare_target_label(item.get("new_target", {}) or {})
+        actions = item.get("actions", {}) or {}
+        status = "RISK" if item.get("risk_count") else ("CHANGED" if item.get("changed_files") else "OK")
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(item.get('mode') or '-')}</code><div class='muted'>{ui.esc(item.get('compare_id') or '-')}</div></td>"
+            f"<td><span title='{ui.esc(old_label)}'>{ui.esc(_short_name(old_label))}</span></td>"
+            f"<td><span title='{ui.esc(new_label)}'>{ui.esc(_short_name(new_label))}</span></td>"
+            f"<td>{ui.badge(status, {'RISK': '需复核', 'CHANGED': '有变化', 'OK': '无变化'}.get(status, status))}</td>"
+            f"<td>{ui.esc(item.get('changed_files', 0))}</td>"
+            f"<td>{ui.esc(actions.get('replace', 0))}</td>"
+            f"<td><span title='{ui.esc(item.get('owner_target') or '')}'>{ui.esc(_short_name(item.get('owner_target') or '-'))}</span></td>"
+            f"<td>{ui.action_strip([ui.button('打开报告', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('Manifest', _href(item.get('manifest')), 'secondary', disabled=not bool(item.get('manifest')), target='_blank')])}</td>"
+            "</tr>"
+        )
+    if rows:
+        return rows
     for item in _build_comparisons_for_library(lib):
         old_version = str(item.get("old_version") or "-")
         new_version = str(item.get("new_version") or "-")
@@ -522,16 +559,16 @@ def _compare_index_rows(lib: Mapping[str, Any]) -> list[str]:
             f"<td><span title='{ui.esc(old_version)}'>{ui.esc(_short_name(old_version))}</span></td>"
             f"<td><span title='{ui.esc(new_version)}'>{ui.esc(_short_name(new_version))}</span></td>"
             f"<td>{ui.badge(item.get('status') or 'COMPARE_PENDING')}</td>"
-            f"<td>{ui.badge(item.get('comparison_quality') or 'NORMAL')}</td>"
             f"<td>{ui.esc(item.get('recommended_total', 0))}</td>"
             f"<td>{ui.esc(item.get('candidate_total', 0))}</td>"
+            f"<td>{ui.badge(item.get('comparison_quality') or 'NORMAL')}</td>"
             f"<td>{ui.button('Diff', diff_html, 'primary', disabled=not bool(diff_html), target='_blank')}</td>"
             "</tr>"
         )
     return rows
 
 
-def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: list[dict[str, Any]]) -> str:
+def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: list[dict[str, Any]], compare_items: list[dict[str, Any]] | None = None) -> str:
     lib_id = str(lib.get("library_id") or lib.get("display_name") or "library")
     safe = _safe(lib_id)
     html_path = out / "libraries" / safe / "index.html"
@@ -543,14 +580,14 @@ def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: lis
     body = (
         _catalog_browser_styles()
         + ui.panel(
-            "Library Overview",
+            "库总览",
             "单库主页负责串联版本、scan、diff、effective 和 release preview；详情报告保持独立页面。",
             ui.metric_grid([
-                ("Latest Full", _latest_full_version(versions), "完整基线", "PASS"),
-                ("Current Effective", (latest_effective or {}).get("effective_id") or _latest_effective_version(lib, versions), "当前有效组合", "PASS" if latest_effective else "WARNING"),
-                ("Pending Scan", not_scanned, "raw delivery evidence", "WARNING" if not_scanned else "PASS"),
-                ("Pending Diff", diff_pending, "compare evidence", "WARNING" if diff_pending else "PASS"),
-                ("Need Binding", need_bind, "base_full / previous_effective", "WARNING" if need_bind else "PASS"),
+                ("最新完整包", _latest_full_version(versions), "完整基线", "PASS"),
+                ("当前 Effective", (latest_effective or {}).get("effective_id") or "未设置", "当前有效组合", "PASS" if latest_effective else "WARNING"),
+                ("待扫描", not_scanned, "raw 交付证据", "WARNING" if not_scanned else "PASS"),
+                ("待对比", diff_pending, "compare 证据", "WARNING" if diff_pending else "PASS"),
+                ("需绑定", need_bind, "base_full / previous_effective", "WARNING" if need_bind else "PASS"),
             ])
             + ui.compact_meta([
                 ("Library", lib_id),
@@ -558,48 +595,48 @@ def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: lis
                 ("Path", lib.get("middle_path") or lib.get("library_root") or "-"),
             ]),
         )
-        + ui.panel("Effective Summary", "这里只展示 effective 摘要和入口，不嵌入完整 effective HTML。", _effective_summary_panel(out, effective_items))
+        + ui.panel("Effective 摘要", "这里只展示 effective 摘要和入口，不嵌入完整 effective HTML。", _effective_summary_panel(out, effective_items))
         + ui.panel(
-            "Raw Delivery Ledger",
+            "Raw 版本台账",
             "每个 raw version 的 scan/diff/effective/release-preview 证据链。",
             ui.filterable_table(
                 f"ledger-{safe}",
-                ["Version", "Scan", "Diff", "Effective", "Release"],
+                ["版本", "Scan 证据", "Diff 证据", "Effective", "Release"],
                 _version_ledger_rows(lib, effective_items),
                 "暂无 version",
                 "筛选 version / stage",
             ),
         )
         + ui.collapsible_panel(
-            "Compare Index",
-            "old -> new comparison 摘要和 Diff 入口；不再生成独立版本对比页。",
+            "Compare 索引",
+            "优先显示 Effective/Release Compare Report；没有真实 compare_manifest 时退回 raw diff 入口。",
             ui.filterable_table(
                 f"compare-{safe}",
-                ["Mode", "Old", "New", "Status", "Quality", "Key Files", "Candidates", "Entry"],
-                _compare_index_rows(lib),
+                ["模式", "基准目标", "对比目标", "状态", "变化", "替换", "检查对象 / 质量", "入口"],
+                _compare_index_rows(lib, compare_items),
                 "暂无 comparison",
-                "筛选 old / new / mode / status",
+                "筛选基准 / 对比 / 模式 / 状态",
             ),
             open=True,
         )
         + ui.collapsible_panel(
-            "Effective Snapshots",
+            "Effective 快照",
             "历史 effective 快照只列摘要，完整文件来源表进入独立 Effective 页面查看。",
             ui.filterable_table(
                 f"effective-{safe}",
-                ["Effective", "Base Full", "Accepted Updates", "Files", "Risk", "Links"],
+                ["Effective", "Base Full", "吸收更新", "文件数", "风险", "入口"],
                 _effective_snapshot_rows(out, effective_items),
                 "暂无 effective snapshot",
                 "筛选 effective / update",
             ),
             open=bool(effective_items),
         )
-        + ui.panel("Evidence Links", "统一证据入口。", ui.action_strip([
+        + ui.panel("证据入口", "统一证据入口。", ui.action_strip([
             ui.button("Catalog", _href(out / "index.html"), "secondary", target="_blank"),
-            ui.button("Current Effective", _href((latest_effective or {}).get("html")), "secondary", disabled=not bool((latest_effective or {}).get("html")), target="_blank"),
+            ui.button("当前 Effective", _href((latest_effective or {}).get("html")), "secondary", disabled=not bool((latest_effective or {}).get("html")), target="_blank"),
             ui.button("Release Preview", _href((latest_effective or {}).get("release_preview")), "secondary", disabled=not bool((latest_effective or {}).get("release_preview")), target="_blank"),
         ]))
-        + ui.collapsible_panel("Commands", "命令集中放置，不挤占版本表。", _command_examples(), open=False)
+        + ui.collapsible_panel("命令示例", "命令集中放置，不挤占版本表。", _command_examples(), open=False)
     )
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / Library Workspace",
@@ -608,7 +645,7 @@ def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: lis
         body,
         decision=lib.get("overall_status") or "REVIEW",
         nav="<a href='../../index.html'>Catalog</a><a class='active' href='#'>Library Workspace</a>",
-        meta=ui.compact_meta([("Versions", len(versions)), ("Effective", len(effective_items)), ("Pending Scan", not_scanned), ("Pending Diff", diff_pending)]),
+        meta=ui.compact_meta([("版本", len(versions)), ("Effective", len(effective_items)), ("待扫描", not_scanned), ("待对比", diff_pending)]),
     )
     _write_text(html_path, html)
     return str(html_path)
@@ -785,7 +822,7 @@ def _summary_metrics(state: Mapping[str, Any], tasks: Mapping[str, Any]) -> list
 
 
 def _command_examples() -> str:
-    examples = [("刷新目录", "$PROJ/scripts/lg.csh catalog"), ("扫描版本", "$PROJ/scripts/lg.csh scan <library> <version>"), ("绑定关系", "$PROJ/scripts/lg.csh override <library> <version> --package-type PARTIAL_UPDATE --update-scope lib,lef --base-full <full_version> --previous-effective <prev_version> --note \"manual confirmed\""), ("执行对比", "$PROJ/scripts/lg.csh diff <library> <version> --scan-if-missing"), ("PowerShell", ".\\scripts\\lg.ps1 diff <library> <version> --scan-if-missing")]
+    examples = [("刷新目录", "$PROJ/scripts/lg.csh cat"), ("扫描版本", "$PROJ/scripts/lg.csh scan <library> <version>"), ("绑定关系", "$PROJ/scripts/lg.csh override <library> <version> --package-type PARTIAL_UPDATE --update-scope lib,lef --base-full <full_version> --previous-effective <prev_version> --note \"manual confirmed\""), ("执行对比", "$PROJ/scripts/lg.csh cmp <library> <version> --scan-if-missing"), ("发布检查", "$PROJ/scripts/lg.csh rel <library> <version> --check-first"), ("PowerShell", ".\\scripts\\lg.ps1 cmp <library> <version> --scan-if-missing")]
     boxes = "".join(ui.command_box(command, title=title, note="示例命令。实际执行时替换 <library> / <version> / <relpath>。") for title, command in examples)
     return "<div class='command-example-grid'>" + boxes + "</div>"
 
@@ -821,7 +858,12 @@ def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str
     return str(page)
 
 
-def _write_report_index(out: Path, state: Mapping[str, Any], effective_by_lib: Mapping[str, list[dict[str, Any]]]) -> str:
+def _write_report_index(
+    out: Path,
+    state: Mapping[str, Any],
+    effective_by_lib: Mapping[str, list[dict[str, Any]]],
+    compare_by_lib: Mapping[str, list[dict[str, Any]]] | None = None,
+) -> str:
     libraries: dict[str, Any] = {}
     for lib in state.get("libraries", []) or []:
         lib_id = str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "")
@@ -853,10 +895,31 @@ def _write_report_index(out: Path, state: Mapping[str, Any], effective_by_lib: M
             }
             for item in effective_items
         }
+        current_effective = _latest_effective_item(effective_items) or {}
+        compare_items = list((compare_by_lib or {}).get(lib_id, []) or [])
+        compare_reports = {
+            str(item.get("compare_id")): {
+                "mode": item.get("mode"),
+                "old_target": item.get("old_target", {}),
+                "new_target": item.get("new_target", {}),
+                "owner_target": item.get("owner_target") or "",
+                "html": _rel_href(out, item.get("html")),
+                "manifest": _rel_href(out, item.get("manifest")),
+                "summary": {
+                    "changed_files": item.get("changed_files", 0),
+                    "risk_count": item.get("risk_count", 0),
+                    "actions": item.get("actions", {}),
+                },
+            }
+            for item in compare_items
+            if item.get("compare_id")
+        }
         libraries[lib_id] = {
             "home": _rel_href(out, lib.get("library_home_html")),
             "versions": versions,
             "effective": effective,
+            "current_effective": str(current_effective.get("effective_id") or "") if current_effective else "",
+            "compare_reports": compare_reports,
         }
     path = out / "report_index.json"
     write_json(
@@ -876,14 +939,17 @@ def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render
     catalog = read_json(catalog_json, default={}) or {}
     state = build_review_state(catalog, out_dir=out)
     tasks = build_review_tasks(state)
-    effective_by_lib = _discover_effective_reports(out, list(state.get("libraries", []) or []))
+    libraries_for_reports = list(state.get("libraries", []) or [])
+    effective_by_lib = _discover_effective_reports(out, libraries_for_reports)
+    compare_by_lib = discover_compare_reports(out, libraries_for_reports) if discover_compare_reports is not None else {}
     if render_library_pages:
         for lib in state.get("libraries", []) or []:
             for version in lib.get("versions", []) or []:
                 links = version.setdefault("links", {})
                 links["version_review_html"] = _render_version_page(out, lib, version)
-            lib["library_home_html"] = _render_library_home(out, lib, _effective_items_for_lib(effective_by_lib, lib))
-    report_index = _write_report_index(out, state, effective_by_lib)
+            lib_id = str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "")
+            lib["library_home_html"] = _render_library_home(out, lib, _effective_items_for_lib(effective_by_lib, lib), list(compare_by_lib.get(lib_id, []) or []))
+    report_index = _write_report_index(out, state, effective_by_lib, compare_by_lib)
     write_json(out / "review_state.json", state)
     write_json(out / "review_tasks.json", tasks)
     body = (

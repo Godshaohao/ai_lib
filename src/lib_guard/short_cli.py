@@ -9,7 +9,30 @@ import sys
 
 
 CONFIG_NAME = "lib_guard.yml"
-PAIRWISE_FILE_DIFF_TYPES = {"lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db"}
+PAIRWISE_FILE_DIFF_TYPES = {
+    "lef",
+    "liberty",
+    "verilog",
+    "cdl",
+    "sdc",
+    "upf",
+    "cpf",
+    "spef",
+    "db",
+    "waiver",
+    "ibis",
+    "pwl",
+    "snp",
+    "cpm",
+}
+SHORT_COMMAND_ALIASES = {
+    "cat": "catalog",
+    "cmp": "diff",
+    "compare": "diff",
+    "fd": "file-diff",
+    "filediff": "file-diff",
+    "rel": "release",
+}
 
 
 def _norm(path: str | Path) -> str:
@@ -156,45 +179,83 @@ def _infer_file_type(relpath: str) -> str:
     return file_type
 
 
+def _canonical_command(name: str | None) -> str | None:
+    return SHORT_COMMAND_ALIASES.get(str(name), name) if name else name
+
+
+def _relpath_parts(relpath: str) -> tuple[str, ...]:
+    normalized = relpath.replace("\\", "/").strip()
+    drive_like = len(normalized) >= 2 and normalized[1] == ":"
+    if not normalized or normalized.startswith("/") or drive_like:
+        raise ValueError("file-diff relpath must be relative to the catalog version raw_path")
+    parts = tuple(part for part in normalized.split("/") if part and part != ".")
+    if not parts or any(part == ".." for part in parts):
+        raise ValueError("file-diff relpath must not be empty or contain '..'")
+    return parts
+
+
+def _resolved_version_file(version: dict[str, Any], relpath: str) -> Path:
+    raw_path = version.get("raw_path")
+    if not raw_path:
+        raise ValueError(f"version {version.get('version_id')!r} has no raw_path in catalog")
+    return Path(str(raw_path)).joinpath(*_relpath_parts(relpath))
+
+
+def _file_diff_out_dir(cfg: dict[str, str], library: str, version: str, relpath: str, file_type: str) -> Path:
+    safe_name = "_".join(_relpath_parts(relpath)).replace(":", "_")
+    stem = Path(safe_name).stem
+    out_name = stem if stem.startswith(f"{file_type}_") else f"{file_type}_{stem}"
+    return Path(cfg["file_diff"]) / library / version / out_name
+
+
 def _build_parser() -> ArgumentParser:
     parser = ArgumentParser(
         prog="lg",
         description="lib_guard short command shell",
         formatter_class=RawDescriptionHelpFormatter,
         epilog="""Examples:
+  Short aliases: catalog alias: cat, diff alias: cmp, file-diff alias: fd, release alias: rel
+
   C Shell:
     lg.csh init $WORK --raw-root $RAW
     cd $WORK
-    lg.csh catalog
-    lg.csh catalog ucie
-    lg.csh catalog ucie --with-evidence
+    lg.csh cat
+    lg.csh cat ucie
+    lg.csh cat ucie --with-evidence
     lg.csh scan
     lg.csh scan ucie --limit 3
     lg.csh scan ucie --missing
     lg.csh scan ucie --all-versions
     lg.csh scan ucie stable_20250608
-    lg.csh diff ucie stable_20250608
-    lg.csh diff ucie stable_20250608 --base initial_20250601 --scan-if-missing
-    lg.csh file-diff ucie stable_20250608 lef/ucie.lef
+    lg.csh cmp ucie stable_20250608
+    lg.csh cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
+    lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
+    lg.csh fd ucie stable_20250608 model/ucie.ibs --base initial_20250601
+    lg.csh fd ucie stable_20250608 touch/chan.s2p --type snp
 
   PowerShell:
     lg.ps1 init $WORK --raw-root $RAW
     cd $WORK
-    lg.ps1 catalog
-    lg.ps1 catalog ucie
-    lg.ps1 catalog ucie --with-evidence
+    lg.ps1 cat
+    lg.ps1 cat ucie
+    lg.ps1 cat ucie --with-evidence
     lg.ps1 scan
     lg.ps1 scan ucie --limit 3
     lg.ps1 scan ucie --missing
     lg.ps1 scan ucie --all-versions
     lg.ps1 scan ucie stable_20250608
-    lg.ps1 diff ucie stable_20250608
-    lg.ps1 diff ucie stable_20250608 --base initial_20250601 --scan-if-missing
-    lg.ps1 file-diff ucie stable_20250608 lef/ucie.lef
+    lg.ps1 cmp ucie stable_20250608
+    lg.ps1 cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
+    lg.ps1 fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
 
   Dry-run / without cd:
     setenv LIB_GUARD_CONFIG $WORK/lib_guard.yml
     lg.csh --dry-run scan ucie stable_20250608
+    lg.csh --dry-run cmp ucie stable_20250608 --base initial_20250601
+    lg.csh --dry-run fd ucie stable_20250608 waiver/rules.waiver --base initial_20250601
+
+  Pairwise file-diff types:
+    lef liberty verilog cdl sdc upf cpf spef db waiver ibis pwl snp cpm
 """,
     )
     parser.add_argument("--config", help=f"Path to {CONFIG_NAME}")
@@ -215,7 +276,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="Limit batch scan to one catalog stage")
     p.add_argument("--with-evidence", action="store_true", help="Refresh catalog with file-type evidence before scanning")
 
-    p = sub.add_parser("catalog", help="Refresh catalog index and catalog HTML only")
+    p = sub.add_parser("catalog", aliases=["cat"], help="Refresh catalog index and catalog HTML only")
     p.add_argument("library", nargs="?")
     p.add_argument("--full", action="store_true", help="Force full catalog refresh instead of using catalog_state.json")
     p.add_argument("--fast", action="store_true", help="Directory-only catalog refresh. This is the default for short commands.")
@@ -239,7 +300,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--note")
     p.add_argument("--updated-by", default="short_cli")
 
-    root_library = sub.add_parser("library", help="Discover and apply the confirmed library registry")
+    root_library = sub.add_parser("library", aliases=["lib"], help="Discover and apply the confirmed library registry")
     lsp = root_library.add_subparsers(dest="library_cmd", required=True)
     p = lsp.add_parser("discover", help="Discover candidate library roots from RAW and write editable library.list")
     p.add_argument("--out", help="Editable library.list output. Default: $WORK/config/library.list")
@@ -253,7 +314,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--input", help="Input library.list. Default: $WORK/config/library.list")
     p.add_argument("--out", help="Formal library_catalog.yml output. Default: $WORK/config/library_catalog.yml")
 
-    p = sub.add_parser("diff", help="Run base-aware catalog structural diff without hidden rescans")
+    p = sub.add_parser("diff", aliases=["cmp", "compare"], help="Run base-aware catalog structural diff without hidden rescans")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"], help="Catalog relation used when --base is not provided")
@@ -264,14 +325,14 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--refresh-catalog", action="store_true", help="Refresh this library catalog before compare. Default is to use existing catalog.json.")
     p.add_argument("--with-evidence", action="store_true", help="When --refresh-catalog is used, collect file-type evidence during catalog refresh")
 
-    p = sub.add_parser("file-diff", help="Run pairwise file diff from catalog raw paths; never runs scan")
+    p = sub.add_parser("file-diff", aliases=["fd", "filediff"], help="Run pairwise file diff from catalog raw paths; never runs scan")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("relpath")
     p.add_argument("--base")
-    p.add_argument("--type")
+    p.add_argument("--type", choices=sorted(PAIRWISE_FILE_DIFF_TYPES), help="Override inferred file type")
 
-    p = sub.add_parser("release", help="Run catalog release for an already-scanned version; never runs scan")
+    p = sub.add_parser("release", aliases=["rel"], help="Run catalog release for an already-scanned version; never runs scan")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("--alias", default="current")
@@ -473,6 +534,7 @@ def _scan_library_help(library: str) -> str:
 def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> list[list[str]]:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    args.short_command = _canonical_command(args.short_command)
     if args.short_command == "init":
         return []
     cfg = _load_config(cwd or Path.cwd(), args.config)
@@ -562,13 +624,27 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         file_type = args.type or _infer_file_type(args.relpath)
         if file_type not in PAIRWISE_FILE_DIFF_TYPES:
             raise ValueError(f"file type {file_type!r} is not supported by pairwise file-diff")
-        old_file = Path(str(old_version.get("raw_path"))) / args.relpath
-        new_file = Path(str(new_version.get("raw_path"))) / args.relpath
-        safe_name = args.relpath.replace("\\", "/").replace("/", "_").replace(":", "_")
-        stem = Path(safe_name).stem
-        out_name = stem if stem.startswith(f"{file_type}_") else f"{file_type}_{stem}"
-        out = Path(cfg["file_diff"]) / args.library / args.version / out_name
-        return [["file-diff", file_type, "--old", str(old_file), "--new", str(new_file), "--out", str(out)]]
+        old_file = _resolved_version_file(old_version, args.relpath)
+        new_file = _resolved_version_file(new_version, args.relpath)
+        out = _file_diff_out_dir(cfg, args.library, args.version, args.relpath, file_type)
+        return [
+            [
+                "file-diff",
+                file_type,
+                "--old",
+                str(old_file),
+                "--new",
+                str(new_file),
+                "--out",
+                str(out),
+                "--library-id",
+                str(lib.get("library_id") or lib.get("library_name") or args.library),
+                "--version-id",
+                str(new_version.get("version_id") or args.version),
+                "--base-version",
+                str(old_version.get("version_id") or args.base or ""),
+            ]
+        ]
     if args.short_command == "release":
         commands: list[list[str]] = []
         check_cmd = [
@@ -638,6 +714,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
     args = parser.parse_args(argv)
+    args.short_command = _canonical_command(args.short_command)
     if args.short_command == "init":
         return run_init(args)
     commands = build_cli_commands(argv, cwd=Path.cwd())

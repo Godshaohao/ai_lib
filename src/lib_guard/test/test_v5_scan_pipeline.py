@@ -906,9 +906,11 @@ class V5ScanPipelineTest(unittest.TestCase):
             tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
             self.assertGreaterEqual(len(tasks["tasks"]), 3)
             commands = "\n".join(task["command"] for task in tasks["tasks"])
-            self.assertIn("file-diff lef", commands)
-            self.assertIn("file-diff verilog", commands)
-            self.assertIn("file-diff liberty", commands)
+            self.assertIn("$PROJ/scripts/lg.csh fd demo v1", commands)
+            self.assertIn("lef", commands)
+            self.assertIn("verilog", commands)
+            self.assertIn("liberty", commands)
+            self.assertNotIn("python -m lib_guard.cli file-diff", commands)
             status = json.loads((diff_out / "pairwise_diff_task_status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["summary"]["pending"], len(tasks["tasks"]))
             issues = json.loads((diff_out / "diff_issues.json").read_text(encoding="utf-8"))
@@ -986,7 +988,8 @@ class V5ScanPipelineTest(unittest.TestCase):
             self.assertIn("View 全量状态", html)
             self.assertIn("File Type 全量变化", html)
             self.assertIn("重点 File Diff 建议", html)
-            self.assertIn("file-diff verilog", html)
+            self.assertIn("$PROJ/scripts/lg.csh fd", html)
+            self.assertNotIn("python -m lib_guard.cli file-diff", html)
             self.assertIn("复制", html)
             self.assertIn("打开 File Diff", html)
             self.assertIn("DONE", html)
@@ -1344,6 +1347,79 @@ class V5ScanPipelineTest(unittest.TestCase):
             self.assertEqual(scan_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
             self.assertIn(str(catalog.parent), scan_cmds[0])
 
+    def test_short_cli_simplifies_v6_file_diff_scenarios(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            old_root = raw / "ucie" / "initial_20250601"
+            new_root = raw / "ucie" / "stable_20250608"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            for relpath in ["model/ucie.ibs", "wave/ucie.pwl", "touch/chan.s2p", "pkg/ucie.cpm", "waiver/rules.waiver"]:
+                (old_root / relpath).parent.mkdir(parents=True, exist_ok=True)
+                (new_root / relpath).parent.mkdir(parents=True, exist_ok=True)
+                (old_root / relpath).write_text("old\n", encoding="utf-8")
+                (new_root / relpath).write_text("new\n", encoding="utf-8")
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "aliases": ["u"],
+                                "versions": [
+                                    {"version_id": "initial_20250601", "raw_path": str(old_root)},
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "raw_path": str(new_root),
+                                        "diff": {"adjacent_old_version": "initial_20250601"},
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.short_cli import build_cli_command, build_cli_commands, write_default_config
+
+            write_default_config(workspace, raw_root=raw)
+
+            ibis_cmd = build_cli_command(["fd", "u", "stable_20250608", "model\\ucie.ibs"], cwd=workspace)
+            self.assertEqual(ibis_cmd[0:2], ["file-diff", "ibis"])
+            self.assertIn(str(old_root / "model" / "ucie.ibs"), ibis_cmd)
+            self.assertIn(str(new_root / "model" / "ucie.ibs"), ibis_cmd)
+            self.assertIn("--library-id", ibis_cmd)
+            self.assertIn("ip/ucie", ibis_cmd)
+            self.assertIn("--version-id", ibis_cmd)
+            self.assertIn("stable_20250608", ibis_cmd)
+            self.assertIn("--base-version", ibis_cmd)
+            self.assertIn("initial_20250601", ibis_cmd)
+
+            expected_types = [
+                ("wave/ucie.pwl", "pwl"),
+                ("touch/chan.s2p", "snp"),
+                ("pkg/ucie.cpm", "cpm"),
+                ("waiver/rules.waiver", "waiver"),
+            ]
+            for relpath, file_type in expected_types:
+                with self.subTest(relpath=relpath):
+                    cmd = build_cli_command(["file-diff", "u", "stable_20250608", relpath], cwd=workspace)
+                    self.assertEqual(cmd[0:2], ["file-diff", file_type])
+
+            explicit_cmd = build_cli_command(["file-diff", "u", "stable_20250608", "touch/chan.s2p", "--type", "snp"], cwd=workspace)
+            self.assertEqual(explicit_cmd[0:2], ["file-diff", "snp"])
+
+            catalog_alias_cmd = build_cli_commands(["cat", "u"], cwd=workspace)
+            self.assertEqual(catalog_alias_cmd[0][0:2], ["catalog", "scan"])
+            diff_alias_cmd = build_cli_commands(["cmp", "u", "stable_20250608", "--base", "initial_20250601"], cwd=workspace)
+            self.assertEqual(diff_alias_cmd[0][0], "compare")
+            self.assertIn("--base", diff_alias_cmd[0])
+
     def test_csh_short_command_wrapper_is_available(self) -> None:
         root = Path(__file__).resolve().parents[3]
         wrapper = root / "scripts" / "lg.csh"
@@ -1361,6 +1437,9 @@ class V5ScanPipelineTest(unittest.TestCase):
         self.assertIn("Examples", help_text)
         self.assertIn("lg.csh scan", help_text)
         self.assertIn("lg.ps1 scan", help_text)
+        self.assertIn("alias: fd", help_text)
+        self.assertIn("alias: cmp", help_text)
+        self.assertIn("waiver ibis pwl snp cpm", help_text)
 
     def test_catalog_workflow_does_not_trigger_summary_rebuild(self) -> None:
         import inspect
@@ -1453,7 +1532,8 @@ class V5ScanPipelineTest(unittest.TestCase):
             tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
             self.assertEqual(tasks["summary"]["by_type"]["verilog"], 1)
             self.assertEqual(tasks["tasks"][0]["pairing_confidence"], "unique_file_type")
-            self.assertIn("file-diff verilog", tasks["tasks"][0]["command"])
+            self.assertIn("$PROJ/scripts/lg.csh fd", tasks["tasks"][0]["command"])
+            self.assertNotIn("python -m lib_guard.cli file-diff", tasks["tasks"][0]["command"])
 
     def test_legacy_extractor_paths_are_removed(self) -> None:
         import importlib

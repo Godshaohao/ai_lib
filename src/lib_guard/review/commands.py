@@ -17,7 +17,7 @@ def derive_next_action(version: Mapping[str, Any]) -> dict[str, Any]:
     if version.get("scan_status") == "NOT_SCANNED":
         return {
             "next_action": "RUN_SCAN",
-            "next_command": f"lg scan {library} {version_id}",
+            "next_command": f"$PROJ/scripts/lg.csh scan {library} {version_id}",
             "next_reason": "该版本还没有 scan evidence。",
         }
     if version.get("scan_status") in {"SCAN_BLOCK", "SCAN_FAILED"}:
@@ -35,7 +35,7 @@ def derive_next_action(version: Mapping[str, Any]) -> dict[str, Any]:
             }
         return {
             "next_action": "RUN_DIFF",
-            "next_command": f"lg diff {library} {version_id} --base {base}",
+            "next_command": f"$PROJ/scripts/lg.csh cmp {library} {version_id} --base {base}",
             "next_reason": "已有 scan evidence，下一步需要生成版本结构 diff。",
         }
     if version.get("pairwise_status") in {"PAIRWISE_PENDING", "PAIRWISE_PARTIAL"}:

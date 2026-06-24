@@ -169,7 +169,7 @@ def _scan_review_model(scan: Path, out: Path, meta: Mapping[str, Any], counts: M
     library = _library_name(meta)
     version = _version_name(meta)
     base = str(meta.get("base_version") or "<base_version>")
-    next_command = f"lg diff {library} {version} --base {base} --scan-if-missing" if decision != "SCAN_BLOCKED" else ""
+    next_command = f"$PROJ/scripts/lg.csh cmp {library} {version} --base {base} --scan-if-missing" if decision != "SCAN_BLOCKED" else ""
     return {
         "schema_version": "scan_review.v1",
         "decision": decision,

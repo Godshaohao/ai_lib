@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Mapping
+
+POINTER_SCHEMA = "current_effective.v1"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def safe_name(value: Any) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "item")).strip("._")
+    return text or "item"
+
+
+def read_json(path: str | Path, default: Any = None) -> Any:
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        return default
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def write_json(path: str | Path, data: Mapping[str, Any]) -> Path:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, p)
+    return p
+
+
+def rel_href(base: str | Path, path: Any) -> str:
+    if not path:
+        return ""
+    try:
+        base_p = Path(base)
+        target = Path(str(path))
+        if target.is_absolute():
+            return Path(os.path.relpath(target, base_p)).as_posix()
+    except Exception:
+        pass
+    return str(path).replace("\\", "/")
+
+
+def default_pointer_path_for_effective(effective_manifest: str | Path) -> Path:
+    """Return <...>/effective/current_effective.json for a manifest in <...>/effective/<E>/effective_manifest.json."""
+    manifest = Path(effective_manifest)
+    # expected: reports/libraries/<lib>/effective/<effective_id>/effective_manifest.json
+    if manifest.parent.parent.name == "effective":
+        return manifest.parent.parent / "current_effective.json"
+    return manifest.parent / "current_effective.json"
+
+
+def make_current_pointer(
+    effective_manifest: str | Path,
+    *,
+    html: str | Path | None = None,
+    release_preview: str | Path | None = None,
+    status: str = "accepted",
+    accepted_by: str = "manual",
+    note: str | None = None,
+) -> dict[str, Any]:
+    manifest_path = Path(effective_manifest)
+    manifest = read_json(manifest_path, {}) or {}
+    effective_id = str(manifest.get("effective_id") or manifest_path.parent.name)
+    library_id = str(manifest.get("library_id") or manifest.get("library_name") or "")
+    html_path = Path(html) if html else manifest_path.parent / "index.html"
+    release_html = Path(release_preview) if release_preview else manifest_path.parent / "release_preview" / "index.html"
+    return {
+        "schema_version": POINTER_SCHEMA,
+        "library_id": library_id,
+        "current_effective_id": effective_id,
+        "status": status,
+        "manifest": str(manifest_path),
+        "html": str(html_path) if html_path.exists() or html else "",
+        "release_preview": str(release_html) if release_html.exists() or release_preview else "",
+        "base_full_version": manifest.get("base_full_version"),
+        "accepted_updates": list(manifest.get("accepted_updates", []) or []),
+        "summary": manifest.get("summary", {}) or {},
+        "accepted_at": now_iso(),
+        "accepted_by": accepted_by,
+        "note": note or "",
+    }
+
+
+def write_current_pointer(
+    effective_manifest: str | Path,
+    *,
+    out: str | Path | None = None,
+    html: str | Path | None = None,
+    release_preview: str | Path | None = None,
+    status: str = "accepted",
+    accepted_by: str = "manual",
+    note: str | None = None,
+) -> Path:
+    pointer = make_current_pointer(
+        effective_manifest,
+        html=html,
+        release_preview=release_preview,
+        status=status,
+        accepted_by=accepted_by,
+        note=note,
+    )
+    out_path = Path(out) if out else default_pointer_path_for_effective(effective_manifest)
+    return write_json(out_path, pointer)
+
+
+def pointer_search_paths(out: str | Path, lib_id: str) -> list[Path]:
+    out_p = Path(out)
+    safe = safe_name(lib_id)
+    names = [lib_id, safe]
+    paths: list[Path] = []
+    for name in names:
+        paths.extend([
+            out_p / "libraries" / safe_name(name) / "effective" / "current_effective.json",
+            out_p / "effective" / safe_name(name) / "current_effective.json",
+            out_p.parent / "effective" / safe_name(name) / "current_effective.json",
+        ])
+    dedup: list[Path] = []
+    seen = set()
+    for p in paths:
+        key = str(p)
+        if key not in seen:
+            dedup.append(p)
+            seen.add(key)
+    return dedup
+
+
+def load_current_pointer(out: str | Path, lib_id: str) -> dict[str, Any]:
+    for path in pointer_search_paths(out, lib_id):
+        data = read_json(path, {}) or {}
+        if data:
+            data["_pointer_path"] = str(path)
+            return data
+    return {}
+
+
+def mark_current_effective_items(out: str | Path, effective_by_lib: Mapping[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    """Mark items using current_effective.json. Does not delete historical/candidate snapshots."""
+    result: dict[str, list[dict[str, Any]]] = {}
+    for lib_id, items in effective_by_lib.items():
+        pointer = load_current_pointer(out, lib_id)
+        current_id = str(pointer.get("current_effective_id") or "")
+        current_manifest = str(pointer.get("manifest") or "")
+        updated: list[dict[str, Any]] = []
+        for item in items:
+            row = dict(item)
+            is_current = False
+            if current_id and str(row.get("effective_id") or "") == current_id:
+                is_current = True
+            if current_manifest and str(row.get("manifest") or "") == current_manifest:
+                is_current = True
+            row["effective_status"] = "current" if is_current else row.get("effective_status", "history")
+            row["is_current_effective"] = is_current
+            if is_current:
+                row["current_pointer"] = pointer
+                row["html"] = row.get("html") or pointer.get("html") or ""
+                row["release_preview"] = row.get("release_preview") or pointer.get("release_preview") or ""
+            updated.append(row)
+        # If pointer exists but manifest was outside discovered roots, add a lightweight row.
+        if pointer and current_id and not any(x.get("is_current_effective") for x in updated):
+            summary = pointer.get("summary", {}) or {}
+            updated.append({
+                "effective_id": current_id,
+                "manifest": pointer.get("manifest") or "",
+                "html": pointer.get("html") or "",
+                "release_preview": pointer.get("release_preview") or "",
+                "base_full_version": pointer.get("base_full_version"),
+                "accepted_updates": list(pointer.get("accepted_updates", []) or []),
+                "summary": summary,
+                "conflict_count": int(summary.get("conflict_count", 0) or 0),
+                "file_count": int(summary.get("file_count", 0) or 0),
+                "component_count": int(summary.get("component_count", 0) or 0),
+                "operation_summary": summary.get("operation_summary", {}) or {},
+                "file_type_summary": summary.get("file_type_summary", {}) or {},
+                "source_summary": summary.get("source_summary", {}) or {},
+                "created_at": pointer.get("accepted_at") or "",
+                "effective_status": "current",
+                "is_current_effective": True,
+                "current_pointer": pointer,
+            })
+        updated.sort(key=lambda x: (0 if x.get("is_current_effective") else 1, str(x.get("created_at") or x.get("effective_id") or "")))
+        result[lib_id] = updated
+    return result

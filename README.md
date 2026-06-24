@@ -26,6 +26,14 @@ Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff
 - Large or ambiguous comparisons first ask the reviewer to confirm base/comparison context. They do not generate a full File Diff command batch.
 - File Diff HTML shows structured field changes, raw text fallback, and best-effort source location from parser evidence.
 
+Desktop UI command policy:
+
+- Catalog command examples use `cat`, `scan`, `cmp`, and `rel`.
+- Scan "next action" uses `cmp ... --scan-if-missing`, not the older `lg diff ...` text.
+- Selected Diff and Effective Compare expose File Diff commands only as focused recommendations using `fd ... --base ... --type ...`.
+- Generated HTML should not show the old completion wording `File Diff 2/5` or `done/total`.
+- Generated HTML should not expose low-level `python -m lib_guard.cli file-diff ...` commands except inside JSON/debug evidence.
+
 Key v6 parser/diff additions:
 
 - Liberty now extracts `is_macro`, `is_pad`, and cell attribute lines.
@@ -48,6 +56,47 @@ Generated HTML under `work/` or `reports/` is output, not source of truth.
 
 ## Common Commands
 
+Preferred short commands:
+
+```csh
+setenv PROJ /path/to/ai_lib
+setenv WORK $PROJ/work/review
+setenv RAW  /path/to/raw_delivery
+
+$PROJ/scripts/lg.csh init $WORK --raw-root $RAW
+cd $WORK
+
+$PROJ/scripts/lg.csh cat
+$PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
+$PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
+$PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> lef/<FILE>.lef --base <BASE_VERSION>
+$PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> model/<FILE>.ibs --base <BASE_VERSION>
+$PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> touch/<FILE>.s2p --type snp --base <BASE_VERSION>
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first
+```
+
+Short aliases are intended for daily csh use:
+
+```text
+cat -> catalog
+cmp -> diff
+fd  -> file-diff
+rel -> release
+```
+
+Use `--dry-run` before expensive work:
+
+```csh
+$PROJ/scripts/lg.csh --dry-run cmp <LIBRARY> <VERSION> --base <BASE_VERSION>
+$PROJ/scripts/lg.csh --dry-run fd <LIBRARY> <VERSION> waiver/<FILE>.waiver --base <BASE_VERSION>
+```
+
+The short CLI still resolves paths from `catalog.json`; do not pass paths relative to `$RAW`.
+`file-diff` relpaths are relative to the selected version root and support:
+`lef`, `liberty`, `verilog`, `cdl`, `sdc`, `upf`, `cpf`, `spef`, `db`, `waiver`, `ibis`, `pwl`, `snp`, and `cpm`.
+
+Low-level commands remain useful for debugging:
+
 ```powershell
 $env:PYTHONPATH='src'
 $PY='C:\Users\Polaris\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
@@ -60,3 +109,23 @@ $PY='C:\Users\Polaris\.cache\codex-runtimes\codex-primary-runtime\dependencies\p
 ```
 
 For shell wrappers, see `scripts/lg.csh`, `scripts/lg.ps1`, and `scripts/lg.cmd`.
+
+## Latest Desktop UI Verification
+
+The desktop review smoke set covers:
+
+```text
+catalog/html/index.html
+scan_html/index.html
+diff_html/index.html
+effective_E3.html
+compare_E2_vs_E3/index.html
+release_preview/index.html
+release_html/index.html
+```
+
+The current audit checks for:
+
+- no stale `lg diff`, `lg.csh file-diff`, or `python -m lib_guard.cli file-diff` in user-facing HTML;
+- no placeholder/debug copy such as `TODO`, `TBD`, `FIXME`, `Lorem ipsum`, `File Diff 2/5`, or `done/total`;
+- desktop layout readability at 1440 px width, including long path/version truncation and scrollable tables.

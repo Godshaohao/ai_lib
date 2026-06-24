@@ -209,7 +209,7 @@ class V5CatalogTest(unittest.TestCase):
             self.assertTrue((out / "html" / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").exists())
             library_html = (out / "html" / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
             self.assertIn("Library Workspace", library_html)
-            self.assertIn("Compare Index", library_html)
+            self.assertIn("Compare 索引", library_html)
             self.assertNotIn("diff_timeline.html", html + library_html)
             self.assertNotIn("done / total", library_html)
 
@@ -326,7 +326,7 @@ class V5CatalogTest(unittest.TestCase):
             catalog_html = work / "catalog" / "html" / "libraries" / "ip_ucie" / "index.html"
             self.assertTrue(catalog_html.exists())
             catalog_text = catalog_html.read_text(encoding="utf-8")
-            self.assertIn("Compare Index", catalog_text)
+            self.assertIn("Compare 索引", catalog_text)
             self.assertIn(str(diff_html).replace("\\", "/"), catalog_text)
             self.assertNotIn("diff_timeline.html", catalog_text)
 
@@ -441,9 +441,9 @@ class V5CatalogTest(unittest.TestCase):
             self.assertEqual(review_version["diff_status"], "DIFF_REVIEW")
             self.assertEqual(review_version["release_status"], "RELEASE_READY")
             library_html = (html_out / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Raw Delivery Ledger", library_html)
-            self.assertIn("Effective Summary", library_html)
-            self.assertIn("Compare Index", library_html)
+            self.assertIn("Raw 版本台账", library_html)
+            self.assertIn("Effective 摘要", library_html)
+            self.assertIn("Compare 索引", library_html)
             version_html = (html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
             self.assertIn(str(scan_html).replace("\\", "/"), version_html)
             self.assertIn(str(diff_html).replace("\\", "/"), version_html)

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from lib_guard.effective.compare import build_compare_manifest, write_compare_manifest
 from lib_guard.effective.manifest import (
     add_update_to_manifest,
     build_effective_manifest,
@@ -13,6 +14,8 @@ from lib_guard.effective.manifest import (
     write_json,
     write_release_preview_outputs,
 )
+from lib_guard.effective.pointer import load_current_pointer, write_current_pointer
+from lib_guard.render.compare_report import write_compare_report
 from lib_guard.render.effective_report import write_effective_report
 
 
@@ -100,6 +103,53 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_accept(args: argparse.Namespace) -> int:
+    pointer_path = write_current_pointer(
+        args.effective,
+        out=args.out,
+        html=args.html,
+        release_preview=args.release_preview,
+        status=args.status,
+        accepted_by=args.accepted_by,
+        note=args.note,
+    )
+    print(json.dumps({"status": "PASS", "current_effective": str(pointer_path)}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_current(args: argparse.Namespace) -> int:
+    pointer = load_current_pointer(args.out_dir, args.library)
+    if not pointer:
+        print(json.dumps({"status": "MISSING", "library": args.library}, ensure_ascii=False, indent=2))
+        return 1
+    print(json.dumps({"status": "PASS", "current_effective": pointer}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    catalog = read_json(args.catalog) if args.catalog else None
+    search_roots = args.search_root or []
+    if args.out_dir:
+        out_dir_path = Path(args.out_dir)
+        search_roots.append(str(out_dir_path.parent.parent.parent if len(out_dir_path.parts) > 3 else out_dir_path.parent))
+    manifest = build_compare_manifest(
+        catalog,
+        args.library,
+        args.old,
+        args.new,
+        search_roots=search_roots,
+        mode=args.mode,
+        compare_id=args.compare_id,
+        owner_target=args.owner_target,
+    )
+    out_dir = Path(args.out_dir)
+    write_compare_manifest(out_dir, manifest)
+    html = args.html or str(out_dir / "index.html")
+    write_compare_report(manifest, html)
+    print(json.dumps({"status": "PASS", "compare_manifest": str(out_dir / "compare_manifest.json"), "html": html}, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="lib_guard effective manifest tools")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -152,6 +202,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--release-preview")
     p.add_argument("--html", required=True)
     p.set_defaults(func=cmd_render)
+
+    p = sub.add_parser("accept", help="Set an effective manifest as current effective by writing current_effective.json")
+    p.add_argument("--effective", required=True)
+    p.add_argument("--out", help="Default: <effective_root>/current_effective.json")
+    p.add_argument("--html")
+    p.add_argument("--release-preview")
+    p.add_argument("--status", default="accepted", choices=["accepted", "current", "candidate", "released"])
+    p.add_argument("--accepted-by", default="manual")
+    p.add_argument("--note")
+    p.set_defaults(func=cmd_accept)
+
+    p = sub.add_parser("current", help="Print current_effective.json for a library")
+    p.add_argument("--library", required=True)
+    p.add_argument("--out-dir", default="reports")
+    p.set_defaults(func=cmd_current)
+
+    p = sub.add_parser("compare", help="Generate file-map compare report for raw/effective/release targets")
+    p.add_argument("--catalog", help="Required for raw:<version> targets")
+    p.add_argument("--library", required=True)
+    p.add_argument("--old", required=True, help="raw:<version>, effective:<id-or-manifest>, release:<manifest>")
+    p.add_argument("--new", required=True, help="raw:<version>, effective:<id-or-manifest>, release:<manifest>")
+    p.add_argument("--out-dir", required=True)
+    p.add_argument("--html")
+    p.add_argument("--mode")
+    p.add_argument("--compare-id")
+    p.add_argument("--owner-target")
+    p.add_argument("--search-root", action="append", default=[])
+    p.set_defaults(func=cmd_compare)
+
     return parser
 
 
