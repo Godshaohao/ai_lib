@@ -155,13 +155,14 @@ class EffectiveManifestTest(unittest.TestCase):
 
             index_html = Path(result["index_html"]).read_text(encoding="utf-8")
             self.assertIn("report_index.json", index_html)
-            self.assertIn("进入库主页", index_html)
+            self.assertIn("进入库工作台", index_html)
             self.assertNotIn("<iframe", index_html.lower())
 
             library_home = catalog_dir / "html" / "libraries" / "ip_ucie" / "index.html"
             self.assertTrue(library_home.exists())
             library_html = library_home.read_text(encoding="utf-8")
-            self.assertIn("Effective Stack", library_html)
+            self.assertIn("Effective Summary", library_html)
+            self.assertIn("Compare Index", library_html)
             self.assertIn("Release Preview", library_html)
             self.assertNotIn("<iframe", library_html.lower())
 

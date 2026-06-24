@@ -204,11 +204,13 @@ class V5CatalogTest(unittest.TestCase):
             self.assertNotIn("file-diff ", html)
             self.assertTrue((out / "html" / "review_state.json").exists())
             self.assertTrue((out / "html" / "review_tasks.json").exists())
-            self.assertTrue((out / "html" / "libraries" / "ip_ucie" / "diff_timeline.html").exists())
+            self.assertFalse((out / "html" / "libraries" / "ip_ucie" / "diff_timeline.html").exists())
+            self.assertFalse((out / "html" / "libraries" / "ip_ucie" / "diff_index.json").exists())
             self.assertTrue((out / "html" / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").exists())
-            library_html = (out / "html" / "libraries" / "ip_ucie" / "diff_timeline.html").read_text(encoding="utf-8")
-            self.assertIn("Diff Timeline", library_html)
-            self.assertIn("Selected Diff", library_html)
+            library_html = (out / "html" / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("Library Workspace", library_html)
+            self.assertIn("Compare Index", library_html)
+            self.assertNotIn("diff_timeline.html", html + library_html)
             self.assertNotIn("done / total", library_html)
 
     def test_cli_catalog_scan_render_and_override(self) -> None:
@@ -321,9 +323,12 @@ class V5CatalogTest(unittest.TestCase):
             self.assertTrue(Path(new_version["diff"]["adjacent_diff_dir"]).exists())
             diff_html = Path(new_version["diff"]["adjacent_diff_dir"]).parent / "diff_html" / "index.html"
             self.assertTrue(diff_html.exists())
-            catalog_html = work / "catalog" / "html" / "libraries" / "ip_ucie" / "diff_timeline.html"
+            catalog_html = work / "catalog" / "html" / "libraries" / "ip_ucie" / "index.html"
             self.assertTrue(catalog_html.exists())
-            self.assertIn(str(diff_html).replace("\\", "/"), catalog_html.read_text(encoding="utf-8"))
+            catalog_text = catalog_html.read_text(encoding="utf-8")
+            self.assertIn("Compare Index", catalog_text)
+            self.assertIn(str(diff_html).replace("\\", "/"), catalog_text)
+            self.assertNotIn("diff_timeline.html", catalog_text)
 
             self.assertEqual(
                 main(
@@ -436,8 +441,9 @@ class V5CatalogTest(unittest.TestCase):
             self.assertEqual(review_version["diff_status"], "DIFF_REVIEW")
             self.assertEqual(review_version["release_status"], "RELEASE_READY")
             library_html = (html_out / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Version Ledger", library_html)
-            self.assertIn("Effective Stack", library_html)
+            self.assertIn("Raw Delivery Ledger", library_html)
+            self.assertIn("Effective Summary", library_html)
+            self.assertIn("Compare Index", library_html)
             version_html = (html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
             self.assertIn(str(scan_html).replace("\\", "/"), version_html)
             self.assertIn(str(diff_html).replace("\\", "/"), version_html)
