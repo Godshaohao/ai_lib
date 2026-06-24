@@ -335,22 +335,74 @@ def _catalog_versions(catalog_path: str | Path, library: str | None = None) -> l
     return rows
 
 
+def _batch_run_dir(args: Namespace, batch_type: str) -> tuple[Path, str]:
+    from lib_guard.batch.manifest import make_batch_run_dir
+
+    run_id = getattr(args, "batch_run_id", None) or f"{batch_type}_{auto_scan_id()}"
+    if getattr(args, "batch_out", None):
+        run_dir = Path(args.batch_out)
+        run_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        run_dir = make_batch_run_dir(getattr(args, "workdir", "work"), batch_type, run_id=run_id)
+    return run_dir, run_id
+
+
+def _batch_manifest_item(item: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "library_name": item.get("library_name"),
+        "library_id": item.get("library_id"),
+        "version_id": item.get("version_id"),
+        "version_key": item.get("version_key"),
+        "stage": item.get("stage"),
+        "reason": reason,
+    }
+
+
 def run_catalog_batch(args: Namespace) -> int:
+    from lib_guard.batch.manifest import init_progress, update_progress, write_failed, write_rerun_failed_csh, write_result, write_selection_manifest
+
+    run_dir, run_id = _batch_run_dir(args, "scan")
     results: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     selected = []
-    skipped_existing = 0
-    skipped_stage = 0
+    skipped: list[dict[str, Any]] = []
     for item in _catalog_versions(args.catalog, args.library):
         if args.stage and item.get("stage") != args.stage:
-            skipped_stage += 1
+            skipped.append(_batch_manifest_item(item, "stage_filter_mismatch"))
             continue
         if args.only_missing and item.get("scan", {}).get("status") != "NOT_SCANNED":
-            skipped_existing += 1
+            skipped.append(_batch_manifest_item(item, "already_scanned"))
             continue
         selected.append(item)
         if args.limit and len(selected) >= args.limit:
             break
+    selection_manifest = write_selection_manifest(
+        run_dir,
+        {
+            "run_id": run_id,
+            "batch_type": "scan",
+            "catalog": str(Path(args.catalog)),
+            "library_filter": args.library,
+            "stage_filter": args.stage,
+            "only_missing": bool(args.only_missing),
+            "only_ready": False,
+            "limit": args.limit,
+            "selected": [_batch_manifest_item(item, "scan.status == NOT_SCANNED" if args.only_missing else "selected") for item in selected],
+            "skipped": skipped,
+        },
+    )
+    if getattr(args, "plan_only", False):
+        result = {
+            "status": "PLAN_ONLY",
+            "run_id": run_id,
+            "selected": len(selected),
+            "skipped": len(skipped),
+            "selection_manifest": str(selection_manifest),
+        }
+        write_result(run_dir, result)
+        print_json(result)
+        return 0
+    init_progress(run_dir, len(selected), run_id)
     for item in selected:
         child = Namespace(**vars(args))
         child.library = item["library_name"]
@@ -360,57 +412,97 @@ def run_catalog_batch(args: Namespace) -> int:
         child.console_out = None
         child.no_catalog_render = True
         try:
+            started_at = auto_scan_id()
             code = run_catalog_workflow(child)
-            results.append({"version": item["version_id"], "exit_code": code})
+            row = {**_batch_manifest_item(item, "executed"), "status": "PASS" if code == 0 else "FAILED", "exit_code": code, "started_at": started_at, "finished_at": auto_scan_id()}
+            results.append(row)
+            update_progress(run_dir, row)
             if code != 0:
-                failures.append({"version": item["version_id"], "exit_code": code})
+                failures.append(row)
         except Exception as exc:
-            failures.append({"version": item["version_id"], "error": str(exc)})
+            row = {**_batch_manifest_item(item, "executed"), "status": "FAILED", "exit_code": 2, "error": str(exc), "finished_at": auto_scan_id()}
+            failures.append(row)
+            update_progress(run_dir, row)
     catalog_html = refresh_catalog_html(args)
     output = {
         "status": "PASS" if not failures else "FAILED",
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "selection_manifest": str(selection_manifest),
         "selected": len(selected),
-        "skipped_existing": skipped_existing,
-        "skipped_stage": skipped_stage,
+        "skipped_existing": sum(1 for item in skipped if item.get("reason") == "already_scanned"),
+        "skipped_stage": sum(1 for item in skipped if item.get("reason") == "stage_filter_mismatch"),
         "selected_versions": [item.get("version_id") for item in selected],
         "results": results,
         "failures": failures,
     }
     if catalog_html:
         output["catalog_html"] = catalog_html
+    write_failed(run_dir, failures)
+    write_rerun_failed_csh(run_dir, failures, "scan")
+    write_result(run_dir, output)
     print_json(output)
     return 0 if not failures else 2
 
 
 def run_catalog_compare_batch(args: Namespace) -> int:
+    from lib_guard.batch.manifest import init_progress, update_progress, write_failed, write_rerun_failed_csh, write_result, write_selection_manifest
+
+    run_dir, run_id = _batch_run_dir(args, "compare")
     results: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     selected = []
-    skipped_existing = 0
-    skipped_stage = 0
-    skipped_not_ready = 0
+    skipped: list[dict[str, Any]] = []
     for item in _catalog_versions(args.catalog, args.library):
         if args.stage and item.get("stage") != args.stage:
-            skipped_stage += 1
+            skipped.append(_batch_manifest_item(item, "stage_filter_mismatch"))
             continue
         diff = item.get("diff", {}) or {}
         scan = item.get("scan", {}) or {}
         old_version = diff.get("cumulative_base_version") if args.mode == "cumulative" else diff.get("adjacent_old_version")
         if args.only_ready:
             if not scan.get("scan_dir") or not old_version:
-                skipped_not_ready += 1
+                skipped.append(_batch_manifest_item(item, "missing_new_scan_or_compare_target"))
                 continue
             old = next((v for v in _catalog_versions(args.catalog, item["library_name"]) if v.get("version_id") == old_version), None)
             if not old or not old.get("scan", {}).get("scan_dir"):
-                skipped_not_ready += 1
+                skipped.append(_batch_manifest_item(item, "missing_old_scan_evidence"))
                 continue
         status_key = "cumulative_status" if args.mode == "cumulative" else "adjacent_status"
         if args.only_pending and diff.get(status_key) != "PENDING":
-            skipped_existing += 1
+            skipped.append(_batch_manifest_item(item, "diff_not_pending"))
             continue
         selected.append(item)
         if args.limit and len(selected) >= args.limit:
             break
+    selection_manifest = write_selection_manifest(
+        run_dir,
+        {
+            "run_id": run_id,
+            "batch_type": "compare",
+            "catalog": str(Path(args.catalog)),
+            "library_filter": args.library,
+            "stage_filter": args.stage,
+            "only_missing": False,
+            "only_ready": bool(args.only_ready),
+            "only_pending": bool(args.only_pending),
+            "limit": args.limit,
+            "selected": [_batch_manifest_item(item, "compare_selected") for item in selected],
+            "skipped": skipped,
+        },
+    )
+    if getattr(args, "plan_only", False):
+        result = {
+            "status": "PLAN_ONLY",
+            "run_id": run_id,
+            "selected": len(selected),
+            "skipped": len(skipped),
+            "selection_manifest": str(selection_manifest),
+        }
+        write_result(run_dir, result)
+        print_json(result)
+        return 0
+    init_progress(run_dir, len(selected), run_id)
     for item in selected:
         child = Namespace(**vars(args))
         child.library = item["library_name"]
@@ -420,25 +512,36 @@ def run_catalog_compare_batch(args: Namespace) -> int:
         child.html_out = None
         child.no_catalog_render = True
         try:
+            started_at = auto_scan_id()
             code = run_catalog_compare(child)
-            results.append({"version": item["version_id"], "exit_code": code})
+            row = {**_batch_manifest_item(item, "executed"), "status": "PASS" if code == 0 else "FAILED", "exit_code": code, "started_at": started_at, "finished_at": auto_scan_id()}
+            results.append(row)
+            update_progress(run_dir, row)
             if code != 0:
-                failures.append({"version": item["version_id"], "exit_code": code})
+                failures.append(row)
         except Exception as exc:
-            failures.append({"version": item["version_id"], "error": str(exc)})
+            row = {**_batch_manifest_item(item, "executed"), "status": "FAILED", "exit_code": 2, "error": str(exc), "finished_at": auto_scan_id()}
+            failures.append(row)
+            update_progress(run_dir, row)
     catalog_html = refresh_catalog_html(args)
     output = {
         "status": "PASS" if not failures else "FAILED",
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "selection_manifest": str(selection_manifest),
         "selected": len(selected),
-        "skipped_existing": skipped_existing,
-        "skipped_stage": skipped_stage,
-        "skipped_not_ready": skipped_not_ready,
+        "skipped_existing": sum(1 for item in skipped if item.get("reason") == "diff_not_pending"),
+        "skipped_stage": sum(1 for item in skipped if item.get("reason") == "stage_filter_mismatch"),
+        "skipped_not_ready": sum(1 for item in skipped if item.get("reason") in {"missing_new_scan_or_compare_target", "missing_old_scan_evidence"}),
         "selected_versions": [item.get("version_id") for item in selected],
         "results": results,
         "failures": failures,
     }
     if catalog_html:
         output["catalog_html"] = catalog_html
+    write_failed(run_dir, failures)
+    write_rerun_failed_csh(run_dir, failures, "compare")
+    write_result(run_dir, output)
     print_json(output)
     return 0 if not failures else 2
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 import json
+import os
 import re
 
 from lib_guard.review import build_review_state, build_review_tasks
@@ -38,6 +39,18 @@ def _version_links(version: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _href(path: Any) -> str:
     return as_file_href(path) if path else ""
+
+
+def _rel_href(base: Path, path: Any) -> str:
+    if not path:
+        return ""
+    try:
+        target = Path(str(path))
+        if target.is_absolute():
+            return Path(os.path.relpath(target, base)).as_posix()
+    except Exception:
+        pass
+    return str(path).replace("\\", "/")
 
 
 def _status_key(value: Any) -> str:
@@ -152,7 +165,7 @@ def _release_is_visible(version: Mapping[str, Any], lib: Mapping[str, Any] | Non
     }
     explicit = bool(version.get("release_candidate") or version.get("selected_for_release"))
     has_release_evidence = bool(links.get("release_html"))
-    release_done_or_blocked = release not in {"", "UNKNOWN", "RELEASE_NOT_CHECKED", "RELEASE_CHECK_REQUIRED", "NOT_APPLICABLE", "NONE"}
+    release_done_or_blocked = release not in {"", "UNKNOWN", "RELEASE_NOT_CHECKED", "RELEASE_NOT_APPLICABLE", "RELEASE_CHECK_REQUIRED", "NOT_APPLICABLE", "NONE"}
     return explicit or has_release_evidence or release_done_or_blocked or bool(version_id and version_id in current_like)
 
 
@@ -252,6 +265,107 @@ def _version_display_text(version: Mapping[str, Any]) -> str:
     stage = str(version.get("stage") or "-")
     pkg_status, pkg_label = _package_label(version)
     return f"{version_id} {stage} {pkg_label} {pkg_status} {version.get('raw_path') or ''}"
+
+
+def _load_json_if_exists(path: Path) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _library_match_keys(lib: Mapping[str, Any]) -> set[str]:
+    values = {
+        str(lib.get("library_id") or ""),
+        str(lib.get("library_name") or ""),
+        str(lib.get("display_name") or ""),
+    }
+    values.update(str(v) for v in lib.get("aliases", []) or [] if v)
+    values.update(v.rsplit("/", 1)[-1] for v in list(values) if v)
+    return {v for v in values if v}
+
+
+def _effective_search_roots(out: Path) -> list[Path]:
+    roots = []
+    for root in [out / "effective", out.parent / "effective", out.parent.parent / "effective"]:
+        if root not in roots and root.exists():
+            roots.append(root)
+    return roots
+
+
+def _discover_effective_reports(out: Path, libraries: list[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    by_key: dict[str, list[dict[str, Any]]] = {str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or ""): [] for lib in libraries}
+    key_lookup: dict[str, str] = {}
+    for lib in libraries:
+        canonical = str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "")
+        for key in _library_match_keys(lib):
+            key_lookup[key] = canonical
+    seen: set[Path] = set()
+    for root in _effective_search_roots(out):
+        for manifest_path in root.rglob("effective_manifest.json"):
+            if manifest_path in seen:
+                continue
+            seen.add(manifest_path)
+            data = _load_json_if_exists(manifest_path)
+            if not data:
+                continue
+            manifest_keys = {
+                str(data.get("library_id") or ""),
+                str(data.get("library_name") or ""),
+                str(data.get("display_name") or ""),
+            }
+            manifest_keys.update(k.rsplit("/", 1)[-1] for k in list(manifest_keys) if k)
+            canonical = next((key_lookup[k] for k in manifest_keys if k in key_lookup), "")
+            if not canonical:
+                continue
+            html_path = manifest_path.parent / "index.html"
+            release_preview_html = manifest_path.parent / "release_preview" / "index.html"
+            release_manifest = manifest_path.parent / "release_preview" / "release_manifest.json"
+            summary = data.get("summary", {}) or {}
+            components = data.get("components", []) or []
+            item = {
+                "effective_id": data.get("effective_id") or manifest_path.parent.name,
+                "manifest": str(manifest_path),
+                "html": str(html_path) if html_path.exists() else "",
+                "release_preview": str(release_preview_html) if release_preview_html.exists() else "",
+                "release_manifest": str(release_manifest) if release_manifest.exists() else "",
+                "base_full_version": data.get("base_full_version"),
+                "accepted_updates": list(data.get("accepted_updates", []) or []),
+                "components": components,
+                "summary": summary,
+                "conflict_count": int(summary.get("conflict_count", len(data.get("conflicts", []) or [])) or 0),
+                "file_count": int(summary.get("file_count", len(data.get("effective_files", {}) or {})) or 0),
+                "component_count": int(summary.get("component_count", len(components)) or 0),
+                "operation_summary": summary.get("operation_summary", {}) or {},
+                "file_type_summary": summary.get("file_type_summary", {}) or {},
+                "source_summary": summary.get("source_summary", {}) or {},
+                "created_at": data.get("created_at") or "",
+            }
+            by_key.setdefault(canonical, []).append(item)
+    for items in by_key.values():
+        items.sort(key=lambda x: str(x.get("created_at") or x.get("effective_id") or ""))
+    return by_key
+
+
+def _effective_items_for_lib(effective_by_lib: Mapping[str, list[dict[str, Any]]], lib: Mapping[str, Any]) -> list[dict[str, Any]]:
+    key = str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "")
+    return list(effective_by_lib.get(key, []) or [])
+
+
+def _latest_effective_item(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return items[-1] if items else None
+
+
+def _version_effective_refs(version_id: str, effective_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    refs = []
+    for item in effective_items:
+        accepted = {str(v) for v in item.get("accepted_updates", []) or []}
+        component_versions = {str(c.get("version_id")) for c in item.get("components", []) or []}
+        if str(version_id) in accepted or str(version_id) == str(item.get("base_full_version")) or str(version_id) in component_versions:
+            refs.append(item)
+    return refs
 
 
 def _version_primary_action(version: Mapping[str, Any]) -> tuple[str, str, str, bool]:
@@ -375,6 +489,163 @@ def _render_library_diff_timeline(out: Path, lib: Mapping[str, Any]) -> str:
     return str(html_path)
 
 
+def _effective_summary_panel(out: Path, effective_items: list[dict[str, Any]], *, compact: bool = False) -> str:
+    if not effective_items:
+        return "<div class='catalog-empty'>暂无 effective snapshot</div>"
+    latest = _latest_effective_item(effective_items) or {}
+    op = latest.get("operation_summary", {}) or {}
+    by_type = latest.get("file_type_summary", {}) or {}
+    source = latest.get("source_summary", {}) or {}
+    component_labels = []
+    for comp in latest.get("components", []) or []:
+        role = "base" if comp.get("role") == "base_full" else "update"
+        scope = ",".join(comp.get("scope", []) or []) or "-"
+        version = str(comp.get("version_id") or "-")
+        component_labels.append(
+            f"<span class='effective-chip {ui.esc(role)}'><b title='{ui.esc(version)}'>{ui.esc(version)}</b><em>{ui.esc(scope)}</em></span>"
+        )
+    op_tags = "".join(f"<span class='tiny-tag'>{ui.esc(k)}:{ui.esc(v)}</span>" for k, v in sorted(op.items()))
+    type_tags = "".join(f"<span class='tiny-tag'>{ui.esc(k)}:{ui.esc(v)}</span>" for k, v in sorted(by_type.items()))
+    source_tags = "".join(f"<span class='tiny-tag' title='{ui.esc(k)}'>{ui.esc(k)}:{ui.esc(v)}</span>" for k, v in sorted(source.items()))
+    muted_dash = "<span class='muted'>-</span>"
+    actions = ui.action_strip([
+        ui.button("Effective 详情", _href(latest.get("html")), "primary", disabled=not bool(latest.get("html")), target="_blank"),
+        ui.button("Release Preview", _href(latest.get("release_preview")), "secondary", disabled=not bool(latest.get("release_preview")), target="_blank"),
+        ui.button("Manifest JSON", _href(latest.get("manifest")), "secondary", disabled=not bool(latest.get("manifest")), target="_blank"),
+    ])
+    if compact:
+        return (
+            "<div class='effective-mini'>"
+            f"<b>{ui.esc(latest.get('effective_id') or '-')}</b>"
+            f"<span>{ui.esc(latest.get('file_count', 0))} files</span>"
+            f"<span>{ui.esc(latest.get('conflict_count', 0))} risks</span>"
+            f"{actions}</div>"
+        )
+    return (
+        "<div class='effective-summary'>"
+        f"<div class='effective-head'><div><div class='muted'>Current Effective</div><h3 title='{ui.esc(latest.get('effective_id'))}'>{ui.esc(latest.get('effective_id') or '-')}</h3></div>{actions}</div>"
+        + ui.metric_grid([
+            ("有效文件", latest.get("file_count", 0), "effective_files", "PASS"),
+            ("组件", latest.get("component_count", 0), "base + updates", "PASS"),
+            ("冲突", latest.get("conflict_count", 0), "scope / replacement", "WARNING" if latest.get("conflict_count") else "PASS"),
+            ("快照", len(effective_items), "effective snapshots", "PASS"),
+        ])
+        + f"<div class='effective-stack'>{''.join(component_labels) or muted_dash}</div>"
+        + f"<div class='effective-tags'><b>操作</b>{op_tags or muted_dash}</div>"
+        + f"<div class='effective-tags'><b>类型</b>{type_tags or muted_dash}</div>"
+        + f"<div class='effective-tags'><b>来源</b>{source_tags or muted_dash}</div>"
+        "</div>"
+    )
+
+
+def _effective_snapshot_rows(out: Path, effective_items: list[dict[str, Any]]) -> list[str]:
+    rows = []
+    for item in reversed(effective_items):
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(item.get('effective_id'))}</code></td>"
+            f"<td>{ui.esc(item.get('base_full_version') or '-')}</td>"
+            f"<td>{ui.esc(', '.join(str(v) for v in item.get('accepted_updates', []) or []) or '-')}</td>"
+            f"<td>{ui.esc(item.get('file_count', 0))}</td>"
+            f"<td>{ui.badge('RISK' if item.get('conflict_count') else 'OK', item.get('conflict_count', 0))}</td>"
+            f"<td>{ui.action_strip([ui.button('Effective', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('Release Preview', _href(item.get('release_preview')), 'secondary', disabled=not bool(item.get('release_preview')), target='_blank')])}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _version_ledger_rows(lib: Mapping[str, Any], effective_items: list[dict[str, Any]]) -> list[str]:
+    rows = []
+    for version in reversed(list(lib.get("versions", []) or [])):
+        version_id = str(version.get("version_id") or version.get("version") or "-")
+        links = _version_links(version)
+        refs = _version_effective_refs(version_id, effective_items)
+        latest_ref = refs[-1] if refs else {}
+        effective_label = str(latest_ref.get("effective_id") or "not included")
+        rows.append(
+            "<tr>"
+            f"<td><b title='{ui.esc(version_id)}'>{ui.esc(version_id)}</b><div class='muted'>{ui.esc(version.get('stage') or '-')}</div></td>"
+            f"<td>{ui.button('Scan', _href(links.get('scan_html')), 'secondary', disabled=not bool(links.get('scan_html')), target='_blank')}</td>"
+            f"<td>{ui.button('Diff', _href(links.get('diff_html')), 'secondary', disabled=not bool(links.get('diff_html')), target='_blank')}</td>"
+            f"<td>{ui.button(effective_label, _href(latest_ref.get('html')), 'primary' if latest_ref else 'secondary', disabled=not bool(latest_ref.get('html')), target='_blank')}</td>"
+            f"<td>{ui.button('Release Preview', _href(latest_ref.get('release_preview')), 'secondary', disabled=not bool(latest_ref.get('release_preview')), target='_blank')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: list[dict[str, Any]], timeline_path: str) -> str:
+    lib_id = str(lib.get("library_id") or lib.get("display_name") or "library")
+    safe = _safe(lib_id)
+    html_path = out / "libraries" / safe / "index.html"
+    versions = list(lib.get("versions", []) or [])
+    latest_effective = _latest_effective_item(effective_items)
+    not_scanned = sum(1 for v in versions if "not_scanned" in _version_tags(v))
+    diff_pending = sum(1 for v in versions if _status_key(v.get("diff_status")) in {"DIFF_PENDING", "DIFF_NOT_READY", "COMPARE_PENDING"})
+    need_bind = sum(1 for v in versions if _relation_status(v) == "NEED_BINDING")
+    body = (
+        _catalog_browser_styles()
+        + ui.panel(
+            "Library Overview",
+            "单库主页负责串联版本、scan、diff、effective 和 release preview；详情报告保持独立页面。",
+            ui.metric_grid([
+                ("Latest Full", _latest_full_version(versions), "完整基线", "PASS"),
+                ("Current Effective", (latest_effective or {}).get("effective_id") or _latest_effective_version(lib, versions), "当前有效组合", "PASS" if latest_effective else "WARNING"),
+                ("Pending Scan", not_scanned, "raw delivery evidence", "WARNING" if not_scanned else "PASS"),
+                ("Pending Diff", diff_pending, "compare evidence", "WARNING" if diff_pending else "PASS"),
+                ("Need Binding", need_bind, "base_full / previous_effective", "WARNING" if need_bind else "PASS"),
+            ])
+            + ui.compact_meta([
+                ("Library", lib_id),
+                ("Vendor", lib.get("vendor") or "-"),
+                ("Path", lib.get("middle_path") or lib.get("library_root") or "-"),
+            ]),
+        )
+        + ui.panel("Effective Stack", "这里只展示 effective 摘要和入口，不嵌入完整 effective HTML。", _effective_summary_panel(out, effective_items))
+        + ui.panel(
+            "Version Ledger",
+            "每个 raw version 的 scan/diff/effective/release-preview 证据链。",
+            ui.filterable_table(
+                f"ledger-{safe}",
+                ["Version", "Scan", "Diff", "Effective", "Release"],
+                _version_ledger_rows(lib, effective_items),
+                "暂无 version",
+                "筛选 version / stage",
+            ),
+        )
+        + ui.collapsible_panel(
+            "Effective Snapshots",
+            "历史 effective 快照只列摘要，完整文件来源表进入独立 Effective 页面查看。",
+            ui.filterable_table(
+                f"effective-{safe}",
+                ["Effective", "Base Full", "Accepted Updates", "Files", "Risk", "Links"],
+                _effective_snapshot_rows(out, effective_items),
+                "暂无 effective snapshot",
+                "筛选 effective / update",
+            ),
+            open=bool(effective_items),
+        )
+        + ui.panel("Evidence Links", "统一证据入口。", ui.action_strip([
+            ui.button("Catalog", _href(out / "index.html"), "secondary", target="_blank"),
+            ui.button("Version Timeline", _href(timeline_path), "primary", target="_blank"),
+            ui.button("Current Effective", _href((latest_effective or {}).get("html")), "secondary", disabled=not bool((latest_effective or {}).get("html")), target="_blank"),
+            ui.button("Release Preview", _href((latest_effective or {}).get("release_preview")), "secondary", disabled=not bool((latest_effective or {}).get("release_preview")), target="_blank"),
+        ]))
+        + ui.collapsible_panel("Commands", "命令集中放置，不挤占版本表。", _command_examples(), open=False)
+    )
+    html = ui.review_page_shell(
+        f"{lib.get('display_name') or lib_id} / Library Detail",
+        "LIBRARY DETAIL",
+        "Catalog 的下钻主页：先看当前有效组合，再核对版本账本和证据链。",
+        body,
+        decision=lib.get("overall_status") or "REVIEW",
+        nav="<a href='../../index.html'>Catalog</a><a class='active' href='#'>Library Detail</a><a href='diff_timeline.html'>Version Timeline</a>",
+        meta=ui.compact_meta([("Versions", len(versions)), ("Effective", len(effective_items)), ("Pending Scan", not_scanned), ("Pending Diff", diff_pending)]),
+    )
+    _write_text(html_path, html)
+    return str(html_path)
+
+
 def _latest_full_version(versions: list[Mapping[str, Any]]) -> str:
     for version in reversed(versions):
         if _is_full_baseline(version):
@@ -425,7 +696,7 @@ def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any
     )
 
 
-def _library_card(out: Path, lib: Mapping[str, Any]) -> str:
+def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[str, Any]]) -> str:
     versions = list(lib.get("versions", []) or [])
     latest = lib.get("latest_version") or (versions[-1].get("version_id") if versions else "-")
     latest_full = _latest_full_version(versions)
@@ -435,27 +706,33 @@ def _library_card(out: Path, lib: Mapping[str, Any]) -> str:
     middle = str(lib.get("middle_path") or lib.get("library_root") or "-")
     stages = sorted({str(v.get("stage") or "unknown") for v in versions})
     tags = _library_tags(lib)
-    timeline_path = _render_library_diff_timeline(out, lib)
+    timeline_path = str(lib.get("diff_timeline_html") or "")
+    home_path = str(lib.get("library_home_html") or "")
+    latest_effective_item = _latest_effective_item(effective_items)
     need_bind = sum(1 for v in versions if _relation_status(v) == "NEED_BINDING")
     not_scanned = sum(1 for v in versions if "not_scanned" in _version_tags(v))
     changed = sum(1 for v in versions if "changed" in _version_tags(v))
     version_rows = "".join(_version_row(lib, v, latest) for v in reversed(versions))
+    library_label = lib.get("display_name") or lib.get("library_name") or lib.get("library_id")
+    empty_versions = "<div class='catalog-empty'>暂无 version</div>"
+    version_list_html = version_rows or empty_versions
     actions = ui.action_strip([
-        ui.button("版本链", _href(timeline_path), "primary", target="_blank"),
-        ui.button("最新扫描", _href((versions[-1].get("links") or {}).get("scan_html") if versions else ""), disabled=not versions or not (versions[-1].get("links") or {}).get("scan_html"), target="_blank"),
-        ui.button("最新差异", _href((versions[-1].get("links") or {}).get("diff_html") if versions else ""), disabled=not versions or not (versions[-1].get("links") or {}).get("diff_html"), target="_blank"),
+        ui.button("进入库主页", _href(home_path), "primary", disabled=not bool(home_path), target="_blank"),
+        ui.button("版本链", _href(timeline_path), "secondary", disabled=not bool(timeline_path), target="_blank"),
+        ui.button("Effective", _href((latest_effective_item or {}).get("html")), "secondary", disabled=not bool((latest_effective_item or {}).get("html")), target="_blank"),
     ])
+    effective_label = str((latest_effective_item or {}).get("effective_id") or latest_effective)
     return (
         f"<section class='library-card' data-overall='{ui.esc(status)}' data-vendor='{ui.esc(vendor)}' data-stages='{ui.esc(','.join(stages))}' data-tags='{ui.esc(','.join(sorted(tags)))}'>"
         "<div class='library-main'>"
-        f"<div><div class='library-title long-token' title='{ui.esc(lib.get('display_name') or lib.get('library_name') or lib.get('library_id'))}'>{ui.esc(lib.get('display_name') or lib.get('library_name') or lib.get('library_id'))}</div><div class='library-path' title='{ui.esc(lib.get('library_id'))}'>{ui.esc(lib.get('library_id') or '-')}</div></div>"
+        f"<div><div class='library-title long-token' title='{ui.esc(library_label)}'>{ui.esc(library_label)}</div><div class='library-path' title='{ui.esc(lib.get('library_id'))}'>{ui.esc(lib.get('library_id') or '-')}</div></div>"
         f"<div><b>{ui.esc(vendor)}</b><div class='library-path' title='{ui.esc(middle)}'>{ui.esc(_short_path(middle, 48))}</div></div>"
         f"<div><span class='muted'>完整基线</span><br><b title='{ui.esc(latest_full)}'>{ui.esc(latest_full)}</b></div>"
-        f"<div><span class='muted'>当前有效</span><br><b title='{ui.esc(latest_effective)}'>{ui.esc(latest_effective)}</b></div>"
+        f"<div><span class='muted'>当前有效</span><br><b title='{ui.esc(effective_label)}'>{ui.esc(effective_label)}</b></div>"
         "<div class='library-status'>"
         f"{ui.badge(status)}<span class='browser-count'>{len(versions)} 版</span>{ui.quiet_badge('NEED_BINDING', need_bind)}{ui.quiet_badge('NOT_SCANNED', not_scanned)}{ui.quiet_badge('CHANGED', changed)}{actions}"
         "</div></div>"
-        f"<details class='version-drawer' {'open' if need_bind else ''}><summary>版本明细 / 默认只展开需绑定库</summary><div class='version-list'>{version_rows or '<div class=\'catalog-empty\'>暂无 version</div>'}</div></details>"
+        f"<details class='version-drawer' {'open' if need_bind else ''}><summary>版本明细 / 默认只展开需绑定库</summary><div class='version-list'>{version_list_html}</div></details>"
         "</section>"
     )
 
@@ -468,12 +745,12 @@ def _group_libraries(libraries: list[Mapping[str, Any]]) -> dict[tuple[str, str]
     return dict(sorted(grouped.items(), key=lambda kv: (kv[0][0], kv[0][1])))
 
 
-def _library_browser(out: Path, state: Mapping[str, Any]) -> str:
+def _library_browser(out: Path, state: Mapping[str, Any], effective_by_lib: Mapping[str, list[dict[str, Any]]]) -> str:
     libraries = list(state.get("libraries", []) or [])
     groups = _group_libraries(libraries)
     group_html = []
     for (vendor, middle), libs in groups.items():
-        cards = "".join(_library_card(out, lib) for lib in libs)
+        cards = "".join(_library_card(out, lib, _effective_items_for_lib(effective_by_lib, lib)) for lib in libs)
         has_attention = any((_library_tags(lib) & {"review", "block", "file_review_pending", "file_review_recommended", "not_scanned", "needs_comparison_confirm"}) for lib in libs)
         group_html.append(
             f"<details class='library-group' {'open' if has_attention else ''}>"
@@ -489,7 +766,7 @@ def _catalog_filter_panel(state: Mapping[str, Any]) -> str:
     stages = sorted({str(v.get("stage") or "unknown") for lib in libraries for v in (lib.get("versions", []) or [])})
     vendor_opts = "<option value='all'>全部 Vendor</option>" + "".join(f"<option value='{ui.esc(v)}'>{ui.esc(v)}</option>" for v in vendors)
     stage_opts = "<option value='all'>全部 Stage</option>" + "".join(f"<option value='{ui.esc(s)}'>{ui.esc(s)}</option>" for s in stages)
-    chips = [("all", "全部"), ("needs_comparison_confirm", "需绑定"), ("not_scanned", "未扫"), ("changed", "有变化"), ("file_review_recommended", "重点"), ("review", "审阅"), ("block", "阻塞"), ("released", "已发布"), ("clear", "正常")]
+    chips = [("all", "全部"), ("needs_comparison_confirm", "需绑定"), ("not_scanned", "未扫"), ("changed", "有变化"), ("file_review_recommended", "重点"), ("review", "审阅"), ("block", "阻塞"), ("clear", "正常")]
     chip_html = "".join(f"<button type='button' class='filter-chip {'active' if k == 'all' else ''}' data-catalog-status-chip='{k}' onclick=\"setCatalogStatusFilter('{k}', this)\">{ui.esc(v)}</button>" for k, v in chips)
     body = (
         "<div class='search'><span>搜索</span><input id='catalog-search' type='search' placeholder='库 / 版本 / vendor / path' oninput='filterCatalogBrowser()'></div>"
@@ -510,6 +787,8 @@ def _task_rows(tasks: Mapping[str, Any], limit: int = 50) -> list[str]:
     for task in tasks.get("tasks", []) or []:
         task_type = str(task.get("task_type") or "")
         command = str(task.get("command") or "")
+        if "release" in task_type.lower() or " release " in f" {command.lower()} ":
+            continue
         if ("file" in task_type.lower() and "diff" in task_type.lower()) or " file-diff " in f" {command} ":
             skipped_file_diff += 1
             continue
@@ -532,10 +811,11 @@ def _summary_metrics(state: Mapping[str, Any], tasks: Mapping[str, Any]) -> list
     libs = list(state.get("libraries", []) or [])
     versions = [v for lib in libs for v in lib.get("versions", []) or []]
     changed = sum(1 for v in versions if "changed" in _version_tags(v))
+    diff_pending = sum(1 for v in versions if _status_key(v.get("diff_status")) in {"DIFF_PENDING", "DIFF_NOT_READY", "COMPARE_PENDING"})
     recommended = sum(1 for v in versions if "file_review_recommended" in _version_tags(v))
     bind = sum(1 for v in versions if _relation_status(v) == "NEED_BINDING")
     not_scanned = sum(1 for v in versions if "not_scanned" in _version_tags(v))
-    return [("库", len(libs), "library count", "PASS"), ("版本", len(versions), "version count", "PASS"), ("需绑定", bind, "base_full / previous_effective", "WARNING" if bind else "PASS"), ("未扫描", not_scanned, "需要 scan 的版本", "WARNING" if not_scanned else "PASS"), ("有变化", changed, "进入版本链查看 comparison", "WARNING" if changed else "PASS"), ("重点文件", recommended, "不是 File Diff 完成度", "WARNING" if recommended else "PASS")]
+    return [("库", len(libs), "library count", "PASS"), ("版本", len(versions), "version count", "PASS"), ("未扫描", not_scanned, "需要 scan 的版本", "WARNING" if not_scanned else "PASS"), ("待对比", diff_pending, "scan 后需要 diff 的版本", "WARNING" if diff_pending else "PASS"), ("需确认", bind, "base_full / previous_effective", "WARNING" if bind else "PASS"), ("有差异", changed, "进入版本链查看 comparison", "WARNING" if changed else "PASS"), ("重点文件", recommended, "Selected Diff 下钻建议", "WARNING" if recommended else "PASS")]
 
 
 def _command_examples() -> str:
@@ -549,6 +829,7 @@ def _catalog_browser_styles() -> str:
 <style>
 .library-main{grid-template-columns:minmax(0,1.3fr) minmax(140px,.8fr) minmax(128px,.7fr) minmax(128px,.7fr) minmax(0,1.05fr)}
 .library-main>div{min-width:0}.library-main b[title]{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.library-title{line-height:1.25}.library-status{grid-column:1/-1;min-width:0;justify-content:flex-start;padding-top:10px;margin-top:2px;border-top:1px dashed var(--line);overflow:visible}.library-status .action-strip{max-width:100%;min-width:0;overflow:visible;white-space:normal;flex-wrap:wrap;padding-bottom:0}.long-token{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}.library-title.long-token,.version-name.long-token{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.version-list{gap:7px}.version-row{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(210px,1fr) minmax(220px,.95fr) minmax(76px,auto);gap:12px;align-items:center;border:1px solid var(--line);background:#fff;border-radius:11px;padding:10px 12px}.version-id-cell{min-width:0}.version-name{font-weight:800;font-size:14px;line-height:1.25}.version-path{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.version-badges{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}.version-badges .badge{max-width:132px}.version-relation{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px;min-width:0}.version-relation span{border:1px solid var(--line);border-radius:8px;background:#f8fafc;padding:5px 7px;min-width:0}.version-relation b{display:block;color:#667085;font-size:11px;line-height:1.2}.version-relation em{display:block;font-style:normal;font-size:12px;color:#344054;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.version-action{text-align:right;min-width:0}.version-action .btn{max-width:100%}.table-wrap td code{white-space:normal;overflow-wrap:anywhere;word-break:break-word}.trace-link-row{min-width:0}.trace-link-row>div{min-width:0}.release-mini{display:inline-flex}.command-example-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.catalog-note{border:1px solid var(--line);border-radius:12px;background:#f8fafc;padding:12px;color:#667085;font-size:13px}@media(max-width:1180px){.library-main{grid-template-columns:1fr}.version-row{grid-template-columns:1fr}.version-action{text-align:left}.version-relation{grid-template-columns:1fr}}
+.effective-summary{display:flex;flex-direction:column;gap:12px}.effective-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.effective-head h3{margin:3px 0 0;font-size:18px;max-width:680px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.effective-stack{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}.effective-chip{flex:0 0 220px;border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:9px}.effective-chip.base{background:#eff6ff;border-color:#bfdbfe}.effective-chip.update{background:#f5f3ff;border-color:#ddd6fe}.effective-chip b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.effective-chip em{display:block;font-size:12px;color:#667085;font-style:normal;margin-top:3px}.effective-tags{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.effective-tags>b{font-size:12px;color:#667085;min-width:44px}.effective-mini{display:flex;gap:8px;align-items:center;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px}.tiny-tag{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px 7px;background:#fff;font-size:12px;color:#344054}
 </style>
 """
 
@@ -575,17 +856,72 @@ def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str
     return str(page)
 
 
+def _write_report_index(out: Path, state: Mapping[str, Any], effective_by_lib: Mapping[str, list[dict[str, Any]]]) -> str:
+    libraries: dict[str, Any] = {}
+    for lib in state.get("libraries", []) or []:
+        lib_id = str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "")
+        effective_items = _effective_items_for_lib(effective_by_lib, lib)
+        versions: dict[str, Any] = {}
+        for version in lib.get("versions", []) or []:
+            version_id = str(version.get("version_id") or version.get("version") or "")
+            links = _version_links(version)
+            refs = _version_effective_refs(version_id, effective_items)
+            versions[version_id] = {
+                "home": _rel_href(out, links.get("version_review_html")),
+                "scan": _rel_href(out, links.get("scan_html")),
+                "diffs": [_rel_href(out, links.get("diff_html"))] if links.get("diff_html") else [],
+                "contributes_to_effective": [str(item.get("effective_id")) for item in refs],
+            }
+        effective = {
+            str(item.get("effective_id")): {
+                "html": _rel_href(out, item.get("html")),
+                "manifest": _rel_href(out, item.get("manifest")),
+                "release_preview": _rel_href(out, item.get("release_preview")),
+                "release_manifest": _rel_href(out, item.get("release_manifest")),
+                "summary": {
+                    "file_count": item.get("file_count", 0),
+                    "component_count": item.get("component_count", 0),
+                    "conflict_count": item.get("conflict_count", 0),
+                    "operation_summary": item.get("operation_summary", {}),
+                    "file_type_summary": item.get("file_type_summary", {}),
+                },
+            }
+            for item in effective_items
+        }
+        libraries[lib_id] = {
+            "home": _rel_href(out, lib.get("library_home_html")),
+            "timeline": _rel_href(out, lib.get("diff_timeline_html")),
+            "versions": versions,
+            "effective": effective,
+        }
+    path = out / "report_index.json"
+    write_json(
+        path,
+        {
+            "schema_version": "report_index.v1",
+            "entry": "index.html",
+            "libraries": libraries,
+        },
+    )
+    return str(path)
+
+
 def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render_library_pages: bool = True, max_attention_items: int = 10, max_report_rows: int = 16) -> dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     catalog = read_json(catalog_json, default={}) or {}
     state = build_review_state(catalog, out_dir=out)
     tasks = build_review_tasks(state)
+    effective_by_lib = _discover_effective_reports(out, list(state.get("libraries", []) or []))
     if render_library_pages:
         for lib in state.get("libraries", []) or []:
             for version in lib.get("versions", []) or []:
                 links = version.setdefault("links", {})
                 links["version_review_html"] = _render_version_page(out, lib, version)
+            timeline_path = _render_library_diff_timeline(out, lib)
+            lib["diff_timeline_html"] = timeline_path
+            lib["library_home_html"] = _render_library_home(out, lib, _effective_items_for_lib(effective_by_lib, lib), timeline_path)
+    report_index = _write_report_index(out, state, effective_by_lib)
     write_json(out / "review_state.json", state)
     write_json(out / "review_tasks.json", tasks)
     body = (
@@ -593,13 +929,13 @@ def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render
         + ui.panel("Catalog 总览", "普通路径：搜索库 → 查看版本链 → 进入 Selected Diff。命令统一放在页面下方示例区。", ui.metric_grid(_summary_metrics(state, tasks)) + "<p class='catalog-note'>File Diff 是 Selected Diff 的文件级下钻入口。</p>")
         + "<div class='catalog-layout'>"
         + f"<div class='catalog-filter-panel'>{_catalog_filter_panel(state)}</div>"
-        + f"<div>{ui.panel('Library Browser', '中文紧凑摘要：只显示版本身份、扫描、关系、基线/前版和一个主动作；不在行内放命令。', _library_browser(out, state))}</div>"
+        + f"<div>{ui.panel('Library Browser', '中文紧凑摘要：只显示库身份、当前有效组合和进入库主页；scan/diff/effective/release preview 由库主页串联。', _library_browser(out, state, effective_by_lib))}</div>"
         + "</div>"
-        + ui.collapsible_panel("Review Tasks", "任务列表只显示原因和类型；执行方式看下方命令示例，避免每行重复占宽。", ui.filterable_table("catalog-task-table", ["优先级", "类型", "Library / Version", "原因", "执行"], _task_rows(tasks), "暂无任务", "筛选 task / reason"), open=False)
+        + ui.collapsible_panel("建议操作 / Suggested Commands", "只保留 scan、diff、relation confirm 建议；release evidence 不作为日常 Catalog 主线。", ui.filterable_table("catalog-task-table", ["优先级", "类型", "Library / Version", "原因", "执行"], _task_rows(tasks), "暂无建议", "筛选 task / reason"), open=False)
         + ui.panel("命令示例", "所有常用命令集中放在这里。Browser 行内只保留状态和入口，不再放待生成命令。", _command_examples())
-        + ui.collapsible_panel("Trace Evidence", "Catalog 原始证据。", ui.trace_link_list([("review_state.json", _href(out / "review_state.json"), "Catalog 页面使用的状态模型"), ("review_tasks.json", _href(out / "review_tasks.json"), "建议动作列表"), ("catalog.json", _href(catalog_json), "原始 catalog")]), open=False)
+        + ui.collapsible_panel("Trace Evidence", "Catalog 原始证据和统一报告索引。", ui.trace_link_list([("report_index.json", _href(report_index), "Catalog / Scan / Diff / Effective / Release Preview 的链接索引"), ("review_state.json", _href(out / "review_state.json"), "Catalog 页面使用的状态模型"), ("review_tasks.json", _href(out / "review_tasks.json"), "建议动作列表"), ("catalog.json", _href(catalog_json), "原始 catalog")]), open=False)
     )
     html = ui.review_page_shell("Library Catalog", "CATALOG", "库版本变化导航入口。Catalog 是地图，不是命令控制台。", body, decision="REVIEW" if tasks.get("tasks") else "PASS", nav="<a class='active' href='#'>Catalog</a><a href='#'>版本链</a><a href='#'>Selected Diff</a><a href='#'>Scan Evidence</a><a href='#'>Release Evidence</a>", meta=ui.compact_meta([("Libraries", len(state.get("libraries", []) or [])), ("Tasks", len(tasks.get("tasks", []) or []))]))
     index = out / "index.html"
     _write_text(index, html)
-    return {"status": "PASS", "index_html": str(index), "review_state": str(out / "review_state.json"), "review_tasks": str(out / "review_tasks.json")}
+    return {"status": "PASS", "index_html": str(index), "review_state": str(out / "review_state.json"), "review_tasks": str(out / "review_tasks.json"), "report_index": report_index}

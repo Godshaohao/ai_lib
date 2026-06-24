@@ -609,42 +609,143 @@ def _diff_review_model(diff: Path, meta: Mapping[str, Any], summary: Mapping[str
         },
     }
 
+def _severity_rank(value: Any) -> int:
+    text = str(value or "").upper()
+    if text in {"BLOCKER", "BLOCK", "ERROR", "FAILED"}:
+        return 0
+    if text in {"WARNING", "WARN", "CHANGED"}:
+        return 1
+    return 2
+
+
+def _view_order_key(view: str) -> tuple[int, str]:
+    key = str(view or "unknown").lower()
+    try:
+        return (VIEW_ORDER.index(key), key)
+    except ValueError:
+        return (len(VIEW_ORDER), key)
+
+
+def _status_label_pair(old_status: Any, new_status: Any, *, changed: bool) -> tuple[str, str]:
+    old = str(old_status or "").strip()
+    new = str(new_status or "").strip()
+    if not old and not new:
+        return "-", "仅文件计数" if changed else "未进入 readiness"
+    if old == new:
+        return old or "-", "状态保持"
+    return f"{old or '-'} → {new or '-'}", "状态变化"
+
+
 def _view_rows(view_diff: Mapping[str, Any]) -> list[str]:
     from lib_guard.render import product_theme as ui
 
     rows = []
-    for item in view_diff.get("views", []) or []:
-        if item.get("changed") is False:
-            continue
-        status = item.get("severity") or item.get("status") or "CHANGED"
+    items = sorted(
+        list(view_diff.get("views", []) or []),
+        key=lambda item: (
+            0 if item.get("changed") else 1,
+            _severity_rank(item.get("severity") or item.get("status")),
+            *_view_order_key(str(item.get("view") or "")),
+        ),
+    )
+    for item in items:
+        changed = bool(item.get("changed"))
+        status = item.get("severity") or ("CHANGED" if changed else "INFO")
+        status_pair, meaning = _status_label_pair(item.get("old_status"), item.get("new_status"), changed=changed)
+        old_count = int(item.get("old_count", 0) or 0)
+        new_count = int(item.get("new_count", 0) or 0)
+        delta = new_count - old_count
+        requirement = str(item.get("requirement") or "file_type").replace("_", " ")
         rows.append(
             "<tr>"
             f"<td><code>{ui.esc(item.get('view') or '-')}</code></td>"
-            f"<td>{ui.esc(item.get('old_status') or '-')} → {ui.esc(item.get('new_status') or '-')}</td>"
-            f"<td>{ui.esc(item.get('old_count', 0))} → {ui.esc(item.get('new_count', 0))}</td>"
+            f"<td>{ui.badge(requirement, requirement)}</td>"
+            f"<td>{ui.esc(status_pair)}</td>"
+            f"<td>{ui.esc(old_count)} → {ui.esc(new_count)} <span class='muted'>({delta:+d})</span></td>"
+            f"<td><span class='muted'>{ui.esc(meaning)}</span></td>"
             f"<td>{ui.badge(status)}</td>"
             "</tr>"
         )
     return rows
 
 
+def _review_mode_label(value: Any, file_type: str) -> str:
+    text = str(value or "").strip().lower()
+    labels = {
+        "manual_pairwise": "建议两两对比",
+        "metadata_only": "只做 metadata",
+        "governance": "治理/归档确认",
+    }
+    if text in labels:
+        return labels[text]
+    if str(file_type or "").lower() in FILE_DIFF_TYPES:
+        return "可两两对比"
+    return "结构计数"
+
+
 def _type_rows(type_diff: Mapping[str, Any]) -> list[str]:
     from lib_guard.render import product_theme as ui
 
     rows = []
-    for file_type, item in sorted((type_diff.get("by_type") or {}).items(), key=lambda kv: (_type_group(kv[0]), kv[0])):
-        if not _type_item_changed(item):
-            continue
+    items = sorted(
+        (type_diff.get("by_type") or {}).items(),
+        key=lambda kv: (
+            0 if _type_item_changed(kv[1]) else 1,
+            _severity_rank(kv[1].get("status")),
+            _type_group(kv[0]),
+            kv[0],
+        ),
+    )
+    for file_type, item in items:
+        changed = _type_item_changed(item)
+        status = item.get("status") or ("CHANGED" if changed else "SAME")
+        added = int(item.get("added_count", 0) or 0)
+        removed = int(item.get("removed_count", 0) or 0)
+        changed_count = int(item.get("changed_count", 0) or 0)
         rows.append(
             "<tr>"
             f"<td>{ui.badge(_type_group(file_type), _type_group(file_type))}</td>"
             f"<td><code>{ui.esc(file_type)}</code></td>"
             f"<td>{ui.esc(item.get('old_count', 0))} → {ui.esc(item.get('new_count', 0))}</td>"
-            f"<td>+{ui.esc(item.get('added_count', 0))} / -{ui.esc(item.get('removed_count', 0))} / ~{ui.esc(item.get('changed_count', 0))}</td>"
-            f"<td>{ui.badge(item.get('status') or 'CHANGED')}</td>"
+            f"<td>+{ui.esc(added)} / -{ui.esc(removed)} / ~{ui.esc(changed_count)}</td>"
+            f"<td>{ui.esc(_review_mode_label(item.get('review_mode'), file_type))}</td>"
+            f"<td>{ui.badge(status)}</td>"
             "</tr>"
         )
     return rows
+
+
+def _structure_overview_panel(view_diff: Mapping[str, Any], type_diff: Mapping[str, Any]) -> str:
+    from lib_guard.render import product_theme as ui
+
+    view_summary = view_diff.get("summary") or {}
+    type_summary = type_diff.get("summary") or {}
+    view_rows = _view_rows(view_diff)
+    type_rows = _type_rows(type_diff)
+    return (
+        "<style>"
+        ".structure-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}"
+        ".structure-card{border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}"
+        ".structure-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:12px 14px;border-bottom:1px solid var(--line);background:#f8fafc}"
+        ".structure-card-head h3{margin:0;font-size:15px}.structure-card-head p{font-size:12px;margin-top:3px}"
+        ".structure-scroll{max-height:492px;overflow:auto;scrollbar-gutter:stable}"
+        ".structure-scroll table{font-size:12px}.structure-scroll th{position:sticky;top:0;z-index:1}.structure-scroll td{padding:8px 10px}"
+        ".structure-kpis{display:flex;gap:7px;flex-wrap:wrap}.structure-kpis span{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:#fff;padding:4px 8px;font-size:12px;color:#344054}"
+        "@media(max-width:1200px){.structure-grid{grid-template-columns:1fr}}"
+        "</style>"
+        "<div class='structure-grid'>"
+        "<section class='structure-card'>"
+        "<div class='structure-card-head'><div><h3>View 全量状态</h3><p>按变化优先排序；默认露出约 10 行，更多在表内滚动。</p></div>"
+        f"<div class='structure-kpis'><span>{ui.esc(view_summary.get('total', len(view_rows)))} views</span><span>{ui.esc(view_summary.get('changed', 0))} changed</span></div></div>"
+        f"<div class='structure-scroll'>{ui.table(['View', '类型', '状态', '数量', '含义', '判断'], view_rows, '暂无 View 信息')}</div>"
+        "</section>"
+        "<section class='structure-card'>"
+        "<div class='structure-card-head'><div><h3>File Type 全量变化</h3><p>说明每类文件是结构计数、metadata，还是建议进入两两对比。</p></div>"
+        f"<div class='structure-kpis'><span>{ui.esc(type_summary.get('new_type_count', len(type_rows)))} types</span><span>{ui.esc(type_summary.get('changed_types', 0))} changed</span></div></div>"
+        f"<div class='structure-scroll'>{ui.table(['领域', 'file_type', '数量', '增/删/改', '核查方式', '判断'], type_rows, '暂无 file_type 信息')}</div>"
+        "</section>"
+        "</div>"
+    )
 
 
 def _release_evidence_rows(release_evidence: Mapping[str, Any]) -> list[str]:
@@ -725,17 +826,16 @@ def render_diff_html(diff_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             ])
             + ui.compact_meta([("Mode", review.get("mode")), ("Diff Dir", diff), ("Review JSON", out / "comparison_review.json")]),
         )
+        + ui.panel("结构概览", "优先看 view 是否齐、file_type 是否异常增长，再决定是否进入 File Diff。View 和 file_type 都显示全量，默认露出 10 行。", _structure_overview_panel(view_diff, type_diff))
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["review_level"])
         + ui.panel("变化影响域", "面向使用者：先看变更影响哪个领域，再决定是否打开 File Diff。", ui.impact_grid(review["impact"]))
         + ui.panel("重点 File Diff 建议", "File Diff 是重点变化放大镜，不是全量差异完成度。只对 P0/P1 关键视图生成命令。", ui.filterable_table("recommend-file-diff-table", ["优先级", "Type", "Old", "New", "原因", "命令", "状态", "结果"], rec_rows, "暂无重点 File Diff 建议", "筛选 type / file / status"))
         + ui.collapsible_panel("候选变化 / 已折叠", "候选变化不默认生成命令，避免错误 base 或大规模重组导致上千条无效 File Diff。", ui.metric_grid([("候选变化", recommendation.get("candidate_total", 0), "changed/candidate files", recommendation.get("comparison_quality")), ("已折叠", recommendation.get("suppressed_total", 0), "未进入重点队列", "WARNING" if recommendation.get("suppressed_total") else "PASS"), ("策略", recommendation.get("policy"), "key view first", "INFO")]) + ui.table(["Reason", "Count"], [f"<tr><td>{ui.esc(x.get('reason'))}</td><td>{ui.esc(x.get('count'))}</td></tr>" for x in recommendation.get("suppressed_summary", [])], "暂无折叠项"), open=False)
         + ui.panel("优先关注", "只列出会影响继续审阅的事项。", ui.attention_items(attention))
         + ui.collapsible_panel(
-            "结构证据",
-            "view/type/release evidence/issue 等原始结构变化，默认折叠。",
-            ui.collapsible_panel("View 变化", "view presence delta", ui.table(["View", "Status", "Count", "Severity"], _view_rows(view_diff), "暂无 View 变化"), open=False)
-            + ui.collapsible_panel("file_type 变化", "按领域归类的文件结构变化", ui.table(["领域", "file_type", "数量", "变化", "状态"], _type_rows(type_diff), "暂无 file_type 变化"), open=False)
-            + ui.collapsible_panel("Release Evidence 变化", "release note / waiver / README", ui.table(["Role", "数量", "变化", "状态"], _release_evidence_rows(release_evidence), "暂无 release evidence 变化"), open=False)
+            "补充证据",
+            "Release evidence、diff issue 和原始 JSON 链接默认折叠；结构概览已经前置展示。",
+            ui.collapsible_panel("Release Evidence 变化", "release note / waiver / README", ui.table(["Role", "数量", "变化", "状态"], _release_evidence_rows(release_evidence), "暂无 release evidence 变化"), open=False)
             + ui.collapsible_panel("Diff Issues", "原始 diff issue", ui.filterable_table("diff-issues", ["Severity", "Category", "Detail"], _issue_rows(list(issues.get("issues") or [])), "暂无 issue", "筛选 issue"), open=False)
             + ui.trace_link_list([
                 ("comparison_review.json", _file_href(out / "comparison_review.json"), "本页面使用的变化导航模型"),

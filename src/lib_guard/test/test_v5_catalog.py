@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -196,7 +197,7 @@ class V5CatalogTest(unittest.TestCase):
             self.assertIn("Library Catalog", html)
             self.assertIn("Library Browser", html)
             self.assertIn("Catalog 总览", html)
-            self.assertIn("Review Tasks", html)
+            self.assertIn("Suggested Commands", html)
             self.assertIn("Trace Evidence", html)
             self.assertIn("Catalog 是地图", html)
             self.assertIn("File Diff 是 Selected Diff", html)
@@ -419,18 +420,27 @@ class V5CatalogTest(unittest.TestCase):
             self.assertEqual(version["scan"]["status"], "SCANNED")
             self.assertEqual(version["scan"]["scan_html"], str(scan_html))
 
-            render_catalog_html(catalog_path, out / "html")
-            html = (out / "html" / "index.html").read_text(encoding="utf-8")
-            self.assertIn(str(scan_html).replace("\\", "/"), html)
+            result = render_catalog_html(catalog_path, out / "html")
+            html_out = out / "html"
+            html = (html_out / "index.html").read_text(encoding="utf-8")
+            self.assertIn("report_index.json", html)
             self.assertNotIn(str(console_html), html)
-            self.assertIn(str(diff_html).replace("\\", "/"), html)
             self.assertIn("Release", html)
+            report_index = json.loads(Path(result["report_index"]).read_text(encoding="utf-8"))
+            report_blob = json.dumps(report_index, ensure_ascii=False)
+            self.assertIn(Path(os.path.relpath(scan_html, html_out)).as_posix(), report_blob)
+            self.assertIn(Path(os.path.relpath(diff_html, html_out)).as_posix(), report_blob)
             review_state = json.loads((out / "html" / "review_state.json").read_text(encoding="utf-8"))
             review_version = review_state["libraries"][0]["versions"][0]
             self.assertEqual(review_version["scan_status"], "SCAN_PASS")
             self.assertEqual(review_version["diff_status"], "DIFF_REVIEW")
             self.assertEqual(review_version["release_status"], "RELEASE_READY")
-            version_html = (out / "html" / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
+            library_html = (html_out / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("Version Ledger", library_html)
+            self.assertIn("Effective Stack", library_html)
+            version_html = (html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
+            self.assertIn(str(scan_html).replace("\\", "/"), version_html)
+            self.assertIn(str(diff_html).replace("\\", "/"), version_html)
             self.assertIn("Selected Diff", version_html)
 
     def test_policy_path_rules_and_inventory_evidence_reduce_misclassification(self) -> None:

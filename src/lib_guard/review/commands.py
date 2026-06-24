@@ -45,18 +45,12 @@ def derive_next_action(version: Mapping[str, Any]) -> dict[str, Any]:
             "next_command": str((task or {}).get("command") or ""),
             "next_reason": "diff 发现内容级文件变化，release 前建议完成 pairwise file-diff。",
         }
-    if version.get("release_status") == "RELEASE_NOT_CHECKED":
-        return {
-            "next_action": "RELEASE_CHECK",
-            "next_command": f"lg release {library} {version_id} --check-first",
-            "next_reason": "scan/diff evidence 已具备，需要执行发布前检查。",
-        }
     if version.get("release_status") == "RELEASE_READY":
         return {
-            "next_action": "RELEASE_APPLY",
-            "next_command": f"lg release {library} {version_id} --check-first --apply",
-            "next_reason": "发布检查已通过，可以显式 apply。",
+            "next_action": "RELEASE_REVIEW",
+            "next_command": "",
+            "next_reason": "该版本已有 release evidence，需要进入 Release Review 单独确认。",
         }
     if version.get("release_status") == "RELEASE_APPLIED":
         return {"next_action": "DONE", "next_command": "", "next_reason": "该版本已有发布结果。"}
-    return {"next_action": "MANUAL_REVIEW", "next_command": "", "next_reason": "当前状态需要人工判断下一步。"}
+    return {"next_action": "REVIEW_READY", "next_command": "", "next_reason": "Scan/Diff evidence 已就绪，可进入版本对比审阅。"}

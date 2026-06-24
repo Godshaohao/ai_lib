@@ -19,11 +19,11 @@ def build_review_tasks(review_state: Mapping[str, Any]) -> dict[str, Any]:
                 "RUN_SCAN": "RUN_SCAN",
                 "RUN_DIFF": "RUN_DIFF",
                 "RUN_PAIRWISE": "PAIRWISE_DIFF",
-                "RELEASE_CHECK": "RELEASE_CHECK",
-                "RELEASE_APPLY": "RELEASE_APPLY",
                 "FIX_SCAN_ISSUE": "MANUAL_REVIEW",
                 "MANUAL_REVIEW": "MANUAL_REVIEW",
             }.get(str(action), "MANUAL_REVIEW")
+            if task_type not in {"CONFIRM_VERSION_RELATION", "RUN_SCAN", "RUN_DIFF", "PAIRWISE_DIFF", "MANUAL_REVIEW"}:
+                continue
             tasks.append(
                 {
                     "task_id": f"task_{lib.get('display_name')}_{version.get('version_id')}_{task_type}".replace("/", "_").replace(" ", "_"),

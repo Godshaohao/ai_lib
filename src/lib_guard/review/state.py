@@ -123,7 +123,34 @@ def _release_result(version: Mapping[str, Any]) -> Mapping[str, Any]:
     return {}
 
 
+def _has_release_evidence(version: Mapping[str, Any]) -> bool:
+    release = version.get("release", {}) or {}
+    release_status = str(version.get("release_status") or "").upper()
+    if version.get("release_candidate") or version.get("selected_for_release"):
+        return True
+    if release_status and release_status not in {"UNKNOWN", "RELEASE_NOT_CHECKED", "RELEASE_NOT_APPLICABLE", "NOT_APPLICABLE", "NONE"}:
+        return True
+    for key in [
+        "status",
+        "check_status",
+        "link_status",
+        "release_html",
+        "release_dir",
+        "manifest_json",
+        "postcheck_json",
+        "release_result",
+        "link_json",
+        "check_json",
+    ]:
+        value = release.get(key)
+        if value not in (None, "", "UNKNOWN", "RELEASE_NOT_CHECKED", "RELEASE_NOT_APPLICABLE", "NOT_APPLICABLE", "NONE"):
+            return True
+    return bool(_release_result(version))
+
+
 def _status_release(version: Mapping[str, Any]) -> str:
+    if not _has_release_evidence(version):
+        return "RELEASE_NOT_APPLICABLE"
     result = _release_result(version)
     raw = str(result.get("status") or (version.get("release", {}) or {}).get("status") or (version.get("release", {}) or {}).get("check_status") or "").upper()
     if raw in {"APPLIED", "DONE", "FORCED_DONE"}:
@@ -152,7 +179,8 @@ def _catalog_status(version: Mapping[str, Any]) -> str:
 def _overall(scan: str, diff: str, pairwise: str, release: str, catalog: str) -> str:
     if catalog in {"NEED_CONFIRM", "UNKNOWN_STAGE"}:
         return "REVIEW"
-    if scan in {"SCAN_BLOCK", "SCAN_FAILED"} or diff in {"DIFF_BLOCK", "DIFF_FAILED"} or pairwise == "PAIRWISE_FAILED" or release in {"RELEASE_BLOCKED", "RELEASE_VERIFY_FAILED"}:
+    release_blocks = release not in {"RELEASE_NOT_APPLICABLE", "RELEASE_NOT_CHECKED"} and release in {"RELEASE_BLOCKED", "RELEASE_VERIFY_FAILED"}
+    if scan in {"SCAN_BLOCK", "SCAN_FAILED"} or diff in {"DIFF_BLOCK", "DIFF_FAILED"} or pairwise == "PAIRWISE_FAILED" or release_blocks:
         return "BLOCK"
     if diff == "DIFF_REVIEW" and pairwise in {"PAIRWISE_PENDING", "PAIRWISE_PARTIAL"}:
         return "REVIEW"
