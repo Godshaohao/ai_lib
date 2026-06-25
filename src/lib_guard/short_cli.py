@@ -53,6 +53,8 @@ def write_default_config(workspace: str | Path, *, raw_root: str | Path | None =
         f"diff: {root / 'diff'}",
         f"file_diff: {root / 'file_diff'}",
         f"release_root: {root / 'release_area'}",
+        f"versions: {root / 'config' / 'library_versions.tsv'}",
+        f"actions_dir: {root / 'actions'}",
         f"library_type: {library_type}",
         "mode: signature",
         "parse_jobs: 8",
@@ -104,6 +106,9 @@ def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[st
     cfg.setdefault("config_dir", str(path.parent / "config"))
     cfg.setdefault("library_list", str(Path(cfg["config_dir"]) / "library.list"))
     cfg.setdefault("library_catalog", str(Path(cfg["config_dir"]) / "library_catalog.yml"))
+    cfg.setdefault("library_versions", cfg.get("versions") or str(Path(cfg["config_dir"]) / "library_versions.tsv"))
+    cfg.setdefault("versions", cfg["library_versions"])
+    cfg.setdefault("actions_dir", str(path.parent / "actions"))
     cfg.setdefault("library_type", "ip")
     if "catalog_policy" not in cfg:
         library_catalog = Path(cfg["library_catalog"])
@@ -114,6 +119,114 @@ def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[st
     cfg.setdefault("mode", "signature")
     cfg.setdefault("parse_jobs", "8")
     return cfg
+
+
+def _safe_path_name(value: str) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in text).strip("_") or "item"
+
+
+def _read_tsv(path: str | Path) -> list[dict[str, str]]:
+    p = Path(path)
+    if not p.exists():
+        return []
+    lines = [line for line in p.read_text(encoding="utf-8").splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not lines:
+        return []
+    header = [item.strip() for item in lines[0].split("\t")]
+    rows: list[dict[str, str]] = []
+    for line in lines[1:]:
+        values = line.split("\t")
+        row = {key: values[idx].strip() if idx < len(values) else "" for idx, key in enumerate(header)}
+        rows.append(row)
+    return rows
+
+
+def _version_ref_map(cfg: dict[str, str], library: str) -> dict[str, str]:
+    refs: dict[str, str] = {}
+    paths = [
+        cfg.get("library_versions") or "",
+        cfg.get("versions") or "",
+        str(Path(cfg["workspace"]) / "configs" / "library_versions.tsv"),
+        str(Path(cfg["workspace"]) / "config" / "library_versions.tsv"),
+    ]
+    seen_paths: set[str] = set()
+    rows: list[dict[str, str]] = []
+    for path in paths:
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        rows.extend(_read_tsv(path))
+    for row in rows:
+        if row.get("library_id") not in {library, f"{cfg.get('library_type', 'ip')}/{library}"}:
+            continue
+        version_id = row.get("version_id") or row.get("version")
+        if not version_id:
+            continue
+        refs[version_id] = version_id
+        if row.get("version_ref"):
+            refs[row["version_ref"]] = version_id
+    return refs
+
+
+def _review_action_path(cfg: dict[str, str], library: str) -> Path:
+    actions_dir = Path(cfg.get("actions_dir") or Path(cfg["workspace"]) / "actions")
+    candidates = [
+        actions_dir / f"{library}.action",
+        actions_dir / f"{_safe_path_name(library)}.action",
+        Path(cfg["workspace"]) / "configs" / "actions" / f"{library}.action",
+        Path(cfg["workspace"]) / "configs" / "actions" / f"{_safe_path_name(library)}.action",
+        Path(cfg["workspace"]) / "work" / "actions" / f"{library}.action",
+        Path(cfg["workspace"]) / "work" / "actions" / f"{_safe_path_name(library)}.action",
+        actions_dir / f"{library}.review",
+        actions_dir / f"{_safe_path_name(library)}.review",
+        Path(cfg["workspace"]) / "configs" / "actions" / f"{library}.review",
+        Path(cfg["workspace"]) / "configs" / "actions" / f"{_safe_path_name(library)}.review",
+        Path(cfg["workspace"]) / "work" / "actions" / f"{library}.review",
+        Path(cfg["workspace"]) / "work" / "actions" / f"{_safe_path_name(library)}.review",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(f"action file not found for {library}: {candidates[0]}")
+
+
+def _parse_review_actions(path: Path) -> dict[str, Any]:
+    actions: dict[str, Any] = {"redo_all": False, "effects": [], "scans": [], "diffs": [], "releases": []}
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        verb = parts[0]
+        args = parts[1:]
+        if verb == "@ALL":
+            if args == ["redo"]:
+                actions["redo_all"] = True
+                continue
+            raise ValueError(f"{path}:{lineno}: @ALL only supports 'redo'")
+        if verb == "@effect":
+            if len(args) < 2:
+                raise ValueError(f"{path}:{lineno}: @effect requires a name and at least one raw version")
+            actions["effects"].append({"name": args[0], "versions": args[1:], "force": False})
+            continue
+        if verb in {"@scan", "@rescan"}:
+            if not args:
+                raise ValueError(f"{path}:{lineno}: {verb} requires auto or raw versions")
+            actions["scans"].append({"versions": args, "force": verb == "@rescan"})
+            continue
+        if verb in {"@diff", "@rediff"}:
+            if len(args) != 3:
+                raise ValueError(f"{path}:{lineno}: {verb} requires OLD NEW NAME")
+            actions["diffs"].append({"old": args[0], "new": args[1], "name": args[2], "force": verb == "@rediff"})
+            continue
+        if verb in {"@release", "@rerelease", "@preview", "@repreview"}:
+            if len(args) != 1:
+                raise ValueError(f"{path}:{lineno}: {verb} requires one target")
+            actions["releases"].append({"target": args[0], "force": verb in {"@rerelease", "@repreview"}})
+            continue
+        raise ValueError(f"{path}:{lineno}: unsupported action {verb}")
+    return actions
 
 
 def _catalog_data(cfg: dict[str, str]) -> dict[str, Any]:
@@ -232,6 +345,13 @@ def _build_parser() -> ArgumentParser:
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
     lg.csh fd ucie stable_20250608 model/ucie.ibs --base initial_20250601
     lg.csh fd ucie stable_20250608 touch/chan.s2p --type snp
+    lg.csh action ucie
+
+  Action file example ($WORK/actions/ucie.action):
+    @effect rec_20260624 stable_20260601 adhoc_01 adhoc_02
+    @scan auto final_20260625
+    @diff current rec_20260624 main
+    @release rec_20260624
 
   PowerShell:
     lg.ps1 init $WORK --raw-root $RAW
@@ -247,6 +367,7 @@ def _build_parser() -> ArgumentParser:
     lg.ps1 cmp ucie stable_20250608
     lg.ps1 cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
     lg.ps1 fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
+    lg.ps1 action ucie
 
   Dry-run / without cd:
     setenv LIB_GUARD_CONFIG $WORK/lib_guard.yml
@@ -347,6 +468,10 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--force-reason")
     p.add_argument("--no-verify", action="store_true")
     p.add_argument("--no-render", action="store_true")
+
+    p = sub.add_parser("action", aliases=["act", "review"], help="Run one library action file from actions/<library>.action")
+    p.add_argument("library")
+    p.add_argument("--action", help="Explicit action file path. Default: $WORK/actions/<library>.action")
     return parser
 
 
@@ -531,6 +656,189 @@ def _scan_library_help(library: str) -> str:
         f"  lg.csh scan {library} --stage stable --missing"
     )
 
+
+def _find_version_in_catalog(cfg: dict[str, str], library: str, version: str) -> dict[str, Any] | None:
+    try:
+        lib = _find_library(_catalog_data(cfg), library)
+        return _find_version(lib, version)
+    except Exception:
+        return None
+
+
+def _scan_evidence_exists(cfg: dict[str, str], library: str, version: str) -> bool:
+    item = _find_version_in_catalog(cfg, library, version)
+    if not item:
+        return False
+    scan_dir = ((item.get("scan") or {}).get("scan_dir") or item.get("scan_dir"))
+    return bool(scan_dir and Path(str(scan_dir)).exists())
+
+
+def _library_report_key(cfg: dict[str, str], library: str) -> str:
+    try:
+        lib = _find_library(_catalog_data(cfg), library)
+        return _safe_path_name(str(lib.get("library_id") or lib.get("library_name") or library))
+    except Exception:
+        return _safe_path_name(library)
+
+
+def _effective_dir(cfg: dict[str, str], library: str, effective_id: str) -> Path:
+    return Path(cfg["catalog_html"]) / "libraries" / _library_report_key(cfg, library) / "effective" / _safe_path_name(effective_id)
+
+
+def _compare_dir(cfg: dict[str, str], library: str, compare_id: str) -> Path:
+    return Path(cfg["catalog_html"]) / "libraries" / _library_report_key(cfg, library) / "compare" / _safe_path_name(compare_id)
+
+
+def _current_effective_id(cfg: dict[str, str], library: str) -> str | None:
+    current_path = Path(cfg["catalog_html"]) / "libraries" / _library_report_key(cfg, library) / "effective" / "current_effective.json"
+    if not current_path.exists():
+        return None
+    try:
+        data = json.loads(current_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return str(data.get("current_effective_id") or "") or None
+
+
+def _resolve_review_version(token: str, refs: dict[str, str]) -> str:
+    return refs.get(token, token)
+
+
+def _review_effect_versions(actions: dict[str, Any], refs: dict[str, str]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for item in actions.get("effects", []) or []:
+        result[str(item["name"])] = [_resolve_review_version(str(v), refs) for v in item.get("versions", [])]
+    return result
+
+
+def _review_target(token: str, cfg: dict[str, str], library: str, refs: dict[str, str], effect_names: set[str]) -> str:
+    if ":" in token:
+        return token
+    if token == "current":
+        current = _current_effective_id(cfg, library)
+        return f"effective:{current or 'current'}"
+    if token in effect_names:
+        return f"effective:{token}"
+    version = _resolve_review_version(token, refs)
+    if version != token or _find_version_in_catalog(cfg, library, version):
+        return f"raw:{version}"
+    return f"effective:{token}"
+
+
+def _review_commands(cfg: dict[str, str], args: Any) -> list[list[str]]:
+    action_path = Path(args.action) if getattr(args, "action", None) else _review_action_path(cfg, args.library)
+    actions = _parse_review_actions(action_path)
+    refs = _version_ref_map(cfg, args.library)
+    effect_versions = _review_effect_versions(actions, refs)
+    effect_names = set(effect_versions)
+    redo_all = bool(actions.get("redo_all"))
+    commands: list[list[str]] = []
+    queued_normal_scans: set[str] = set()
+
+    def add_scan(version: str, *, force: bool) -> None:
+        if not force and version in queued_normal_scans:
+            return
+        if not force and _scan_evidence_exists(cfg, args.library, version):
+            return
+        if not force:
+            queued_normal_scans.add(version)
+        commands.append(_scan_run_command(cfg, args.library, version))
+
+    for scan in actions.get("scans", []) or []:
+        force = redo_all or bool(scan.get("force"))
+        for token in scan.get("versions", []) or []:
+            if token == "auto":
+                for versions in effect_versions.values():
+                    for version in versions:
+                        add_scan(version, force=force)
+            else:
+                add_scan(_resolve_review_version(str(token), refs), force=force)
+
+    for effect in actions.get("effects", []) or []:
+        name = str(effect["name"])
+        versions = effect_versions[name]
+        if not versions:
+            continue
+        out_dir = _effective_dir(cfg, args.library, name)
+        manifest = out_dir / "effective_manifest.json"
+        force = redo_all or bool(effect.get("force"))
+        if manifest.exists() and not force:
+            continue
+        command = [
+            "effective",
+            "build",
+            "--catalog",
+            cfg["catalog"],
+            "--library",
+            args.library,
+            "--base-full",
+            versions[0],
+            "--effective-id",
+            name,
+            "--out",
+            str(manifest),
+            "--html",
+            str(out_dir / "index.html"),
+        ]
+        for version in versions[1:]:
+            command.extend(["--include", version])
+        commands.append(command)
+
+    for diff in actions.get("diffs", []) or []:
+        name = str(diff["name"])
+        out_dir = _compare_dir(cfg, args.library, name)
+        force = redo_all or bool(diff.get("force"))
+        if (out_dir / "compare_manifest.json").exists() and not force:
+            continue
+        commands.append(
+            [
+                "effective",
+                "compare",
+                "--catalog",
+                cfg["catalog"],
+                "--library",
+                args.library,
+                "--old",
+                _review_target(str(diff["old"]), cfg, args.library, refs, effect_names),
+                "--new",
+                _review_target(str(diff["new"]), cfg, args.library, refs, effect_names),
+                "--out-dir",
+                str(out_dir),
+                "--html",
+                str(out_dir / "index.html"),
+                "--compare-id",
+                name,
+                "--search-root",
+                cfg["catalog_html"],
+            ]
+        )
+
+    for release in actions.get("releases", []) or []:
+        target = str(release["target"])
+        effective_id = target if target in effect_names else target.replace("effective:", "")
+        out_dir = _effective_dir(cfg, args.library, effective_id)
+        release_dir = out_dir / "release_preview"
+        force = redo_all or bool(release.get("force"))
+        if (release_dir / "release_manifest.json").exists() and not force:
+            continue
+        commands.append(
+            [
+                "effective",
+                "release-preview",
+                "--effective",
+                str(out_dir / "effective_manifest.json"),
+                "--release-root",
+                cfg["release_root"],
+                "--release-id",
+                f"release_{effective_id}",
+                "--out-dir",
+                str(release_dir),
+                "--html",
+                str(release_dir / "index.html"),
+            ]
+        )
+    return commands
+
 def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> list[list[str]]:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -557,6 +865,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         ]
     if args.short_command == "override":
         return [_override_command(cfg, args)]
+    if args.short_command in {"action", "act", "review"}:
+        return _review_commands(cfg, args)
     if args.short_command == "scan":
         with_evidence = bool(getattr(args, "with_evidence", False))
         if args.library and args.version:

@@ -1,0 +1,12 @@
+# One-library action file.
+# Existing scan/diff/effective/release outputs are skipped by default.
+# Use @rescan, @rediff, @rerelease, or @ALL redo to rebuild existing outputs.
+
+@effect rec_20260624 lib1 lib2 lib3
+
+@scan auto lib4
+
+@diff current rec_20260624 main
+@diff rec_20260624 lib4 final_check
+
+@release rec_20260624

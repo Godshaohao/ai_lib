@@ -1,0 +1,5 @@
+library_id	version_ref	version_id
+ucie	lib1	stable_20260601
+ucie	lib2	adhoc_01
+ucie	lib3	adhoc_02
+ucie	lib4	final_20260625

@@ -1441,6 +1441,149 @@ class V5ScanPipelineTest(unittest.TestCase):
         self.assertIn("alias: cmp", help_text)
         self.assertIn("waiver ibis pwl snp cpm", help_text)
 
+    def test_short_cli_action_file_skips_existing_and_supports_redo_verbs(self) -> None:
+        from lib_guard.short_cli import build_cli_commands, write_default_config
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            raw.mkdir()
+            write_default_config(workspace, raw_root=raw)
+            config_dir = workspace / "config"
+            config_dir.mkdir(exist_ok=True)
+            actions = workspace / "actions"
+            actions.mkdir()
+            catalog_dir = workspace / "catalog"
+            existing_scan = workspace / "scan_out" / "ucie" / "stable_20260601"
+            existing_scan.mkdir(parents=True)
+            catalog_dir.mkdir()
+            (catalog_dir / "catalog.json").write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_type": "ip",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20260601",
+                                        "version_key": "ip/ucie/stable_20260601",
+                                        "raw_path": str(raw / "ucie" / "stable_20260601"),
+                                        "scan": {"scan_dir": str(existing_scan), "status": "PASS"},
+                                    },
+                                    {
+                                        "version_id": "adhoc_01",
+                                        "version_key": "ip/ucie/adhoc_01",
+                                        "raw_path": str(raw / "ucie" / "adhoc_01"),
+                                        "scan": {"status": "NOT_SCANNED"},
+                                    },
+                                    {
+                                        "version_id": "final_20260625",
+                                        "version_key": "ip/ucie/final_20260625",
+                                        "raw_path": str(raw / "ucie" / "final_20260625"),
+                                        "scan": {"status": "NOT_SCANNED"},
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (config_dir / "library_versions.tsv").write_text(
+                "library_id\tversion_ref\tversion_id\n"
+                "ucie\tlib1\tstable_20260601\n"
+                "ucie\tlib2\tadhoc_01\n"
+                "ucie\tlib3\tfinal_20260625\n",
+                encoding="utf-8",
+            )
+            (actions / "ucie.action").write_text(
+                "@effect rec_20260624 lib1 lib2\n"
+                "@scan auto lib3\n"
+                "@rescan lib1\n"
+                "@diff current rec_20260624 main\n"
+                "@rediff rec_20260624 lib3 final_check\n"
+                "@release rec_20260624\n"
+                "@rerelease rec_20260624\n",
+                encoding="utf-8",
+            )
+
+            commands = build_cli_commands(["action", "ucie"], cwd=workspace)
+            rendered = [" ".join(cmd) for cmd in commands]
+
+            self.assertTrue(any("run --catalog" in cmd and "--version adhoc_01" in cmd for cmd in rendered))
+            self.assertTrue(any("run --catalog" in cmd and "--version final_20260625" in cmd for cmd in rendered))
+            self.assertTrue(any("run --catalog" in cmd and "--version stable_20260601" in cmd for cmd in rendered))
+            self.assertEqual(sum(1 for cmd in rendered if "run --catalog" in cmd and "--version stable_20260601" in cmd), 1)
+            self.assertTrue(any("effective build" in cmd and "--effective-id rec_20260624" in cmd for cmd in rendered))
+            self.assertTrue(any("effective compare" in cmd and "--compare-id main" in cmd for cmd in rendered))
+            self.assertTrue(any("effective compare" in cmd and "--compare-id final_check" in cmd for cmd in rendered))
+            self.assertEqual(sum(1 for cmd in rendered if "effective release-preview" in cmd), 2)
+
+    def test_short_cli_action_all_redo_forces_every_action(self) -> None:
+        from lib_guard.short_cli import build_cli_commands, write_default_config
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            raw.mkdir()
+            write_default_config(workspace, raw_root=raw)
+            actions = workspace / "actions"
+            actions.mkdir()
+            catalog_dir = workspace / "catalog"
+            catalog_dir.mkdir()
+            existing_scan = workspace / "scan_out" / "ucie" / "stable_20260601"
+            existing_scan.mkdir(parents=True)
+            effective_dir = catalog_dir / "html" / "libraries" / "ip_ucie" / "effective" / "rec_20260624"
+            release_dir = effective_dir / "release_preview"
+            compare_dir = catalog_dir / "html" / "libraries" / "ip_ucie" / "compare" / "main"
+            release_dir.mkdir(parents=True)
+            compare_dir.mkdir(parents=True)
+            (effective_dir / "effective_manifest.json").write_text("{}", encoding="utf-8")
+            (release_dir / "release_manifest.json").write_text("{}", encoding="utf-8")
+            (compare_dir / "compare_manifest.json").write_text("{}", encoding="utf-8")
+            (catalog_dir / "catalog.json").write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_type": "ip",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20260601",
+                                        "version_key": "ip/ucie/stable_20260601",
+                                        "raw_path": str(raw / "ucie" / "stable_20260601"),
+                                        "scan": {"scan_dir": str(existing_scan), "status": "PASS"},
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (actions / "ucie.action").write_text(
+                "@ALL redo\n"
+                "@effect rec_20260624 stable_20260601\n"
+                "@scan auto\n"
+                "@diff current rec_20260624 main\n"
+                "@release rec_20260624\n",
+                encoding="utf-8",
+            )
+
+            commands = build_cli_commands(["action", "ucie"], cwd=workspace)
+            rendered = [" ".join(cmd) for cmd in commands]
+
+            self.assertTrue(any("run --catalog" in cmd and "--version stable_20260601" in cmd for cmd in rendered))
+            self.assertTrue(any("effective build" in cmd and "--effective-id rec_20260624" in cmd for cmd in rendered))
+            self.assertTrue(any("effective compare" in cmd and "--compare-id main" in cmd for cmd in rendered))
+            self.assertTrue(any("effective release-preview" in cmd for cmd in rendered))
+
     def test_catalog_workflow_does_not_trigger_summary_rebuild(self) -> None:
         import inspect
 

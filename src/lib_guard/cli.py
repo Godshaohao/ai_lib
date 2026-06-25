@@ -15,7 +15,7 @@ This CLI keeps scan, render, release, update, catalog, and diff boundaries expli
 
 from __future__ import annotations
 
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser, Namespace, REMAINDER
 from typing import Any
 import importlib
 import logging
@@ -82,6 +82,12 @@ run_update_file = _lazy_command("lib_guard.cli_commands.update", "run_update_fil
 run_update_type = _lazy_command("lib_guard.cli_commands.update", "run_update_type")
 run_version_list = _lazy_command("lib_guard.cli_commands.version", "run_version_list")
 run_version_register = _lazy_command("lib_guard.cli_commands.version", "run_version_register")
+
+
+def run_effective_command(args: Namespace) -> int:
+    from lib_guard.effective.cli import main as effective_main
+
+    return int(effective_main(list(args.effective_args or [])))
 
 
 def build_scan_status(*args: Any, **kwargs: Any) -> Any:
@@ -389,6 +395,12 @@ def add_library_parser(subparsers: Any) -> None:
     p.set_defaults(func=run_library_apply)
 
 
+def add_effective_parser(subparsers: Any) -> None:
+    p = subparsers.add_parser("effective", help="Effective/recommendation manifest operations")
+    p.add_argument("effective_args", nargs=REMAINDER)
+    p.set_defaults(func=run_effective_command)
+
+
 def add_catalog_parser(subparsers: Any) -> None:
     root = subparsers.add_parser("catalog", help="Discover raw library assets and render catalog HTML")
     sp = root.add_subparsers(dest="catalog_cmd", required=True)
@@ -626,6 +638,7 @@ def build_parser() -> ArgumentParser:
     add_diff_parser(subparsers)
     add_file_diff_parser(subparsers)
     add_library_parser(subparsers)
+    add_effective_parser(subparsers)
     add_catalog_parser(subparsers)
     add_workflow_parsers(subparsers)
     add_version_parser(subparsers)

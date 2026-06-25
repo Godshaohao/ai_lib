@@ -46,7 +46,7 @@ raw library
 ```text
 configs/
   release_policy.json       release 准入策略
-  summary_policy.json       summary 重建影响关系
+  summary_policy.json       legacy summary 重建影响关系；当前 catalog/action 主流程不再要求 summary 步骤
 
 docs/
   lib_guard_v5_user_guide.md
@@ -163,9 +163,11 @@ $RELROOT = "C:\path\to\release_root"
 
 含义：发布别名和 release level 绑定。
 
-### 4.2 summary_policy.json
+### 4.2 summary_policy.json (legacy)
 
 路径：[configs/summary_policy.json](../configs/summary_policy.json)
+
+当前 catalog/action 主流程已经取消强制 summary rebuild。这个文件保留给旧 `update` / `summary rebuild` 命令做兼容，不应作为新增 file_type 时的主配置入口。
 
 它定义某类文件变化后，需要重建哪些 summary。例如：
 

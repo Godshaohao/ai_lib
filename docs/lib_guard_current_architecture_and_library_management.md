@@ -98,7 +98,7 @@ src/lib_guard/
 configs/
   catalog_policy.json            # catalog 目录发现规则、阶段识别规则
   release_policy.json            # required/optional views、alias gate、doc policy
-  summary_policy.json            # 文件类型到 summary rebuild 的映射
+  summary_policy.json            # legacy: old update/summary rebuild impact map; not required by current catalog/action flow
 ```
 
 注意：当前 parser 已统一到 `src/lib_guard/scan/parsers`，旧的 `extractors` 路径不再作为主路径使用。scan 胶水层已经收敛为 `inventory.py` 和 `parser_engine.py` 两个主实现模块，旧小模块仅作为兼容导出。
@@ -395,6 +395,8 @@ python -m lib_guard.cli summary rebuild \
   --type lef \
   --policy "$PROJ/configs/summary_policy.json"
 ```
+
+Legacy note: `configs/summary_policy.json` only applies to the old summary rebuild command path. The current catalog/action workflow should not require a summary rebuild step.
 
 根据 `configs/summary_policy.json`，`lef` 会影响：
 
