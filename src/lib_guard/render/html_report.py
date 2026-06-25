@@ -23,6 +23,7 @@ CONSTRAINT_TYPES = {"sdc", "spef"}
 POWER_TYPES = {"upf", "cpf"}
 LAYOUT_TYPES = {"gds", "oas", "layout", "milkyway"}
 BINARY_METADATA_TYPES = {"db", "gds", "oas", "milkyway", "layout"}
+COUNT_ONLY_TYPES = {"liberty", "lib", "db", "spef", "gds", "oas", "milkyway", "layout"}
 DOC_TYPES = {"doc", "package", "waiver", "readme", "release_note", "update_note", "changelog", "known_issue", "integration_guide"}
 FILE_DIFF_TYPES = {"lef", "liberty", "lib", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db"}
 CORE_VIEW_TYPES = ["lef", "liberty", "verilog"]
@@ -121,6 +122,51 @@ def _type_meaning(file_type: str) -> str:
     }.get(key, "项目自定义或辅助文件类型。")
 
 
+def _type_group(file_type: str) -> str:
+    key = str(file_type or "unknown").lower()
+    if key in IMPLEMENTATION_TYPES:
+        return "Implementation"
+    if key in ABSTRACT_TYPES:
+        return "Abstract"
+    if key in TIMING_TYPES:
+        return "Timing"
+    if key in CONSTRAINT_TYPES:
+        return "Constraint"
+    if key in POWER_TYPES:
+        return "Power"
+    if key in LAYOUT_TYPES:
+        return "Layout"
+    if key in DOC_TYPES:
+        return "Release Evidence"
+    if key in {"binary", "archive"}:
+        return "Binary"
+    if key == "unknown":
+        return "Unknown"
+    return "Other"
+
+
+def _type_meaning(file_type: str) -> str:
+    key = str(file_type or "unknown").lower()
+    return {
+        "lef": "Parsed by default. Summarizes macro, pin, layer, OBS, and geometry hints.",
+        "liberty": "Count-only by default. Corner hints come from file names; content parsing is opt-in.",
+        "lib": "Count-only by default. Corner hints come from file names; content parsing is opt-in.",
+        "verilog": "Parsed by default. Summarizes module, port, and define structure.",
+        "cdl": "Parsed by default. Summarizes subckt, pin, and instance structure.",
+        "sdc": "Parsed by default. Summarizes clocks, groups, uncertainty, and load-like constraints.",
+        "upf": "Parsed by default. Summarizes power domains, supplies, isolation, and related commands.",
+        "cpf": "Parsed by default. Summarizes power intent commands and domains.",
+        "spef": "Count-only by default. No content parsing unless explicitly requested.",
+        "db": "Count-only by default. Binary content is not opened during normal scan.",
+        "gds": "Count-only by default. Layout content is not opened during normal scan.",
+        "oas": "Count-only by default. Layout content is not opened during normal scan.",
+        "release_note": "Release evidence.",
+        "waiver": "Waiver evidence; parsed when a supported waiver file is present.",
+        "readme": "Usage or release evidence.",
+        "unknown": "Unrecognized file type. Confirm whether to ignore it or map it in file rules.",
+    }.get(key, "Project-specific or auxiliary file type.")
+
+
 def _type_counts(inventory: Mapping[str, Any], parser_manifest: Mapping[str, Any], dashboard: Mapping[str, Any]) -> dict[str, int]:
     direct = inventory.get("file_type_counts") or (dashboard.get("counts") or {}).get("file_type_counts") or parser_manifest.get("file_type_counts")
     if isinstance(direct, Mapping):
@@ -140,7 +186,57 @@ def _library_name(meta: Mapping[str, Any]) -> str:
     return raw.split("/")[-1]
 
 
-def _scan_review_model(scan: Path, out: Path, meta: Mapping[str, Any], counts: Mapping[str, int], issue_items: list[Mapping[str, Any]], release_readiness: Mapping[str, Any]) -> dict[str, Any]:
+def _parser_summary(parser_manifest: Mapping[str, Any], parser_quality: Mapping[str, Any]) -> dict[str, Any]:
+    by_type: dict[str, dict[str, int]] = {}
+    parsed_tasks = 0
+    failed_tasks = 0
+    pass_empty_tasks = 0
+    for file_entry in parser_manifest.get("files", []) or []:
+        file_type = str(file_entry.get("file_type") or "unknown")
+        for task in file_entry.get("parser_tasks", []) or []:
+            if not task.get("parser_name"):
+                continue
+            item = by_type.setdefault(file_type, {"tasks": 0, "parsed": 0, "failed": 0, "pass_empty": 0})
+            item["tasks"] += 1
+            status = str(task.get("result_status", task.get("status", ""))).upper()
+            if status == "FAILED":
+                item["failed"] += 1
+                failed_tasks += 1
+            elif status == "PASS_EMPTY":
+                item["pass_empty"] += 1
+                item["parsed"] += 1
+                pass_empty_tasks += 1
+                parsed_tasks += 1
+            else:
+                item["parsed"] += 1
+                parsed_tasks += 1
+    quality = parser_quality.get("parsers", []) if isinstance(parser_quality, Mapping) else []
+    return {
+        "parser_tasks": sum(item["tasks"] for item in by_type.values()),
+        "parsed_tasks": parsed_tasks,
+        "failed_tasks": failed_tasks,
+        "pass_empty_tasks": pass_empty_tasks,
+        "by_type": dict(sorted(by_type.items())),
+        "quality_status": parser_quality.get("status") if isinstance(parser_quality, Mapping) else None,
+        "parsers": quality,
+    }
+
+
+def _count_only_summary(counts: Mapping[str, int]) -> dict[str, Any]:
+    file_type_counts = {name: int(counts.get(name, 0) or 0) for name in sorted(COUNT_ONLY_TYPES) if int(counts.get(name, 0) or 0)}
+    return {"file_type_counts": file_type_counts, "total_files": sum(file_type_counts.values())}
+
+
+def _scan_review_model(
+    scan: Path,
+    out: Path,
+    meta: Mapping[str, Any],
+    counts: Mapping[str, int],
+    issue_items: list[Mapping[str, Any]],
+    release_readiness: Mapping[str, Any],
+    corner_summary: Mapping[str, Any],
+    parser_summary: Mapping[str, Any],
+) -> dict[str, Any]:
     missing_core = [name for name in CORE_VIEW_TYPES if not counts.get(name)]
     unknown = int(counts.get("unknown", 0) or 0)
     blockers: list[dict[str, Any]] = []
@@ -178,7 +274,9 @@ def _scan_review_model(scan: Path, out: Path, meta: Mapping[str, Any], counts: M
         "version": version,
         "package_type": meta.get("package_type") or "UNKNOWN",
         "required_views": {"missing": missing_core, "found": [v for v in CORE_VIEW_TYPES if counts.get(v)]},
-        "metadata_only": [name for name in BINARY_METADATA_TYPES if counts.get(name)],
+        "count_only": _count_only_summary(counts),
+        "corner_summary": dict(corner_summary or {}),
+        "parser_summary": dict(parser_summary or {}),
         "unknown_files": unknown,
         "total_files": sum(int(v or 0) for v in counts.values()),
         "blockers": blockers,
@@ -204,8 +302,8 @@ def _scan_view_rows(counts: Mapping[str, int]) -> list[str]:
     rows: list[str] = []
     for name in VIEW_ORDER:
         count = int(counts.get(name, 0) or 0)
-        if count and name in BINARY_METADATA_TYPES:
-            status = "METADATA_ONLY"
+        if count and name in COUNT_ONLY_TYPES:
+            status = "COUNT_ONLY"
         elif count:
             status = "FOUND"
         elif name in CORE_VIEW_TYPES:
@@ -240,6 +338,43 @@ def _file_type_rows(counts: Mapping[str, int]) -> list[str]:
     return rows
 
 
+def _corner_rows(corner_summary: Mapping[str, Any]) -> list[str]:
+    from lib_guard.render import product_theme as ui
+
+    rows: list[str] = []
+    for item in corner_summary.get("examples", []) or []:
+        corner = item.get("corner") or {}
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
+            f"<td>{ui.esc(corner.get('process') or '-')}</td>"
+            f"<td>{ui.esc(corner.get('voltage') or '-')}</td>"
+            f"<td>{ui.esc(corner.get('temperature') or '-')}</td>"
+            f"<td><code>{ui.esc(item.get('file') or '-')}</code></td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _parser_summary_rows(parser_summary: Mapping[str, Any]) -> list[str]:
+    from lib_guard.render import product_theme as ui
+
+    rows: list[str] = []
+    for file_type, item in (parser_summary.get("by_type") or {}).items():
+        status = "FAILED" if int(item.get("failed", 0) or 0) else "PASS_EMPTY" if int(item.get("pass_empty", 0) or 0) else "PARSED"
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(file_type)}</code></td>"
+            f"<td>{ui.badge(status)}</td>"
+            f"<td>{ui.esc(item.get('tasks', 0))}</td>"
+            f"<td>{ui.esc(item.get('parsed', 0))}</td>"
+            f"<td>{ui.esc(item.get('pass_empty', 0))}</td>"
+            f"<td>{ui.esc(item.get('failed', 0))}</td>"
+            "</tr>"
+        )
+    return rows
+
+
 def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any]:
     from lib_guard.render import product_theme as ui
 
@@ -252,10 +387,13 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     issues = read_json(scan / "scan_issues.json", {}) or {}
     dashboard = read_json(scan / "summary" / "dashboard_summary.json", {}) or {}
     release_readiness = read_json(scan / "summary" / "release_readiness.json", {}) or {}
+    parser_quality = read_json(scan / "summary" / "parser_quality.json", {}) or {}
     files = inventory.get("files", []) or []
     issue_items = list(issues.get("issues", []) or [])
     counts = _type_counts(inventory, parser_manifest, dashboard)
-    review = _scan_review_model(scan, out, meta, counts, issue_items, release_readiness)
+    corner_summary = inventory.get("corner_filename_summary") or {}
+    parser_summary = _parser_summary(parser_manifest, parser_quality)
+    review = _scan_review_model(scan, out, meta, counts, issue_items, release_readiness, corner_summary, parser_summary)
     write_json(out / "scan_review.json", review)
 
     attention = [(x.get("level"), x.get("category"), x.get("message"), "scan_review.json") for x in (review.get("blockers") or []) + (review.get("warnings") or [])]
@@ -295,6 +433,64 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             ])
             + ui.filterable_table("file-type-table", ["领域", "file_type", "数量", "说明"], _file_type_rows(counts), "暂无 file_type", "筛选 file_type / 领域")
             + ui.collapsible_panel("完整文件列表", "默认折叠，避免 scan 页面变成 raw folder。", ui.filterable_table("file-list", ["file_type", "role", "size", "path"], _file_rows(files), "暂无文件", "筛选文件路径"), open=False),
+            open=False,
+        )
+    )
+    count_only = review.get("count_only") or {}
+    corner = review.get("corner_summary") or {}
+    parser = review.get("parser_summary") or {}
+    body = (
+        ui.panel(
+            "Version Detail",
+            "Scan is the primary detail page for a raw version: count files, classify views, extract filename corners, and summarize lightweight parser results.",
+            ui.metric_grid([
+                ("Package", review.get("package_type"), "delivery type", "PASS" if review.get("package_type") != "UNKNOWN" else "WARNING"),
+                ("Total files", review.get("total_files"), "inventory count", "PASS"),
+                ("Count-only", count_only.get("total_files", 0), ".lib / .db / .spef / layout", "INFO" if count_only.get("total_files") else "PASS"),
+                ("Corner files", corner.get("total_corner_files", 0), "filename PVT hints", "PASS" if corner.get("total_corner_files") else "INFO"),
+                ("Parser tasks", parser.get("parser_tasks", 0), "lightweight summaries", parser.get("quality_status") or "PASS"),
+                ("Attention", len(attention), review["headline"], review["decision"]),
+            ])
+            + ui.compact_meta([
+                ("Library", review.get("library")),
+                ("Version", review.get("version")),
+                ("Raw Root", meta.get("root_path") or meta.get("root")),
+                ("Scan Dir", scan),
+            ]),
+        )
+        + ui.panel(
+            "Count-only + Corner Summary",
+            "Heavy timing, parasitic, and binary views are counted and classified by path/name. Normal scan does not read their content.",
+            ui.metric_grid([
+                ("Count-only files", count_only.get("total_files", 0), ", ".join(f"{k}:{v}" for k, v in (count_only.get("file_type_counts") or {}).items()) or "none", "INFO" if count_only.get("total_files") else "PASS"),
+                ("Process corners", len(corner.get("process_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("process_counts") or {}).items()) or "none", "PASS" if corner.get("process_counts") else "INFO"),
+                ("Voltage corners", len(corner.get("voltage_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("voltage_counts") or {}).items()) or "none", "PASS" if corner.get("voltage_counts") else "INFO"),
+                ("Temperature corners", len(corner.get("temperature_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("temperature_counts") or {}).items()) or "none", "PASS" if corner.get("temperature_counts") else "INFO"),
+            ])
+            + ui.table(["file_type", "Process", "Voltage", "Temp", "Path"], _corner_rows(corner), "No filename corner hints found"),
+        )
+        + ui.panel(
+            "Parser Summary",
+            "Lightweight text and structure parsers still run by default and provide the main structured summary for this version.",
+            ui.table(["file_type", "Status", "Tasks", "Parsed", "Empty", "Failed"], _parser_summary_rows(parser), "No parser tasks were run"),
+        )
+        + ui.panel(
+            "View Coverage",
+            "Shows which delivery views are present and whether they are parsed or count-only in the default scan profile.",
+            ui.table(["View", "Status", "Count", "Domain", "Meaning"], _scan_view_rows(counts), "No view information"),
+        )
+        + ui.panel("Attention", "Only items that affect review or the next diff step are surfaced here.", ui.attention_items(attention))
+        + ui.collapsible_panel(
+            "Evidence",
+            "Raw JSON and full file inventory are kept as trace evidence, folded by default.",
+            ui.trace_link_list([
+                ("scan_review.json", _file_href(out / "scan_review.json"), "Review model used by this page"),
+                ("scan_meta.json", _file_href(scan / "scan_meta.json"), "Version and raw root context"),
+                ("file_inventory.json", _file_href(scan / "file_inventory.json"), "Full file list with filename corner hints"),
+                ("parser_manifest.json", _file_href(scan / "parser_manifest.json"), "Parser task manifest"),
+                ("parser_quality.json", _file_href(scan / "summary" / "parser_quality.json"), "Parser status summary"),
+            ])
+            + ui.filterable_table("file-type-table", ["Domain", "file_type", "Count", "Meaning"], _file_type_rows(counts), "No file types", "Filter file_type / domain"),
             open=False,
         )
     )

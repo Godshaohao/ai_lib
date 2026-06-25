@@ -161,7 +161,8 @@ class EffectiveManifestTest(unittest.TestCase):
             library_home = catalog_dir / "html" / "libraries" / "ip_ucie" / "index.html"
             self.assertTrue(library_home.exists())
             library_html = library_home.read_text(encoding="utf-8")
-            self.assertIn("Effective 摘要", library_html)
+            self.assertIn("Library Version Timeline", library_html)
+            self.assertIn("latest_effective_ref", library_html)
             self.assertIn("Compare 索引", library_html)
             self.assertIn("Release Preview", library_html)
             self.assertNotIn("<iframe", library_html.lower())
@@ -290,14 +291,82 @@ class EffectiveManifestTest(unittest.TestCase):
             report_index = json.loads(Path(result["report_index"]).read_text(encoding="utf-8"))
             lib_entry = report_index["libraries"]["ip/ucie"]
             self.assertEqual(lib_entry["current_effective"], "E3_20260624")
+            self.assertEqual(lib_entry["latest_effective_ref"], "E3_20260624")
+            self.assertTrue(any(node["node_kind"] == "raw" for node in lib_entry["timeline"]))
+            self.assertTrue(any(node["node_kind"] == "effective" for node in lib_entry["timeline"]))
             self.assertIn("E2_vs_E3", lib_entry["compare_reports"])
             self.assertEqual(lib_entry["compare_reports"]["E2_vs_E3"]["summary"]["changed_files"], 2)
 
             library_html = (html_dir / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
             self.assertIn("E3_20260624", library_html)
+            self.assertIn("Library Version Timeline", library_html)
             self.assertIn("E2_vs_E3", library_html)
             self.assertIn("打开报告", library_html)
             self.assertNotIn("<iframe", library_html.lower())
+
+    def test_timeline_can_point_latest_effective_to_raw_full(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            base = raw / "ucie" / "stable_20250601_base_full_release"
+            patch = raw / "ucie" / "patch_20260624_rtl_update"
+            full = raw / "ucie" / "stable_20260701_full_refresh"
+            for folder in [base / "rtl", patch / "rtl", full / "rtl"]:
+                folder.mkdir(parents=True)
+            (base / "rtl" / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+            (patch / "rtl" / "top.v").write_text("module top(input a, output b); endmodule\n", encoding="utf-8")
+            (full / "rtl" / "top.v").write_text("module top(input a, output b, output c); endmodule\n", encoding="utf-8")
+
+            from lib_guard.catalog.index import render_catalog_html, scan_catalog
+            from lib_guard.effective.cli import main as effective_main
+
+            catalog_dir = root / "catalog"
+            html_dir = catalog_dir / "html"
+            scan_catalog(raw, out_dir=catalog_dir, library_type="ip")
+            manifest = html_dir / "libraries" / "ip_ucie" / "effective" / "effective_20260624" / "effective_manifest.json"
+            self.assertEqual(
+                effective_main(
+                    [
+                        "build",
+                        "--catalog",
+                        str(catalog_dir / "catalog.json"),
+                        "--library",
+                        "ucie",
+                        "--base-full",
+                        base.name,
+                        "--include",
+                        patch.name,
+                        "--scope",
+                        f"{patch.name}:verilog",
+                        "--effective-id",
+                        "effective_20260624",
+                        "--out",
+                        str(manifest),
+                        "--html",
+                        str(manifest.parent / "index.html"),
+                    ]
+                ),
+                0,
+            )
+
+            result = render_catalog_html(catalog_dir / "catalog.json", html_dir)
+            report_index = json.loads(Path(result["report_index"]).read_text(encoding="utf-8"))
+            lib_entry = report_index["libraries"]["ip/ucie"]
+            self.assertEqual(lib_entry["latest_effective_ref"], full.name)
+
+            nodes = {node["version_id"]: node for node in lib_entry["timeline"]}
+            self.assertEqual(nodes[full.name]["node_kind"], "raw")
+            self.assertEqual(nodes[full.name]["package_type"], "full")
+            self.assertEqual(nodes[full.name]["usage_status"], "current")
+            self.assertEqual(nodes[patch.name]["package_type"], "partial")
+            self.assertEqual(nodes[patch.name]["usage_status"], "accepted")
+            self.assertEqual(nodes["effective_20260624"]["node_kind"], "effective")
+            self.assertEqual(nodes["effective_20260624"]["package_type"], "composed")
+
+            library_html = (html_dir / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("Current Effective", library_html)
+            self.assertIn(full.name, library_html)
+            self.assertIn("Library Version Timeline", library_html)
 
 
 if __name__ == "__main__":

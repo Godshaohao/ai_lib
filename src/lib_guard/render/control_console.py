@@ -80,5 +80,5 @@ def render_console(
         "console_dir": str(out),
         "index_html": result.get("index_html", str(out / "index.html")),
         "data_dir": str(data_dir),
-        "note": "control_console is a compatibility wrapper; the single scan review page is index.html.",
+        "note": "control_console is a compatibility wrapper; Version Review is the normal single-version detail page.",
     }

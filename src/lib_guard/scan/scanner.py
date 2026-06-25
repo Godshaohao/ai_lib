@@ -658,7 +658,9 @@ class ScanRunner:
         for file_entry in parser_manifest.get("files", []) or []:
             file_type = str(file_entry.get("file_type", "unknown"))
             for task in file_entry.get("parser_tasks", []) or []:
-                parser_name = task.get("parser_name") or "UNSUPPORTED"
+                if not task.get("parser_name"):
+                    continue
+                parser_name = task.get("parser_name")
                 item = by_parser.setdefault(
                     parser_name,
                     {
@@ -761,6 +763,9 @@ class ScanRunner:
         status: str,
     ) -> ScanBundle:
         inventory_files = [dict(r) if isinstance(r, dict) else dict(r.__dict__) for r in records]
+        from .inventory import corner_filename_summary
+
+        corner_summary = corner_filename_summary(inventory_files)
         meta = {
             "schema_version": context.schema_version,
             "tool": "lib_guard",
@@ -801,6 +806,7 @@ class ScanRunner:
                 "issues_count": self.stats["issues_count"],
             },
             "file_type_counts": self._counts(inventory_files, "file_type"),
+            "corner_filename_summary": corner_summary,
             "hash_policy": meta["hash_policy"],
             "version_profile": {
                 "version_kind": meta["version_kind"],
@@ -811,7 +817,7 @@ class ScanRunner:
         return ScanBundle(
             scan_meta=meta,
             manifest=manifest,
-            file_inventory={"schema_version": context.schema_version, "scan_id": context.scan_id, "root_path": str(context.root_path), "files": inventory_files},
+            file_inventory={"schema_version": context.schema_version, "scan_id": context.scan_id, "root_path": str(context.root_path), "files": inventory_files, "corner_filename_summary": corner_summary},
             parser_task_list=parser_task_list,
             parser_manifest=parser_manifest,
             parser_results=parser_results,

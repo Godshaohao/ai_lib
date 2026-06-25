@@ -124,6 +124,83 @@ class V5ScanPipelineTest(unittest.TestCase):
             self.assertTrue(task["result_path"].startswith("parser_results/verilog/"))
             self.assertTrue((out / task["result_path"]).exists())
 
+    def test_default_scan_keeps_heavy_views_count_only_and_reports_parser_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            html = Path(td) / "html"
+            root.mkdir()
+            (root / "rtl").mkdir()
+            (root / "lef").mkdir()
+            (root / "timing").mkdir()
+            (root / "parasitic").mkdir()
+            (root / "constraints").mkdir()
+            (root / "power").mkdir()
+            (root / "pkg").mkdir()
+            (root / "rtl" / "top.v").write_text("module top(input clk); endmodule\n", encoding="utf-8")
+            (root / "lef" / "block.lef").write_text("VERSION 5.8 ;\nMACRO TOP\nEND TOP\n", encoding="utf-8")
+            (root / "timing" / "block_ss_0p72v_125c.lib").write_text("library(ss) { cell(TOP) { area : 1.0; } }\n", encoding="utf-8")
+            (root / "timing" / "block_tt_0p80v_25c.db").write_text("db-placeholder\n", encoding="utf-8")
+            (root / "parasitic" / "block_ff_0p88v_m40c.spef").write_text("*SPEF \"IEEE 1481-1998\"\n*D_NET n1 0.1\n", encoding="utf-8")
+            (root / "constraints" / "block.sdc").write_text("create_clock -name clk -period 1.0 [get_ports clk]\n", encoding="utf-8")
+            (root / "power" / "block.upf").write_text("create_power_domain PD_TOP\n", encoding="utf-8")
+            (root / "pkg" / "chan.s2p").write_text("# Hz S RI R 50\n1 0 0 0 0\n", encoding="utf-8")
+            (root / "pkg" / "wave.pwl").write_text("0 0\n1n 1\n", encoding="utf-8")
+            (root / "pkg" / "model.cpm").write_text("pin A\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.render.html_report import render_scan_html
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="stable_20250608",
+                    scan_mode="full",
+                    scan_id="COUNT_ONLY",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=True,
+                    no_progress=True,
+                    progress_interval=1,
+                    parse_jobs=1,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+            render_scan_html(out, html)
+
+            task_list = json.loads((out / "parser_task_list.json").read_text(encoding="utf-8"))
+            parser_types = {task["file_type"] for task in task_list["tasks"]}
+            self.assertNotIn("liberty", parser_types)
+            self.assertNotIn("db", parser_types)
+            self.assertNotIn("spef", parser_types)
+            self.assertTrue({"lef", "verilog", "sdc", "upf", "snp", "pwl", "cpm"}.issubset(parser_types))
+
+            inventory = json.loads((out / "file_inventory.json").read_text(encoding="utf-8"))
+            corner_summary = inventory["corner_filename_summary"]
+            self.assertEqual(corner_summary["total_corner_files"], 3)
+            self.assertEqual(corner_summary["process_counts"]["ss"], 1)
+            self.assertEqual(corner_summary["process_counts"]["tt"], 1)
+            self.assertEqual(corner_summary["process_counts"]["ff"], 1)
+
+            review = json.loads((html / "scan_review.json").read_text(encoding="utf-8"))
+            self.assertEqual(review["count_only"]["file_type_counts"]["liberty"], 1)
+            self.assertEqual(review["count_only"]["file_type_counts"]["db"], 1)
+            self.assertEqual(review["count_only"]["file_type_counts"]["spef"], 1)
+            self.assertGreaterEqual(review["parser_summary"]["parsed_tasks"], 7)
+            self.assertEqual(review["corner_summary"]["total_corner_files"], 3)
+
+            html_text = (html / "index.html").read_text(encoding="utf-8")
+            self.assertIn("Count-only", html_text)
+            self.assertIn("Corner Summary", html_text)
+            self.assertIn("Parser Summary", html_text)
+            self.assertNotIn("Metadata only", html_text)
+            self.assertNotIn("metadata-only", html_text)
+
     def test_scan_classifies_gzip_files_and_writes_typed_parser_results(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "raw"

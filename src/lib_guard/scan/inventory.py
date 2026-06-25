@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 import hashlib
 import os
+import re
 
 
 KEY_FILE_TYPES = {
@@ -44,6 +45,10 @@ DEFAULT_SCAN_IGNORE_DIRS = {
     "temp",
 }
 
+_CORNER_PROCESS_RE = re.compile(r"(?<![a-z0-9])(ss|ff|tt|sf|fs)(?![a-z0-9])", re.IGNORECASE)
+_CORNER_VOLTAGE_RE = re.compile(r"(?<![a-z0-9])(\d+p\d+|\d+\.\d+)v(?![a-z0-9])", re.IGNORECASE)
+_CORNER_TEMP_RE = re.compile(r"(?<![a-z0-9])([m-]?\d+)c(?![a-z0-9])", re.IGNORECASE)
+
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
@@ -73,6 +78,58 @@ def _scan_ignore_dirs(config: Any = None, context: Any = None) -> set[str]:
         names.update(_split_name_list(_get(obj, "ignore_dirs", None)))
         names.update(_split_name_list(_get(obj, "scan_ignore_dirs", None)))
     return names
+
+
+def extract_filename_corner(path: str) -> dict[str, Any] | None:
+    """Extract lightweight PVT corner hints from a file path without reading content."""
+
+    text = str(path or "").replace("\\", "/").lower()
+    process = None
+    voltage = None
+    temperature = None
+    m = _CORNER_PROCESS_RE.search(text)
+    if m:
+        process = m.group(1).lower()
+    m = _CORNER_VOLTAGE_RE.search(text)
+    if m:
+        voltage = m.group(1).lower().replace("p", ".") + "v"
+    m = _CORNER_TEMP_RE.search(text)
+    if m:
+        temperature = m.group(1).lower().replace("m", "-") + "c"
+    if not any([process, voltage, temperature]):
+        return None
+    return {"process": process, "voltage": voltage, "temperature": temperature}
+
+
+def corner_filename_summary(records: list[Mapping[str, Any]]) -> dict[str, Any]:
+    process_counts: dict[str, int] = {}
+    voltage_counts: dict[str, int] = {}
+    temperature_counts: dict[str, int] = {}
+    examples: list[dict[str, Any]] = []
+    total = 0
+    for record in records:
+        corner = record.get("corner") if isinstance(record, Mapping) else None
+        if not isinstance(corner, Mapping) or not any(corner.values()):
+            continue
+        total += 1
+        process = corner.get("process")
+        voltage = corner.get("voltage")
+        temperature = corner.get("temperature")
+        if process:
+            process_counts[str(process)] = process_counts.get(str(process), 0) + 1
+        if voltage:
+            voltage_counts[str(voltage)] = voltage_counts.get(str(voltage), 0) + 1
+        if temperature:
+            temperature_counts[str(temperature)] = temperature_counts.get(str(temperature), 0) + 1
+        if len(examples) < 20:
+            examples.append({"file": record.get("path"), "file_type": record.get("file_type"), "corner": dict(corner)})
+    return {
+        "total_corner_files": total,
+        "process_counts": dict(sorted(process_counts.items())),
+        "voltage_counts": dict(sorted(voltage_counts.items())),
+        "temperature_counts": dict(sorted(temperature_counts.items())),
+        "examples": examples,
+    }
 
 
 class FileWalker:
@@ -124,6 +181,7 @@ class FileClassifier:
                 "is_key_file": file_type in KEY_FILE_TYPES,
                 "is_key_doc": file_type == "doc" and role in {"readme", "release_note", "integration_guide", "update_note"},
                 "doc_type": role if file_type == "doc" else None,
+                "corner": extract_filename_corner(str(_get(record, "path", name))),
             }
         )
         return record

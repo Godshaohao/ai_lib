@@ -11,6 +11,7 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
 
 class ScanPolicy:
     DEFAULT_PARSE_MODES = {"candidate", "release", "diff", "refresh", "full"}
+    DEFAULT_COUNT_ONLY_PARSE_TYPES = {"liberty", "db", "spef"}
     SMART_SKIP_EXTENSIONS = {
         ".lef",
         ".lib",
@@ -96,4 +97,10 @@ class ScanPolicy:
         if configured_types:
             allowed = {str(item).strip().lower() for item in configured_types}
             return str(_get(record, "file_type", "unknown")).lower() in allowed
+        excluded = set(self.DEFAULT_COUNT_ONLY_PARSE_TYPES)
+        configured_excluded = _get(self.config, "parse_exclude_file_types", None)
+        if configured_excluded:
+            excluded.update(str(item).strip().lower() for item in configured_excluded)
+        if str(_get(record, "file_type", "unknown")).lower() in excluded:
+            return False
         return mode in self.DEFAULT_PARSE_MODES and bool(_get(record, "is_key_file", False))

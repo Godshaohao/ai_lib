@@ -387,10 +387,125 @@ class V5CatalogTest(unittest.TestCase):
             console_html.write_text("<html>console</html>", encoding="utf-8")
             diff_html.write_text("<html>diff</html>", encoding="utf-8")
             release_json.write_text("{}", encoding="utf-8")
+            (scan_dir / "summary").mkdir(parents=True, exist_ok=True)
+            (scan_dir / "scan_meta.json").write_text(
+                json.dumps({"library_name": "ucie", "release_version": "stable_20250608", "package_type": "FULL_PACKAGE"}),
+                encoding="utf-8",
+            )
+            (scan_dir / "file_inventory.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {"path": "lef/ucie.lef", "file_type": "lef", "corner": None},
+                            {"path": "lib/ucie_ss_0p72v_125c.lib", "file_type": "liberty", "corner": {"process": "ss", "voltage": "0.72v", "temperature": "125c"}},
+                            {"path": "db/ucie_tt_0p80v_25c.db", "file_type": "db", "corner": {"process": "tt", "voltage": "0.80v", "temperature": "25c"}},
+                            {"path": "sdc/ucie.sdc", "file_type": "sdc", "corner": None},
+                            {"path": "upf/ucie.upf", "file_type": "upf", "corner": None},
+                            {"path": "waiver/lint.waiver", "file_type": "waiver", "corner": None},
+                        ],
+                        "corner_filename_summary": {
+                            "total_corner_files": 2,
+                            "process_counts": {"ss": 1, "tt": 1},
+                            "voltage_counts": {"0.72v": 1, "0.80v": 1},
+                            "temperature_counts": {"125c": 1, "25c": 1},
+                            "examples": [],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            parser_results = {
+                "parser_results/lef/1.json": {
+                    "parser_name": "LefParser",
+                    "file_type": "lef",
+                    "file": "lef/ucie.lef",
+                    "status": "PASS",
+                    "data": {
+                        "stats": {"macro_count": 12, "pin_count": 16},
+                        "macros": {f"UCIE_MACRO_{i:02d}": {"pin_count": i} for i in range(12)},
+                    },
+                },
+                "parser_results/sdc/1.json": {
+                    "parser_name": "SdcParser",
+                    "file_type": "sdc",
+                    "file": "sdc/ucie.sdc",
+                    "status": "PASS",
+                    "data": {"stats": {"clock_count": 2, "clock_group_count": 1, "load_count": 3, "uncertainty_count": 1}},
+                },
+                "parser_results/upf/1.json": {
+                    "parser_name": "UpfParser",
+                    "file_type": "upf",
+                    "file": "upf/ucie.upf",
+                    "status": "PASS",
+                    "data": {"stats": {"power_domain_count": 2, "supply_count": 4, "isolation_count": 1}},
+                },
+                "parser_results/waiver/1.json": {
+                    "parser_name": "WaiverParser",
+                    "file_type": "waiver",
+                    "file": "waiver/lint.waiver",
+                    "status": "PASS",
+                    "data": {"stats": {"waiver_count": 5}},
+                },
+            }
+            (scan_dir / "parser_results.json").write_text(json.dumps(parser_results, ensure_ascii=False), encoding="utf-8")
+            (scan_dir / "parser_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {"file": "lef/ucie.lef", "file_type": "lef", "parser_tasks": [{"parser_name": "LefParser", "result_status": "PASS", "result_path": "parser_results/lef/1.json"}]},
+                            {"file": "sdc/ucie.sdc", "file_type": "sdc", "parser_tasks": [{"parser_name": "SdcParser", "result_status": "PASS", "result_path": "parser_results/sdc/1.json"}]},
+                            {"file": "upf/ucie.upf", "file_type": "upf", "parser_tasks": [{"parser_name": "UpfParser", "result_status": "PASS", "result_path": "parser_results/upf/1.json"}]},
+                            {"file": "waiver/lint.waiver", "file_type": "waiver", "parser_tasks": [{"parser_name": "WaiverParser", "result_status": "PASS", "result_path": "parser_results/waiver/1.json"}]},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (scan_dir / "summary" / "parser_quality.json").write_text(json.dumps({"status": "PASS", "parsers": []}), encoding="utf-8")
             (raw / "ucie" / "stable_20250608").mkdir(parents=True)
             (raw / "ucie" / "stable_20250608" / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            (raw / "ucie" / "stable_20250608" / "doc").mkdir()
+            (raw / "ucie" / "stable_20250608" / "doc" / "release_note.txt").write_text(
+                "Fixed lane reset timing and updated UPF isolation coverage.\nSecond line stays in the summary.",
+                encoding="utf-8",
+            )
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps(
+                    {
+                        "status": "DIFF",
+                        "risk_level": "warning",
+                        "added_files": 1,
+                        "removed_files": 0,
+                        "changed_files": 3,
+                        "view_changes": 2,
+                        "release_evidence_changes": 1,
+                        "manual_pairwise_tasks": 2,
+                        "recommended_actions": ["Review SDC clock delta", "Review UPF isolation delta"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "file_diff.json").write_text(
+                json.dumps(
+                    {
+                        "added": [{"path": "upf/new_domain.upf", "file_type": "upf"}],
+                        "removed": [],
+                        "changed": [
+                            {"path": "sdc/ucie.sdc", "file_type": "sdc"},
+                            {"path": "upf/ucie.upf", "file_type": "upf"},
+                            {"path": "lef/ucie.lef", "file_type": "lef"},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
 
             from lib_guard.catalog.index import (
+                apply_catalog_override,
                 render_catalog_html,
                 scan_catalog,
                 update_catalog_diff_status,
@@ -400,6 +515,17 @@ class V5CatalogTest(unittest.TestCase):
 
             scan_catalog(raw, out_dir=out, library_type="ip")
             catalog_path = out / "catalog.json"
+            apply_catalog_override(
+                catalog_path,
+                version_key="ip/ucie/stable_20250608",
+                package_type="PARTIAL_UPDATE",
+                update_scope=["sdc", "upf", "lef"],
+                standalone=False,
+                base_required=True,
+                base_full_version="stable_20250608",
+                previous_effective_version="initial_20250601",
+                compare_default="previous_effective",
+            )
             update_catalog_scan_status(
                 catalog_path,
                 version_key="ip/ucie/stable_20250608",
@@ -413,7 +539,7 @@ class V5CatalogTest(unittest.TestCase):
                 catalog_path,
                 version_key="ip/ucie/stable_20250608",
                 mode="adjacent",
-                old_version="stable_20250601",
+                old_version="initial_20250601",
                 diff_dir=diff_dir,
                 status="DIFF",
                 diff_html=diff_html,
@@ -427,7 +553,7 @@ class V5CatalogTest(unittest.TestCase):
             )
 
             catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-            self.assertEqual(catalog.get("manual_overrides"), {})
+            self.assertEqual(catalog.get("manual_overrides", {}).get("ip/ucie/stable_20250608", {}).get("package_type"), "PARTIAL_UPDATE")
             state = catalog["runtime_state"]["ip/ucie/stable_20250608"]
             self.assertEqual(state["scan"]["scan_html"], str(scan_html))
             self.assertEqual(state["scan"]["console_html"], str(console_html))
@@ -453,13 +579,37 @@ class V5CatalogTest(unittest.TestCase):
             self.assertEqual(review_version["diff_status"], "DIFF_REVIEW")
             self.assertEqual(review_version["release_status"], "RELEASE_READY")
             library_html = (html_out / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Raw 版本台账", library_html)
-            self.assertIn("Effective 摘要", library_html)
+            self.assertIn("Library Version Timeline", library_html)
+            self.assertIn("latest_effective_ref", library_html)
             self.assertIn("Compare 索引", library_html)
             version_html = (html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
-            self.assertIn(str(scan_html).replace("\\", "/"), version_html)
-            self.assertIn(str(diff_html).replace("\\", "/"), version_html)
-            self.assertIn("Selected Diff", version_html)
+            self.assertIn("Raw Version Detail", version_html)
+            self.assertIn("Count-only + Corner Summary", version_html)
+            self.assertIn("Parser Summary", version_html)
+            self.assertLess(version_html.find("更新详情"), version_html.find("Raw Version Detail"))
+            self.assertIn("更新详情（vs initial_20250601）", version_html)
+            self.assertIn("incremental compare", version_html)
+            self.assertIn("missing files are not treated as deletes", version_html)
+            self.assertIn("Fixed lane reset timing", version_html)
+            self.assertIn("changed_files", version_html)
+            self.assertIn("sdc/ucie.sdc", version_html)
+            self.assertIn("Review UPF isolation delta", version_html)
+            self.assertIn("Parser Details", version_html)
+            self.assertIn("UCIE_MACRO_09", version_html)
+            self.assertNotIn("UCIE_MACRO_10", version_html)
+            self.assertIn("LEF", version_html)
+            self.assertIn("Macros", version_html)
+            self.assertIn("SDC", version_html)
+            self.assertIn("Clocks", version_html)
+            self.assertIn("UPF", version_html)
+            self.assertIn("Power Domains", version_html)
+            self.assertIn("Waiver", version_html)
+            self.assertIn("Waivers", version_html)
+            self.assertNotIn(str(scan_html).replace("\\", "/"), version_html)
+            self.assertNotIn(str(diff_html).replace("\\", "/"), version_html)
+            self.assertNotIn("Selected Diff", version_html)
+            self.assertNotIn("pairwise_html", version_html)
+            self.assertNotIn("release_html", version_html)
 
     def test_policy_path_rules_and_inventory_evidence_reduce_misclassification(self) -> None:
         with tempfile.TemporaryDirectory() as td:

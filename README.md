@@ -17,10 +17,18 @@ The current workflow focuses on:
 The current review UI uses a guided navigation model:
 
 ```text
-Catalog -> Diff Timeline -> Selected Diff -> recommended File Diff
+Catalog -> Library Version Timeline -> Version Review / Selected Diff -> recommended File Diff
 ```
 
 - Catalog is the asset map and report hub. It no longer expands direct File Diff commands.
+- A library has one mixed timeline. Raw deliveries and composed effective nodes are not separated into two version systems.
+- Version Review is the raw single-version detail page. Its first section is `更新详情（vs <previous_effective>）`, combining release_note/changelog text with the automatic diff summary for the current version.
+- Full packages use full compare semantics against the previous effective baseline. Partial, hotfix, and scoped update packages use incremental compare semantics, so files missing from the package are not treated as deletes.
+- Version Review also embeds scan inventory, Count-only + Corner Summary, parser summaries, and pre-diff readiness instead of sending normal reviewers to a separate scan page.
+- Each timeline node carries `node_kind` (`raw`, `effective`, or `release`) and `package_type` (`full`, `partial`, `hotfix`, `doc`, `composed`, or `unknown`).
+- `latest_effective_ref` points to the current usable node. It can point directly to a full raw package or to an effective composed manifest.
+- Full raw packages can become the latest effective library without generating a duplicate effective node.
+- Partial raw packages stay as timeline events. They become `accepted` only when included by an effective composed node; otherwise they remain `pending_review`.
 - Selected Diff is the review surface for one comparison. It shows structural domains, release evidence changes, and the "key File Diff recommendation" queue.
 - File Diff is a recommendation model, not a completion scoreboard. The UI no longer shows `File Diff 2/5` or `done/total`.
 - Large or ambiguous comparisons first ask the reviewer to confirm base/comparison context. They do not generate a full File Diff command batch.
@@ -30,6 +38,8 @@ Desktop UI command policy:
 
 - Catalog command examples use `cat`, `scan`, `cmp`, and `rel`.
 - Scan "next action" uses `cmp ... --scan-if-missing`, not the older `lg diff ...` text.
+- Library Workspace shows `Library Version Timeline` as the primary organization, not separate Raw Sources and Effective Versions sections.
+- Version Review shows scan evidence directly. Standalone `scan_html` output may remain as compatibility/debug evidence, but it is not the normal Catalog/Version navigation target.
 - Selected Diff and Effective Compare expose File Diff commands only as focused recommendations using `fd ... --base ... --type ...`.
 - Generated HTML should not show the old completion wording `File Diff 2/5` or `done/total`.
 - Generated HTML should not expose low-level `python -m lib_guard.cli file-diff ...` commands except inside JSON/debug evidence.
@@ -39,7 +49,8 @@ Key v6 parser/diff additions:
 - Liberty now extracts `is_macro`, `is_pad`, and cell attribute lines.
 - SDC/UPF keep command counts and add semantic fields for clocks, uncertainty, loads, power domains, supplies, isolation, retention, and level shifters.
 - Waiver, IBIS, PWL, SNP/Touchstone, and CPM are available through scan parsers and the pairwise `file-diff` CLI.
-- DB remains metadata-only unless an external semantic parser is added.
+- Scan defaults keep `.lib/.lib.gz`, `.db`, `.spef`, and layout/binary views as Count-only inventory: count, type, path, and filename corner summary. Lightweight text/structure views still run parser-backed summaries by default.
+- Parser Summary rows expose a folded `Parser Details` section with up to the first 10 extracted objects per parser so reviewers can inspect real extracted content without turning the page into a raw dump.
 
 ## Workflow Pack Integration
 

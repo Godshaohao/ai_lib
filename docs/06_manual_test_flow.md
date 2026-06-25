@@ -586,6 +586,34 @@ When catalog cannot infer the old version, pass `--base <base_version>`.
 Run this smoke set after UI, short CLI, or report-rendering changes. This section
 uses the current short command model and intentionally checks desktop output only.
 
+### 14.0 Unified library timeline model
+
+Catalog should organize each library as one mixed timeline:
+
+```text
+Library Version Timeline
+
+event_time    version_id           node_kind    package_type    usage_status
+2025-06-01    stable_20250601      raw          full            superseded
+2025-06-08    patch_20250608       raw          partial         accepted
+2025-06-08    effective_20250608   effective    composed        current
+2025-07-01    stable_20250701      raw          full            current
+```
+
+Rules:
+
+- raw and effective nodes share the same `timeline`; do not split them into
+  separate Raw Sources and Effective Versions systems.
+- `latest_effective_ref` points to the current usable node.
+- `latest_effective_ref` may point to a `raw/full` node or an
+  `effective/composed` node.
+- A full raw package can directly become the latest effective library.
+- A partial raw package cannot become latest effective by itself; after it is
+  accepted, create or point to an effective composed node.
+- `scan` belongs to raw nodes.
+- resolved coverage belongs to effective nodes.
+- diff belongs to effective transitions, meaning changes in `latest_effective_ref`.
+
 ### 14.1 User-facing command rules
 
 Preferred csh commands:
@@ -601,11 +629,43 @@ $PROJ/scripts/lg.csh rel <library> <version> --check-first
 Expected report behavior:
 
 - Catalog shows navigation and examples, not a full File Diff command list.
+- Library Workspace uses `Library Version Timeline` with `node_kind`,
+  `package_type`, `usage_status`, and the visible `latest_effective_ref`.
 - Scan next action uses `cmp`, not stale `lg diff` wording.
 - Selected Diff is the only normal place for key File Diff recommendations.
 - Effective Compare File Diff commands include `--type`.
 - Large or ambiguous comparisons ask the reviewer to confirm base/comparison before
   generating focused File Diff recommendations.
+
+### 14.1.1 Version Review scan detail model
+
+The raw version detail page is `VERSION REVIEW`. It should embed the important
+single-version scan evidence directly instead of behaving like a flat artifact
+launcher or sending normal review flow into a separate scan page.
+
+Default scan behavior:
+
+- The first visible section is `更新详情（vs <previous_effective>）`.
+- `更新详情` should combine release_note/changelog/update_note text with the
+  automatic diff summary for the current version.
+- Full packages use full compare semantics. Partial, hotfix, and scoped update
+  packages use incremental compare semantics; missing files in the package are
+  not treated as deletes.
+- All files are inventoried by count, file type, path, and filename-derived corner
+  hints.
+- Lightweight text and structure files run parsers and expose Parser Summary
+  results by default.
+- `.lib/.lib.gz`, `.db`, `.spef`, and binary/layout views are Count-only by
+  default. Normal scan does not parse their content.
+- The visible Version Review UI should show `Count-only + Corner Summary`,
+  `Parser Summary`, and pre-diff readiness.
+- `Parser Summary` rows should include folded `Parser Details` examples, limited
+  to the first 10 extracted objects for each parser.
+- The visible Version Review UI should not show `Metadata only` as the main
+  concept.
+- Standalone `scan_html` may exist as compatibility/debug evidence, but Catalog
+  and Library Timeline should treat Version Review as the normal single-version
+  detail page.
 
 ### 14.2 Desktop HTML smoke targets
 
@@ -613,6 +673,7 @@ Generate or open the representative pages:
 
 ```text
 work/ui_desktop_audit/catalog/html/index.html
+work/ui_desktop_audit/catalog/html/libraries/ip_ucie/versions/stable_20250608/index.html
 work/ui_desktop_audit/scan_html/index.html
 work/ui_desktop_audit/diff_html/index.html
 work/ui_desktop_audit/effective_E3.html
@@ -643,7 +704,7 @@ $env:PYTHONPATH='src'
 Current expected unittest result:
 
 ```text
-Ran 76 tests
+Ran 80 tests
 OK
 ```
 
