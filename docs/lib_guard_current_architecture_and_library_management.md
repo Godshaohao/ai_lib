@@ -755,7 +755,7 @@ python -m lib_guard.cli run \
   --catalog "$WORK/catalog/catalog.json" \
   --library ucie \
   --version stable_20250608 \
-  --mode signature \
+  --mode candidate \
   --workdir "$WORK" \
   --config-dir "$PROJ/configs" \
   --parse-jobs 4 \
@@ -767,7 +767,7 @@ python -m lib_guard.cli run \
 该命令会自动完成：
 
 ```text
-scan -> summary rebuild -> scan HTML -> console HTML -> catalog runtime_state 回写 -> catalog HTML 刷新
+scan -> parser evidence -> scan/version evidence HTML -> catalog runtime_state 回写 -> catalog HTML 刷新
 ```
 
 ### 10.5 批量扫描
@@ -778,7 +778,7 @@ python -m lib_guard.cli run-batch \
   --library ucie \
   --stage stable \
   --only-missing \
-  --mode signature \
+  --mode candidate \
   --workdir "$WORK" \
   --config-dir "$PROJ/configs" \
   --parse-jobs 4 \
@@ -810,7 +810,7 @@ python -m lib_guard.cli scan status \
 python -m lib_guard.cli scan-status \
   --latest \
   --library-id "ip/ucie/stable_20250608" \
-  --mode signature \
+  --mode candidate \
   --workdir "$WORK"
 ```
 

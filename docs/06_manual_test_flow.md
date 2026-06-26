@@ -425,7 +425,7 @@ python -m lib_guard.cli run \
   --library ucie \
   --version stable_20250608 \
   --workdir $WORK \
-  --mode signature \
+  --mode candidate \
   --parse-jobs 4 \
   --skip-cache \
   --console-progress \
@@ -707,4 +707,3 @@ Current expected unittest result:
 Ran 80 tests
 OK
 ```
-

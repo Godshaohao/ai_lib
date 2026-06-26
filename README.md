@@ -24,7 +24,8 @@ Catalog -> Library Version Timeline -> Version Review / Selected Diff -> recomme
 - A library has one mixed timeline. Raw deliveries and composed effective nodes are not separated into two version systems.
 - Version Review is the raw single-version detail page. Its first section is `更新详情（vs <previous_effective>）`, combining release_note/changelog text with the automatic diff summary for the current version.
 - Full packages use full compare semantics against the previous effective baseline. Partial, hotfix, and scoped update packages use incremental compare semantics, so files missing from the package are not treated as deletes.
-- Version Review also embeds scan inventory, Count-only + Corner Summary, parser summaries, and pre-diff readiness instead of sending normal reviewers to a separate scan page.
+- Version Review also embeds scan inventory, Count-only + Corner Summary, parser-backed evidence summaries, and pre-diff readiness instead of sending normal reviewers to a separate scan page.
+- Page labels such as `Parser Summary`, `Diff Summary`, and `Corner Summary` mean HTML evidence summaries. They do not reintroduce the legacy standalone `summary rebuild` step.
 - Each timeline node carries `node_kind` (`raw`, `effective`, or `release`) and `package_type` (`full`, `partial`, `hotfix`, `doc`, `composed`, or `unknown`).
 - `latest_effective_ref` points to the current usable node. It can point directly to a full raw package or to an effective composed manifest.
 - Full raw packages can become the latest effective library without generating a duplicate effective node.
@@ -49,7 +50,8 @@ Key v6 parser/diff additions:
 - Liberty now extracts `is_macro`, `is_pad`, and cell attribute lines.
 - SDC/UPF keep command counts and add semantic fields for clocks, uncertainty, loads, power domains, supplies, isolation, retention, and level shifters.
 - Waiver, IBIS, PWL, SNP/Touchstone, and CPM are available through scan parsers and the pairwise `file-diff` CLI.
-- Scan defaults keep `.lib/.lib.gz`, `.db`, `.spef`, and layout/binary views as Count-only inventory: count, type, path, and filename corner summary. Lightweight text/structure views still run parser-backed summaries by default.
+- Scan defaults use `candidate` evidence mode for normal review: lightweight key files run parsers for Version Review, while `.lib/.lib.gz`, `.db`, `.spef`, and layout/binary views stay Count-only inventory with count, type, path, and filename corner summary.
+- Compatibility modes still exist for debugging: `quick` / `inventory` skip parser work, `signature` builds signatures without parser content, and `release` / `diff` / `refresh` / `full` keep parser-enabled behavior for deeper workflows.
 - Parser Summary rows expose a folded `Parser Details` section with up to the first 10 extracted objects per parser so reviewers can inspect real extracted content without turning the page into a raw dump.
 
 ## Workflow Pack Integration
@@ -80,6 +82,8 @@ cd $WORK
 $PROJ/scripts/lg.csh cat
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
+$PROJ/scripts/lg.csh refresh <LIBRARY>
+$PROJ/scripts/lg.csh refresh --all
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> lef/<FILE>.lef --base <BASE_VERSION>
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> model/<FILE>.ibs --base <BASE_VERSION>
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> touch/<FILE>.s2p --type snp --base <BASE_VERSION>
@@ -92,6 +96,7 @@ Short aliases are intended for daily csh use:
 cat -> catalog
 cmp -> diff
 fd  -> file-diff
+rf  -> refresh
 rel -> release
 ```
 
@@ -99,10 +104,12 @@ Use `--dry-run` before expensive work:
 
 ```csh
 $PROJ/scripts/lg.csh --dry-run cmp <LIBRARY> <VERSION> --base <BASE_VERSION>
+$PROJ/scripts/lg.csh --dry-run refresh --all
 $PROJ/scripts/lg.csh --dry-run fd <LIBRARY> <VERSION> waiver/<FILE>.waiver --base <BASE_VERSION>
 ```
 
 The short CLI still resolves paths from `catalog.json`; do not pass paths relative to `$RAW`.
+`refresh` resolves the current/latest raw version already known by `catalog.json`, then runs `compare --scan-if-missing` so the Version Review update-detail diff is rebuilt. Run `cat` first when new RAW directories must be discovered.
 `file-diff` relpaths are relative to the selected version root and support:
 `lef`, `liberty`, `verilog`, `cdl`, `sdc`, `upf`, `cpf`, `spef`, `db`, `waiver`, `ibis`, `pwl`, `snp`, and `cpm`.
 
@@ -113,7 +120,7 @@ $env:PYTHONPATH='src'
 $PY='C:\Users\Polaris\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 
 & $PY -m lib_guard.cli catalog scan --root <RAW_ROOT> --out <WORK>\catalog --render --html-out <WORK>\catalog\html --policy configs\catalog_policy.json
-& $PY -m lib_guard.cli run-batch --catalog <WORK>\catalog\catalog.json --mode signature --workdir <WORK> --parse-jobs 8
+& $PY -m lib_guard.cli run-batch --catalog <WORK>\catalog\catalog.json --mode candidate --workdir <WORK> --parse-jobs 8
 & $PY -m lib_guard.cli compare --catalog <WORK>\catalog\catalog.json --library <LIBRARY> --new <VERSION> --workdir <WORK>
 & $PY -m lib_guard.cli file-diff sdc --old <OLD.sdc> --new <NEW.sdc> --out <WORK>\file_diff\sdc_case
 & $PY -m unittest discover -s src\lib_guard\test -p 'test*.py'

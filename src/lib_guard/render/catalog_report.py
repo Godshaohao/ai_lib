@@ -1042,7 +1042,7 @@ def _catalog_browser_styles() -> str:
     return """
 <style>
 .library-main{grid-template-columns:minmax(140px,.8fr) minmax(128px,.7fr) minmax(128px,.7fr);align-items:start}
-.library-main>div{min-width:0}.library-main b[title]{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.library-name-row,.library-path-row,.library-status{grid-column:1/-1}.library-name-row{padding-bottom:2px}.library-title{font-size:18px;line-height:1.28}.library-path-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;align-items:start;border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:7px 9px}.library-path-row span{font-size:12px;font-weight:800}.library-path-row code{display:block;color:#344054;white-space:normal;overflow-wrap:anywhere;word-break:break-word}.library-status{min-width:0;justify-content:flex-start;padding-top:10px;margin-top:2px;border-top:1px dashed var(--line);overflow:visible}.library-status .action-strip{max-width:100%;min-width:0;overflow:visible;white-space:normal;flex-wrap:wrap;padding-bottom:0}.long-token{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}.library-title.long-token{display:block}.version-name.long-token{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.version-list{gap:7px}.version-row{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(210px,1fr) minmax(220px,.95fr) minmax(76px,auto);gap:12px;align-items:center;border:1px solid var(--line);background:#fff;border-radius:11px;padding:10px 12px}.version-id-cell{min-width:0}.version-name{font-weight:800;font-size:14px;line-height:1.25}.version-path{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.version-badges{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}.version-badges .badge{max-width:132px}.version-relation{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px;min-width:0}.version-relation span{border:1px solid var(--line);border-radius:8px;background:#f8fafc;padding:5px 7px;min-width:0}.version-relation b{display:block;color:#667085;font-size:11px;line-height:1.2}.version-relation em{display:block;font-style:normal;font-size:12px;color:#344054;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.version-action{text-align:right;min-width:0}.version-action .btn{max-width:100%}.table-wrap td code{white-space:normal;overflow-wrap:anywhere;word-break:break-word}.trace-link-row{min-width:0}.trace-link-row>div{min-width:0}.release-mini{display:inline-flex}.command-example-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.catalog-note{border:1px solid var(--line);border-radius:12px;background:#f8fafc;padding:12px;color:#667085;font-size:13px}@media(max-width:1180px){.library-main{grid-template-columns:1fr}.library-path-row{grid-template-columns:1fr}.version-row{grid-template-columns:1fr}.version-action{text-align:left}.version-relation{grid-template-columns:1fr}}
+.library-main>div{min-width:0}.library-main b[title]{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.library-name-row,.library-path-row,.library-status{grid-column:1/-1}.library-name-row{padding-bottom:2px}.library-title{font-size:18px;line-height:1.28}.library-path-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;align-items:start;border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:7px 9px}.library-path-row span{font-size:12px;font-weight:800}.library-path-row code{display:block;color:#344054;white-space:normal;overflow-wrap:anywhere;word-break:break-word}.library-status{min-width:0;justify-content:flex-start;padding-top:10px;margin-top:2px;border-top:1px dashed var(--line);overflow:visible}.library-status .action-strip{max-width:100%;min-width:0;overflow:visible;white-space:normal;flex-wrap:wrap;padding-bottom:0}.long-token{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}.library-title.long-token{display:block}.version-name.long-token{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.version-list{gap:7px}.version-row{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(210px,1fr) minmax(220px,.95fr) minmax(76px,auto);gap:12px;align-items:center;border:1px solid var(--line);background:#fff;border-radius:11px;padding:10px 12px}.version-id-cell{min-width:0}.version-name{font-weight:800;font-size:14px;line-height:1.25}.version-path{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.version-badges{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}.version-badges .badge{max-width:132px}.version-relation{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px;min-width:0}.version-relation span{border:1px solid var(--line);border-radius:8px;background:#f8fafc;padding:5px 7px;min-width:0}.version-relation b{display:block;color:#667085;font-size:11px;line-height:1.2}.version-relation em{display:block;font-style:normal;font-size:12px;color:#344054;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.version-action{text-align:right;min-width:0}.version-action .btn{max-width:100%}.table-wrap td code{white-space:normal;overflow-wrap:anywhere;word-break:break-word}.absolute-path-box{margin:0 0 18px;border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px}.absolute-path-box b{display:block;font-size:12px;color:#667085;margin-bottom:4px}.absolute-path-box code{display:block;color:#344054;white-space:normal;overflow-wrap:anywhere;word-break:break-word}.version-scroll-table{max-width:100%;overflow:auto;scrollbar-gutter:stable;border:1px solid var(--line);border-radius:10px;background:#fff;margin-top:12px}.version-scroll-table table{min-width:720px}.version-scroll-table.change-scroll table{min-width:1800px}.version-scroll-table.metric-scroll{max-height:300px}.version-scroll-table.change-scroll{height:420px;max-height:420px;overflow:scroll}.version-scroll-table th{position:sticky;top:0;z-index:1}.version-scroll-table td code{white-space:nowrap;overflow-wrap:normal;word-break:normal}.version-scroll-table.change-scroll td:nth-child(3) code{display:inline-block;min-width:1080px}.trace-link-row{min-width:0}.trace-link-row>div{min-width:0}.release-mini{display:inline-flex}.command-example-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.catalog-note{border:1px solid var(--line);border-radius:12px;background:#f8fafc;padding:12px;color:#667085;font-size:13px}@media(max-width:1180px){.library-main{grid-template-columns:1fr}.library-path-row{grid-template-columns:1fr}.version-row{grid-template-columns:1fr}.version-action{text-align:left}.version-relation{grid-template-columns:1fr}}
 .effective-summary{display:flex;flex-direction:column;gap:12px}.effective-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.effective-head h3{margin:3px 0 0;font-size:18px;max-width:680px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.effective-stack{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}.effective-chip{flex:0 0 220px;border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:9px}.effective-chip.base{background:#eff6ff;border-color:#bfdbfe}.effective-chip.update{background:#f5f3ff;border-color:#ddd6fe}.effective-chip b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.effective-chip em{display:block;font-size:12px;color:#667085;font-style:normal;margin-top:3px}.effective-tags{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.effective-tags>b{font-size:12px;color:#667085;min-width:44px}.effective-mini{display:flex;gap:8px;align-items:center;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px}.tiny-tag{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px 7px;background:#fff;font-size:12px;color:#344054}
 </style>
 """
@@ -1293,7 +1293,7 @@ def _parser_review_metrics(file_type: str, data: Mapping[str, Any]) -> list[tupl
     if key == "lef":
         return [("Macros", _stats_value(data, "macro_count", "macros")), ("Pins", _stats_value(data, "pin_count", "pins")), ("Layers", _stats_value(data, "layer_count", "layers"))]
     if key in {"verilog", "systemverilog"}:
-        return [("Modules", _stats_value(data, "module_count", "modules")), ("Ports", _stats_value(data, "port_count", "ports")), ("Defines", _stats_value(data, "define_count", "defines"))]
+        return [("Modules", _stats_value(data, "module_count", "modules")), ("Ports", _stats_value(data, "port_count", "ports"))]
     if key == "cdl":
         return [("Subckts", _stats_value(data, "subckt_count", "subckts", "circuits")), ("Pins", _stats_value(data, "pin_count", "pins")), ("Instances", _stats_value(data, "instance_count", "instances"))]
     if key == "sdc":
@@ -1314,6 +1314,22 @@ def _parser_review_metrics(file_type: str, data: Mapping[str, Any]) -> list[tupl
     return [(str(k).replace("_count", "").replace("_", " ").title(), v) for k, v in list(stats.items())[:4] if str(k).endswith("_count")]
 
 
+def _parser_scope_html(file_type: str, data: Mapping[str, Any]) -> str:
+    key = file_type.lower()
+    if key not in {"verilog", "systemverilog"}:
+        return ""
+    parsed = [str(item) for item in data.get("parsed_fields", []) or [] if str(item)]
+    unparsed = [str(item) for item in data.get("unparsed_features", []) or [] if str(item)]
+    rows = []
+    if parsed:
+        rows.append(f"<span class='tiny-tag'><b>Parsed Scope</b>&nbsp;{ui.esc(', '.join(parsed))}</span>")
+    if unparsed:
+        rows.append(f"<span class='tiny-tag'><b>Not Parsed</b>&nbsp;{ui.esc(', '.join(unparsed))}</span>")
+    if not rows:
+        return ""
+    return "<div class='effective-tags parser-scope'>" + "".join(rows) + "</div>"
+
+
 def _version_parser_rows(parser_manifest: Mapping[str, Any], parser_results: Mapping[str, Any]) -> list[str]:
     rows: list[str] = []
     result_by_path = dict(parser_results or {})
@@ -1327,12 +1343,13 @@ def _version_parser_rows(parser_manifest: Mapping[str, Any], parser_results: Map
             file_type = str(result.get("file_type") or file_entry.get("file_type") or "-")
             metrics = _parser_review_metrics(file_type, data)
             metric_html = "<div class='effective-tags'>" + "".join(_metric_text(label, value) for label, value in metrics) + "</div>" if metrics else ui.muted("-")
+            scope_html = _parser_scope_html(file_type, data)
             detail_html = _parser_detail_html(data)
             rows.append(
                 "<tr>"
                 f"<td><b>{ui.esc(file_type.upper() if file_type != 'waiver' else 'Waiver')}</b><br><code>{ui.esc(parser_name)}</code></td>"
                 f"<td>{ui.badge(str(task.get('result_status') or task.get('status') or result.get('status') or 'UNKNOWN'))}</td>"
-                f"<td>{metric_html}{detail_html}</td>"
+                f"<td>{metric_html}{scope_html}{detail_html}</td>"
                 f"<td><code>{ui.esc(result.get('file') or file_entry.get('file') or '-')}</code></td>"
                 "</tr>"
             )
@@ -1349,6 +1366,9 @@ def _summary_metric_rows(summary: Mapping[str, Any]) -> list[str]:
         "view_changes",
         "type_changes",
         "release_evidence_changes",
+        "parser_regressions",
+        "parser_status_regressions",
+        "readiness_regressions",
         "manual_pairwise_tasks",
         "manual_review_items",
         "breaking_changes",
@@ -1368,7 +1388,29 @@ def _as_int(value: Any) -> int:
         return 0
 
 
-def _file_change_entries(file_diff: Mapping[str, Any]) -> list[tuple[str, str, str]]:
+def _relative_display_path(path: Any, *, base: Any = None, tail_parts: int = 4) -> str:
+    text = str(path or "-")
+    if text == "-":
+        return text
+    p = Path(text)
+    if base:
+        try:
+            return p.relative_to(Path(str(base))).as_posix()
+        except Exception:
+            pass
+    if p.is_absolute():
+        parts = p.parts[-tail_parts:]
+        return Path(*parts).as_posix() if parts else p.name
+    return text.replace("\\", "/")
+
+
+def _raw_relpath(raw_path: Any) -> str:
+    p = Path(str(raw_path or ""))
+    parts = p.parts[-2:]
+    return Path(*parts).as_posix() if parts else "-"
+
+
+def _file_change_entries(file_diff: Mapping[str, Any], *, raw_path: Any = None) -> list[tuple[str, str, str]]:
     entries: list[tuple[str, str, str]] = []
     for kind in ["added", "removed", "changed"]:
         value = file_diff.get(kind)
@@ -1378,17 +1420,18 @@ def _file_change_entries(file_diff: Mapping[str, Any]) -> list[tuple[str, str, s
             iterable = value
         else:
             iterable = []
-        for item in iterable[:20]:
+        for item in iterable:
             if isinstance(item, Mapping):
-                entries.append((kind, str(item.get("file_type") or item.get("type") or "-"), str(item.get("path") or item.get("relpath") or item.get("file") or "-")))
+                path = _relative_display_path(item.get("path") or item.get("relpath") or item.get("file") or "-", base=raw_path)
+                entries.append((kind, str(item.get("file_type") or item.get("type") or "-"), path))
             else:
-                entries.append((kind, "-", str(item)))
+                entries.append((kind, "-", _relative_display_path(item, base=raw_path)))
     return entries
 
 
-def _file_change_rows(file_diff: Mapping[str, Any]) -> list[str]:
+def _file_change_rows(file_diff: Mapping[str, Any], *, raw_path: Any = None) -> list[str]:
     rows = []
-    for kind, file_type, path in _file_change_entries(file_diff):
+    for kind, file_type, path in _file_change_entries(file_diff, raw_path=raw_path):
         rows.append(
             "<tr>"
             f"<td>{ui.badge(kind.upper(), kind)}</td>"
@@ -1399,12 +1442,12 @@ def _file_change_rows(file_diff: Mapping[str, Any]) -> list[str]:
     return rows
 
 
-def _release_note_rows(notes: list[dict[str, str]]) -> list[str]:
+def _release_note_rows(notes: list[dict[str, str]], *, raw_path: Any = None) -> list[str]:
     rows = []
     for item in notes:
         rows.append(
             "<tr>"
-            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
+            f"<td><code>{ui.esc(_relative_display_path(item.get('path') or '-', base=raw_path))}</code></td>"
             f"<td>{ui.esc(item.get('summary') or '-')}</td>"
             "</tr>"
         )
@@ -1416,6 +1459,24 @@ def _recommended_action_rows(summary: Mapping[str, Any]) -> list[str]:
     for action in summary.get("recommended_actions", []) or []:
         rows.append(f"<tr><td>{ui.esc(action)}</td></tr>")
     return rows
+
+
+def _scroll_table(headers: list[str], rows: list[str], empty: str, class_name: str) -> str:
+    head = "".join(f"<th>{ui.esc(h)}</th>" for h in headers)
+    body = "".join(rows) if rows else f"<tr><td colspan='{len(headers)}' class='empty'>{ui.esc(empty)}</td></tr>"
+    return f"<div class='version-scroll-table {ui.esc(class_name)}'><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
+
+
+def _absolute_path_box(label: str, path: Any) -> str:
+    if not path:
+        text = "-"
+    else:
+        p = Path(str(path))
+        try:
+            text = str(p if p.is_absolute() else p.resolve())
+        except Exception:
+            text = str(p)
+    return f"<div class='absolute-path-box'><b>{ui.esc(label)}</b><code>{ui.esc(text)}</code></div>"
 
 
 def _version_update_detail_panel(version: Mapping[str, Any]) -> str:
@@ -1431,13 +1492,13 @@ def _version_update_detail_panel(version: Mapping[str, Any]) -> str:
         "版本更新说明默认放在最前面：优先展示 release note，再结合自动 diff 给出结构化变化。",
         ui.metric_grid([
             ("Compare Strategy", strategy, strategy_note, "WARNING" if strategy == "incremental compare" else "PASS"),
-            ("Diff Summary", summary_status, str(diff_dir or "no diff_summary.json"), summary_status),
+            ("Diff Summary", summary_status, _relative_display_path(diff_dir, tail_parts=4) if diff_dir else "no diff_summary.json", summary_status),
             ("Changed Files", summary.get("changed_files", 0), "changed_files", "WARNING" if _as_int(summary.get("changed_files", 0)) else "INFO"),
             ("Release Notes", len(notes), "release_note / changelog / update_note", "PASS" if notes else "INFO"),
         ])
-        + ui.table(["Metric", "Value"], _summary_metric_rows(summary), "暂无自动 diff 结果")
-        + ui.table(["Change", "Type", "Path"], _file_change_rows(file_diff), "暂无文件级 diff 明细")
-        + ui.table(["Release Note", "Summary"], _release_note_rows(notes), "暂无 release_note / changelog 摘要")
+        + _scroll_table(["Metric", "Value"], _summary_metric_rows(summary), "暂无自动 diff 结果", "metric-scroll")
+        + _scroll_table(["Change", "Type", "Path"], _file_change_rows(file_diff, raw_path=version.get("raw_path")), "暂无文件级 diff 明细", "change-scroll")
+        + ui.table(["Release Note", "Summary"], _release_note_rows(notes, raw_path=version.get("raw_path")), "暂无 release_note / changelog 摘要")
         + ui.table(["Recommended Action"], _recommended_action_rows(summary), "暂无推荐动作"),
     )
 
@@ -1480,7 +1541,8 @@ def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str
     )
     corner_summary = inventory.get("corner_filename_summary") or {}
     body = (
-        _version_update_detail_panel(version)
+        _absolute_path_box("Absolute Raw Path", version.get("raw_path"))
+        + _version_update_detail_panel(version)
         +
         ui.panel(
             "Raw Version Detail",
@@ -1496,7 +1558,7 @@ def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str
             + ui.compact_meta([
                 ("Library", lib_id),
                 ("Version", version_id),
-                ("Raw Path", version.get("raw_path") or "-"),
+                ("Raw Relpath", _raw_relpath(version.get("raw_path"))),
                 ("Stage", version.get("stage") or "-"),
                 ("base_full", _base_full_version(version) or "-"),
                 ("previous_effective", _previous_effective_version(version) or "-"),

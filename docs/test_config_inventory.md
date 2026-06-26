@@ -44,11 +44,21 @@ release_root: <workspace>/release_area
 versions: <workspace>/config/library_versions.tsv
 actions_dir: <workspace>/actions
 library_type: ip
-mode: signature
+mode: candidate
 parse_jobs: 8
 ```
 
-`mode` is still present because the old scan runner expects it. It should be treated as an internal compatibility value, not a user-facing concept.
+`mode` is still present because the scan runner expects it. The default is `candidate` so Version Review has parser-backed evidence without asking normal users to choose a scan profile. Legacy/debug values still exist: `quick` / `inventory` skip parser work, `signature` builds signature-style evidence without parser content, and `release` / `diff` / `refresh` / `full` are parser-enabled deeper modes.
+
+Version Review reads parser evidence from:
+
+- `parser_manifest.json`
+- `parser_results.json`
+- `summary/parser_quality.json`
+
+Default ignored-for-content views remain Count-only in normal review, especially `.lib/.lib.gz`, `.db`, `.spef`, and layout/binary files. They are counted, classified, and used for filename corner hints, but their contents are not opened by the default page path.
+
+Verilog parsing is intentionally lightweight. The default Verilog parser records only `module`, `port`, `direction`, `width`, `declared_range`, `module_count`, and `port_count`. It does not parse `instance`, `parameter_value`, `generate_block`, `always_block`, `assign_expression`, or `gate_netlist_connectivity`. Large synthesized/gate netlists should be treated as metadata/count-only by product policy unless a dedicated netlist parser is added.
 
 ## Version List
 
@@ -121,6 +131,7 @@ Notes:
 
 - `catalog_state.json` is the page state model used by the catalog HTML.
 - `manager_tasks.json` is a manager-facing task list for missing scan/diff/relation evidence. It is valid, but not part of the normal IP-user update-consumption path.
+- Version Review may show `Parser Summary`, `Diff Summary`, and `Count-only + Corner Summary`; those are page evidence summaries, not the legacy standalone summary rebuild step.
 - `manual_preview/**` is only a local generated browser preview. It is ignored by git and can be regenerated from the test catalog.
 - `summary_policy.json` remains for legacy `update` / summary rebuild compatibility. The current catalog/action workflow should not require adding a new summary step when adding file types.
 

@@ -31,6 +31,8 @@ SHORT_COMMAND_ALIASES = {
     "compare": "diff",
     "fd": "file-diff",
     "filediff": "file-diff",
+    "rf": "refresh",
+    "refresh-diff": "refresh",
     "rel": "release",
 }
 
@@ -56,7 +58,7 @@ def write_default_config(workspace: str | Path, *, raw_root: str | Path | None =
         f"versions: {root / 'config' / 'library_versions.tsv'}",
         f"actions_dir: {root / 'actions'}",
         f"library_type: {library_type}",
-        "mode: signature",
+        "mode: candidate",
         "parse_jobs: 8",
     ]
     path = root / CONFIG_NAME
@@ -116,7 +118,7 @@ def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[st
             cfg["catalog_policy"] = str(library_catalog)
         elif default_policy and default_policy.exists():
             cfg["catalog_policy"] = str(default_policy)
-    cfg.setdefault("mode", "signature")
+    cfg.setdefault("mode", "candidate")
     cfg.setdefault("parse_jobs", "8")
     return cfg
 
@@ -269,6 +271,96 @@ def _find_version(library: dict[str, Any], version: str) -> dict[str, Any]:
     raise ValueError(f"version not found in catalog: {version}")
 
 
+def _latest_refresh_version(library: dict[str, Any]) -> dict[str, Any] | None:
+    versions = [item for item in library.get("versions", []) or [] if isinstance(item, dict)]
+    if not versions:
+        return None
+    current_raw = [item for item in versions if item.get("current_effective")]
+    if current_raw:
+        return current_raw[-1]
+    by_id = {str(item.get("version_id") or ""): item for item in versions}
+    summary = library.get("summary", {}) or {}
+    for key in ["latest_effective_ref", "latest_version", "current_version"]:
+        value = str(summary.get(key) or "")
+        if value in by_id:
+            return by_id[value]
+    return versions[-1]
+
+
+def _library_cli_name(library: dict[str, Any]) -> str:
+    return str(library.get("library_name") or library.get("library_id") or "")
+
+
+def _refresh_compare_command(
+    cfg: dict[str, str],
+    library: str,
+    version: str,
+    *,
+    mode: str = "adjacent",
+    rescan: bool = False,
+) -> list[str]:
+    command = [
+        "compare",
+        "--catalog",
+        cfg["catalog"],
+        "--library",
+        library,
+        "--new",
+        version,
+        "--mode",
+        mode,
+        "--workdir",
+        cfg["workspace"],
+        "--catalog-html-out",
+        cfg["catalog_html"],
+    ]
+    command.append("--rescan" if rescan else "--scan-if-missing")
+    command.extend(["--scan-mode", cfg["mode"]])
+    command.extend(["--parse-jobs", cfg["parse_jobs"]])
+    command.extend(["--progress-interval", "1", "--console-progress"])
+    return command
+
+
+def _refresh_commands(cfg: dict[str, str], args: Any) -> list[list[str]]:
+    if bool(getattr(args, "all", False)) == bool(getattr(args, "library", None)):
+        raise ValueError("refresh requires exactly one of: <library> or --all")
+    commands: list[list[str]] = []
+    if getattr(args, "refresh_catalog", False):
+        commands.append(
+            _catalog_scan_command(
+                cfg,
+                None if getattr(args, "all", False) else args.library,
+                with_evidence=bool(getattr(args, "with_evidence", False)),
+            )
+        )
+    data = _catalog_data(cfg)
+    libraries = data.get("libraries", []) or []
+    if getattr(args, "all", False):
+        selected = [item for item in libraries if isinstance(item, dict)]
+    else:
+        selected = [_find_library(data, args.library)]
+    for lib in selected:
+        version = _latest_refresh_version(lib)
+        if not version:
+            continue
+        library_name = _library_cli_name(lib)
+        version_id = str(version.get("version_id") or "")
+        if not library_name or not version_id:
+            continue
+        commands.append(
+            _refresh_compare_command(
+                cfg,
+                library_name,
+                version_id,
+                mode=getattr(args, "mode", "adjacent"),
+                rescan=bool(getattr(args, "rescan", False)),
+            )
+        )
+    if not commands:
+        raise ValueError("refresh found no catalog versions to compare")
+    return commands
+
+
 def _resolve_old_version(library: dict[str, Any], version: dict[str, Any], explicit_base: str | None) -> dict[str, Any]:
     if explicit_base:
         return _find_version(library, explicit_base)
@@ -342,6 +434,8 @@ def _build_parser() -> ArgumentParser:
     lg.csh scan ucie stable_20250608
     lg.csh cmp ucie stable_20250608
     lg.csh cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
+    lg.csh refresh ucie
+    lg.csh refresh --all
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
     lg.csh fd ucie stable_20250608 model/ucie.ibs --base initial_20250601
     lg.csh fd ucie stable_20250608 touch/chan.s2p --type snp
@@ -366,6 +460,8 @@ def _build_parser() -> ArgumentParser:
     lg.ps1 scan ucie stable_20250608
     lg.ps1 cmp ucie stable_20250608
     lg.ps1 cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
+    lg.ps1 refresh ucie
+    lg.ps1 refresh --all
     lg.ps1 fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
     lg.ps1 action ucie
 
@@ -444,6 +540,14 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--rescan", action="store_true", help="Force rescan of old and new versions before compare")
     p.add_argument("--auto-scan", action="store_true", help="Deprecated alias for --scan-if-missing; does not force rescan")
     p.add_argument("--refresh-catalog", action="store_true", help="Refresh this library catalog before compare. Default is to use existing catalog.json.")
+    p.add_argument("--with-evidence", action="store_true", help="When --refresh-catalog is used, collect file-type evidence during catalog refresh")
+
+    p = sub.add_parser("refresh", aliases=["rf", "refresh-diff"], help="Refresh latest/current raw version update detail diff")
+    p.add_argument("library", nargs="?")
+    p.add_argument("--all", action="store_true", help="Refresh latest/current raw version diff for every catalog library")
+    p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"], help="Catalog relation used when compare infers the base")
+    p.add_argument("--rescan", action="store_true", help="Force rescan before compare instead of scanning only missing evidence")
+    p.add_argument("--refresh-catalog", action="store_true", help="Refresh catalog before resolving latest/current versions")
     p.add_argument("--with-evidence", action="store_true", help="When --refresh-catalog is used, collect file-type evidence during catalog refresh")
 
     p = sub.add_parser("file-diff", aliases=["fd", "filediff"], help="Run pairwise file diff from catalog raw paths; never runs scan")
@@ -867,6 +971,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         return [_override_command(cfg, args)]
     if args.short_command in {"action", "act", "review"}:
         return _review_commands(cfg, args)
+    if args.short_command == "refresh":
+        return _refresh_commands(cfg, args)
     if args.short_command == "scan":
         with_evidence = bool(getattr(args, "with_evidence", False))
         if args.library and args.version:

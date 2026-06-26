@@ -87,7 +87,7 @@ find
 du
 ls
 python -m lib_guard.cli catalog scan
-python -m lib_guard.cli scan --mode signature
+python -m lib_guard.cli scan --mode candidate
 ```
 
 Do not run by default:

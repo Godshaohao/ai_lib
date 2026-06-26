@@ -5,6 +5,16 @@ import re
 from .base import BaseParser, make_parser_envelope, record_abs_path, get_field, read_text_file
 
 VERILOG_PARSER_VERSION = '2.0'
+VERILOG_PARSE_STRATEGY = "lightweight_rtl_interface"
+VERILOG_PARSED_FIELDS = ["module", "port", "direction", "width", "declared_range", "module_count", "port_count"]
+VERILOG_UNPARSED_FEATURES = [
+    "instance",
+    "parameter_value",
+    "generate_block",
+    "always_block",
+    "assign_expression",
+    "gate_netlist_connectivity",
+]
 _RE_MODULE = re.compile(r'\bmodule\s+([A-Za-z_][\w$]*)\s*(?:#\s*\(.*?\)\s*)?\((.*?)\)\s*;', re.S)
 _RE_DECL = re.compile(r'\b(input|output|inout)\b\s*(?:wire|reg|logic)?\s*(\[[^\]]+\])?\s*([^;]+);', re.I | re.S)
 _RE_RANGE = re.compile(r'\[\s*([^:\]]+)\s*:\s*([^\]]+)\s*\]')
@@ -44,7 +54,16 @@ def parse_verilog_text(text: str, source: str = '') -> dict[str, Any]:
                 mod['ports'].setdefault(pname, {'name': pname})
                 if pname not in mod['port_order']: mod['port_order'].append(pname)
                 mod['ports'][pname].update({'direction': direction, 'width': width, 'declared_range': rng})
-    return {'source': source, 'modules': modules, 'module_order': list(modules.keys()), 'stats': {'module_count': len(modules), 'port_count': sum(len(m['ports']) for m in modules.values())}}
+    return {
+        'source': source,
+        'parse_strategy': VERILOG_PARSE_STRATEGY,
+        'parsed_fields': list(VERILOG_PARSED_FIELDS),
+        'unparsed_features': list(VERILOG_UNPARSED_FEATURES),
+        'recommendation': 'Use File Diff or a dedicated netlist parser for large gate netlists and connectivity review.',
+        'modules': modules,
+        'module_order': list(modules.keys()),
+        'stats': {'module_count': len(modules), 'port_count': sum(len(m['ports']) for m in modules.values())},
+    }
 
 def parse_verilog_data_file(path: str | Path) -> dict[str, Any]:
     return parse_verilog_text(read_text_file(path), source=str(path))

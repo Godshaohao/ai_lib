@@ -1328,6 +1328,20 @@ class V5ScanPipelineTest(unittest.TestCase):
                                         "diff": {"adjacent_old_version": "initial_20250601"},
                                     },
                                 ],
+                            },
+                            {
+                                "library_id": "pcie",
+                                "library_name": "pcie",
+                                "versions": [
+                                    {"version_id": "base_20250601", "version_key": "ip/pcie/base_20250601", "raw_path": str(raw / "pcie" / "base_20250601")},
+                                    {
+                                        "version_id": "latest_20250608",
+                                        "version_key": "ip/pcie/latest_20250608",
+                                        "raw_path": str(raw / "pcie" / "latest_20250608"),
+                                        "current_effective": True,
+                                        "diff": {"adjacent_old_version": "base_20250601"},
+                                    },
+                                ],
                             }
                         ],
                     },
@@ -1403,6 +1417,24 @@ class V5ScanPipelineTest(unittest.TestCase):
             self.assertIn("--parse-jobs", explicit_diff_cmds[0])
             self.assertIn("8", explicit_diff_cmds[0])
             self.assertIn("--base", explicit_diff_cmds[-1])
+
+            refresh_latest_cmds = build_cli_commands(["refresh", "ucie"], cwd=workspace)
+            self.assertEqual(len(refresh_latest_cmds), 1)
+            self.assertEqual(refresh_latest_cmds[0][0], "compare")
+            self.assertIn("--library", refresh_latest_cmds[0])
+            self.assertIn("ucie", refresh_latest_cmds[0])
+            self.assertIn("--new", refresh_latest_cmds[0])
+            self.assertIn("stable_20250608", refresh_latest_cmds[0])
+            self.assertIn("--scan-if-missing", refresh_latest_cmds[0])
+            self.assertIn("--scan-mode", refresh_latest_cmds[0])
+            self.assertIn("candidate", refresh_latest_cmds[0])
+
+            refresh_all_cmds = build_cli_commands(["refresh", "--all"], cwd=workspace)
+            self.assertEqual(len(refresh_all_cmds), 2)
+            self.assertEqual(refresh_all_cmds[0][0], "compare")
+            self.assertIn("stable_20250608", refresh_all_cmds[0])
+            self.assertIn("pcie", refresh_all_cmds[1])
+            self.assertIn("latest_20250608", refresh_all_cmds[1])
 
     def test_short_cli_can_use_env_config_without_repeating_config_arg(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1671,6 +1703,33 @@ class V5ScanPipelineTest(unittest.TestCase):
         self.assertNotIn("rebuilt_summaries", source)
         self.assertNotIn("developer_artifacts", source)
 
+    def test_default_scan_modes_generate_version_review_parser_evidence(self) -> None:
+        from lib_guard.cli import build_parser
+
+        parser = build_parser()
+
+        direct = parser.parse_args(["scan", "--root", "raw", "--profile", "ip", "--name", "ucie", "--version", "stable_20250608"])
+        run = parser.parse_args(["run", "--catalog", "catalog.json", "--library", "ucie", "--version", "stable_20250608"])
+        batch = parser.parse_args(["run-batch", "--catalog", "catalog.json"])
+        compare = parser.parse_args(["compare", "--catalog", "catalog.json", "--library", "ucie", "--new", "stable_20250608", "--scan-if-missing"])
+        render = parser.parse_args(["render", "--latest", "--library-id", "ip/ucie/stable_20250608"])
+        status = parser.parse_args(["scan-status", "--latest", "--library-id", "ip/ucie/stable_20250608"])
+
+        self.assertEqual(direct.mode, "candidate")
+        self.assertEqual(run.mode, "candidate")
+        self.assertEqual(batch.mode, "candidate")
+        self.assertEqual(compare.scan_mode, "candidate")
+        self.assertEqual(render.mode, "candidate")
+        self.assertEqual(status.mode, "candidate")
+
+    def test_short_cli_init_defaults_to_version_review_scan_mode(self) -> None:
+        from lib_guard.short_cli import write_default_config
+
+        with tempfile.TemporaryDirectory() as td:
+            config = write_default_config(Path(td), raw_root=Path(td) / "raw")
+
+            self.assertIn("mode: candidate", config.read_text(encoding="utf-8"))
+
     def test_scan_signature_uses_smart_hash_policy_for_heavy_eda_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "raw"
@@ -1825,6 +1884,37 @@ class V5ScanPipelineTest(unittest.TestCase):
                 self.assertIn(result["status"], {"PASS", "PASS_EMPTY", "METADATA_ONLY"})
                 self.assertIn("object_count", result["stats"])
                 self.assertNotIn("parser", result)
+
+    def test_verilog_parser_declares_lightweight_scope_and_unparsed_features(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "top.v"
+            path.write_text(
+                "\n".join(
+                    [
+                        "module child(input a, output b); endmodule",
+                        "module top(input clk, input [3:0] data, output done);",
+                        "  child u_child(.a(clk), .b(done));",
+                        "endmodule",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.scan.parsers.verilog import parse_verilog_file
+
+            result = parse_verilog_file(path)
+            data = result["data"]
+            self.assertEqual(data["stats"]["module_count"], 2)
+            self.assertEqual(data["stats"]["port_count"], 5)
+            self.assertEqual(data["parse_strategy"], "lightweight_rtl_interface")
+            self.assertEqual(
+                data["parsed_fields"],
+                ["module", "port", "direction", "width", "declared_range", "module_count", "port_count"],
+            )
+            self.assertIn("instance", data["unparsed_features"])
+            self.assertIn("gate_netlist_connectivity", data["unparsed_features"])
+            self.assertNotIn("instances", data)
+            self.assertNotIn("instance_count", data["stats"])
 
 
 if __name__ == "__main__":

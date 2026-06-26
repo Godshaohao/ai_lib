@@ -29,7 +29,7 @@ Use file type to choose the comparison strategy:
 | --- | --- | --- |
 | Liberty | Did cells, pins, corners, timing arcs, power arcs, or capacitance data change? | Structural parser diff |
 | LEF | Did macros, pins, directions, layers, sizes, obstructions, or blockages change? | Structural parser diff |
-| Verilog | Did modules, ports, directions, widths, parameters, or instances change? | Structural parser diff |
+| Verilog | Did modules, ports, directions, and widths change? | Lightweight RTL interface parser summary; use File Diff or a dedicated netlist parser for instance/connectivity review |
 | CDL/SPICE | Did subckts, pins, instances, or models change? | Structural parser diff |
 | SDC | Did clocks, constraints, exceptions, IO delays, or groups change? | Structural diff when available |
 | UPF/CPF | Did power domains, supplies, isolation, retention, or level shifters change? | Structural diff when available |
@@ -112,7 +112,9 @@ Treat parser results as evidence for review, not as the final expert judgment.
 
 For structural files, focus on domain objects:
 
-- Verilog: module, port, direction, width, instance.
+- Verilog: the default parser is lightweight and only reports `module`, `port`, `direction`, `width`, `declared_range`, `module_count`, and `port_count`.
+- Verilog not parsed by default: `instance`, `parameter_value`, `generate_block`, `always_block`, `assign_expression`, and `gate_netlist_connectivity`.
+- Large synthesized Verilog / gate netlists should default to metadata/count-only plus recommended File Diff or a future dedicated netlist parser.
 - LEF: macro, pin, direction, layer, size.
 - Liberty: cell, pin, corner, timing arc, `is_macro`, `is_pad`.
 - CDL: subckt, pin, instance.

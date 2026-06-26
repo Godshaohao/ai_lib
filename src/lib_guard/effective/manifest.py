@@ -268,6 +268,48 @@ def _component(version_id: str, role: str, scope: Sequence[str] | str | None, or
     }
 
 
+def _version_evidence(version_id: str, role: str, version: Mapping[str, Any]) -> dict[str, Any]:
+    scan = version.get("scan", {}) or {}
+    diff = version.get("diff", {}) or {}
+    release = version.get("release", {}) or {}
+    parser_summary = (
+        scan.get("parser_summary")
+        or scan.get("parser")
+        or version.get("parser_summary")
+        or version.get("parser")
+        or {}
+    )
+    diff_summary = diff.get("summary") or version.get("diff_summary") or {}
+    return {
+        "version_id": version_id,
+        "role": role,
+        "stage": version.get("stage") or "",
+        "package_type": version.get("package_type") or "",
+        "raw_path": str(version.get("raw_path") or version.get("version_path") or ""),
+        "scan_status": scan.get("status") or version.get("scan_status") or "",
+        "scan_mode": scan.get("mode") or scan.get("scan_mode") or version.get("scan_mode") or "",
+        "scan_dir": str(scan.get("scan_dir") or version.get("scan_dir") or ""),
+        "scan_html": str(scan.get("scan_html") or version.get("scan_html") or ""),
+        "parser_summary": parser_summary,
+        "diff_status": diff.get("adjacent_status") or diff.get("status") or version.get("diff_status") or "",
+        "adjacent_old_version": diff.get("adjacent_old_version") or version.get("base_version") or "",
+        "adjacent_diff_html": str(diff.get("adjacent_diff_html") or diff.get("diff_html") or ""),
+        "diff_summary": diff_summary,
+        "release_status": release.get("status") or version.get("release_status") or "",
+        "release_html": str(release.get("html") or release.get("release_html") or ""),
+    }
+
+
+def _version_evidence_summary(components: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    return {
+        "component_count": len(components),
+        "scanned_components": sum(1 for item in components if item.get("scan_status")),
+        "diff_ready_components": sum(1 for item in components if item.get("diff_status") or item.get("adjacent_diff_html")),
+        "parser_components": sum(1 for item in components if item.get("parser_summary")),
+        "release_components": sum(1 for item in components if item.get("release_status") or item.get("release_html")),
+    }
+
+
 def build_effective_manifest(
     catalog: Mapping[str, Any],
     library: str,
@@ -283,6 +325,7 @@ def build_effective_manifest(
     base = find_version(lib, base_full_version)
     effective_files: dict[str, dict[str, Any]] = {}
     components: list[dict[str, Any]] = [_component(base_full_version, "base_full", ["all"], 0)]
+    evidence_components: list[dict[str, Any]] = [_version_evidence(base_full_version, "base_full", base)]
     conflicts: list[dict[str, Any]] = []
     replacement_counts: Counter[str] = Counter()
 
@@ -298,6 +341,7 @@ def build_effective_manifest(
         version = find_version(lib, version_id)
         scope_list = normalize_scope(scope) or normalize_scope(version.get("update_scope"))
         components.append(_component(version_id, "accepted_update", scope_list, order))
+        evidence_components.append(_version_evidence(version_id, "accepted_update", version))
         records = _file_records(version_id, version)
         actual_types = {r["file_type"] for r in records}
         if scope_list and "all" not in scope_list:
@@ -365,6 +409,10 @@ def build_effective_manifest(
         "base_full_version": base_full_version,
         "accepted_updates": [v for v, _ in includes],
         "components": components,
+        "version_evidence": {
+            "summary": _version_evidence_summary(evidence_components),
+            "components": evidence_components,
+        },
         "effective_files": dict(sorted(effective_files.items())),
         "tombstones": tombstones,
         "conflicts": conflicts,

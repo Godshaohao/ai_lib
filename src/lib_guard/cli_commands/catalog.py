@@ -181,7 +181,7 @@ def _compare_scan_child(args: Namespace, library: str, version: str) -> Namespac
         catalog=args.catalog,
         library=library,
         version=version,
-        mode=getattr(args, "scan_mode", "signature"),
+        mode=getattr(args, "scan_mode", "candidate"),
         workdir=getattr(args, "workdir", "work"),
         out=None,
         html_out=None,
@@ -286,7 +286,7 @@ def run_catalog_compare(args: Namespace) -> int:
     diff_leaf = f"base_{old['version_id']}" if explicit_base else args.mode
     diff_dir = args.out or str(Path(args.workdir) / "diff" / new["library_name"] / new["version_id"] / diff_leaf)
     diff_result = diff_scan_outputs(pair["old_scan"], pair["new_scan"], out_path=diff_dir, version_relation=pair["version_relation"])
-    html_out = args.html_out or str(Path(diff_dir).parent / "diff_html")
+    html_out = args.html_out or str(Path(diff_dir) / "diff_html")
     html_result = render_diff_html(diff_dir, html_out)
     update_catalog_diff_status(
         args.catalog,

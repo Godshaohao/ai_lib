@@ -333,7 +333,7 @@ class V5CatalogTest(unittest.TestCase):
             }["stable_20250608"]
             self.assertEqual(new_version["diff"]["adjacent_status"], "DIFF_DONE")
             self.assertTrue(Path(new_version["diff"]["adjacent_diff_dir"]).exists())
-            diff_html = Path(new_version["diff"]["adjacent_diff_dir"]).parent / "diff_html" / "index.html"
+            diff_html = Path(new_version["diff"]["adjacent_diff_html"])
             self.assertTrue(diff_html.exists())
             catalog_html = work / "catalog" / "html" / "libraries" / "ip_ucie" / "index.html"
             self.assertTrue(catalog_html.exists())
@@ -370,6 +370,7 @@ class V5CatalogTest(unittest.TestCase):
             self.assertEqual(new_version["diff"]["base_version"], "stable_20250601")
             self.assertTrue(Path(new_version["diff"]["base_diff_dir"]).exists())
             self.assertTrue(Path(new_version["diff"]["base_diff_html"]).exists())
+            self.assertNotEqual(new_version["diff"]["adjacent_diff_html"], new_version["diff"]["base_diff_html"])
 
     def test_runtime_state_is_separate_and_catalog_html_links_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -447,6 +448,28 @@ class V5CatalogTest(unittest.TestCase):
                     "status": "PASS",
                     "data": {"stats": {"waiver_count": 5}},
                 },
+                "parser_results/verilog/1.json": {
+                    "parser_name": "VerilogParser",
+                    "file_type": "verilog",
+                    "file": "rtl/top.v",
+                    "status": "PASS",
+                    "data": {
+                        "parse_strategy": "lightweight_rtl_interface",
+                        "parsed_fields": ["module", "port", "direction", "width", "declared_range", "module_count", "port_count"],
+                        "unparsed_features": ["instance", "parameter_value", "generate_block", "gate_netlist_connectivity"],
+                        "stats": {"module_count": 1, "port_count": 3},
+                        "modules": {
+                            "top": {
+                                "name": "top",
+                                "ports": {
+                                    "clk": {"direction": "input", "width": 1, "declared_range": None},
+                                    "data": {"direction": "input", "width": 8, "declared_range": "[7:0]"},
+                                    "done": {"direction": "output", "width": 1, "declared_range": None},
+                                },
+                            }
+                        },
+                    },
+                },
             }
             (scan_dir / "parser_results.json").write_text(json.dumps(parser_results, ensure_ascii=False), encoding="utf-8")
             (scan_dir / "parser_manifest.json").write_text(
@@ -457,6 +480,7 @@ class V5CatalogTest(unittest.TestCase):
                             {"file": "sdc/ucie.sdc", "file_type": "sdc", "parser_tasks": [{"parser_name": "SdcParser", "result_status": "PASS", "result_path": "parser_results/sdc/1.json"}]},
                             {"file": "upf/ucie.upf", "file_type": "upf", "parser_tasks": [{"parser_name": "UpfParser", "result_status": "PASS", "result_path": "parser_results/upf/1.json"}]},
                             {"file": "waiver/lint.waiver", "file_type": "waiver", "parser_tasks": [{"parser_name": "WaiverParser", "result_status": "PASS", "result_path": "parser_results/waiver/1.json"}]},
+                            {"file": "rtl/top.v", "file_type": "verilog", "parser_tasks": [{"parser_name": "VerilogParser", "result_status": "PASS", "result_path": "parser_results/verilog/1.json"}]},
                         ]
                     },
                     ensure_ascii=False,
@@ -477,12 +501,13 @@ class V5CatalogTest(unittest.TestCase):
                         "status": "DIFF",
                         "risk_level": "warning",
                         "added_files": 1,
-                        "removed_files": 0,
-                        "changed_files": 3,
+                        "removed_files": 1,
+                        "changed_files": 14,
                         "view_changes": 2,
                         "release_evidence_changes": 1,
                         "manual_pairwise_tasks": 2,
-                        "recommended_actions": ["Review SDC clock delta", "Review UPF isolation delta"],
+                        "parser_regressions": 1,
+                        "recommended_actions": ["Review SDC clock delta", "Review UPF isolation delta", "Review removed waiver"],
                     },
                     ensure_ascii=False,
                 ),
@@ -492,11 +517,22 @@ class V5CatalogTest(unittest.TestCase):
                 json.dumps(
                     {
                         "added": [{"path": "upf/new_domain.upf", "file_type": "upf"}],
-                        "removed": [],
+                        "removed": [{"path": "waiver/legacy.waiver", "file_type": "waiver"}],
                         "changed": [
                             {"path": "sdc/ucie.sdc", "file_type": "sdc"},
                             {"path": "upf/ucie.upf", "file_type": "upf"},
                             {"path": "lef/ucie.lef", "file_type": "lef"},
+                            {"path": "rtl/top.v", "file_type": "verilog"},
+                            {"path": "rtl/subsystem/lane0/reset_sync_with_a_very_long_relative_path_for_scroll_check.v", "file_type": "verilog"},
+                            {"path": "rtl/subsystem/lane1/reset_sync_with_a_very_long_relative_path_for_scroll_check.v", "file_type": "verilog"},
+                            {"path": "rtl/subsystem/lane2/reset_sync_with_a_very_long_relative_path_for_scroll_check.v", "file_type": "verilog"},
+                            {"path": "rtl/subsystem/lane3/reset_sync_with_a_very_long_relative_path_for_scroll_check.v", "file_type": "verilog"},
+                            {"path": "sdc/corners/ss_0p72v_125c/ucie_lane_constraints_with_long_relative_path.sdc", "file_type": "sdc"},
+                            {"path": "sdc/corners/tt_0p80v_25c/ucie_lane_constraints_with_long_relative_path.sdc", "file_type": "sdc"},
+                            {"path": "upf/domains/low_power/isolation_strategy_with_long_relative_path.upf", "file_type": "upf"},
+                            {"path": "doc/release/deep_change_note_with_long_relative_path.md", "file_type": "doc"},
+                            {"path": "waiver/lint/legacy_rule_replacement_with_long_relative_path.waiver", "file_type": "waiver"},
+                            {"path": "lef/macros/ucie_macro_variant_with_long_relative_path.lef", "file_type": "lef"},
                         ],
                     },
                     ensure_ascii=False,
@@ -584,6 +620,10 @@ class V5CatalogTest(unittest.TestCase):
             self.assertIn("Compare 索引", library_html)
             version_html = (html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
             self.assertIn("Raw Version Detail", version_html)
+            self.assertIn("Absolute Raw Path", version_html)
+            self.assertIn(str(raw / "ucie" / "stable_20250608"), version_html)
+            self.assertLess(version_html.find("Absolute Raw Path"), version_html.find("更新详情"))
+            self.assertNotIn(f"<b>Raw Path</b><em>{raw / 'ucie' / 'stable_20250608'}</em>", version_html)
             self.assertIn("Count-only + Corner Summary", version_html)
             self.assertIn("Parser Summary", version_html)
             self.assertLess(version_html.find("更新详情"), version_html.find("Raw Version Detail"))
@@ -591,9 +631,25 @@ class V5CatalogTest(unittest.TestCase):
             self.assertIn("incremental compare", version_html)
             self.assertIn("missing files are not treated as deletes", version_html)
             self.assertIn("Fixed lane reset timing", version_html)
+            self.assertIn("Release Notes</div><div class='metric-value'>1", version_html)
+            self.assertIn("version-scroll-table metric-scroll", version_html)
+            self.assertIn("version-scroll-table change-scroll", version_html)
+            self.assertIn("height:420px", version_html)
+            self.assertIn("min-width:1800px", version_html)
+            self.assertIn("removed_files", version_html)
+            self.assertIn("parser_regressions", version_html)
             self.assertIn("changed_files", version_html)
+            self.assertIn("upf/new_domain.upf", version_html)
+            self.assertIn("waiver/legacy.waiver", version_html)
+            self.assertIn("rtl/top.v", version_html)
+            self.assertIn("doc/release/deep_change_note_with_long_relative_path.md", version_html)
             self.assertIn("sdc/ucie.sdc", version_html)
             self.assertIn("Review UPF isolation delta", version_html)
+            self.assertIn("Review removed waiver", version_html)
+            self.assertIn("doc/release_note.txt", version_html)
+            self.assertNotIn(str(raw / "ucie" / "stable_20250608" / "doc" / "release_note.txt"), version_html)
+            self.assertNotIn("summary/dashboard_summary.json", version_html)
+            self.assertNotIn("summary rebuild", version_html)
             self.assertIn("Parser Details", version_html)
             self.assertIn("UCIE_MACRO_09", version_html)
             self.assertNotIn("UCIE_MACRO_10", version_html)
@@ -605,6 +661,12 @@ class V5CatalogTest(unittest.TestCase):
             self.assertIn("Power Domains", version_html)
             self.assertIn("Waiver", version_html)
             self.assertIn("Waivers", version_html)
+            self.assertIn("VERILOG", version_html)
+            self.assertIn("Parsed Scope", version_html)
+            self.assertIn("module, port, direction, width, declared_range, module_count, port_count", version_html)
+            self.assertIn("Not Parsed", version_html)
+            self.assertIn("instance, parameter_value, generate_block, gate_netlist_connectivity", version_html)
+            self.assertNotIn("Defines", version_html)
             self.assertNotIn(str(scan_html).replace("\\", "/"), version_html)
             self.assertNotIn(str(diff_html).replace("\\", "/"), version_html)
             self.assertNotIn("Selected Diff", version_html)

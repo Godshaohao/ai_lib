@@ -128,7 +128,7 @@ python -m lib_guard.cli run \
   --library ucie \
   --version stable_20250608 \
   --workdir "$WORK" \
-  --mode signature \
+  --mode candidate \
   --parse-jobs 4 \
   --skip-cache
 ```
@@ -136,7 +136,7 @@ python -m lib_guard.cli run \
 这个命令会执行：
 
 - scan
-- summary rebuild
+- parser evidence generation
 - scan HTML
 - console HTML
 - 回写 `runtime_state.<version>.scan`
@@ -153,7 +153,7 @@ python -m lib_guard.cli run-batch \
   --only-missing \
   --limit 20 \
   --workdir "$WORK" \
-  --mode signature \
+  --mode candidate \
   --parse-jobs 4
 ```
 
@@ -171,6 +171,17 @@ python -m lib_guard.cli compare \
   --mode adjacent \
   --workdir "$WORK"
 ```
+
+`compare` works inside one library: scan evidence is required for the old/base version and the new/latest version. The diff report is stored under the new version, for example `$WORK/diff/ucie/stable_20250608/adjacent/diff_html/index.html`, and `catalog.json` records that path on `versions[].diff.adjacent_diff_html`. Passing `--base <old_version>` writes a separate `base_<old_version>/diff_html` report so multiple compares for the same new version do not overwrite each other.
+
+Short command refresh:
+
+```csh
+$PROJ/scripts/lg.csh refresh ucie
+$PROJ/scripts/lg.csh refresh --all
+```
+
+`refresh` chooses the current/latest raw version already present in `catalog.json` and runs compare with `--scan-if-missing`. If a new raw directory has not been discovered yet, run `lg.csh cat` first.
 
 累计比较：
 

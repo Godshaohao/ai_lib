@@ -64,6 +64,55 @@ def _component_stack(manifest: Mapping[str, Any]) -> str:
     return f'<div class="stack-row">{joiners}</div>'
 
 
+def _summary_tags(data: Mapping[str, Any] | None) -> str:
+    if not data:
+        return '<span class="muted">-</span>'
+    tags = []
+    for key, value in sorted(data.items()):
+        if isinstance(value, (dict, list)):
+            continue
+        tags.append(f'<span class="tiny-tag">{esc(key)}:{esc(value)}</span>')
+    return "".join(tags) or '<span class="muted">-</span>'
+
+
+def _version_evidence_panel(manifest: Mapping[str, Any]) -> str:
+    evidence = manifest.get("version_evidence", {}) or {}
+    rows = evidence.get("components", []) or []
+    if not rows:
+        return '<div class="empty-note">No source version evidence has been attached to this effective manifest.</div>'
+    body = []
+    for row in rows:
+        diff_html = str(row.get("adjacent_diff_html") or "")
+        diff_cell = (
+            f'<a class="link-pill" href="{esc(diff_html)}">diff html</a>'
+            if diff_html
+            else _badge(row.get("diff_status") or "-", "soft")
+        )
+        body.append(f"""
+        <tr data-search="{esc(str(row.get('version_id')).lower())} {esc(str(row.get('scan_status')).lower())} {esc(str(row.get('diff_status')).lower())}">
+          <td>{_long(row.get('version_id'))}<div class="muted mini">{esc(row.get('role') or '')}</div></td>
+          <td>{_badge(row.get('scan_status') or '-', 'soft')}<div class="muted mini">{esc(row.get('scan_mode') or '')}</div></td>
+          <td>{diff_cell}<div class="muted mini">adjacent_old_version: {esc(row.get('adjacent_old_version') or '-')}</div></td>
+          <td>{_summary_tags(row.get('parser_summary') or {})}</td>
+          <td>{_summary_tags(row.get('diff_summary') or {})}</td>
+          <td class="path-cell muted" title="{esc(row.get('raw_path'))}">{esc(short_name(str(row.get('raw_path') or ''), 34, 20))}</td>
+        </tr>
+        """)
+    summary = evidence.get("summary", {}) or {}
+    return f"""
+    <div class="table-toolbar">
+      <span class="muted">scanned {esc(summary.get('scanned_components', 0))} / diff-ready {esc(summary.get('diff_ready_components', 0))} / parser {esc(summary.get('parser_components', 0))}</span>
+      <input class="table-filter" data-target="version-evidence" placeholder="Filter version evidence..." />
+    </div>
+    <div class="table-scroll compact-scroll">
+      <table class="data-table" id="version-evidence">
+        <thead><tr><th>source version</th><th>scan</th><th>update detail</th><th>parser_summary</th><th>diff_summary</th><th>raw path</th></tr></thead>
+        <tbody>{''.join(body)}</tbody>
+      </table>
+    </div>
+    """
+
+
 def _scope_heatmap(manifest: Mapping[str, Any]) -> str:
     data = update_scope_heatmap(manifest) if update_scope_heatmap else {"views": [], "rows": []}
     views = data.get("views", []) or []
@@ -255,6 +304,7 @@ body {{ margin:0; font-family:Inter, "Segoe UI", Arial, sans-serif; color:var(--
 .stack-scope {{ margin-top:6px; font-size:12px; color:var(--muted); }}
 .badge, .tiny-tag {{ display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:12px; font-weight:700; background:#eef2ff; color:#344054; margin:2px; }}
 .tiny-tag {{ padding:3px 6px; font-weight:600; }}
+.link-pill {{ display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:12px; font-weight:700; background:#dcfce7; color:#166534; text-decoration:none; }}
 .soft {{ background:#f2f4f7; }}
 .op-base {{ background:#e0f2fe; color:#075985; }}
 .op-add {{ background:#dcfce7; color:#166534; }}
@@ -302,6 +352,7 @@ pre {{ white-space:pre-wrap; overflow:auto; margin:12px 0 0; }}
   </section>
   <section class="kpi-grid">{kpis}</section>
   <section class="card"><h2>Effective Stack</h2>{_component_stack(manifest)}</section>
+  <section class="card"><h2>Version Evidence</h2>{_version_evidence_panel(manifest)}</section>
   <section class="grid-2">
     <div class="card"><h2>Update Scope Heatmap</h2>{_scope_heatmap(manifest)}</div>
     <div class="card"><h2>Compare Matrix</h2>{_compare_matrix(manifest)}</div>

@@ -106,7 +106,7 @@ $RELROOT = "C:\path\to\release_root"
 后续命令可以写成：
 
 ```powershell
-& $PY -m lib_guard.cli scan --root $RAW --profile ip --name demo --version v1 --mode signature --workdir $WORK
+& $PY -m lib_guard.cli scan --root $RAW --profile ip --name demo --version v1 --mode candidate --workdir $WORK
 ```
 
 ## 4. 核心配置
@@ -270,7 +270,7 @@ dry-run link：
   --profile ip `
   --name demo `
   --version v1 `
-  --mode signature `
+  --mode candidate `
   --workdir work
 ```
 

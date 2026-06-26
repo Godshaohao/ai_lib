@@ -28,12 +28,28 @@ class EffectiveManifestTest(unittest.TestCase):
                                 "version_id": base.name,
                                 "raw_path": str(base),
                                 "stage": "stable",
+                                "scan": {
+                                    "status": "PASS",
+                                    "scan_dir": str(root / "scan" / base.name),
+                                    "parser_summary": {"parser_tasks": 1, "parsed_views": 1},
+                                },
                             },
                             {
                                 "version_id": patch.name,
                                 "raw_path": str(patch),
                                 "stage": "ad-hoc",
                                 "update_scope": ["verilog"],
+                                "scan": {
+                                    "status": "PASS",
+                                    "scan_dir": str(root / "scan" / patch.name),
+                                    "parser_summary": {"parser_tasks": 2, "parsed_views": 1, "ignored_views": 1},
+                                },
+                                "diff": {
+                                    "adjacent_status": "DIFF",
+                                    "adjacent_old_version": base.name,
+                                    "adjacent_diff_html": str(root / "diff_html" / patch.name / "index.html"),
+                                    "summary": {"changed_files": 1, "removed_files": 0},
+                                },
                             },
                         ],
                     }
@@ -88,11 +104,15 @@ class EffectiveManifestTest(unittest.TestCase):
             self.assertEqual(manifest["summary"]["file_count"], 1)
             self.assertEqual(manifest["summary"]["operation_summary"], {"replace": 1})
             self.assertEqual(manifest["effective_files"]["rtl/top.v"]["source_version"], patch.name)
+            self.assertEqual(manifest["version_evidence"]["summary"]["diff_ready_components"], 1)
             self.assertEqual(preview["schema_version"], "effective_release_preview.v1")
             self.assertEqual(preview["summary"]["actions"], {"add": 1})
             self.assertTrue((preview_dir / "release_delta.json").exists())
             self.assertTrue((preview_dir / "release_preview.csh").exists())
             self.assertIn("Effective Stack", html)
+            self.assertIn("Version Evidence", html)
+            self.assertIn("parser_tasks", html)
+            self.assertIn("adjacent_old_version", html)
             self.assertIn("Release Delta Preview", html)
             self.assertIn("stable_20250601_base", html)
             self.assertNotIn("鍩", html)
@@ -163,6 +183,8 @@ class EffectiveManifestTest(unittest.TestCase):
             library_html = library_home.read_text(encoding="utf-8")
             self.assertIn("Library Version Timeline", library_html)
             self.assertIn("latest_effective_ref", library_html)
+            self.assertNotIn("Current Effective Detail", library_html)
+            self.assertNotIn("Version Evidence", library_html)
             self.assertIn("Compare 索引", library_html)
             self.assertIn("Release Preview", library_html)
             self.assertNotIn("<iframe", library_html.lower())
@@ -367,6 +389,11 @@ class EffectiveManifestTest(unittest.TestCase):
             self.assertIn("Current Effective", library_html)
             self.assertIn(full.name, library_html)
             self.assertIn("Library Version Timeline", library_html)
+            self.assertNotIn("Current Effective Detail", library_html)
+            self.assertNotIn("Current raw", library_html)
+            self.assertNotIn("Version Evidence", library_html)
+            self.assertNotIn("Scan HTML", library_html)
+            self.assertNotIn("Diff HTML", library_html)
 
 
 if __name__ == "__main__":
