@@ -1,5 +1,5 @@
 """
-lib_guard CLI v5.
+lib_guard CLI.
 
 Commands:
 - scan
@@ -288,7 +288,7 @@ def add_package_parser(subparsers: Any) -> None:
 
 
 def add_console_parser(subparsers: Any) -> None:
-    root = subparsers.add_parser("console", help="Build v5 HTML control console and review data")
+    root = subparsers.add_parser("console", help="Build HTML review console and review data")
     sp = root.add_subparsers(dest="console_cmd", required=True)
 
     p = sp.add_parser("build", help="Build HTML console from scan output")
@@ -341,7 +341,7 @@ def add_diff_parser(subparsers: Any) -> None:
     p.add_argument("--new-version", required=True)
     p.add_argument("--workdir", default="work")
     p.add_argument("--out")
-    p.add_argument("--scan-if-missing", action="store_true", help="Reserved for future scan-on-demand support")
+    p.add_argument("--scan-if-missing", action="store_true", help="Scan missing evidence before comparing when supported")
     p.set_defaults(func=run_diff_adjacent)
 
     p = sp.add_parser("cumulative", help="Compare a version against its base_version from version index")
@@ -349,7 +349,7 @@ def add_diff_parser(subparsers: Any) -> None:
     p.add_argument("--new-version", required=True)
     p.add_argument("--workdir", default="work")
     p.add_argument("--out")
-    p.add_argument("--scan-if-missing", action="store_true", help="Reserved for future scan-on-demand support")
+    p.add_argument("--scan-if-missing", action="store_true", help="Scan missing evidence before comparing when supported")
     p.set_defaults(func=run_diff_cumulative)
 
     p = sp.add_parser("render", help="Render a diff_output directory into an HTML report")
@@ -623,7 +623,7 @@ def add_version_parser(subparsers: Any) -> None:
 
 
 def build_parser() -> ArgumentParser:
-    parser = ArgumentParser(prog="lib_guard", description="lib_guard v5 CLI")
+    parser = ArgumentParser(prog="lib_guard", description="lib_guard CLI")
     parser.add_argument("-v", "--verbose", action="count", default=0)
     parser.add_argument("--tool-version", action="store_true")
     subparsers = parser.add_subparsers(dest="command")

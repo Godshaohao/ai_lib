@@ -254,7 +254,7 @@ def _command_examples(manifest: Mapping[str, Any], preview: Mapping[str, Any] | 
     return f"""
     <details class="command-panel">
       <summary>命令示例</summary>
-      <pre><code># 构建 effective manifest\n$PROJ/scripts/lg_effective.csh build --catalog catalog/catalog.json --library {esc(lib)} --base-full BASE_FULL --include ADHOC_01 --scope ADHOC_01:liberty --effective-id {esc(eid)}\n\n# 在当前 effective 上追加一次 adhoc\n$PROJ/scripts/lg_effective.csh add --catalog catalog/catalog.json --current catalog/effective/{esc(lib)}/{esc(eid)}/effective_manifest.json --version ADHOC_02 --scope lef --effective-id E_NEXT\n\n# 生成 release preview，不直接发布\n$PROJ/scripts/lg_effective.csh release-preview --effective catalog/effective/{esc(lib)}/{esc(eid)}/effective_manifest.json --release-root $WORK/release_area --release-id R_NEXT --out-dir catalog/effective/{esc(lib)}/{esc(eid)}/release_preview</code></pre>
+      <pre><code># 构建 effective manifest\nPYTHONPATH=$PROJ/src python -m lib_guard.cli effective build --catalog catalog/catalog.json --library {esc(lib)} --base-full BASE_FULL --include ADHOC_01 --scope ADHOC_01:liberty --effective-id {esc(eid)}\n\n# 在当前 effective 上追加一次 adhoc\nPYTHONPATH=$PROJ/src python -m lib_guard.cli effective add --catalog catalog/catalog.json --current catalog/effective/{esc(lib)}/{esc(eid)}/effective_manifest.json --version ADHOC_02 --scope lef --effective-id E_NEXT\n\n# 生成 release preview，不直接发布\nPYTHONPATH=$PROJ/src python -m lib_guard.cli effective release-preview --effective catalog/effective/{esc(lib)}/{esc(eid)}/effective_manifest.json --release-root $WORK/release_area --release-id R_NEXT --out-dir catalog/effective/{esc(lib)}/{esc(eid)}/release_preview</code></pre>
     </details>
     """
 

@@ -1,42 +1,11 @@
-# parsers_refactor
+# lib_guard Parsers
 
-Drop these files into:
+Each parser module owns one file family and returns the shared `ParserResult`
+envelope through `parse_*_file()` and `BaseParser.parse()`.
 
-```text
-src/lib_guard/scan/parsers/
-```
+## Contract
 
-This refactor removes `text.py` as a parser hub. Generic reading helpers live in `base.py`; each format has its own module.
-
-Key usage examples:
-
-```python
-from lib_guard.scan.parsers.lef import parse_lef_file, diff_lef_files
-result = parse_lef_file("a.lef")
-diff = diff_lef_files("old.lef", "new.lef")
-
-from lib_guard.scan.parsers.liberty import parse_liberty_file
-result = parse_liberty_file("ss_0p72v_125c.lib.gz")
-```
-
-Parser modules are canonical by format name only. The old `*_parser.py` shim
-modules are intentionally removed.
-
-Parser smoke script:
-
-```csh
-src/lib_guard/test/test_parse_any.csh /path/to/file [out_json]
-```
-
-The smoke script follows the Parser v2 vocabulary and prints `result_type`,
-`parser_name`, `parser_schema_version`, `file_type`, `compression`, and
-`status` from the canonical `ParserResult` envelope.
-
-## v5 Parser v2
-
-Parser v2 no longer supports legacy free-form parser outputs. Every
-`parse_*_file()` API and every `BaseParser.parse()` implementation returns a
-unified `ParserResult` envelope:
+Parser results use this shape:
 
 ```json
 {
@@ -46,21 +15,17 @@ unified `ParserResult` envelope:
   "parser_version": "2.0",
   "parser_schema_version": "1.0",
   "file": "lef/a.lef",
-  "abs_path": "/proj/.../lef/a.lef",
+  "abs_path": "/proj/raw/lef/a.lef",
   "file_type": "lef",
   "compression": null,
   "status": "PASS",
-  "stats": {
-    "object_count": 1,
-    "warning_count": 0,
-    "error_count": 0
-  },
+  "stats": {},
   "data": {},
   "issues": []
 }
 ```
 
-Allowed statuses:
+Allowed statuses are:
 
 ```text
 PASS
@@ -71,18 +36,16 @@ UNSUPPORTED
 METADATA_ONLY
 ```
 
-Parser v2 shared helpers live in `base.py`:
+## Adding A Parser
 
-```text
-detect_combined_extension(path)
-detect_compression(path)
-open_text_auto(path)
-iter_lines_auto(path)
-read_text_auto(path)
-```
+1. Add a focused module under `src/lib_guard/scan/parsers/`.
+2. Reuse helpers from `base.py` for compression, text reading, and result
+   wrapping.
+3. Register the parser where scan execution selects parsers by file type.
+4. Add a smoke or unit test under `src/lib_guard/test/`.
+5. Add summary or diff support only when the extracted fields are meaningful
+   for review.
 
-This makes compressed files such as `.v.gz`, `.lef.gz`, `.lib.gz`, and
-`.spef.gz` behave the same as their uncompressed equivalents.
+The historical parser refactor notes are archived at
+`docs/archive/v5_v6_migration/parsers_refactor.md`.
 
-See `docs/lib_guard_v5_architecture_patch.md` for the full migration rationale
-and the scan-flow deficiency table that drives the v5 Parser v2 work.

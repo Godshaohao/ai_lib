@@ -404,7 +404,7 @@ def rebuild_summary_from_scan(
             "release_readiness": str(summary_dir / "release_readiness.json"),
             "summary_report": str(summary_dir / "summary_report.md"),
         },
-        "note": "This command rebuilds v5 parser summaries plus dashboard/release input summaries from existing scan output.",
+        "note": "This command rebuilds parser summaries plus dashboard/release input summaries from existing scan output.",
     }
     atomic_write_json(summary_dir / "summary_rebuild.json", result)
     return result

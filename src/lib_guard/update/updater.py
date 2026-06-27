@@ -1,9 +1,9 @@
 """
-Safe update commands for lib_guard v4.
+Compatibility update commands.
 
-This first version does not attempt complex in-place summary merging. It resolves
-latest scan, determines affected summary types, writes an update record, and can
-trigger summary rebuild for affected types.
+The current catalog/action workflow normally regenerates scan and diff evidence.
+This module keeps the older update path available for targeted summary refresh
+workflows.
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ def update_type(
         "skip_cache": skip_cache,
         "affected_summaries": affected,
         "summary_result": summary_result,
-        "note": "v4 safe update: summary rebuild is supported. Parser-only type update should be handled by scan --skip-cache / future --only-type integration.",
+        "note": "Compatibility update path: targeted summary refresh is supported. Parser-only type update should be handled by scan --skip-cache / future --only-type integration.",
     }
     atomic_write_json(out_dir / "update_type.json", result)
     HistoryIndex(workdir).register_run(

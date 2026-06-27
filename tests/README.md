@@ -8,10 +8,21 @@ src/lib_guard/test/
 
 Run:
 
-```powershell
-$env:PYTHONPATH='src'
-$PY='C:\Users\Polaris\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-& $PY -m unittest discover -s src\lib_guard\test -p 'test*.py'
+```bash
+PYTHONPATH=src python -m unittest discover -s src/lib_guard/test -p "test*.py"
 ```
 
-This directory is reserved for future repository-level integration fixtures that are not tied to the Python package layout.
+This directory is used for repository-level integration fixtures that are not
+tied to the Python package layout.
+
+Integration fixture libraries live under `tests/fixtures/raw/` and are
+registered through `tests/fixtures/raw/library_map.yml`. The fixture layout
+mirrors production-style delivery roots:
+
+```text
+vendor/library/version/platform_source_package/
+```
+
+The OpenROAD platform fixtures are copied from OpenROAD-flow-scripts. Each
+version directory has a `SOURCE.md` with the upstream commit and license
+provenance.

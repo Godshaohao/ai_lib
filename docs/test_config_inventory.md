@@ -1,3 +1,5 @@
+Status: current
+
 # Test / Workspace Configuration Inventory
 
 This project now has two kinds of configuration:
@@ -13,7 +15,7 @@ Generated HTML and run outputs are not source. `work/`, `reports/`, and `manual_
 | --- | --- | --- |
 | `src/` | Python source | Yes |
 | `configs/` | Default project policies | Yes |
-| `actions/` | Example action files | Yes, copy to workspace actions |
+| `examples/` | Copyable example files | Yes, copy into a workspace when needed |
 | `docs/` | Product and config documentation | Yes |
 | `manual_preview/` | Local generated preview for browser checking | Regenerate, do not treat as source |
 | `work/` | Local scan/diff/release outputs | Generated |
@@ -25,7 +27,7 @@ Generated HTML and run outputs are not source. `work/`, `reports/`, and `manual_
 | --- | --- | --- |
 | `configs/catalog_policy.json` | RAW discovery, version path patterns, stage rules, ignored dirs | Add real RAW path patterns, tune ignored dirs, adjust stage matching |
 | `configs/release_policy.json` | Required/optional views, validation levels, release alias gates | Tune required views per library type, change alias gate strictness, adjust doc policy |
-| `configs/summary_policy.json` | Legacy summary rebuild impact map for old update commands | Usually do not edit in the current action flow; summary rebuild is no longer a required step |
+| `configs/summary_policy.json` | Compatibility impact map for the old update command path | Usually do not edit in the current catalog/action flow |
 | `configs/library_versions.example.tsv` | Example version reference list | Copy into a workspace as `config/library_versions.tsv` or `configs/library_versions.tsv` |
 
 ## Workspace Config Files
@@ -48,7 +50,7 @@ mode: candidate
 parse_jobs: 8
 ```
 
-`mode` is still present because the scan runner expects it. The default is `candidate` so Version Review has parser-backed evidence without asking normal users to choose a scan profile. Legacy/debug values still exist: `quick` / `inventory` skip parser work, `signature` builds signature-style evidence without parser content, and `release` / `diff` / `refresh` / `full` are parser-enabled deeper modes.
+`mode` is still present because the scan runner expects it. The default is `candidate` so Version Review has parser-backed evidence without asking normal users to choose a scan profile. Compatibility/debug values still exist: `quick` / `inventory` skip parser work, `signature` builds signature-style evidence without parser content, and `release` / `diff` / `refresh` / `full` are parser-enabled deeper modes.
 
 Version Review reads parser evidence from:
 
@@ -89,7 +91,8 @@ Those should be inferred or handled later by a small override file, not mixed in
 
 ## Action Files
 
-Action files live under `actions/<library>.action` in a workspace. Example:
+Action files live under `actions/<library>.action` in a workspace. A copyable
+example is available at `examples/ucie.action.example`.
 
 ```text
 @effect rec_20260624 lib1 lib2 lib3
@@ -131,9 +134,9 @@ Notes:
 
 - `catalog_state.json` is the page state model used by the catalog HTML.
 - `manager_tasks.json` is a manager-facing task list for missing scan/diff/relation evidence. It is valid, but not part of the normal IP-user update-consumption path.
-- Version Review may show `Parser Summary`, `Diff Summary`, and `Count-only + Corner Summary`; those are page evidence summaries, not the legacy standalone summary rebuild step.
+- Version Review may show `Parser Summary`, `Diff Summary`, and `Count-only + Corner Summary`; those are page evidence summaries generated from scan and diff artifacts.
 - `manual_preview/**` is only a local generated browser preview. It is ignored by git and can be regenerated from the test catalog.
-- `summary_policy.json` remains for legacy `update` / summary rebuild compatibility. The current catalog/action workflow should not require adding a new summary step when adding file types.
+- `summary_policy.json` remains only for the compatibility `update` path. The current catalog/action workflow should not require adding a new summary step when adding file types.
 
 ## Current Local Preview
 

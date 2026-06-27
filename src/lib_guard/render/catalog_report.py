@@ -1107,6 +1107,10 @@ def _version_file_diff(diff_dir: Path | None) -> Mapping[str, Any]:
     return read_json(diff_dir / "file_diff.json", default={}) if diff_dir else {}
 
 
+def _version_diff_json(diff_dir: Path | None, name: str) -> Mapping[str, Any]:
+    return read_json(diff_dir / name, default={}) if diff_dir else {}
+
+
 def _clip_text(text: str, limit: int = 900) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     return text[: limit - 1] + "..." if len(text) > limit else text
@@ -1210,6 +1214,23 @@ def _stats_value(data: Mapping[str, Any], *keys: str) -> int:
             return len(value)
         if isinstance(value, list):
             return len(value)
+    subckts = data.get("subckts") if isinstance(data.get("subckts"), Mapping) else {}
+    if subckts and any(key in {"pin_count", "pins"} for key in keys):
+        return sum(_as_int((item or {}).get("pin_count")) for item in subckts.values() if isinstance(item, Mapping))
+    if subckts and any(key in {"device_count", "devices", "instance_count", "instances"} for key in keys):
+        return sum(_as_int((item or {}).get("device_count")) for item in subckts.values() if isinstance(item, Mapping))
+    macros = data.get("macros") if isinstance(data.get("macros"), Mapping) else {}
+    if macros and any(key in {"pin_count", "pins"} for key in keys):
+        return sum(len((item or {}).get("pins") or {}) for item in macros.values() if isinstance(item, Mapping))
+    if macros and any(key in {"layer_count", "layers"} for key in keys):
+        layers: set[str] = set()
+        for macro in macros.values():
+            if not isinstance(macro, Mapping):
+                continue
+            for pin in ((macro.get("pins") or {}) if isinstance(macro.get("pins"), Mapping) else {}).values():
+                if isinstance(pin, Mapping):
+                    layers.update(str(x) for x in (pin.get("layers") or []) if str(x))
+        return len(layers)
     return 0
 
 
@@ -1291,11 +1312,11 @@ def _parser_detail_html(data: Mapping[str, Any]) -> str:
 def _parser_review_metrics(file_type: str, data: Mapping[str, Any]) -> list[tuple[str, Any]]:
     key = file_type.lower()
     if key == "lef":
-        return [("Macros", _stats_value(data, "macro_count", "macros")), ("Pins", _stats_value(data, "pin_count", "pins")), ("Layers", _stats_value(data, "layer_count", "layers"))]
+        return [("Macros", _stats_value(data, "macro_count", "macros")), ("Pins", _stats_value(data, "pin_count", "pins")), ("Used Layers", _stats_value(data, "layer_count", "layers"))]
     if key in {"verilog", "systemverilog"}:
         return [("Modules", _stats_value(data, "module_count", "modules")), ("Ports", _stats_value(data, "port_count", "ports"))]
     if key == "cdl":
-        return [("Subckts", _stats_value(data, "subckt_count", "subckts", "circuits")), ("Pins", _stats_value(data, "pin_count", "pins")), ("Instances", _stats_value(data, "instance_count", "instances"))]
+        return [("Subckts", _stats_value(data, "subckt_count", "subckts", "circuits")), ("Pins", _stats_value(data, "pin_count", "pins")), ("Devices", _stats_value(data, "device_count", "devices", "instance_count", "instances"))]
     if key == "sdc":
         return [("Clocks", _stats_value(data, "clock_count", "clocks")), ("Clock Groups", _stats_value(data, "clock_group_count", "clock_groups")), ("Loads", _stats_value(data, "load_count", "loads")), ("Uncertainty", _stats_value(data, "uncertainty_count", "uncertainties"))]
     if key in {"upf", "cpf"}:
@@ -1328,6 +1349,105 @@ def _parser_scope_html(file_type: str, data: Mapping[str, Any]) -> str:
     if not rows:
         return ""
     return "<div class='effective-tags parser-scope'>" + "".join(rows) + "</div>"
+
+
+def _merge_parser_metrics(target: dict[str, int], file_type: str, data: Mapping[str, Any]) -> None:
+    for label, value in _parser_review_metrics(file_type, data):
+        target[label] = target.get(label, 0) + _as_int(value)
+
+
+def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_results: Mapping[str, Any]) -> list[str]:
+    result_by_path = dict(parser_results or {})
+    groups: dict[str, dict[str, Any]] = {}
+    for file_entry in parser_manifest.get("files", []) or []:
+        for task in file_entry.get("parser_tasks", []) or []:
+            parser_name = task.get("parser_name")
+            if not parser_name:
+                continue
+            result = result_by_path.get(task.get("result_path")) or {}
+            data = result.get("data") if isinstance(result.get("data"), Mapping) else {}
+            file_type = str(result.get("file_type") or file_entry.get("file_type") or "-")
+            key = file_type.lower()
+            group = groups.setdefault(
+                key,
+                {
+                    "file_type": file_type,
+                    "parser_names": set(),
+                    "files": [],
+                    "status_counts": {},
+                    "metrics": {},
+                    "details": [],
+                    "scope": {"parsed": [], "unparsed": []},
+                },
+            )
+            status = str(task.get("result_status") or task.get("status") or result.get("status") or "UNKNOWN").upper()
+            group["parser_names"].add(str(parser_name))
+            group["files"].append(str(result.get("file") or file_entry.get("file") or "-"))
+            group["status_counts"][status] = group["status_counts"].get(status, 0) + 1
+            _merge_parser_metrics(group["metrics"], file_type, data)
+            group["details"].extend(_parser_detail_items(data, limit=10))
+            if key in {"verilog", "systemverilog"}:
+                for item in data.get("parsed_fields", []) or []:
+                    text = str(item)
+                    if text and text not in group["scope"]["parsed"]:
+                        group["scope"]["parsed"].append(text)
+                for item in data.get("unparsed_features", []) or []:
+                    text = str(item)
+                    if text and text not in group["scope"]["unparsed"]:
+                        group["scope"]["unparsed"].append(text)
+    rows: list[str] = []
+    for key in sorted(groups):
+        group = groups[key]
+        status = "PASS" if set(group["status_counts"]) <= {"PASS"} else "FAILED" if group["status_counts"].get("FAILED") else "REVIEW"
+        metric_html = "<div class='effective-tags'>" + "".join(_metric_text(label, value) for label, value in group["metrics"].items()) + "</div>"
+        status_text = ", ".join(f"{k}:{v}" for k, v in sorted(group["status_counts"].items()))
+        detail_rows = []
+        seen: set[tuple[str, str]] = set()
+        for category, name, detail in group["details"]:
+            token = (category, name)
+            if token in seen:
+                continue
+            seen.add(token)
+            detail_rows.append(
+                "<tr>"
+                f"<td><code>{ui.esc(category)}</code></td>"
+                f"<td>{ui.esc(name)}</td>"
+                f"<td>{ui.esc(detail)}</td>"
+                "</tr>"
+            )
+            if len(detail_rows) >= 12:
+                break
+        scope_html = ""
+        if group["scope"]["parsed"] or group["scope"]["unparsed"]:
+            scope_html = (
+                "<div class='effective-tags parser-scope'>"
+                + (f"<span class='tiny-tag'><b>Parsed Scope</b>&nbsp;{ui.esc(', '.join(group['scope']['parsed']))}</span>" if group["scope"]["parsed"] else "")
+                + (f"<span class='tiny-tag'><b>Not Parsed</b>&nbsp;{ui.esc(', '.join(group['scope']['unparsed']))}</span>" if group["scope"]["unparsed"] else "")
+                + "</div>"
+            )
+        detail_html = (
+            "<details class='detail-fold parser-detail'><summary>Parser Details / Representative Objects</summary>"
+            + ui.table(["Category", "Name", "Detail"], detail_rows, "No extracted objects")
+            + "</details>"
+        )
+        files_html = (
+            "<details class='detail-fold'><summary>Parsed Files</summary>"
+            + "<div class='muted-box'>"
+            + "<br>".join(f"<code>{ui.esc(path)}</code>" for path in group["files"][:20])
+            + ("<br><span class='muted'>...</span>" if len(group["files"]) > 20 else "")
+            + "</div></details>"
+        )
+        rows.append(
+            "<tr>"
+            f"<td><b>{ui.esc(str(group['file_type']).upper())}</b><br><code>{ui.esc(', '.join(sorted(group['parser_names'])))}</code></td>"
+            f"<td>{ui.badge(status)}</td>"
+            f"<td>{ui.esc(len(group['files']))}</td>"
+            f"<td>{ui.esc(status_text)}</td>"
+            f"<td>{metric_html}{scope_html}{detail_html}</td>"
+            f"<td>{files_html}</td>"
+            "</tr>"
+        )
+    return rows
 
 
 def _version_parser_rows(parser_manifest: Mapping[str, Any], parser_results: Mapping[str, Any]) -> list[str]:
@@ -1461,6 +1581,120 @@ def _recommended_action_rows(summary: Mapping[str, Any]) -> list[str]:
     return rows
 
 
+def _diff_view_rows(view_diff: Mapping[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for item in view_diff.get("views", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        if not item.get("changed") and str(item.get("severity") or "info").lower() == "info":
+            continue
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(item.get('view') or '-')}</code></td>"
+            f"<td>{ui.badge(str(item.get('severity') or 'info').upper())}</td>"
+            f"<td>{ui.esc(item.get('old_count') or 0)} → {ui.esc(item.get('new_count') or 0)}</td>"
+            f"<td>{ui.esc(item.get('old_status') or '-')} → {ui.esc(item.get('new_status') or '-')}</td>"
+            f"<td>{ui.esc(item.get('old_parser_status') or '-')} → {ui.esc(item.get('new_parser_status') or '-')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _diff_type_rows(type_diff: Mapping[str, Any], *, limit: int = 12) -> list[str]:
+    rows: list[str] = []
+    by_type = type_diff.get("by_type") if isinstance(type_diff.get("by_type"), Mapping) else {}
+    for file_type, item in sorted(by_type.items()):
+        if not isinstance(item, Mapping):
+            continue
+        changed = _as_int(item.get("added_count")) + _as_int(item.get("removed_count")) + _as_int(item.get("changed_count"))
+        if not changed:
+            continue
+        examples = []
+        for key in ["added", "removed", "changed"]:
+            values = item.get(key) or []
+            if isinstance(values, Mapping):
+                values = list(values.keys())
+            for path in list(values)[:3]:
+                examples.append(f"{key}: {path}")
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(file_type)}</code></td>"
+            f"<td>{ui.esc(item.get('old_count') or 0)} → {ui.esc(item.get('new_count') or 0)}</td>"
+            f"<td>+{ui.esc(item.get('added_count') or 0)} / -{ui.esc(item.get('removed_count') or 0)} / ~{ui.esc(item.get('changed_count') or 0)}</td>"
+            f"<td>{ui.badge(str(item.get('status') or 'CHANGED'))}</td>"
+            f"<td><code>{ui.esc('; '.join(examples[:limit]) or '-')}</code></td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _diff_readiness_rows(readiness_diff: Mapping[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for key, value in readiness_diff.items():
+        if key in {"schema_version", "new_blocking_items", "new_manual_review_items"}:
+            continue
+        if isinstance(value, Mapping):
+            rows.append(
+                "<tr>"
+                f"<td><code>{ui.esc(key)}</code></td>"
+                f"<td>{ui.esc(value.get('old'))}</td>"
+                f"<td>{ui.esc(value.get('new'))}</td>"
+                f"<td>{ui.esc(value.get('delta') if 'delta' in value else '-')}</td>"
+                "</tr>"
+            )
+    for item in readiness_diff.get("new_blocking_items", []) or []:
+        if isinstance(item, Mapping):
+            rows.append(
+                "<tr>"
+                f"<td><code>new_blocker</code></td>"
+                f"<td>-</td><td>{ui.esc(item.get('title') or item.get('category') or '-')}</td>"
+                f"<td>{ui.esc(item.get('message') or '-')}</td>"
+                "</tr>"
+            )
+    return rows
+
+
+def _diff_issue_rows(diff_dir: Path | None, *, limit: int = 20) -> list[str]:
+    issues = _version_diff_json(diff_dir, "diff_issues.json").get("issues") if diff_dir else []
+    rows: list[str] = []
+    for item in list(issues or [])[:limit]:
+        if not isinstance(item, Mapping):
+            continue
+        rows.append(
+            "<tr>"
+            f"<td>{ui.badge(str(item.get('severity') or 'info').upper())}</td>"
+            f"<td>{ui.esc(item.get('category') or '-')}</td>"
+            f"<td>{ui.esc(item.get('title') or '-')}</td>"
+            f"<td>{ui.esc(item.get('message') or '-')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _version_diff_evidence_panel(version: Mapping[str, Any]) -> str:
+    diff_dir = _version_diff_dir(version)
+    if not diff_dir:
+        return ui.panel("Diff Evidence", "Run compare to populate version-level diff evidence.", ui.muted("No diff directory is registered for this version."))
+    view_diff = _version_diff_json(diff_dir, "view_diff.json")
+    type_diff = _version_diff_json(diff_dir, "type_diff.json")
+    readiness_diff = _version_diff_json(diff_dir, "release_readiness_diff.json")
+    summary = _version_diff_summary(diff_dir)
+    return ui.panel(
+        "Diff Evidence",
+        "Concrete comparison evidence embedded from the standalone comparison JSON. Open the full diff page only when you need the complete evidence trail.",
+        ui.metric_grid([
+            ("Status", summary.get("status") or "NO_DIFF", _relative_display_path(diff_dir, tail_parts=5), summary.get("status")),
+            ("Files", f"+{summary.get('added_files', 0)} / -{summary.get('removed_files', 0)} / ~{summary.get('changed_files', 0)}", "added / removed / changed", "WARNING" if _as_int(summary.get("removed_files")) or _as_int(summary.get("changed_files")) else "INFO"),
+            ("Views", summary.get("view_changes", 0), "view-level changes", "WARNING" if _as_int(summary.get("view_changes")) else "PASS"),
+            ("Readiness", f"{(readiness_diff.get('bundle_status') or {}).get('old', '-')} → {(readiness_diff.get('bundle_status') or {}).get('new', '-')}", "release readiness delta", "BLOCK" if (readiness_diff.get("bundle_status") or {}).get("new") == "BLOCK" else "INFO"),
+        ])
+        + _scroll_table(["View", "Severity", "Count", "Status", "Parser"], _diff_view_rows(view_diff), "No changed views", "diff-view-scroll")
+        + _scroll_table(["Type", "Count", "Delta", "Status", "Examples"], _diff_type_rows(type_diff), "No type changes", "diff-type-scroll")
+        + _scroll_table(["Readiness", "Old", "New", "Delta / Message"], _diff_readiness_rows(readiness_diff), "No release readiness delta", "diff-readiness-scroll")
+        + _scroll_table(["Severity", "Category", "Title", "Message"], _diff_issue_rows(diff_dir), "No diff issues", "diff-issue-scroll"),
+    )
+
+
 def _scroll_table(headers: list[str], rows: list[str], empty: str, class_name: str) -> str:
     head = "".join(f"<th>{ui.esc(h)}</th>" for h in headers)
     body = "".join(rows) if rows else f"<tr><td colspan='{len(headers)}' class='empty'>{ui.esc(empty)}</td></tr>"
@@ -1578,9 +1812,10 @@ def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str
         )
         + ui.panel(
             "Parser Summary",
-            "Parser results are review evidence. They surface the checks from the requirement list before opening comparison review.",
-            ui.table(["Parser", "Status", "Summary", "Source"], _version_parser_rows(parser_manifest, parser_results), "No parser summary is available for this version"),
+            "Parser results are review evidence. This aggregated view shows parser coverage, extracted object counts, and representative objects before opening comparison review.",
+            ui.table(["Parser", "Status", "Files", "Task Status", "Aggregate Summary", "Sources"], _version_parser_aggregate_rows(parser_manifest, parser_results), "No parser summary is available for this version"),
         )
+        + _version_diff_evidence_panel(version)
         + ui.panel(
             "Pre-Diff Readiness",
             "Use this section to decide whether the version has enough scan evidence before opening library comparison review.",
