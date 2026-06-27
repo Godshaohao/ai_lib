@@ -27,7 +27,7 @@ Generated HTML and run outputs are not source. `work/`, `reports/`, and `manual_
 | --- | --- | --- |
 | `configs/catalog_policy.json` | RAW discovery, version path patterns, stage rules, ignored dirs | Add real RAW path patterns, tune ignored dirs, adjust stage matching |
 | `configs/release_policy.json` | Required/optional views, validation levels, release alias gates | Tune required views per library type, change alias gate strictness, adjust doc policy |
-| `configs/summary_policy.json` | Compatibility impact map for the old update command path | Usually do not edit in the current catalog/action flow |
+| `configs/legacy_summary_policy.json` | Compatibility impact map for the old update command path | Usually do not edit in the current catalog/action flow |
 | `configs/library_versions.example.tsv` | Example version reference list | Copy into a workspace as `config/library_versions.tsv` or `configs/library_versions.tsv` |
 
 ## Workspace Config Files
@@ -136,7 +136,7 @@ Notes:
 - `manager_tasks.json` is a manager-facing task list for missing scan/diff/relation evidence. It is valid, but not part of the normal IP-user update-consumption path.
 - Version Review may show `Parser Summary`, `Diff Summary`, and `Count-only + Corner Summary`; those are page evidence summaries generated from scan and diff artifacts.
 - `manual_preview/**` is only a local generated browser preview. It is ignored by git and can be regenerated from the test catalog.
-- `summary_policy.json` remains only for the compatibility `update` path. The current catalog/action workflow should not require adding a new summary step when adding file types.
+- `legacy_summary_policy.json` remains only for the compatibility `update` path. The current catalog/action workflow should not require adding a new summary step when adding file types.
 
 ## Current Local Preview
 

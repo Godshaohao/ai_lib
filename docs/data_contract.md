@@ -18,6 +18,5 @@ The review pipeline exchanges JSON artifacts between stages:
 | `diff_issues.json` | compare | version review, comparison review |
 
 Policies in `configs/` define current catalog and release behavior.
-`configs/summary_policy.json` is retained only for compatibility with the old
-update path.
-
+`configs/legacy_summary_policy.json` is retained only for compatibility with the
+old update path.

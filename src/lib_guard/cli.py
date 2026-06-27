@@ -240,7 +240,7 @@ def add_update_parser(subparsers: Any) -> None:
     p.add_argument("--mode", default="signature")
     p.add_argument("--scope", default="summary", choices=["parser", "summary", "parser-summary", "all"])
     p.add_argument("--workdir", default="work")
-    p.add_argument("--policy", default="configs/summary_policy.json")
+    p.add_argument("--policy", default="configs/legacy_summary_policy.json")
     p.add_argument("--no-rebuild-summary", action="store_true")
     p.set_defaults(func=run_update_file)
 
@@ -250,7 +250,7 @@ def add_update_parser(subparsers: Any) -> None:
     p.add_argument("--mode", default="signature")
     p.add_argument("--scope", default="summary", choices=["parser", "summary", "parser-summary", "all"])
     p.add_argument("--workdir", default="work")
-    p.add_argument("--policy", default="configs/summary_policy.json")
+    p.add_argument("--policy", default="configs/legacy_summary_policy.json")
     p.add_argument("--skip-cache", action="store_true")
     p.add_argument("--no-rebuild-summary", action="store_true")
     p.set_defaults(func=run_update_type)

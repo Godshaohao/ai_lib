@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -26,6 +27,7 @@ class RepositoryCleanupTest(unittest.TestCase):
             "Build v5 HTML",
         ]
         roots = [ROOT / "README.md", ROOT / "AGENT.md", ROOT / "docs", ROOT / "scripts", ROOT / "src" / "lib_guard"]
+        old_policy_name = re.compile(r"(?<!legacy_)summary_policy\.json")
         hits: list[str] = []
         for root in roots:
             paths = [root] if root.is_file() else list(root.rglob("*"))
@@ -41,6 +43,8 @@ class RepositoryCleanupTest(unittest.TestCase):
                 for token in tokens:
                     if token in text:
                         hits.append(f"{rel}: {token}")
+                if not rel.startswith("src/lib_guard/") and old_policy_name.search(text):
+                    hits.append(f"{rel}: summary_policy.json")
         self.assertFalse(hits, "stale workflow copy found:\n" + "\n".join(hits))
 
 

@@ -10,7 +10,7 @@ CONFIG_SPECS = [
     ("file_patterns", "configs/file_patterns.json", True, ["scan"], ["scan"]),
     ("library_profiles", "configs/library_profiles.json", True, ["release_check"], ["release check"]),
     ("scan_policy", "configs/scan_policy.json", True, ["scan", "cache"], ["scan"]),
-    ("summary_policy", "configs/summary_policy.json", True, ["scan_report"], ["scan"]),
+    ("legacy_summary_policy", "configs/legacy_summary_policy.json", True, ["scan_report"], ["scan"]),
     ("release_policy", "configs/release_policy.json", True, ["release_check"], ["release check"]),
     ("ignore_rules", "configs/ignore_rules.json", True, ["scan"], ["scan"]),
     ("severity_policy", "configs/severity_policy.json", True, ["release_check"], ["release check"]),
@@ -93,7 +93,7 @@ def build_config_view(config_dir: str | Path = "configs") -> dict[str, Any]:
 def _config_suggestion(name: str) -> str:
     if name.startswith("release_policy."):
         return "After changing this item, rerun release check; scan is usually not required."
-    if name.startswith("summary_policy."):
+    if name.startswith("legacy_summary_policy."):
         return "After changing this item, rerun scan for affected libraries if summary artifacts are still enabled."
     if name.startswith("scan_policy.") or name.startswith("file_patterns.") or name.startswith("ignore_rules."):
         return "After changing this item, rerun scan for affected libraries."
