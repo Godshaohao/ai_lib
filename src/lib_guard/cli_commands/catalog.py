@@ -37,7 +37,7 @@ def run_catalog_scan(args: Namespace) -> int:
 
 
 def _library_match_names(lib: dict[str, Any]) -> set[str]:
-    names = {str(lib.get("library_name") or ""), str(lib.get("library_id") or "")}
+    names = {str(lib.get("library_name") or ""), str(lib.get("display_name") or ""), str(lib.get("library_id") or "")}
     names.update(str(a) for a in lib.get("aliases", []) or [] if str(a))
     return {name for name in names if name}
 
@@ -335,6 +335,37 @@ def _catalog_versions(catalog_path: str | Path, library: str | None = None) -> l
     return rows
 
 
+def _default_catalog_html_out(catalog_path: str | Path) -> Path:
+    catalog = Path(catalog_path)
+    if catalog.parent.name == "catalog":
+        return catalog.parent / "html"
+    return catalog.parent / "html"
+
+
+def _review_gate_for_catalog_version(args: Namespace) -> tuple[str | None, dict[str, Any]]:
+    from lib_guard.review.io import read_json, write_json
+    from lib_guard.review.state import build_review_state
+
+    explicit = getattr(args, "review_gate", None)
+    if explicit:
+        return str(explicit), read_json(explicit, {}) or {}
+    catalog = json.loads(Path(args.catalog).read_text(encoding="utf-8"))
+    out_dir = _default_catalog_html_out(args.catalog)
+    state = build_review_state(catalog, out_dir=out_dir)
+    for lib in state.get("libraries", []) or []:
+        if args.library not in _library_match_names(lib):
+            continue
+        for version in lib.get("versions", []) or []:
+            if version.get("version_id") == args.version or version.get("version_key") == args.version:
+                gate = dict(version.get("review_gate") or {})
+                gate_file = gate.get("gate_file")
+                if gate_file:
+                    write_json(gate_file, gate)
+                    return str(gate_file), gate
+                return None, gate
+    return None, {}
+
+
 def _batch_run_dir(args: Namespace, batch_type: str) -> tuple[Path, str]:
     from lib_guard.batch.manifest import make_batch_run_dir
 
@@ -559,7 +590,15 @@ def run_catalog_release_check(args: Namespace) -> int:
     if not diff_dir and args.diff_mode:
         diff = item.get("diff", {}) or {}
         diff_dir = diff.get("cumulative_diff_dir") if args.diff_mode == "cumulative" else diff.get("adjacent_diff_dir")
-    result = check_release_scan(scan_dir, policy_path=args.policy, diff_dir=diff_dir)
+    review_gate_path, review_gate = _review_gate_for_catalog_version(args)
+    result = check_release_scan(
+        scan_dir,
+        policy_path=args.policy,
+        diff_dir=diff_dir,
+        alias=getattr(args, "alias", None),
+        review_gate_path=review_gate_path,
+        review_gate=review_gate if not review_gate_path else None,
+    )
     result_path = Path(scan_dir) / "release" / "release_check.json"
     release_result_path = Path(scan_dir) / "release" / "release_result.json"
     write_release_result(release_result_path, release_result_from_check(result))

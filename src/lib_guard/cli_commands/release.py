@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from pathlib import Path
+import json
 
-from .common import print_json
+from .common import auto_scan_id, print_json
 
 
 def run_release_check(args: Namespace) -> int:
@@ -12,7 +14,13 @@ def run_release_check(args: Namespace) -> int:
     from lib_guard.release.checker import check_release_scan
 
     scan_dir = resolve_scan_dir(scan=args.scan, latest=args.latest, library_id=args.library_id, mode=args.mode, workdir=args.workdir)
-    result = check_release_scan(scan_dir, policy_path=args.policy, diff_dir=args.diff)
+    result = check_release_scan(
+        scan_dir,
+        policy_path=args.policy,
+        diff_dir=args.diff,
+        alias=getattr(args, "alias", None),
+        review_gate_path=getattr(args, "review_gate", None),
+    )
     if args.register_history:
         meta = {}
         meta_path = Path(scan_dir) / "scan_meta.json"
@@ -117,4 +125,3 @@ def run_release_manifest_from_snapshot(args: Namespace) -> int:
     )
     print_json({"status": "PASS", "manifest": args.out, "snapshot_id": result.get("snapshot_id"), "file_count": len(result.get("files", []) or [])})
     return 0
-

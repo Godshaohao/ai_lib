@@ -1737,6 +1737,42 @@ def _version_update_detail_panel(version: Mapping[str, Any]) -> str:
     )
 
 
+def _review_gate_rows(items: list[Mapping[str, Any]], *, limit: int = 5) -> list[str]:
+    rows: list[str] = []
+    for item in list(items or [])[:limit]:
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(item.get('id') or '-')}</code></td>"
+            f"<td>{ui.badge(str(item.get('severity') or 'INFO').upper())}</td>"
+            f"<td>{ui.esc(item.get('title') or item.get('category') or '-')}</td>"
+            f"<td>{ui.esc(item.get('message') or '-')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _review_gate_panel(version: Mapping[str, Any]) -> str:
+    gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
+    status = str((gate or {}).get("status") or "NOT_BUILT")
+    blocking_items = list((gate or {}).get("blocking_items", []) or [])
+    attention_items = list((gate or {}).get("attention_items", []) or [])
+    accepted_items = list((gate or {}).get("accepted_items", []) or [])
+    waived_items = list((gate or {}).get("waived_items", []) or [])
+    return ui.panel(
+        "Review Gate",
+        "Lightweight release-risk gate. File Diff recommendations are attention items; metadata-only, catalog trust, and release-fatal risks require owner acceptance or a fix.",
+        ui.metric_grid([
+            ("Status", status, str((gate or {}).get("gate") or "current"), status),
+            ("Blocking Open", len(blocking_items), "requires fix/accept/waive", "BLOCK" if blocking_items else "PASS"),
+            ("Attention", len(attention_items), "recommended evidence, not current blocker", "WARNING" if attention_items else "PASS"),
+            ("Accepted / Waived", f"{len(accepted_items)} / {len(waived_items)}", "recorded decisions", "INFO"),
+        ])
+        + _scroll_table(["Item", "Severity", "Title", "Message"], _review_gate_rows(blocking_items), "No open blocking items", "review-gate-blocking-scroll")
+        + ui.collapsible_panel("Attention Items", "Recommendations and focused evidence. These do not block current by default.", _scroll_table(["Item", "Severity", "Title", "Message"], _review_gate_rows(attention_items), "No attention items", "review-gate-attention-scroll"), open=False)
+        + ui.collapsible_panel("Trace", "Review gate files consumed by release-check.", ui.trace_link_list([("review_gate.json", _href((gate or {}).get("gate_file")), "Version gate status"), ("review_overrides.json", _href((gate or {}).get("override_file")), "Owner accept/waive decisions")]), open=False),
+    )
+
+
 def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> str:
     lib_id = str(lib.get("library_id") or lib.get("display_name") or "library")
     version_id = str(version.get("version_id") or version.get("version") or "version")
@@ -1777,6 +1813,7 @@ def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str
     body = (
         _absolute_path_box("Absolute Raw Path", version.get("raw_path"))
         + _version_update_detail_panel(version)
+        + _review_gate_panel(version)
         +
         ui.panel(
             "Raw Version Detail",
@@ -1949,6 +1986,9 @@ def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render
             for version in lib.get("versions", []) or []:
                 links = version.setdefault("links", {})
                 links["version_review_html"] = _render_version_page(out, lib, version)
+                gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
+                if gate.get("gate_file"):
+                    write_json(gate["gate_file"], gate)
             lib_id = str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "")
             lib["library_home_html"] = _render_library_home(out, lib, _effective_items_for_lib(effective_by_lib, lib), list(compare_by_lib.get(lib_id, []) or []))
     report_index = _write_report_index(out, state, effective_by_lib, compare_by_lib)

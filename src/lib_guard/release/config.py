@@ -31,9 +31,9 @@ class ReleasePolicy:
     allow_missing_docs_as_warning: bool = True
     release_link_mode: str = "symlink"  # symlink/copy/dry_run
     alias_gate: dict[str, dict[str, Any]] = field(default_factory=lambda: {
-        "stage": {"required_release_level": "L0", "allow_warning": True, "require_diff": False},
-        "current": {"required_release_level": "L1", "allow_warning": True, "require_diff": True},
-        "approved": {"required_release_level": "L2", "allow_warning": False, "require_p2_deep_diff": True, "require_manual_review_closed": True},
+        "stage": {"required_release_level": "L0", "allow_warning": True, "require_diff": False, "require_review_gate_closed": False},
+        "current": {"required_release_level": "L1", "allow_warning": True, "require_diff": True, "require_review_gate_closed": True, "require_pairwise_done": False},
+        "approved": {"required_release_level": "L2", "allow_warning": False, "require_p2_deep_diff": True, "require_manual_review_closed": True, "require_review_gate_closed": True, "require_pairwise_done": True},
     })
     doc_policy: dict[str, Any] = field(default_factory=lambda: {
         "always_parse": True,

@@ -17,8 +17,10 @@ Catalog -> Library Workspace -> Version Review -> Comparison Review -> File Diff
 - Comparison Review shows structural changes between a selected base and update.
 - File Diff is a focused downstream review for selected files, not a progress
   scoreboard.
-- Release commands build link/verify manifests only after scan and comparison
-  evidence is available.
+- Review Gate records only real blockers and owner accept/waive decisions. It is
+  not a multi-department approval workflow.
+- Release commands use manifest-driven file-level symlink by default and build
+  link/verify evidence only after scan and comparison evidence is available.
 
 The normal daily interface is the short command wrapper in `scripts/lg.csh`,
 `scripts/lg.ps1`, or `scripts/lg.cmd`. The lower-level `python -m lib_guard.cli`
@@ -53,7 +55,9 @@ $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --rescan
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> --base <BASE_VERSION> --type <FILE_TYPE>
-$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first
+$PROJ/scripts/lg.csh rv-check <LIBRARY> <VERSION> --gate current
+$PROJ/scripts/lg.csh rv-accept <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 ```
 
 If `$WORK/lib_guard.yml` exists, `lg.csh` will use it automatically. You can
@@ -79,5 +83,6 @@ PYTHONPATH=src python -m unittest discover -s src/lib_guard/test -p "test*.py"
 - [User guide](docs/user_guide.md)
 - [CLI reference](docs/cli_reference.md)
 - [Data contract](docs/data_contract.md)
+- [Review gate](docs/review_gate.md)
 - [Test plan](docs/test_plan.md)
 - [Deprecation policy](docs/deprecation_policy.md)

@@ -37,24 +37,31 @@
   "allow_warning": true,
   "block_on_parser_failed": true,
   "block_on_integrity_error": true,
+  "release_link_mode": "symlink",
   "link_views": ["verilog", "lef", "liberty", "db", "cdl", "sdc", "upf", "cpf", "doc"],
   "alias_gate": {
     "stage": {
       "required_release_level": "L0",
       "allow_warning": true,
-      "require_diff": false
+      "require_diff": false,
+      "require_review_gate_closed": false
     },
     "current": {
       "required_release_level": "L1",
       "allow_warning": true,
       "require_diff": true,
-      "require_adjacent_diff_for_hotfix": true
+      "require_adjacent_diff_for_hotfix": true,
+      "require_review_gate_closed": true,
+      "block_on_metadata_only_unaccepted": true,
+      "require_pairwise_done": false
     },
     "approved": {
       "required_release_level": "L2",
       "allow_warning": false,
       "require_p2_deep_diff": true,
-      "require_manual_review_closed": true
+      "require_manual_review_closed": true,
+      "require_review_gate_closed": true,
+      "require_pairwise_done": true
     }
   },
   "doc_policy": {

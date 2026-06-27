@@ -76,6 +76,11 @@ run_release_manifest_from_snapshot = _lazy_command("lib_guard.cli_commands.relea
 run_release_manifest_template = _lazy_command("lib_guard.cli_commands.release", "run_release_manifest_template")
 run_release_verify = _lazy_command("lib_guard.cli_commands.release", "run_release_verify")
 run_render_command = _lazy_command("lib_guard.cli_commands.render", "run_render_command")
+run_review_accept = _lazy_command("lib_guard.cli_commands.review", "run_review_accept")
+run_review_build = _lazy_command("lib_guard.cli_commands.review", "run_review_build")
+run_review_check = _lazy_command("lib_guard.cli_commands.review", "run_review_check")
+run_review_list = _lazy_command("lib_guard.cli_commands.review", "run_review_list")
+run_review_waive = _lazy_command("lib_guard.cli_commands.review", "run_review_waive")
 run_scan_command = _lazy_command("lib_guard.cli_commands.scan", "run_scan_command")
 run_scan_status = _lazy_command("lib_guard.cli_commands.scan", "run_scan_status")
 run_update_file = _lazy_command("lib_guard.cli_commands.update", "run_update_file")
@@ -198,6 +203,8 @@ def add_release_parser(subparsers: Any) -> None:
             p.add_argument("--diff", help="Optional diff_output directory used as an alias gate")
         else:
             p.add_argument("--diff", help="Optional diff_output directory used as a release gate")
+            p.add_argument("--alias", help="Optional release alias for alias-gate checks")
+            p.add_argument("--review-gate", help="Optional review_gate.json consumed by alias gate")
             p.add_argument("--register-history", action="store_true", default=True)
         p.set_defaults(func=fn)
 
@@ -319,6 +326,42 @@ def add_console_parser(subparsers: Any) -> None:
     p.add_argument("--config-dir", default="configs")
     p.add_argument("--out", required=True)
     p.set_defaults(func=run_console_review)
+
+
+def add_review_parser(subparsers: Any) -> None:
+    root = subparsers.add_parser("review", help="Lightweight review gate operations")
+    sp = root.add_subparsers(dest="review_cmd", required=True)
+
+    def add_common(p: Any) -> None:
+        p.add_argument("--catalog", required=True)
+        p.add_argument("--library", required=True)
+        p.add_argument("--version", required=True)
+        p.add_argument("--gate", default="current", choices=["stage", "current", "approved"])
+        p.add_argument("--out", help="Review directory. Default: <work>/review/<library>/<version>")
+        p.add_argument("--gate-file", help="Explicit review_gate.json path")
+        p.add_argument("--overrides", help="Explicit review_overrides.json path")
+        p.add_argument("--catalog-html-out")
+        p.add_argument("--no-catalog-render", action="store_true")
+
+    p = sp.add_parser("build", help="Build and write review_gate.json")
+    add_common(p)
+    p.set_defaults(func=run_review_build)
+
+    p = sp.add_parser("check", help="Print review gate status")
+    add_common(p)
+    p.set_defaults(func=run_review_check)
+
+    p = sp.add_parser("list", help="List blocking and attention items")
+    add_common(p)
+    p.set_defaults(func=run_review_list)
+
+    for name, fn in [("accept", run_review_accept), ("waive", run_review_waive)]:
+        p = sp.add_parser(name, help=f"Record a review {name} decision")
+        add_common(p)
+        p.add_argument("--item", required=True)
+        p.add_argument("--by", required=True)
+        p.add_argument("--reason", required=True)
+        p.set_defaults(func=fn)
 
 
 def add_diff_parser(subparsers: Any) -> None:
@@ -455,8 +498,10 @@ def add_catalog_parser(subparsers: Any) -> None:
     p.add_argument("--library", required=True)
     p.add_argument("--version", required=True)
     p.add_argument("--policy", default="configs/release_policy.json")
+    p.add_argument("--alias", default="current")
     p.add_argument("--diff")
     p.add_argument("--diff-mode", choices=["adjacent", "cumulative"])
+    p.add_argument("--review-gate")
     p.set_defaults(func=run_catalog_release_check)
 
     p = sp.add_parser("release-link", help="Run release link dry-run/apply from a catalog version")
@@ -635,6 +680,7 @@ def build_parser() -> ArgumentParser:
     add_package_parser(subparsers)
     add_update_parser(subparsers)
     add_console_parser(subparsers)
+    add_review_parser(subparsers)
     add_diff_parser(subparsers)
     add_file_diff_parser(subparsers)
     add_library_parser(subparsers)

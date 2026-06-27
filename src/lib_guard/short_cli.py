@@ -439,6 +439,8 @@ def _build_parser() -> ArgumentParser:
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
     lg.csh fd ucie stable_20250608 model/ucie.ibs --base initial_20250601
     lg.csh fd ucie stable_20250608 touch/chan.s2p --type snp
+    lg.csh rv-check ucie stable_20250608 --gate current
+    lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
     lg.csh action ucie
 
   Action file example ($WORK/actions/ucie.action):
@@ -463,6 +465,8 @@ def _build_parser() -> ArgumentParser:
     lg.ps1 refresh ucie
     lg.ps1 refresh --all
     lg.ps1 fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
+    lg.ps1 rv-check ucie stable_20250608 --gate current
+    lg.ps1 rel ucie stable_20250608 --check-first --link-mode symlink
     lg.ps1 action ucie
 
   Dry-run / without cd:
@@ -470,6 +474,7 @@ def _build_parser() -> ArgumentParser:
     lg.csh --dry-run scan ucie stable_20250608
     lg.csh --dry-run cmp ucie stable_20250608 --base initial_20250601
     lg.csh --dry-run fd ucie stable_20250608 waiver/rules.waiver --base initial_20250601
+    lg.csh --dry-run rv-accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason accepted
 
   Pairwise file-diff types:
     lef liberty verilog cdl sdc upf cpf spef db waiver ibis pwl snp cpm
@@ -563,7 +568,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--alias", default="current")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--overwrite", action="store_true")
-    p.add_argument("--link-mode", default="copy", choices=["copy", "symlink"])
+    p.add_argument("--link-mode", default="symlink", choices=["copy", "symlink"])
     p.add_argument("--check-only", action="store_true", help="Only run release-check for this catalog version")
     p.add_argument("--check-first", action="store_true", help="Run release-check before release-batch")
     p.add_argument("--only-checked", action="store_true", help="Release only if prior/latest release-check is PASS/PASS_WITH_WARNING")
@@ -576,6 +581,21 @@ def _build_parser() -> ArgumentParser:
     p = sub.add_parser("action", aliases=["act", "review"], help="Run one library action file from actions/<library>.action")
     p.add_argument("library")
     p.add_argument("--action", help="Explicit action file path. Default: $WORK/actions/<library>.action")
+
+    for name in ["rv-build", "rv-check", "rv-list"]:
+        p = sub.add_parser(name, help="Build/check/list lightweight review gate for a catalog version")
+        p.add_argument("library")
+        p.add_argument("version")
+        p.add_argument("--gate", default="current", choices=["stage", "current", "approved"])
+
+    for name in ["rv-accept", "rv-waive"]:
+        p = sub.add_parser(name, help="Record a lightweight review gate decision")
+        p.add_argument("library")
+        p.add_argument("version")
+        p.add_argument("--gate", default="current", choices=["stage", "current", "approved"])
+        p.add_argument("--item", required=True)
+        p.add_argument("--by", required=True)
+        p.add_argument("--reason", required=True)
     return parser
 
 
@@ -711,6 +731,26 @@ def _override_command(cfg: dict[str, str], args: Any) -> list[str]:
     ]:
         if value:
             command.append(opt)
+    return command
+
+
+def _review_gate_command(cfg: dict[str, str], args: Any, subcommand: str) -> list[str]:
+    command = [
+        "review",
+        subcommand,
+        "--catalog",
+        cfg["catalog"],
+        "--library",
+        args.library,
+        "--version",
+        args.version,
+        "--gate",
+        args.gate,
+        "--catalog-html-out",
+        cfg["catalog_html"],
+    ]
+    if subcommand in {"accept", "waive"}:
+        command.extend(["--item", args.item, "--by", args.by, "--reason", args.reason])
     return command
 
 
@@ -969,6 +1009,9 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         ]
     if args.short_command == "override":
         return [_override_command(cfg, args)]
+    if args.short_command in {"rv-build", "rv-check", "rv-list", "rv-accept", "rv-waive"}:
+        review_subcommand = args.short_command.removeprefix("rv-")
+        return [_review_gate_command(cfg, args, review_subcommand)]
     if args.short_command in {"action", "act", "review"}:
         return _review_commands(cfg, args)
     if args.short_command == "refresh":
@@ -1072,6 +1115,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             args.library,
             "--version",
             args.version,
+            "--alias",
+            args.alias,
         ]
         if args.check_only:
             return [check_cmd]
