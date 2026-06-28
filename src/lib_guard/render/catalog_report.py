@@ -1009,7 +1009,7 @@ def _task_rows(tasks: Mapping[str, Any], limit: int = 50) -> list[str]:
             f"<td><span class='muted'>按下方命令示例执行</span></td></tr>"
         )
     if skipped_file_diff:
-        rows.append("<tr><td><span class='muted'>-</span></td><td><code>file-diff</code></td><td><b>File Diff 命令已下沉</b></td>" + f"<td>共 {ui.esc(skipped_file_diff)} 条 File Diff 候选命令不在 Catalog 展开；请进入 Selected Diff 的重点文件建议队列。</td><td><span class='muted'>不在 Catalog 生成全量命令</span></td></tr>")
+        rows.append("<tr><td><span class='muted'>-</span></td><td><code>file-diff</code></td><td><b>File Diff 命令已下沉</b></td>" + f"<td>共 {ui.esc(skipped_file_diff)} 条 File Diff 候选命令不在 Catalog 展开；请进入版本更新详情里的重点文件建议。</td><td><span class='muted'>不在 Catalog 生成全量命令</span></td></tr>")
     return rows
 
 
@@ -1026,7 +1026,7 @@ def _summary_metrics(state: Mapping[str, Any], tasks: Mapping[str, Any]) -> list
         ("库", len(libs), "可查询的 library", "PASS"),
         ("版本", len(versions), "可查询的版本", "PASS"),
         ("有更新", changed, "进入库工作台查看更新文件", "WARNING" if changed else "PASS"),
-        ("重点文件", recommended, "Selected Diff 下钻建议", "WARNING" if recommended else "PASS"),
+        ("重点文件", recommended, "版本更新详情下钻建议", "WARNING" if recommended else "PASS"),
         ("待补证据", evidence_pending, "库管理者补 scan / diff", "WARNING" if evidence_pending else "PASS"),
         ("管理任务", actionable_tasks, "见 manager_tasks.json", "INFO" if actionable_tasks else "PASS"),
     ]
@@ -1048,7 +1048,7 @@ def _catalog_browser_styles() -> str:
 """
 
 
-VERSION_COUNT_ONLY_TYPES = {"liberty", "lib", "db", "spef", "gds", "oas", "layout", "milkyway"}
+VERSION_COUNT_ONLY_TYPES = {"liberty", "lib", "db", "spef", "gds", "oas", "layout", "milkyway", "verilog"}
 
 
 def _version_scan_dir(version: Mapping[str, Any]) -> Path | None:
@@ -1171,7 +1171,7 @@ def _version_count_only_rows(counts: Mapping[str, int]) -> list[str]:
             "<tr>"
             f"<td><code>{ui.esc(file_type)}</code></td>"
             f"<td>{ui.esc(count)}</td>"
-            f"<td>{ui.esc('Count-only by default')}</td>"
+            f"<td>{ui.esc('默认只统计数量与文件名线索')}</td>"
             "</tr>"
         )
     return rows
@@ -1238,6 +1238,132 @@ def _metric_text(label: str, value: Any) -> str:
     return f"<span class='tiny-tag'><b>{ui.esc(label)}</b>&nbsp;{ui.esc(value)}</span>"
 
 
+def _format_counts(counts: Mapping[str, int], *, limit: int = 5) -> str:
+    pairs = [(str(k), int(v or 0)) for k, v in counts.items() if str(k) and int(v or 0) > 0]
+    pairs.sort(key=lambda item: (-item[1], item[0]))
+    text = ", ".join(f"{key}:{value}" for key, value in pairs[:limit])
+    return text + (", ..." if len(pairs) > limit else "")
+
+
+def _bump(counts: dict[str, int], value: Any) -> None:
+    text = str(value or "").strip()
+    if not text:
+        return
+    counts[text] = counts.get(text, 0) + 1
+
+
+def _size_text(size: Any) -> str | None:
+    if not isinstance(size, Mapping):
+        return None
+    x = size.get("x")
+    y = size.get("y")
+    if x is None or y is None:
+        return None
+    return f"{x}x{y}"
+
+
+def _iter_lef_pins(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    pins: list[Mapping[str, Any]] = []
+    macros = data.get("macros") if isinstance(data.get("macros"), Mapping) else {}
+    for macro in macros.values():
+        if not isinstance(macro, Mapping):
+            continue
+        for pin in ((macro.get("pins") or {}) if isinstance(macro.get("pins"), Mapping) else {}).values():
+            if isinstance(pin, Mapping):
+                pins.append(pin)
+    return pins
+
+
+def _lef_used_layers(data: Mapping[str, Any]) -> list[str]:
+    explicit = [str(item) for item in (data.get("used_layers") or []) if str(item)]
+    if explicit:
+        return sorted(set(explicit))
+    layers = data.get("layers") if isinstance(data.get("layers"), Mapping) else {}
+    found = set(str(name) for name in layers if str(name))
+    for pin in _iter_lef_pins(data):
+        found.update(str(layer) for layer in (pin.get("layers") or []) if str(layer))
+    return sorted(found)
+
+
+def _iter_cdl_instances(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    instances = data.get("instances")
+    if isinstance(instances, list):
+        return [item for item in instances if isinstance(item, Mapping)]
+    out: list[Mapping[str, Any]] = []
+    subckts = data.get("subckts") if isinstance(data.get("subckts"), Mapping) else {}
+    for subckt in subckts.values():
+        if not isinstance(subckt, Mapping):
+            continue
+        for item in subckt.get("instances") or []:
+            if isinstance(item, Mapping):
+                out.append(item)
+    return out
+
+
+def _parser_insight_items(file_type: str, data: Mapping[str, Any]) -> list[tuple[str, str]]:
+    key = file_type.lower()
+    items: list[tuple[str, str]] = []
+    stats = data.get("stats") if isinstance(data.get("stats"), Mapping) else {}
+    if key == "lef":
+        direction_counts: dict[str, int] = {}
+        use_counts: dict[str, int] = {}
+        for pin in _iter_lef_pins(data):
+            _bump(direction_counts, pin.get("direction"))
+            _bump(use_counts, pin.get("use"))
+        layer_type_counts: dict[str, int] = {}
+        layers = data.get("layers") if isinstance(data.get("layers"), Mapping) else {}
+        for layer in layers.values():
+            if isinstance(layer, Mapping):
+                _bump(layer_type_counts, layer.get("type"))
+        if direction_counts:
+            items.append(("Pin Directions", _format_counts(direction_counts)))
+        if use_counts:
+            items.append(("Pin Uses", _format_counts(use_counts)))
+        if layer_type_counts:
+            items.append(("Layer Types", _format_counts(layer_type_counts)))
+        used_layers = _lef_used_layers(data)
+        if used_layers:
+            items.append(("Top Layers", ", ".join(used_layers[:8]) + (" ..." if len(used_layers) > 8 else "")))
+        if _as_int(stats.get("pin_rect_count")):
+            items.append(("Pin Rects", str(_as_int(stats.get("pin_rect_count")))))
+        if _as_int(stats.get("obs_rect_count")):
+            items.append(("OBS Rects", str(_as_int(stats.get("obs_rect_count")))))
+    elif key == "cdl":
+        kind_counts: dict[str, int] = {}
+        for instance in _iter_cdl_instances(data):
+            _bump(kind_counts, instance.get("kind"))
+        if kind_counts:
+            items.append(("Instance Types", _format_counts(kind_counts)))
+        subckts = data.get("subckts") if isinstance(data.get("subckts"), Mapping) else {}
+        pin_counts = {
+            str(name): _as_int((subckt or {}).get("pin_count"))
+            for name, subckt in subckts.items()
+            if isinstance(subckt, Mapping)
+        }
+        if pin_counts:
+            items.append(("Subckt Pins", _format_counts(pin_counts, limit=4)))
+    elif key in {"verilog", "systemverilog"}:
+        direction_counts: dict[str, int] = {}
+        modules = data.get("modules") if isinstance(data.get("modules"), Mapping) else {}
+        for module in modules.values():
+            if not isinstance(module, Mapping):
+                continue
+            ports = module.get("ports") if isinstance(module.get("ports"), Mapping) else {}
+            for port in ports.values():
+                if isinstance(port, Mapping):
+                    _bump(direction_counts, port.get("direction"))
+        if direction_counts:
+            items.append(("Port Directions", _format_counts(direction_counts)))
+    return [(label, value) for label, value in items if value]
+
+
+def _parser_insight_html(file_type: str, data: Mapping[str, Any]) -> str:
+    items = _parser_insight_items(file_type, data)
+    if not items:
+        return ""
+    return "<div class='effective-tags parser-insights'>" + "".join(_metric_text(label, value) for label, value in items[:8]) + "</div>"
+
+
 PARSER_DETAIL_KEYS = [
     "macros",
     "pins",
@@ -1265,6 +1391,56 @@ PARSER_DETAIL_KEYS = [
 
 def _short_detail_value(value: Any) -> str:
     if isinstance(value, Mapping):
+        if "target" in value or "kind" in value:
+            parts = []
+            if value.get("kind"):
+                parts.append(f"kind={value.get('kind')}")
+            if value.get("target"):
+                parts.append(f"target={value.get('target')}")
+            if value.get("pin_count") is not None:
+                parts.append(f"pins={value.get('pin_count')}")
+            return ", ".join(parts) or str(value.get("name") or "-")
+        if "direction" in value or "use" in value or "rect_count" in value:
+            parts = []
+            if value.get("direction"):
+                parts.append(str(value.get("direction")))
+            if value.get("use"):
+                parts.append(str(value.get("use")))
+            layers = value.get("layers") or []
+            if layers:
+                parts.append("layers=" + ",".join(str(item) for item in layers[:4]))
+            if value.get("rect_count") is not None:
+                parts.append(f"rects={value.get('rect_count')}")
+            return ", ".join(parts) or str(value.get("name") or "-")
+        if "type" in value or "width" in value or "pitch" in value:
+            parts = []
+            for key in ["type", "direction", "width", "pitch", "spacing"]:
+                if value.get(key) is not None:
+                    parts.append(f"{key}={value.get(key)}")
+            return ", ".join(parts) or str(value.get("name") or "-")
+        if "pins" in value or "pin_count" in value or "instance_count" in value:
+            parts = []
+            size = _size_text(value.get("size"))
+            if value.get("class"):
+                parts.append(f"class={value.get('class')}")
+            if size:
+                parts.append(f"size={size}")
+            if value.get("site"):
+                parts.append(f"site={value.get('site')}")
+            if value.get("pin_count") is not None:
+                parts.append(f"pins={value.get('pin_count')}")
+            elif isinstance(value.get("pins"), Mapping):
+                parts.append(f"pins={len(value.get('pins') or {})}")
+            if value.get("instance_count") is not None:
+                parts.append(f"instances={value.get('instance_count')}")
+            return ", ".join(parts) or str(value.get("name") or "-")
+        if "port_count" in value or "module_count" in value:
+            parts = []
+            if value.get("port_count") is not None:
+                parts.append(f"ports={value.get('port_count')}")
+            if value.get("module_count") is not None:
+                parts.append(f"modules={value.get('module_count')}")
+            return ", ".join(parts) or str(value.get("name") or "-")
         if "name" in value:
             return str(value.get("name") or "-")
         parts = [f"{k}={v}" for k, v in list(value.items())[:3] if not isinstance(v, (dict, list))]
@@ -1272,19 +1448,101 @@ def _short_detail_value(value: Any) -> str:
     return str(value or "-")
 
 
-def _parser_detail_items(data: Mapping[str, Any], *, limit: int = 10) -> list[tuple[str, str, str]]:
-    items: list[tuple[str, str, str]] = []
+def _lef_layer_detail(detail: Any) -> str:
+    if not isinstance(detail, Mapping):
+        text = str(detail or "").strip()
+        return "-" if not text else text
+    parts = []
+    for key in ["type", "direction", "width", "pitch", "spacing"]:
+        value = detail.get(key)
+        if value is not None:
+            parts.append(f"{key}={value}")
+    return ", ".join(parts) or "-"
+
+
+def _lef_layer_meaning(detail: Any) -> str:
+    if not isinstance(detail, Mapping):
+        return "tech_layer"
+    layer_type = str(detail.get("type") or "").upper()
+    if layer_type == "ROUTING":
+        return "routing_layer"
+    if layer_type == "CUT":
+        return "cut_layer"
+    return "tech_layer"
+
+
+def _lef_layer_sort_key(name: str, detail: Any) -> tuple[int, str]:
+    if isinstance(detail, Mapping):
+        layer_type = str(detail.get("type") or "").upper()
+        if layer_type == "ROUTING":
+            return (0, name)
+        if layer_type == "CUT":
+            return (1, name)
+        if any(detail.get(key) is not None for key in ["direction", "width", "pitch", "spacing"]):
+            return (2, name)
+    return (3, name)
+
+
+def _parser_object_meaning(file_type: str, category: str, name: str, detail: str, source: str = "", raw_detail: Any = None) -> str:
+    key = str(file_type or "").lower()
+    lower = f"{name} {detail}".lower()
+    source_lower = str(source or "").replace("\\", "/").lower()
+    if key in {"verilog", "systemverilog"} and category == "modules":
+        if "clkgate" in lower or "clockgate" in lower:
+            return "clock_gate"
+        if "fakeram" in lower or "sram" in lower or "regfile" in lower:
+            return "macro_stub"
+        if "/yosys/" in f"/{source_lower}" or "yosys/cells_" in source_lower:
+            return "yosys_cell_model"
+        if lower.startswith("_tech") or "tech" in lower:
+            return "support_module"
+        return "rtl_module"
+    if key == "lef":
+        if category == "macros":
+            return "physical_macro"
+        if category == "pins":
+            return "macro_pin"
+        if category == "layers":
+            return _lef_layer_meaning(raw_detail)
+    if key == "cdl":
+        if category == "subckts":
+            return "circuit_subckt"
+        if category == "instances":
+            return "circuit_instance"
+    if key == "sdc":
+        return "constraint_object"
+    if key in {"upf", "cpf"}:
+        return "power_intent_object"
+    if key == "waiver":
+        return "waiver_object"
+    return "parser_object"
+
+
+def _parser_detail_items(data: Mapping[str, Any], *, source: Any = None, file_type: str = "", limit: int = 10) -> list[tuple[str, str, str, str, str]]:
+    items: list[tuple[str, str, str, str, str]] = []
+    source_text = str(source or data.get("file") or "-")
     for key in PARSER_DETAIL_KEYS:
         value = data.get(key)
         if isinstance(value, Mapping):
-            for name, detail in value.items():
-                items.append((key, str(name), _short_detail_value(detail)))
+            entries = value.items()
+            if file_type.lower() == "lef" and key == "layers":
+                entries = sorted(value.items(), key=lambda item: _lef_layer_sort_key(str(item[0]), item[1]))
+            for name, detail in entries:
+                short = _lef_layer_detail(detail) if file_type.lower() == "lef" and key == "layers" else _short_detail_value(detail)
+                if key == "modules" and short == str(name):
+                    short = "module declaration"
+                if short == str(name):
+                    short = "-"
+                items.append((key, str(name), source_text, _parser_object_meaning(file_type, key, str(name), short, source_text, detail), short))
                 if len(items) >= limit:
                     return items
         elif isinstance(value, list):
             for entry in value:
-                name = _short_detail_value(entry)
-                items.append((key, name, _short_detail_value(entry if isinstance(entry, Mapping) else "")))
+                name = str(entry.get("name") or _short_detail_value(entry)) if isinstance(entry, Mapping) else _short_detail_value(entry)
+                short = _short_detail_value(entry if isinstance(entry, Mapping) else "")
+                if short == name:
+                    short = "-"
+                items.append((key, name, source_text, _parser_object_meaning(file_type, key, name, short, source_text, entry), short))
                 if len(items) >= limit:
                     return items
     return items
@@ -1292,19 +1550,23 @@ def _parser_detail_items(data: Mapping[str, Any], *, limit: int = 10) -> list[tu
 
 def _parser_detail_html(data: Mapping[str, Any]) -> str:
     rows = []
-    for category, name, detail in _parser_detail_items(data, limit=10):
+    file_type = str(data.get("file_type") or "")
+    for category, name, source, meaning, detail in _parser_detail_items(data, source=data.get("file"), file_type=file_type, limit=10):
+        detail_html = "<span class='muted'>-</span>" if str(detail) == "-" else ui.esc(detail)
         rows.append(
             "<tr>"
             f"<td><code>{ui.esc(category)}</code></td>"
             f"<td>{ui.esc(name)}</td>"
-            f"<td>{ui.esc(detail)}</td>"
+            f"<td><code>{ui.esc(source)}</code></td>"
+            f"<td>{ui.esc(meaning)}</td>"
+            f"<td>{detail_html}</td>"
             "</tr>"
         )
     if not rows:
         return "<details class='detail-fold'><summary>Parser Details</summary><div class='muted-box'>No extracted detail examples</div></details>"
     return (
         "<details class='detail-fold parser-detail'><summary>Parser Details</summary>"
-        + ui.table(["Category", "Name", "Detail"], rows, "No extracted detail examples")
+        + ui.table(["对象类型", "代表对象", "来源文件", "审查含义", "Detail"], rows, "No extracted detail examples")
         + "</details>"
     )
 
@@ -1316,7 +1578,7 @@ def _parser_review_metrics(file_type: str, data: Mapping[str, Any]) -> list[tupl
     if key in {"verilog", "systemverilog"}:
         return [("Modules", _stats_value(data, "module_count", "modules")), ("Ports", _stats_value(data, "port_count", "ports"))]
     if key == "cdl":
-        return [("Subckts", _stats_value(data, "subckt_count", "subckts", "circuits")), ("Pins", _stats_value(data, "pin_count", "pins")), ("Devices", _stats_value(data, "device_count", "devices", "instance_count", "instances"))]
+        return [("Subckts", _stats_value(data, "subckt_count", "subckts", "circuits")), ("Pins", _stats_value(data, "pin_count", "pins")), ("Instances", _stats_value(data, "instance_count", "instances", "device_count", "devices"))]
     if key == "sdc":
         return [("Clocks", _stats_value(data, "clock_count", "clocks")), ("Clock Groups", _stats_value(data, "clock_group_count", "clock_groups")), ("Loads", _stats_value(data, "load_count", "loads")), ("Uncertainty", _stats_value(data, "uncertainty_count", "uncertainties"))]
     if key in {"upf", "cpf"}:
@@ -1377,6 +1639,7 @@ def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_re
                     "status_counts": {},
                     "metrics": {},
                     "details": [],
+                    "insights": [],
                     "scope": {"parsed": [], "unparsed": []},
                 },
             )
@@ -1385,7 +1648,8 @@ def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_re
             group["files"].append(str(result.get("file") or file_entry.get("file") or "-"))
             group["status_counts"][status] = group["status_counts"].get(status, 0) + 1
             _merge_parser_metrics(group["metrics"], file_type, data)
-            group["details"].extend(_parser_detail_items(data, limit=10))
+            group["details"].extend(_parser_detail_items(data, source=result.get("file") or file_entry.get("file"), file_type=file_type, limit=10))
+            group["insights"].extend(_parser_insight_items(file_type, data))
             if key in {"verilog", "systemverilog"}:
                 for item in data.get("parsed_fields", []) or []:
                     text = str(item)
@@ -1401,18 +1665,37 @@ def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_re
         status = "PASS" if set(group["status_counts"]) <= {"PASS"} else "FAILED" if group["status_counts"].get("FAILED") else "REVIEW"
         metric_html = "<div class='effective-tags'>" + "".join(_metric_text(label, value) for label, value in group["metrics"].items()) + "</div>"
         status_text = ", ".join(f"{k}:{v}" for k, v in sorted(group["status_counts"].items()))
-        detail_rows = []
-        seen: set[tuple[str, str]] = set()
-        for category, name, detail in group["details"]:
-            token = (category, name)
-            if token in seen:
+        insight_rows = []
+        insight_seen: set[tuple[str, str]] = set()
+        for label, value in group["insights"]:
+            token = (label, value)
+            if token in insight_seen:
                 continue
-            seen.add(token)
+            insight_seen.add(token)
+            insight_rows.append(_metric_text(label, value))
+            if len(insight_rows) >= 8:
+                break
+        insight_html = "<div class='effective-tags parser-insights'>" + "".join(insight_rows) + "</div>" if insight_rows else ""
+        detail_rows = []
+        detail_groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+        for category, name, source, meaning, detail in group["details"]:
+            token = (category, name, meaning, detail)
+            detail_group = detail_groups.setdefault(token, {"sources": []})
+            if source not in detail_group["sources"]:
+                detail_group["sources"].append(source)
+        for (category, name, meaning, detail), detail_group in detail_groups.items():
+            sources = detail_group["sources"]
+            source_html = f"<code>{ui.esc(sources[0] if sources else '-')}</code>"
+            if len(sources) > 1:
+                source_html += f"<br><span class='muted'>另有 {ui.esc(len(sources) - 1)} 个来源</span>"
+            detail_html = "<span class='muted'>-</span>" if str(detail) == "-" else ui.esc(detail)
             detail_rows.append(
                 "<tr>"
                 f"<td><code>{ui.esc(category)}</code></td>"
                 f"<td>{ui.esc(name)}</td>"
-                f"<td>{ui.esc(detail)}</td>"
+                f"<td>{source_html}</td>"
+                f"<td>{ui.esc(meaning)}</td>"
+                f"<td>{detail_html}</td>"
                 "</tr>"
             )
             if len(detail_rows) >= 12:
@@ -1426,8 +1709,8 @@ def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_re
                 + "</div>"
             )
         detail_html = (
-            "<details class='detail-fold parser-detail'><summary>Parser Details / Representative Objects</summary>"
-            + ui.table(["Category", "Name", "Detail"], detail_rows, "No extracted objects")
+            "<details class='detail-fold parser-detail'><summary>Parser Details / 代表对象</summary>"
+            + ui.table(["对象类型", "代表对象", "来源文件", "审查含义", "Detail"], detail_rows, "No extracted objects")
             + "</details>"
         )
         files_html = (
@@ -1443,7 +1726,7 @@ def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_re
             f"<td>{ui.badge(status)}</td>"
             f"<td>{ui.esc(len(group['files']))}</td>"
             f"<td>{ui.esc(status_text)}</td>"
-            f"<td>{metric_html}{scope_html}{detail_html}</td>"
+            f"<td>{metric_html}{insight_html}{scope_html}{detail_html}</td>"
             f"<td>{files_html}</td>"
             "</tr>"
         )
@@ -1463,13 +1746,14 @@ def _version_parser_rows(parser_manifest: Mapping[str, Any], parser_results: Map
             file_type = str(result.get("file_type") or file_entry.get("file_type") or "-")
             metrics = _parser_review_metrics(file_type, data)
             metric_html = "<div class='effective-tags'>" + "".join(_metric_text(label, value) for label, value in metrics) + "</div>" if metrics else ui.muted("-")
+            insight_html = _parser_insight_html(file_type, data)
             scope_html = _parser_scope_html(file_type, data)
             detail_html = _parser_detail_html(data)
             rows.append(
                 "<tr>"
                 f"<td><b>{ui.esc(file_type.upper() if file_type != 'waiver' else 'Waiver')}</b><br><code>{ui.esc(parser_name)}</code></td>"
                 f"<td>{ui.badge(str(task.get('result_status') or task.get('status') or result.get('status') or 'UNKNOWN'))}</td>"
-                f"<td>{metric_html}{scope_html}{detail_html}</td>"
+                f"<td>{metric_html}{insight_html}{scope_html}{detail_html}</td>"
                 f"<td><code>{ui.esc(result.get('file') or file_entry.get('file') or '-')}</code></td>"
                 "</tr>"
             )
@@ -1695,10 +1979,37 @@ def _version_diff_evidence_panel(version: Mapping[str, Any]) -> str:
     )
 
 
+def _scroll_table_facets(class_name: str, headers: list[str]) -> list[tuple[int, str]]:
+    preferred = {
+        "metric-scroll": [0],
+        "change-scroll": [0, 1, 3],
+        "view-coverage-scroll": [0, 1, 3, 4, 5],
+        "corner-detail-scroll": [0, 1, 2, 3],
+        "unknown-detail-scroll": [0],
+        "diff-view-scroll": [0, 1, 3, 4],
+        "diff-type-scroll": [0, 3],
+        "diff-readiness-scroll": [0],
+        "diff-issue-scroll": [0, 1],
+        "review-gate-blocking-scroll": [1, 2],
+        "review-gate-attention-scroll": [1, 2],
+    }
+    indexes = preferred.get(class_name)
+    if indexes is None:
+        indexes = [0, 1] if len(headers) > 1 else [0]
+    return [(index, headers[index]) for index in indexes if 0 <= index < len(headers)]
+
+
 def _scroll_table(headers: list[str], rows: list[str], empty: str, class_name: str) -> str:
-    head = "".join(f"<th>{ui.esc(h)}</th>" for h in headers)
-    body = "".join(rows) if rows else f"<tr><td colspan='{len(headers)}' class='empty'>{ui.esc(empty)}</td></tr>"
-    return f"<div class='version-scroll-table {ui.esc(class_name)}'><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
+    table_id = "tbl-" + _safe(class_name)
+    return ui.faceted_table(
+        table_id,
+        headers,
+        rows,
+        empty,
+        "搜索当前表格...",
+        _scroll_table_facets(class_name, headers),
+        wrap_class=f"version-scroll-table {class_name}",
+    )
 
 
 def _absolute_path_box(label: str, path: Any) -> str:
@@ -1714,27 +2025,10 @@ def _absolute_path_box(label: str, path: Any) -> str:
 
 
 def _version_update_detail_panel(version: Mapping[str, Any]) -> str:
-    target = _version_compare_target(version)
-    strategy, strategy_note = _version_compare_strategy(version)
-    diff_dir = _version_diff_dir(version)
-    summary = _version_diff_summary(diff_dir)
-    file_diff = _version_file_diff(diff_dir)
-    notes = _version_release_notes(version.get("raw_path"))
-    summary_status = str(summary.get("status") or "NO_DIFF_SUMMARY")
-    return ui.panel(
-        f"更新详情（vs {target}）",
-        "版本更新说明默认放在最前面：优先展示 release note，再结合自动 diff 给出结构化变化。",
-        ui.metric_grid([
-            ("Compare Strategy", strategy, strategy_note, "WARNING" if strategy == "incremental compare" else "PASS"),
-            ("Diff Summary", summary_status, _relative_display_path(diff_dir, tail_parts=4) if diff_dir else "no diff_summary.json", summary_status),
-            ("Changed Files", summary.get("changed_files", 0), "changed_files", "WARNING" if _as_int(summary.get("changed_files", 0)) else "INFO"),
-            ("Release Notes", len(notes), "release_note / changelog / update_note", "PASS" if notes else "INFO"),
-        ])
-        + _scroll_table(["Metric", "Value"], _summary_metric_rows(summary), "暂无自动 diff 结果", "metric-scroll")
-        + _scroll_table(["Change", "Type", "Path"], _file_change_rows(file_diff, raw_path=version.get("raw_path")), "暂无文件级 diff 明细", "change-scroll")
-        + ui.table(["Release Note", "Summary"], _release_note_rows(notes, raw_path=version.get("raw_path")), "暂无 release_note / changelog 摘要")
-        + ui.table(["Recommended Action"], _recommended_action_rows(summary), "暂无推荐动作"),
-    )
+    from lib_guard.render.version_detail_report import build_version_update_detail_model, render_version_update_detail_panel
+
+    model = build_version_update_detail_model(Path("."), {}, version)
+    return render_version_update_detail_panel(model)
 
 
 def _review_gate_rows(items: list[Mapping[str, Any]], *, limit: int = 5) -> list[str]:
@@ -1774,122 +2068,9 @@ def _review_gate_panel(version: Mapping[str, Any]) -> str:
 
 
 def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> str:
-    lib_id = str(lib.get("library_id") or lib.get("display_name") or "library")
-    version_id = str(version.get("version_id") or version.get("version") or "version")
-    safe_lib = _safe(lib_id)
-    safe_ver = _safe(version_id)
-    page = out / "libraries" / safe_lib / "versions" / safe_ver / "index.html"
-    links = _version_links(version)
-    tags = _version_tags(version)
-    relation = _relation_status(version)
-    rail = ui.status_rail([("Catalog", "DISCOVERED", "版本已进入 catalog"), ("Scan", version.get("scan_status") or "NOT_SCANNED", "单版本证据页"), ("关系", relation, _relation_label(relation)), ("Diff", version.get("diff_status") or "COMPARE_PENDING", "进入库工作台选择 comparison"), ("重点", _file_review_status(version), _file_review_text(version))])
-    body = (
-        ui.panel("版本导航", "主要路径：Library Workspace → Compare Index → Selected Diff。Catalog 不直接展开每一行命令。", ui.metric_grid([("Scan", ui.status_label(version.get("scan_status")), "单版本扫描", version.get("scan_status")), ("关系", _relation_label(relation), "base_full / previous_effective", relation), ("Diff", ui.status_label(version.get("diff_status")), "版本变化", version.get("diff_status")), ("重点文件", _file_review_text(version), "只在 Selected Diff 中打开", _file_review_status(version))]) + ui.compact_meta([("Library", lib_id), ("Version", version_id), ("Raw Path", version.get("raw_path") or "-"), ("Stage", version.get("stage") or "-"), ("base_full", _base_full_version(version) or "-"), ("previous_effective", _previous_effective_version(version) or "-")]))
-        + ui.panel("主要入口", "先回到库工作台查看 Compare Index，再打开 Selected Diff。File Diff 从 Selected Diff 下钻。", ui.action_strip([ui.button("库工作台", _href(out / "libraries" / safe_lib / "index.html"), "primary", target="_blank"), ui.button("差异页", _href(links.get("diff_html")), disabled=not links.get("diff_html"), target="_blank"), ui.button("扫描页", _href(links.get("scan_html")), disabled=not links.get("scan_html"), target="_blank"), ui.button("发布页", _href(links.get("release_html")), disabled=not links.get("release_html"), target="_blank")]))
-        + ui.collapsible_panel("命令示例", "示例统一放在这里，不占用 Browser 列表宽度。", _command_examples(), open=False)
-        + ui.collapsible_panel("Trace Links", "证据链接默认折叠。", ui.trace_link_list([("scan_html", _href(links.get("scan_html")), "单版本 Scan Review"), ("diff_html", _href(links.get("diff_html")), "Selected Diff Review"), ("pairwise_html", _href(links.get("pairwise_html")), "旧字段：不作为 Catalog/Version 直接入口；File Diff 从 Selected Diff 下钻"), ("release_html", _href(links.get("release_html")), "Release Review")]), open=False)
-    )
-    html = ui.review_page_shell(f"{lib.get('display_name') or lib_id} / {version_id}", "VERSION REVIEW", "版本入口页。主要路径是 Library Workspace → Compare Index → Selected Diff；File Diff 从 Selected Diff 下钻。", _catalog_browser_styles() + body, decision=version.get("overall_status") or ("REVIEW" if tags - {"clear"} else "PASS"), rail=rail, nav=f"<a href='../../../index.html'>Catalog</a><a class='active' href='#'>Version</a><a href='../index.html'>Library Workspace</a>", meta=ui.compact_meta([("Library", lib_id), ("Version", version_id), ("Tags", ", ".join(sorted(tags)))]))
-    rail = ui.status_rail([
-        ("Catalog", "DISCOVERED", "Version is registered in the catalog"),
-        ("Scan", version.get("scan_status") or "NOT_SCANNED", "Single-version scan evidence"),
-        ("Relation", relation, _relation_label(relation)),
-        ("Compare", version.get("diff_status") or "COMPARE_PENDING", "Open comparison from Library Workspace"),
-        ("File Review", _file_review_status(version), _file_review_text(version)),
-    ])
-    scan_dir = _version_scan_dir(version)
-    inventory = _scan_inventory(scan_dir)
-    parser_manifest = _scan_parser_manifest(scan_dir)
-    parser_results = _scan_parser_results(scan_dir)
-    counts = _version_file_type_counts(inventory)
-    count_only_total = sum(int(counts.get(item, 0) or 0) for item in VERSION_COUNT_ONLY_TYPES)
-    parser_task_count = sum(
-        1
-        for file_entry in (parser_manifest.get("files", []) or [])
-        for task in (file_entry.get("parser_tasks", []) or [])
-        if task.get("parser_name")
-    )
-    corner_summary = inventory.get("corner_filename_summary") or {}
-    body = (
-        _absolute_path_box("Absolute Raw Path", version.get("raw_path"))
-        + _version_update_detail_panel(version)
-        + _review_gate_panel(version)
-        +
-        ui.panel(
-            "Raw Version Detail",
-            "This page is the version detail surface. It combines scan evidence and pre-diff readiness; no separate scan page is needed for normal review.",
-            ui.metric_grid([
-                ("Scan", ui.status_label(version.get("scan_status")), "single-version evidence", version.get("scan_status")),
-                ("Files", sum(int(v or 0) for v in counts.values()), "inventory count", "PASS" if counts else "INFO"),
-                ("Count-only", count_only_total, ".lib / .db / .spef / layout", "INFO" if count_only_total else "PASS"),
-                ("Corners", (corner_summary or {}).get("total_corner_files", 0), "filename PVT hints", "PASS" if (corner_summary or {}).get("total_corner_files") else "INFO"),
-                ("Parser tasks", parser_task_count, "structured scan summary", "PASS" if parser_task_count else "INFO"),
-                ("Relation", _relation_label(relation), "base_full / previous_effective", relation),
-            ])
-            + ui.compact_meta([
-                ("Library", lib_id),
-                ("Version", version_id),
-                ("Raw Relpath", _raw_relpath(version.get("raw_path"))),
-                ("Stage", version.get("stage") or "-"),
-                ("base_full", _base_full_version(version) or "-"),
-                ("previous_effective", _previous_effective_version(version) or "-"),
-            ]),
-        )
-        + ui.panel(
-            "Count-only + Corner Summary",
-            "Heavy timing, parasitic, and binary views are counted and classified by path/name. Normal version review does not read their content.",
-            ui.metric_grid([
-                ("Count-only files", count_only_total, ", ".join(f"{k}:{counts[k]}" for k in sorted(VERSION_COUNT_ONLY_TYPES) if counts.get(k)) or "none", "INFO" if count_only_total else "PASS"),
-                ("Process corners", len((corner_summary or {}).get("process_counts") or {}), ", ".join(f"{k}:{v}" for k, v in ((corner_summary or {}).get("process_counts") or {}).items()) or "none", "PASS" if (corner_summary or {}).get("process_counts") else "INFO"),
-                ("Voltage corners", len((corner_summary or {}).get("voltage_counts") or {}), ", ".join(f"{k}:{v}" for k, v in ((corner_summary or {}).get("voltage_counts") or {}).items()) or "none", "PASS" if (corner_summary or {}).get("voltage_counts") else "INFO"),
-                ("Temperature corners", len((corner_summary or {}).get("temperature_counts") or {}), ", ".join(f"{k}:{v}" for k, v in ((corner_summary or {}).get("temperature_counts") or {}).items()) or "none", "PASS" if (corner_summary or {}).get("temperature_counts") else "INFO"),
-            ])
-            + ui.table(["file_type", "Count", "Default",], _version_count_only_rows(counts), "No count-only views")
-            + ui.table(["file_type", "Process", "Voltage", "Temp", "Path"], _version_corner_rows(inventory), "No filename corner hints"),
-        )
-        + ui.panel(
-            "Parser Summary",
-            "Parser results are review evidence. This aggregated view shows parser coverage, extracted object counts, and representative objects before opening comparison review.",
-            ui.table(["Parser", "Status", "Files", "Task Status", "Aggregate Summary", "Sources"], _version_parser_aggregate_rows(parser_manifest, parser_results), "No parser summary is available for this version"),
-        )
-        + _version_diff_evidence_panel(version)
-        + ui.panel(
-            "Pre-Diff Readiness",
-            "Use this section to decide whether the version has enough scan evidence before opening library comparison review.",
-            ui.metric_grid([
-                ("Parsed views", parser_task_count, "LEF / RTL / CDL / SDC / UPF / package / waiver", "PASS" if parser_task_count else "WARNING"),
-                ("Count-only views", count_only_total, "tracked without content parse", "INFO" if count_only_total else "PASS"),
-                ("Diff status", ui.status_label(version.get("diff_status")), "comparison review lives in Library Workspace", version.get("diff_status")),
-                ("File Review", _file_review_text(version), "opened from comparison review only", _file_review_status(version)),
-            ])
-            + ui.action_strip([
-                ui.button("Library Workspace", _href(out / "libraries" / safe_lib / "index.html"), "primary", target="_blank"),
-            ]),
-        )
-        + ui.collapsible_panel(
-            "Evidence",
-            "Raw scan JSON is folded by default. Diff and release reports are not direct entries on the version page.",
-            ui.trace_link_list([
-                ("scan_dir", _href(scan_dir), "Raw scan output directory"),
-                ("file_inventory.json", _href(scan_dir / "file_inventory.json") if scan_dir else "", "Inventory used by this page"),
-                ("parser_manifest.json", _href(scan_dir / "parser_manifest.json") if scan_dir else "", "Parser task manifest"),
-                ("parser_results.json", _href(scan_dir / "parser_results.json") if scan_dir else "", "Parser result data"),
-            ]),
-            open=False,
-        )
-    )
-    html = ui.review_page_shell(
-        f"{lib.get('display_name') or lib_id} / {version_id}",
-        "VERSION REVIEW",
-        "Raw version detail. Scan evidence and pre-diff readiness are shown here; comparison review lives in the library workspace.",
-        _catalog_browser_styles() + body,
-        decision=version.get("overall_status") or ("REVIEW" if tags - {"clear"} else "PASS"),
-        rail=rail,
-        nav=f"<a href='../../../index.html'>Catalog</a><a class='active' href='#'>Version</a><a href='../index.html'>Library Workspace</a>",
-        meta=ui.compact_meta([("Library", lib_id), ("Version", version_id), ("Tags", ", ".join(sorted(tags)))]),
-    )
-    _write_text(page, html)
-    return str(page)
+    from lib_guard.render.version_detail_report import render_version_detail_page
+
+    return render_version_detail_page(out, lib, version)
 
 
 def _write_report_index(
@@ -1971,6 +2152,9 @@ def _write_report_index(
 
 
 def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render_library_pages: bool = True, max_attention_items: int = 10, max_report_rows: int = 16) -> dict[str, Any]:
+    from lib_guard.render.catalog_workspace_report import render_catalog_index_page, render_library_workspace_page
+    from lib_guard.render.version_detail_report import render_version_detail_page
+
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     catalog = read_json(catalog_json, default={}) or {}
@@ -1985,12 +2169,12 @@ def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render
         for lib in state.get("libraries", []) or []:
             for version in lib.get("versions", []) or []:
                 links = version.setdefault("links", {})
-                links["version_review_html"] = _render_version_page(out, lib, version)
+                links["version_review_html"] = render_version_detail_page(out, lib, version)
                 gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
                 if gate.get("gate_file"):
                     write_json(gate["gate_file"], gate)
             lib_id = str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "")
-            lib["library_home_html"] = _render_library_home(out, lib, _effective_items_for_lib(effective_by_lib, lib), list(compare_by_lib.get(lib_id, []) or []))
+            lib["library_home_html"] = render_library_workspace_page(out, lib, _effective_items_for_lib(effective_by_lib, lib), list(compare_by_lib.get(lib_id, []) or []))
     report_index = _write_report_index(out, state, effective_by_lib, compare_by_lib)
     for stale_name in ("review_state.json", "review_tasks.json"):
         stale_path = out / stale_name
@@ -1998,18 +2182,17 @@ def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render
             stale_path.unlink()
     write_json(out / "catalog_state.json", state)
     write_json(out / "manager_tasks.json", tasks)
-    body = (
-        _catalog_browser_styles()
-        + ui.panel("Catalog 总览", "面向 IP 使用者：先搜索库，再进入库工作台查看更新文件和可执行脚本。库管理者证据放在下方折叠区。", ui.metric_grid(_summary_metrics(state, tasks)) + "<p class='catalog-note'>主流程是获取库更新信息、更新文件和执行脚本；管理补证据不作为普通使用者的首要任务。</p>")
-        + "<div class='catalog-layout'>"
-        + f"<div class='catalog-filter-panel'>{_catalog_filter_panel(state)}</div>"
-        + f"<div>{ui.panel('Library Browser', '中文紧凑摘要：只显示库身份、当前有效组合和进入库工作台；scan/diff/effective/release preview 由库工作台串联。', _library_browser(out, state, effective_by_lib))}</div>"
-        + "</div>"
-        + ui.collapsible_panel("管理建议 / Suggested Commands", "manager_tasks.json 是有效的管理者任务列表，用于补 scan、diff 或关系确认；普通 IP 使用者通常不需要处理。", ui.filterable_table("catalog-task-table", ["优先级", "类型", "Library / Version", "原因", "执行"], _task_rows(tasks), "暂无建议", "筛选 task / reason"), open=False)
-        + ui.collapsible_panel("Trace Evidence", "Catalog 原始证据和统一报告索引。manager_tasks.json 的定位是管理者任务证据。", ui.trace_link_list([("report_index.json", _href(report_index), "Catalog / Scan / Diff / Effective / Release Preview 的链接索引"), ("catalog_state.json", _href(out / "catalog_state.json"), "Catalog 页面使用的状态模型"), ("manager_tasks.json", _href(out / "manager_tasks.json"), "管理者建议动作列表"), ("catalog.json", _href(catalog_json), "原始 catalog")]), open=True)
-        + ui.collapsible_panel("命令示例", "所有常用命令集中折叠在最下面。Browser 行内只保留状态和入口，不再放待生成命令。", _command_examples(), open=False)
+    html = render_catalog_index_page(
+        out,
+        state,
+        tasks,
+        effective_by_lib,
+        compare_by_lib,
+        max_attention_items=max_attention_items,
+        max_report_rows=max_report_rows,
+        report_index=report_index,
+        catalog_json=catalog_json,
     )
-    html = ui.review_page_shell("Library Catalog", "CATALOG", "库版本变化导航入口。Catalog 是地图，不是命令控制台。", body, decision="REVIEW" if tasks.get("tasks") else "PASS", nav="<a class='active' href='#'>Catalog</a><a href='#'>Library Workspace</a><a href='#'>Selected Diff</a><a href='#'>Scan Evidence</a><a href='#'>Release Evidence</a>", meta=ui.compact_meta([("Libraries", len(state.get("libraries", []) or [])), ("Tasks", len(tasks.get("tasks", []) or []))]))
     index = out / "index.html"
     _write_text(index, html)
     return {"status": "PASS", "index_html": str(index), "catalog_state": str(out / "catalog_state.json"), "manager_tasks": str(out / "manager_tasks.json"), "report_index": report_index}

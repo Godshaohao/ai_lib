@@ -11,7 +11,7 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
 
 class ScanPolicy:
     DEFAULT_PARSE_MODES = {"candidate", "release", "diff", "refresh", "full"}
-    DEFAULT_COUNT_ONLY_PARSE_TYPES = {"liberty", "db", "spef"}
+    DEFAULT_COUNT_ONLY_PARSE_TYPES = {"liberty", "db", "spef", "verilog", "systemverilog"}
     SMART_SKIP_EXTENSIONS = {
         ".lef",
         ".lib",

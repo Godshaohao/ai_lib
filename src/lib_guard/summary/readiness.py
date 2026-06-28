@@ -22,17 +22,18 @@ DEFAULT_REQUIRED_VIEWS = {
 }
 
 DEFAULT_OPTIONAL_VIEWS = {
-    "ip": ["cdl", "db", "sdc", "upf", "sdf", "waiver", "doc"],
-    "hard_ip": ["sdc", "upf", "sdf", "spef", "db", "ibis", "package", "waiver", "doc"],
-    "stdcell": ["doc", "waiver"],
-    "sram": ["sdf", "doc", "waiver"],
+    "ip": ["cdl", "db", "sdc", "upf", "sdf", "flow_config", "tech_config", "waiver", "doc"],
+    "hard_ip": ["sdc", "upf", "sdf", "spef", "db", "ibis", "package", "flow_config", "tech_config", "waiver", "doc"],
+    "stdcell": ["flow_config", "tech_config", "doc", "waiver"],
+    "sram": ["sdf", "flow_config", "tech_config", "doc", "waiver"],
     "package": ["pwl", "spice", "doc"],
 }
 
 DEFAULT_VALIDATION_LEVELS = {
     "lef": "parsed_required",
     "liberty": "parsed_required",
-    "verilog": "parsed_required",
+    "verilog": "metadata_required",
+    "systemverilog": "metadata_required",
     "cdl": "parsed_required",
     "spice": "parsed_required",
     "sdc": "parsed_required",
@@ -44,6 +45,8 @@ DEFAULT_VALIDATION_LEVELS = {
     "touchstone": "parsed_preferred",
     "pwl": "parsed_preferred",
     "package": "parsed_preferred",
+    "flow_config": "manual_review",
+    "tech_config": "manual_review",
     "waiver": "parsed_preferred",
     "db": "metadata_required",
     "gds": "metadata_required",
@@ -155,6 +158,8 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
         level = validation_levels.get(file_type, "pass_through_allowed")
         if level == "metadata_required":
             manual_review_items.append(_manual_review("metadata_only_ack", component_id, file_type, _files_for_type(files, file_type), "Metadata-only release channel requires acknowledgement."))
+        elif level == "manual_review":
+            manual_review_items.append(_manual_review("manual_view_review", component_id, file_type, _files_for_type(files, file_type), "Flow/technology setup files require manual approval."))
         elif level == "pass_through_allowed":
             manual_review_items.append(_manual_review("pass_through_approval", component_id, file_type, _files_for_type(files, file_type), "Pass-through files require manual approval."))
             warning_items.append(_item("warning", "pass_through", f"Pass-through file type: {file_type}", "File type is not automatically validated.", file_type))
@@ -265,6 +270,8 @@ def _validate_view(
         return {"view": view, "found": True, "validation_level": level, "parser_status": "METADATA_ONLY", "status": "PASS", "message": "Metadata recorded; deep parser is not required.", "files": files}
     if level == "doc_review_required":
         return {"view": view, "found": True, "validation_level": level, "parser_status": "DOC_REVIEW", "status": "WARNING" if required else "INFO", "message": "Document requires manual review.", "files": files}
+    if level == "manual_review":
+        return {"view": view, "found": True, "validation_level": level, "parser_status": "MANUAL_REVIEW", "status": "WARNING", "message": "Flow/technology setup requires manual review.", "files": files}
     if level == "pass_through_allowed":
         return {"view": view, "found": True, "validation_level": level, "parser_status": "PASS_THROUGH", "status": "WARNING", "message": "Pass-through file requires manual approval.", "files": files}
     if worst_status in {"FAILED", "PASS_EMPTY"}:

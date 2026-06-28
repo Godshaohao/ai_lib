@@ -37,6 +37,7 @@ class ScanPipelineTest(unittest.TestCase):
                     cache_dir=str(Path(td) / "cache"),
                     skip_cache=False,
                     no_cache=False,
+                    parse_file_types=["verilog"],
                     tool_version="0.5.0",
                     schema_version="1.0",
                 )
@@ -92,6 +93,7 @@ class ScanPipelineTest(unittest.TestCase):
                     cache_dir=str(Path(td) / "cache"),
                     skip_cache=False,
                     no_cache=False,
+                    parse_file_types=["verilog"],
                     tool_version="0.5.0",
                     schema_version="1.0",
                 )
@@ -175,10 +177,11 @@ class ScanPipelineTest(unittest.TestCase):
 
             task_list = json.loads((out / "parser_task_list.json").read_text(encoding="utf-8"))
             parser_types = {task["file_type"] for task in task_list["tasks"]}
+            self.assertNotIn("verilog", parser_types)
             self.assertNotIn("liberty", parser_types)
             self.assertNotIn("db", parser_types)
             self.assertNotIn("spef", parser_types)
-            self.assertTrue({"lef", "verilog", "sdc", "upf", "snp", "pwl", "cpm"}.issubset(parser_types))
+            self.assertTrue({"lef", "sdc", "upf", "snp", "pwl", "cpm"}.issubset(parser_types))
 
             inventory = json.loads((out / "file_inventory.json").read_text(encoding="utf-8"))
             corner_summary = inventory["corner_filename_summary"]
@@ -188,10 +191,11 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(corner_summary["process_counts"]["ff"], 1)
 
             review = json.loads((html / "scan_review.json").read_text(encoding="utf-8"))
+            self.assertEqual(review["count_only"]["file_type_counts"]["verilog"], 1)
             self.assertEqual(review["count_only"]["file_type_counts"]["liberty"], 1)
             self.assertEqual(review["count_only"]["file_type_counts"]["db"], 1)
             self.assertEqual(review["count_only"]["file_type_counts"]["spef"], 1)
-            self.assertGreaterEqual(review["parser_summary"]["parsed_tasks"], 7)
+            self.assertGreaterEqual(review["parser_summary"]["parsed_tasks"], 6)
             self.assertEqual(review["corner_summary"]["total_corner_files"], 3)
 
             html_text = (html / "index.html").read_text(encoding="utf-8")
@@ -245,6 +249,28 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(result["compression"], "gzip")
             self.assertEqual(result["file_type"], "lef")
 
+    def test_openroad_flow_setup_files_are_classified_for_manual_review(self) -> None:
+        from lib_guard.scan.inventory import FileClassifier
+
+        classifier = FileClassifier()
+        samples = {
+            "config.mk": ("flow_config", "flow_setup"),
+            "fastroute.tcl": ("flow_config", "flow_script"),
+            "pdn.cfg": ("flow_config", "flow_config"),
+            "rcx_patterns.rules": ("tech_config", "tech_rule"),
+            "asap7.lyp": ("tech_config", "klayout"),
+            "asap7.lyt": ("tech_config", "klayout"),
+            "asap7.lydrc": ("tech_config", "drc_rule"),
+            "no_synth.cells": ("flow_config", "cell_list"),
+        }
+
+        for name, (file_type, role) in samples.items():
+            with self.subTest(name=name):
+                record = classifier.classify({"path": f"openroad/{name}", "name": name})
+                self.assertEqual(record["file_type"], file_type)
+                self.assertEqual(record["role"], role)
+                self.assertNotEqual(record["domain"], "unknown")
+
     def test_parser_cache_is_v2_isolated_and_manifest_reports_hit(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "raw"
@@ -266,6 +292,7 @@ class ScanPipelineTest(unittest.TestCase):
                 cache_dir=str(cache),
                 skip_cache=False,
                 no_cache=False,
+                parse_file_types=["verilog"],
                 tool_version="0.5.0",
                 schema_version="1.0",
             )
@@ -311,7 +338,7 @@ class ScanPipelineTest(unittest.TestCase):
             ).run()
 
             task_list = json.loads((out / "parser_task_list.json").read_text(encoding="utf-8"))
-            self.assertEqual(task_list["task_count"], 2)
+            self.assertEqual(task_list["task_count"], 1)
             self.assertEqual(task_list["parse_jobs"], 1)
             task = task_list["tasks"][0]
             self.assertIn("task_id", task)
@@ -324,7 +351,7 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("by_type", latest)
             self.assertIn("summary", latest)
             self.assertIn("active_workers", latest)
-            self.assertEqual(latest["summary"]["completed"], 2)
+            self.assertEqual(latest["summary"]["completed"], 1)
             self.assertEqual(latest["summary"]["pass_empty"], 1)
             self.assertEqual(latest["by_type"]["lef"]["pass_empty"], 1)
 
@@ -362,6 +389,7 @@ class ScanPipelineTest(unittest.TestCase):
                     no_progress=True,
                     progress_interval=1,
                     parse_jobs=1,
+                    parse_file_types=["verilog"],
                     tool_version="0.5.0",
                     schema_version="1.0",
                 )
@@ -403,6 +431,7 @@ class ScanPipelineTest(unittest.TestCase):
                 no_cache=True,
                 no_progress=True,
                 progress_interval=1,
+                parse_file_types=["verilog", "lef", "sdc"],
                 tool_version="0.5.0",
                 schema_version="1.0",
             )
@@ -505,6 +534,7 @@ class ScanPipelineTest(unittest.TestCase):
                     cache_dir=str(Path(td) / "cache"),
                     skip_cache=True,
                     no_cache=False,
+                    parse_file_types=["verilog"],
                     tool_version="0.5.0",
                     schema_version="1.0",
                 )
@@ -551,16 +581,17 @@ class ScanPipelineTest(unittest.TestCase):
             ).run()
 
             readiness = json.loads((out / "summary" / "release_readiness.json").read_text(encoding="utf-8"))
-            self.assertEqual(readiness["bundle_status"], "BLOCK")
-            self.assertEqual(readiness["release_channel"], "blocked")
+            self.assertEqual(readiness["bundle_status"], "PASS")
+            self.assertEqual(readiness["release_channel"], "metadata_only")
             self.assertEqual(len(readiness["components"]), 1)
             component = readiness["components"][0]
             self.assertEqual(component["component_id"], "ip/demo/v1")
-            self.assertEqual(component["release_channel"], "blocked")
+            self.assertEqual(component["release_channel"], "metadata_only")
             self.assertIn("verilog", component["required_views"])
-            self.assertEqual(component["required_view_results"]["verilog"]["status"], "BLOCK")
-            self.assertEqual(component["required_view_results"]["verilog"]["parser_status"], "PASS_EMPTY")
-            self.assertTrue(readiness["blocking_items"])
+            self.assertEqual(component["required_view_results"]["verilog"]["status"], "PASS")
+            self.assertEqual(component["required_view_results"]["verilog"]["parser_status"], "METADATA_ONLY")
+            self.assertEqual(component["required_view_results"]["verilog"]["validation_level"], "metadata_required")
+            self.assertFalse(readiness["blocking_items"])
             self.assertTrue(readiness["manual_review_items"])
 
     def test_release_check_uses_release_readiness_gate(self) -> None:
@@ -592,9 +623,9 @@ class ScanPipelineTest(unittest.TestCase):
             ).run()
             result = check_release_scan(out, policy_path="configs/release_policy.json")
 
-            self.assertEqual(result["release_check_status"], "BLOCK")
-            self.assertEqual(result["release_readiness"]["bundle_status"], "BLOCK")
-            self.assertTrue(any(issue["category"] == "release_readiness" for issue in result["issues"]))
+            self.assertEqual(result["release_check_status"], "PASS_WITH_WARNING")
+            self.assertEqual(result["release_readiness"]["bundle_status"], "PASS")
+            self.assertFalse(any(issue["category"] == "release_readiness" for issue in result["issues"]))
             self.assertFalse(any(issue["category"] == "summary" for issue in result["issues"]))
 
     def test_release_link_force_records_override_and_applies_blocked_release(self) -> None:
@@ -609,6 +640,7 @@ class ScanPipelineTest(unittest.TestCase):
                 json.dumps(
                     {
                         "required_views": {"ip": ["verilog"]},
+                        "validation_levels": {"verilog": "parsed_required"},
                         "require_doc_types": [],
                         "require_signatures": False,
                         "require_summaries": False,
@@ -621,6 +653,7 @@ class ScanPipelineTest(unittest.TestCase):
 
             from lib_guard.scan.scanner import ScanRunner
             from lib_guard.release.linker import link_release_from_scan
+            from lib_guard.summary.readiness import build_release_readiness
 
             ScanRunner(
                 SimpleNamespace(
@@ -638,10 +671,15 @@ class ScanPipelineTest(unittest.TestCase):
                     no_progress=True,
                     progress_interval=1,
                     parse_jobs=1,
+                    parse_file_types=["verilog"],
                     tool_version="0.5.0",
                     schema_version="1.0",
                 )
             ).run()
+            (scan / "summary" / "release_readiness.json").write_text(
+                json.dumps(build_release_readiness(scan, policy_path=policy), indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
             blocked = link_release_from_scan(scan, release_root, alias="current", dry_run=False, policy_path=policy)
             self.assertEqual(blocked["status"], "BLOCKED")
 
@@ -729,6 +767,8 @@ class ScanPipelineTest(unittest.TestCase):
 
             from lib_guard.scan.scanner import ScanRunner
             from lib_guard.diff.scan_diff import diff_scan_outputs
+            from lib_guard.summary.readiness import build_release_readiness
+            from lib_guard.summary.readiness import build_release_readiness
 
             base = dict(
                 library_type="ip",
@@ -742,6 +782,7 @@ class ScanPipelineTest(unittest.TestCase):
                 no_progress=True,
                 progress_interval=1,
                 parse_jobs=1,
+                parse_file_types=["verilog"],
                 tool_version="0.5.0",
                 schema_version="1.0",
             )
@@ -768,6 +809,7 @@ class ScanPipelineTest(unittest.TestCase):
 
             from lib_guard.scan.scanner import ScanRunner
             from lib_guard.diff.scan_diff import diff_scan_outputs
+            from lib_guard.summary.readiness import build_release_readiness
 
             base = dict(
                 library_type="ip",
@@ -780,11 +822,18 @@ class ScanPipelineTest(unittest.TestCase):
                 no_progress=True,
                 progress_interval=1,
                 parse_jobs=1,
+                parse_file_types=["verilog"],
                 tool_version="0.5.0",
                 schema_version="1.0",
             )
             ScanRunner(SimpleNamespace(**base, root_path=str(old_root), out_dir=str(old_out), scan_id="OLD", version="full_v1.0")).run()
             ScanRunner(SimpleNamespace(**base, root_path=str(new_root), out_dir=str(new_out), scan_id="NEW", version="hotfix_v1.0.1")).run()
+            strict_policy = {"required_views": {"ip": ["verilog"]}, "validation_levels": {"verilog": "parsed_required"}}
+            for scan_dir in [old_out, new_out]:
+                (scan_dir / "summary" / "release_readiness.json").write_text(
+                    json.dumps(build_release_readiness(scan_dir, policy_path=strict_policy), indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
             result = diff_scan_outputs(
                 old_out,
                 new_out,
@@ -1008,6 +1057,55 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(manual_tasks["summary"]["total"], len(tasks["tasks"]))
             self.assertEqual(summary["view_changes"], view_diff["summary"]["changed"])
             self.assertEqual(summary["type_changes"], type_diff["summary"]["changed_types"])
+
+    def test_diff_treats_same_hash_path_prefix_change_as_move_not_added_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_root = Path(td) / "old_raw"
+            new_root = Path(td) / "new_raw"
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            diff_out = Path(td) / "diff"
+            old_root.mkdir()
+            new_root.mkdir()
+            (old_root / "asap7_source_package").mkdir()
+            (new_root / "upstream_ae9a8ed9").mkdir()
+            sdc = "create_clock -name core -period 1.0 [get_ports clk]\n"
+            (old_root / "asap7_source_package" / "constraints.sdc").write_text(sdc, encoding="utf-8")
+            (new_root / "upstream_ae9a8ed9" / "constraints.sdc").write_text(sdc, encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            base = dict(
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="release",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, root_path=str(old_root), out_dir=str(old_scan), scan_id="OLD")).run()
+            ScanRunner(SimpleNamespace(**base, root_path=str(new_root), out_dir=str(new_scan), scan_id="NEW")).run()
+
+            diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
+
+            file_diff = json.loads((diff_out / "file_diff.json").read_text(encoding="utf-8"))
+            self.assertEqual(file_diff["counts"]["renamed_or_moved"], 1)
+            self.assertEqual(file_diff["counts"]["added"], 0)
+            self.assertEqual(file_diff["counts"]["removed"], 0)
+            self.assertEqual(file_diff["added"], [])
+            self.assertEqual(file_diff["removed"], [])
+            summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["renamed_or_moved"], 1)
+            tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
+            self.assertEqual(tasks["summary"]["total"], 0)
 
     def test_diff_render_writes_html_with_pairwise_task_commands(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1884,6 +1982,94 @@ class ScanPipelineTest(unittest.TestCase):
                 self.assertIn(result["status"], {"PASS", "PASS_EMPTY", "METADATA_ONLY"})
                 self.assertIn("object_count", result["stats"])
                 self.assertNotIn("parser", result)
+
+    def test_cdl_parser_extracts_subckt_pins_and_instances(self) -> None:
+        from lib_guard.scan.parsers.cdl import parse_cdl_text
+
+        data = parse_cdl_text(
+            "\n".join(
+                [
+                    '.INCLUDE "models.sp"',
+                    ".SUBCKT SRAM A0 A1",
+                    "+ D0 D1 VDD VSS",
+                    "M0 D0 A0 VDD VDD pmos L=0.15 W=1.0",
+                    "XBUF A0 D0 VDD VSS INV",
+                    "RKEEP D1 VSS 1k",
+                    ".ENDS SRAM",
+                ]
+            )
+        )
+
+        self.assertEqual(data["stats"]["subckt_count"], 1)
+        self.assertEqual(data["stats"]["include_count"], 1)
+        self.assertEqual(data["stats"]["pin_count"], 6)
+        self.assertEqual(data["stats"]["instance_count"], 3)
+        sram = data["subckts"]["SRAM"]
+        self.assertEqual(sram["pins"], ["A0", "A1", "D0", "D1", "VDD", "VSS"])
+        self.assertEqual(sram["pin_count"], 6)
+        self.assertEqual(sram["instance_count"], 3)
+        self.assertEqual([item["name"] for item in sram["instances"]], ["M0", "XBUF", "RKEEP"])
+        self.assertEqual(sram["instances"][0]["target"], "pmos")
+        self.assertEqual(sram["instances"][0]["kind"], "mos")
+        self.assertEqual(sram["instances"][1]["target"], "INV")
+        self.assertEqual(sram["instances"][1]["kind"], "subckt")
+
+    def test_lef_parser_extracts_technology_layers_and_pin_geometry(self) -> None:
+        from lib_guard.scan.parsers.lef import parse_lef_text
+
+        data = parse_lef_text(
+            "\n".join(
+                [
+                    "VERSION 5.8 ;",
+                    "UNITS",
+                    "  DATABASE MICRONS 2000 ;",
+                    "END UNITS",
+                    "LAYER M1",
+                    "  TYPE ROUTING ;",
+                    "  DIRECTION HORIZONTAL ;",
+                    "  PITCH 0.040 ;",
+                    "  WIDTH 0.020 ;",
+                    "END M1",
+                    "MACRO SRAM",
+                    "  CLASS BLOCK ;",
+                    "  ORIGIN 0 0 ;",
+                    "  SIZE 10 BY 20 ;",
+                    "  PIN CLK",
+                    "    DIRECTION INPUT ;",
+                    "    USE SIGNAL ;",
+                    "    PORT",
+                    "      LAYER M1 ;",
+                    "      RECT 0 0 1 1 ;",
+                    "    END",
+                    "  END CLK",
+                    "  OBS",
+                    "    LAYER M1 ;",
+                    "    RECT 0 0 10 20 ;",
+                    "  END",
+                    "END SRAM",
+                ]
+            )
+        )
+
+        self.assertEqual(data["database_microns"], 2000)
+        self.assertEqual(data["stats"]["macro_count"], 1)
+        self.assertEqual(data["stats"]["pin_count"], 1)
+        self.assertEqual(data["stats"]["layer_count"], 1)
+        self.assertEqual(data["stats"]["pin_rect_count"], 1)
+        self.assertEqual(data["stats"]["obs_rect_count"], 1)
+        self.assertEqual(data["layers"]["M1"]["type"], "ROUTING")
+        self.assertEqual(data["layers"]["M1"]["direction"], "HORIZONTAL")
+        self.assertEqual(data["layers"]["M1"]["width"], 0.02)
+        macro = data["macros"]["SRAM"]
+        self.assertEqual(macro["class"], "BLOCK")
+        self.assertEqual(macro["size"], {"x": 10.0, "y": 20.0})
+        self.assertEqual(macro["area"], 200.0)
+        pin = macro["pins"]["CLK"]
+        self.assertEqual(pin["direction"], "INPUT")
+        self.assertEqual(pin["use"], "SIGNAL")
+        self.assertEqual(pin["layers"], ["M1"])
+        self.assertEqual(pin["layer_count"], 1)
+        self.assertEqual(pin["rect_count"], 1)
 
     def test_verilog_parser_declares_lightweight_scope_and_unparsed_features(self) -> None:
         with tempfile.TemporaryDirectory() as td:

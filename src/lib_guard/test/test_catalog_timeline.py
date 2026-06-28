@@ -11,6 +11,101 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class CatalogTimelineTest(unittest.TestCase):
+    def test_catalog_split_public_apis_exist(self) -> None:
+        from lib_guard.render.catalog_report import render_catalog_html
+        from lib_guard.render.catalog_workspace_report import (
+            build_library_report_index_entry,
+            render_catalog_index_page,
+            render_library_workspace_page,
+        )
+        from lib_guard.render.version_detail_report import (
+            build_version_update_detail_model,
+            export_current_lib_diff_markdown,
+            render_version_detail_page,
+            render_version_update_detail_panel,
+        )
+
+        for item in [
+            render_catalog_html,
+            render_catalog_index_page,
+            render_library_workspace_page,
+            build_library_report_index_entry,
+            render_version_detail_page,
+            build_version_update_detail_model,
+            render_version_update_detail_panel,
+            export_current_lib_diff_markdown,
+        ]:
+            self.assertTrue(callable(item))
+
+    def test_version_update_detail_model_exports_markdown_without_html_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            diff_dir = root / "diff"
+            diff_dir.mkdir()
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps(
+                    {
+                        "status": "DIFF",
+                        "changed_files": 2,
+                        "recommended_actions": ["Review LEF macro delta"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "file_diff.json").write_text(
+                json.dumps(
+                    {
+                        "changed": [
+                            {"path": "lef/macro.lef", "file_type": "lef"},
+                            {"path": "db/macro.db", "file_type": "db"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            raw = root / "raw"
+            raw.mkdir()
+            (raw / "release_note.txt").write_text("Updated macro shape.\n", encoding="utf-8")
+            version = {
+                "version_id": "patch_20260627",
+                "raw_path": str(raw),
+                "package_type": "PARTIAL_UPDATE",
+                "previous_effective_version": "effective_20260620",
+                "diff": {"adjacent_diff_dir": str(diff_dir), "adjacent_old_version": "effective_20260620"},
+            }
+            lib = {"library_id": "ip/ucie", "library_name": "ucie", "display_name": "ucie"}
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                export_current_lib_diff_markdown,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            md_path = root / "current_lib_diff.md"
+            export_current_lib_diff_markdown(model, md_path)
+            panel_html = render_version_update_detail_panel(model)
+            md_text = md_path.read_text(encoding="utf-8")
+            md_path.unlink()
+            panel_html_after_delete = render_version_update_detail_panel(model)
+
+            self.assertEqual(model["schema_version"], "version_update_detail.v1")
+            self.assertEqual(model["base_ref"], "previous_effective")
+            self.assertEqual(model["base_version"], "effective_20260620")
+            self.assertEqual(model["comparison_semantics"], "incremental")
+            self.assertEqual(model["delete_semantics"], "out_of_scope_missing")
+            self.assertEqual(model["changed_files"], 2)
+            self.assertIn("effective_20260620", panel_html)
+            self.assertIn("2", panel_html)
+            self.assertIn("effective_20260620", md_text)
+            self.assertIn("changed_files: 2", md_text)
+            self.assertIn("Metadata-only", panel_html)
+            self.assertIn("lef/macro.lef", panel_html)
+            self.assertNotIn("$PROJ/scripts/lg.csh fd ucie patch_20260627 db/macro.db", panel_html)
+            self.assertEqual(panel_html, panel_html_after_delete)
+
     def test_catalog_scan_library_refresh_keeps_other_libraries(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -450,6 +545,7 @@ class CatalogTimelineTest(unittest.TestCase):
                     {
                         "files": [
                             {"path": "lef/ucie.lef", "file_type": "lef", "corner": None},
+                            {"path": "cdl/ucie.cdl", "file_type": "cdl", "corner": None},
                             {"path": "lib/ucie_ss_0p72v_125c.lib", "file_type": "liberty", "corner": {"process": "ss", "voltage": "0.72v", "temperature": "125c"}},
                             {"path": "db/ucie_tt_0p80v_25c.db", "file_type": "db", "corner": {"process": "tt", "voltage": "0.80v", "temperature": "25c"}},
                             {"path": "sdc/ucie.sdc", "file_type": "sdc", "corner": None},
@@ -475,8 +571,43 @@ class CatalogTimelineTest(unittest.TestCase):
                     "file": "lef/ucie.lef",
                     "status": "PASS",
                     "data": {
-                        "stats": {"macro_count": 12, "pin_count": 16},
-                        "macros": {f"UCIE_MACRO_{i:02d}": {"pin_count": i} for i in range(12)},
+                        "stats": {"macro_count": 12, "pin_count": 16, "layer_count": 1, "pin_rect_count": 8, "obs_rect_count": 1},
+                                "layers": {
+                                    "LVTN": {},
+                                    "M1": {"type": "ROUTING", "direction": "HORIZONTAL", "width": 0.02},
+                                },
+                        "macros": {
+                            f"UCIE_MACRO_{i:02d}": {
+                                "class": "BLOCK",
+                                "size": {"x": 10.0 + i, "y": 20.0},
+                                "pin_count": i,
+                                "pins": {
+                                    "CLK": {"direction": "INPUT", "use": "SIGNAL", "layers": ["M1"], "rect_count": 1}
+                                }
+                                if i == 0
+                                else {},
+                            }
+                            for i in range(12)
+                        },
+                    },
+                },
+                "parser_results/cdl/1.json": {
+                    "parser_name": "CdlParser",
+                    "file_type": "cdl",
+                    "file": "cdl/ucie.cdl",
+                    "status": "PASS",
+                    "data": {
+                        "stats": {"subckt_count": 1, "pin_count": 4, "instance_count": 1},
+                        "subckts": {
+                            "UCIE_WRAP": {
+                                "name": "UCIE_WRAP",
+                                "pins": ["A", "Y", "VDD", "VSS"],
+                                "pin_count": 4,
+                                "instance_count": 1,
+                                "instances": [{"name": "XINV", "kind": "subckt", "target": "INV", "pin_count": 4}],
+                            }
+                        },
+                        "instances": [{"name": "XINV", "kind": "subckt", "target": "INV", "pin_count": 4}],
                     },
                 },
                 "parser_results/sdc/1.json": {
@@ -529,6 +660,7 @@ class CatalogTimelineTest(unittest.TestCase):
                     {
                         "files": [
                             {"file": "lef/ucie.lef", "file_type": "lef", "parser_tasks": [{"parser_name": "LefParser", "result_status": "PASS", "result_path": "parser_results/lef/1.json"}]},
+                            {"file": "cdl/ucie.cdl", "file_type": "cdl", "parser_tasks": [{"parser_name": "CdlParser", "result_status": "PASS", "result_path": "parser_results/cdl/1.json"}]},
                             {"file": "sdc/ucie.sdc", "file_type": "sdc", "parser_tasks": [{"parser_name": "SdcParser", "result_status": "PASS", "result_path": "parser_results/sdc/1.json"}]},
                             {"file": "upf/ucie.upf", "file_type": "upf", "parser_tasks": [{"parser_name": "UpfParser", "result_status": "PASS", "result_path": "parser_results/upf/1.json"}]},
                             {"file": "waiver/lint.waiver", "file_type": "waiver", "parser_tasks": [{"parser_name": "WaiverParser", "result_status": "PASS", "result_path": "parser_results/waiver/1.json"}]},
@@ -574,6 +706,7 @@ class CatalogTimelineTest(unittest.TestCase):
                             {"path": "sdc/ucie.sdc", "file_type": "sdc"},
                             {"path": "upf/ucie.upf", "file_type": "upf"},
                             {"path": "lef/ucie.lef", "file_type": "lef"},
+                            {"path": "db/ucie_tt_0p80v_25c.db", "file_type": "db"},
                             {"path": "rtl/top.v", "file_type": "verilog"},
                             {"path": "rtl/subsystem/lane0/reset_sync_with_a_very_long_relative_path_for_scroll_check.v", "file_type": "verilog"},
                             {"path": "rtl/subsystem/lane1/reset_sync_with_a_very_long_relative_path_for_scroll_check.v", "file_type": "verilog"},
@@ -657,6 +790,12 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn("report_index.json", html)
             self.assertNotIn(str(console_html), html)
             self.assertIn("Release", html)
+            self.assertTrue((html_out / "index.html").exists())
+            self.assertTrue((html_out / "libraries" / "ip_ucie" / "index.html").exists())
+            self.assertTrue((html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").exists())
+            self.assertTrue((html_out / "report_index.json").exists())
+            self.assertTrue((html_out / "catalog_state.json").exists())
+            self.assertTrue((html_out / "manager_tasks.json").exists())
             report_index = json.loads(Path(result["report_index"]).read_text(encoding="utf-8"))
             report_blob = json.dumps(report_index, ensure_ascii=False)
             self.assertIn(Path(os.path.relpath(scan_html, html_out)).as_posix(), report_blob)
@@ -671,28 +810,45 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn("latest_effective_ref", library_html)
             self.assertIn("Compare 索引", library_html)
             version_html = (html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Raw Version Detail", version_html)
-            self.assertIn("Absolute Raw Path", version_html)
+            self.assertIn("版本审查总览", version_html)
+            self.assertIn("版本上下文", version_html)
+            self.assertIn("绝对 Raw 路径", version_html)
             self.assertIn(str(raw / "ucie" / "stable_20250608"), version_html)
-            self.assertLess(version_html.find("Absolute Raw Path"), version_html.find("更新详情"))
+            self.assertLess(version_html.find("版本审查总览"), version_html.find("更新详情"))
             self.assertNotIn(f"<b>Raw Path</b><em>{raw / 'ucie' / 'stable_20250608'}</em>", version_html)
-            self.assertIn("Count-only + Corner Summary", version_html)
-            self.assertIn("Parser Summary", version_html)
-            self.assertLess(version_html.find("更新详情"), version_html.find("Raw Version Detail"))
-            self.assertIn("更新详情（vs initial_20250601）", version_html)
-            self.assertIn("incremental compare", version_html)
-            self.assertIn("missing files are not treated as deletes", version_html)
+            self.assertIn("大文件与 PVT Corner", version_html)
+            self.assertIn("Parser 覆盖汇总", version_html)
+            self.assertIn("对比前检查", version_html)
+            self.assertIn("原始证据", version_html)
+            self.assertLess(version_html.find("更新详情"), version_html.find("证据质量"))
+            self.assertIn("更新详情（vs previous_effective / initial_20250601）", version_html)
+            self.assertIn("增量对比 (incremental compare)", version_html)
+            self.assertIn("缺失文件不视为删除", version_html)
+            self.assertIn("Markdown 导出", version_html)
             self.assertIn("Fixed lane reset timing", version_html)
-            self.assertIn("Release Notes</div><div class='metric-value'>1", version_html)
+            self.assertIn("Release note</div><div class='metric-value'>1", version_html)
             self.assertIn("version-scroll-table metric-scroll", version_html)
             self.assertIn("version-scroll-table change-scroll", version_html)
+            self.assertIn("faceted-table-tools", version_html)
+            self.assertIn("id='tbl-change-scroll'", version_html)
+            self.assertIn("data-filter-columns='0:变化|1:类型|3:审查级别'", version_html)
+            self.assertIn("id='parser-aggregate'", version_html)
+            self.assertIn("applyTableFilters", version_html)
             self.assertIn("height:420px", version_html)
             self.assertIn("min-width:1800px", version_html)
             self.assertIn("removed_files", version_html)
             self.assertIn("parser_regressions", version_html)
             self.assertIn("changed_files", version_html)
+            self.assertIn("变化文件", version_html)
+            self.assertIn("建议动作", version_html)
+            self.assertNotIn("NO_DIFF_SUMMARY", version_html)
+            self.assertNotIn("暂无自动 diff 结果", version_html)
+            self.assertNotIn("暂无文件级 diff 明细", version_html)
+            self.assertNotIn("暂无推荐动作", version_html)
             self.assertIn("upf/new_domain.upf", version_html)
             self.assertIn("waiver/legacy.waiver", version_html)
+            self.assertIn("db/ucie_tt_0p80v_25c.db", version_html)
+            self.assertIn("Metadata-only", version_html)
             self.assertIn("rtl/top.v", version_html)
             self.assertIn("doc/release/deep_change_note_with_long_relative_path.md", version_html)
             self.assertIn("sdc/ucie.sdc", version_html)
@@ -707,6 +863,18 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn("UCIE_MACRO_10", version_html)
             self.assertIn("LEF", version_html)
             self.assertIn("Macros", version_html)
+            self.assertIn("Used Layers", version_html)
+            self.assertIn("Pin Directions", version_html)
+            self.assertIn("INPUT:1", version_html)
+            self.assertIn("Layer Types", version_html)
+            self.assertIn("ROUTING:1", version_html)
+            self.assertIn("Top Layers", version_html)
+            self.assertIn("M1", version_html)
+            self.assertIn("CDL", version_html)
+            self.assertIn("Subckts", version_html)
+            self.assertIn("Instances", version_html)
+            self.assertIn("UCIE_WRAP", version_html)
+            self.assertIn("XINV", version_html)
             self.assertIn("SDC", version_html)
             self.assertIn("Clocks", version_html)
             self.assertIn("UPF", version_html)
@@ -722,8 +890,320 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn(str(scan_html).replace("\\", "/"), version_html)
             self.assertNotIn(str(diff_html).replace("\\", "/"), version_html)
             self.assertNotIn("Selected Diff", version_html)
+            self.assertNotIn("Open comparison from Library Workspace", version_html)
+            self.assertNotIn("comparison review lives in the library workspace", version_html)
+            self.assertNotIn("Raw Version Detail", version_html)
+            self.assertNotIn("Count-only + Corner Summary", version_html)
+            self.assertNotIn("Parser Summary", version_html)
+            self.assertNotIn("Pre-Diff Readiness", version_html)
+            self.assertNotIn("File Diff 2/5", version_html)
+            self.assertNotIn("done/total", version_html)
             self.assertNotIn("pairwise_html", version_html)
             self.assertNotIn("release_html", version_html)
+
+    def test_version_detail_shows_delivery_view_coverage_and_parser_meaning(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw" / "asap7"
+            scan_dir = root / "scan"
+            out = root / "html"
+            raw.mkdir(parents=True)
+            (scan_dir / "summary").mkdir(parents=True)
+            (scan_dir / "parser_results" / "verilog").mkdir(parents=True)
+            inventory = {
+                "files": [
+                    {"path": "verilog/fakeram7_128x64.v", "file_type": "verilog", "role": "verilog"},
+                    {"path": "lef/fakeram7_128x64.lef", "file_type": "lef", "role": "lef"},
+                    {"path": "lib/fakeram7_tt.lib.gz", "file_type": "liberty", "role": "liberty"},
+                    {"path": "gds/fakeram7.gds", "file_type": "gds", "role": "gds", "is_large_hash_skipped": True, "hash_reason": "heavy_eda_or_archive_extension"},
+                    {"path": "constraints.sdc", "file_type": "sdc", "role": "sdc"},
+                    {"path": "openRoad/pdn.cfg", "file_type": "flow_config", "role": "flow_config"},
+                    {"path": "drc/asap7.lydrc", "file_type": "tech_config", "role": "drc_rule"},
+                    {"path": "README.md", "file_type": "doc", "role": "readme"},
+                    {"path": "misc/unclassified.foo", "file_type": "unknown", "role": "unknown"},
+                    {"path": "LICENSE_BUILD_RUN_SCRIPTS", "file_type": "unknown", "role": "unknown"},
+                ],
+                "corner_filename_summary": {
+                    "total_corner_files": 1,
+                    "process_counts": {"tt": 1},
+                    "voltage_counts": {},
+                    "temperature_counts": {},
+                    "examples": [
+                        {
+                            "file": "lib/fakeram7_tt.lib.gz",
+                            "file_type": "liberty",
+                            "corner": {"process": "tt", "voltage": None, "temperature": None},
+                        }
+                    ],
+                },
+            }
+            (scan_dir / "file_inventory.json").write_text(json.dumps(inventory, ensure_ascii=False), encoding="utf-8")
+            (scan_dir / "parser_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {
+                                "file": "yoSys/cells_adders_L.v",
+                                "file_type": "verilog",
+                                "parser_tasks": [
+                                    {
+                                        "parser_name": "VerilogParser",
+                                        "status": "PASS",
+                                        "result_status": "PASS",
+                                        "result_path": "parser_results/verilog/cells_adders_l.json",
+                                    }
+                                ],
+                            },
+                            {
+                                "file": "yoSys/cells_adders_R.v",
+                                "file_type": "verilog",
+                                "parser_tasks": [
+                                    {
+                                        "parser_name": "VerilogParser",
+                                        "status": "PASS",
+                                        "result_status": "PASS",
+                                        "result_path": "parser_results/verilog/cells_adders_r.json",
+                                    }
+                                ],
+                            },
+                            {
+                                "file": "lef/tech.lef",
+                                "file_type": "lef",
+                                "parser_tasks": [
+                                    {
+                                        "parser_name": "LefParser",
+                                        "status": "PASS",
+                                        "result_status": "PASS",
+                                        "result_path": "parser_results/lef/tech.json",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (scan_dir / "parser_results.json").write_text(
+                json.dumps(
+                    {
+                        "parser_results/verilog/cells_adders_l.json": {
+                            "status": "PASS",
+                            "file": "yoSys/cells_adders_L.v",
+                            "file_type": "verilog",
+                            "data": {
+                                "modules": {
+                                    "_tech_fa": {
+                                        "name": "_tech_fa",
+                                    },
+                                    "fakeram7_128x64": {
+                                        "name": "fakeram7_128x64",
+                                        "port_count": 4,
+                                    },
+                                    "OPENROAD_CLKGATE": {
+                                        "name": "OPENROAD_CLKGATE",
+                                        "port_count": 3,
+                                    },
+                                },
+                                "stats": {"module_count": 2, "port_count": 7},
+                                "parsed_fields": ["module", "port", "direction"],
+                                "unparsed_features": ["instance", "always_block"],
+                            },
+                        },
+                        "parser_results/verilog/cells_adders_r.json": {
+                            "status": "PASS",
+                            "file": "yoSys/cells_adders_R.v",
+                            "file_type": "verilog",
+                            "data": {
+                                "modules": {
+                                    "_tech_fa": {
+                                        "name": "_tech_fa",
+                                    },
+                                },
+                                "stats": {"module_count": 1, "port_count": 5},
+                                "parsed_fields": ["module", "port", "direction"],
+                                "unparsed_features": ["instance", "always_block"],
+                            },
+                        },
+                        "parser_results/lef/tech.json": {
+                            "status": "PASS",
+                            "file": "lef/tech.lef",
+                            "file_type": "lef",
+                            "data": {
+                                "layers": {
+                                    "LVTN": {},
+                                    "M1": {"type": "ROUTING", "direction": "HORIZONTAL", "width": 0.02},
+                                },
+                                "stats": {"macro_count": 0, "pin_count": 0, "layer_count": 2},
+                            },
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (scan_dir / "summary" / "release_readiness.json").write_text(
+                json.dumps(
+                    {
+                        "bundle_status": "PASS_WITH_WARNING",
+                        "required_view_status": "PASS",
+                        "release_level_candidate": "L1",
+                        "components": [
+                            {
+                                "required_views": ["verilog", "lef", "liberty"],
+                                "optional_views": ["gds", "sdc", "doc", "flow_config", "tech_config"],
+                                "required_view_results": {
+                                    "verilog": {"status": "PASS", "found": True, "parser_status": "PASS", "validation_level": "parsed_required"},
+                                    "lef": {"status": "PASS", "found": True, "parser_status": "PASS", "validation_level": "parsed_required"},
+                                    "liberty": {"status": "PASS", "found": True, "parser_status": "METADATA_ONLY", "validation_level": "metadata_required"},
+                                },
+                                "optional_view_results": {
+                                    "gds": {"status": "PASS", "found": True, "parser_status": "METADATA_ONLY", "validation_level": "metadata_required"},
+                                    "sdc": {"status": "PASS", "found": True, "parser_status": "PASS", "validation_level": "parsed_required"},
+                                    "doc": {"status": "INFO", "found": True, "parser_status": "DOC_REVIEW", "validation_level": "doc_review_required"},
+                                    "flow_config": {"status": "WARNING", "found": True, "parser_status": "PASS_THROUGH", "validation_level": "manual_review"},
+                                    "tech_config": {"status": "WARNING", "found": True, "parser_status": "PASS_THROUGH", "validation_level": "manual_review"},
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            version = {
+                "version_id": "20260627_asap7",
+                "raw_path": str(raw),
+                "package_type": "FULL_PACKAGE",
+                "scan": {"scan_dir": str(scan_dir), "scan_id": "scan_asap7"},
+            }
+            lib = {
+                "library_id": "ip/vendor_A.openroad_platform.openroad_asap7",
+                "library_name": "vendor_A.openroad_platform.openroad_asap7",
+                "display_name": "openroad_asap7",
+            }
+
+            from lib_guard.render.version_detail_report import render_version_detail_page
+
+            page = Path(render_version_detail_page(out, lib, version))
+            html = page.read_text(encoding="utf-8")
+
+            self.assertIn("交付 View 覆盖", html)
+            self.assertIn("完整性判断", html)
+            self.assertIn("必需", html)
+            self.assertIn("可选", html)
+            self.assertIn("rtl / verilog", html)
+            self.assertIn("lib / liberty", html)
+            self.assertIn("flow / flow_config", html)
+            self.assertIn("tech / tech_config", html)
+            self.assertIn("未知 / 待确认", html)
+            self.assertIn("未知文件细分", html)
+            self.assertIn("无扩展名", html)
+            self.assertIn(".foo", html)
+            self.assertIn("misc/unclassified.foo", html)
+            self.assertIn("LICENSE_BUILD_RUN_SCRIPTS", html)
+            self.assertIn("大文件与 PVT Corner", html)
+            self.assertIn("GDS/SPEF/Liberty/DB", html)
+            self.assertIn("PVT Corner 明细", html)
+            self.assertIn("corner-detail-scroll", html)
+            self.assertIn("id='count-only-files'", html)
+            self.assertIn("id='tbl-view-coverage-scroll'", html)
+            self.assertIn("data-filter-columns='0:View / Scope|1:要求|3:状态|4:Parser|5:校验级别'", html)
+            self.assertNotIn("只计数视图与 Corner 汇总", html)
+            self.assertNotIn("重文件", html)
+            self.assertIn("代表对象", html)
+            self.assertIn("来源文件", html)
+            self.assertIn("审查含义", html)
+            self.assertIn("macro_stub", html)
+            self.assertIn("clock_gate", html)
+            self.assertIn("yosys_cell_model", html)
+            self.assertNotIn("tech_cell", html)
+            self.assertIn("另有 1 个来源", html)
+            self.assertIn("module declaration", html)
+            self.assertEqual(html.count("<td>_tech_fa</td>"), 1)
+            self.assertIn("fakeram7_128x64", html)
+            self.assertIn("yoSys/cells_adders_L.v", html)
+            self.assertNotIn("<td>LVTN</td><td><code>lef/tech.lef</code></td><td>routing_layer</td><td>LVTN</td>", html)
+            self.assertIn("<td>LVTN</td><td><code>lef/tech.lef</code></td><td>tech_layer</td><td><span class='muted'>-</span></td>", html)
+            self.assertIn("type=ROUTING, direction=HORIZONTAL, width=0.02", html)
+            self.assertLess(html.index("<td>M1</td>"), html.index("<td>LVTN</td>"))
+
+    def test_version_detail_empty_raw_scan_explains_partial_update_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw" / "sky130ram_update"
+            scan_dir = root / "scan"
+            out = root / "html"
+            raw.mkdir(parents=True)
+            scan_dir.mkdir()
+            (raw / "release_note.txt").write_text("Only docs changed.\n", encoding="utf-8")
+            (scan_dir / "file_inventory.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {"path": "release_note.txt", "file_type": "doc"}
+                        ],
+                        "corner_filename_summary": {
+                            "total_corner_files": 0,
+                            "process_counts": {},
+                            "voltage_counts": {},
+                            "temperature_counts": {},
+                            "examples": [],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (scan_dir / "parser_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {
+                                "file": "release_note.txt",
+                                "file_type": "doc",
+                                "parser_tasks": [
+                                    {
+                                        "parser_name": None,
+                                        "status": "SKIPPED",
+                                        "result_status": "SKIPPED",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (scan_dir / "parser_results.json").write_text("{}", encoding="utf-8")
+            version = {
+                "version_id": "20260626_sky130ram_update",
+                "raw_path": str(raw),
+                "package_type": "PARTIAL_UPDATE",
+                "previous_effective_version": "20260619_sky130ram",
+                "scan": {"scan_dir": str(scan_dir), "scan_id": "scan_empty"},
+            }
+            lib = {
+                "library_id": "ip/vendor_C.openroad_platform.openroad_sky130ram",
+                "library_name": "vendor_C.openroad_platform.openroad_sky130ram",
+                "display_name": "openroad_sky130ram",
+            }
+
+            from lib_guard.render.version_detail_report import render_version_detail_page
+
+            page = Path(render_version_detail_page(out, lib, version))
+            html = page.read_text(encoding="utf-8")
+
+            self.assertIn("版本审查总览", html)
+            self.assertIn("当前版本是增量包", html)
+            self.assertIn("本页 Raw Scan 只统计本次交付内容", html)
+            self.assertIn("继承文件请查看 effective 或 base 视图", html)
+            self.assertIn("当前 Raw Scan 没有发现大文件计数项", html)
+            self.assertIn("当前 Scan 没有生成可展示的 Parser 结果", html)
+            self.assertIn("scan_empty", html)
+            self.assertNotIn("No parser summary is available for this version", html)
+            self.assertNotIn("No count-only views", html)
 
     def test_policy_path_rules_and_inventory_evidence_reduce_misclassification(self) -> None:
         with tempfile.TemporaryDirectory() as td:

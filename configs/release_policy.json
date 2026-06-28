@@ -14,7 +14,8 @@
   "validation_levels": {
     "lef": "parsed_required",
     "liberty": "parsed_required",
-    "verilog": "parsed_required",
+    "verilog": "metadata_required",
+    "systemverilog": "metadata_required",
     "cdl": "parsed_required",
     "sdc": "parsed_required",
     "upf": "parsed_required",

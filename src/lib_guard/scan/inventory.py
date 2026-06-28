@@ -26,6 +26,8 @@ KEY_FILE_TYPES = {
     "waiver",
     "gds",
     "oas",
+    "flow_config",
+    "tech_config",
 }
 
 DEFAULT_SCAN_IGNORE_DIRS = {
@@ -221,6 +223,10 @@ class FileClassifier:
             return "cpm"
         if name.endswith((".pkg", ".package", ".json", ".yaml", ".yml")):
             return "package"
+        if name.endswith((".lyp", ".lyt", ".lydrc", ".rules")):
+            return "tech_config"
+        if name.endswith((".tcl", ".cfg", ".mk", ".cells")):
+            return "flow_config"
         if "waiver" in name:
             return "waiver"
         if ext in {".md", ".txt", ".pdf", ".doc", ".docx"} or "readme" in name or "release" in name:
@@ -241,6 +247,10 @@ class FileClassifier:
             return "constraint"
         if file_type in {"doc", "package", "waiver"}:
             return "documentation"
+        if file_type == "flow_config":
+            return "flow_setup"
+        if file_type == "tech_config":
+            return "technology_setup"
         return "unknown"
 
     def _role(self, name: str, path: str, file_type: str) -> str:
@@ -258,6 +268,22 @@ class FileClassifier:
             return "gate_netlist"
         if file_type == "lef" and name.endswith((".tlef", ".tlef.gz")):
             return "tech_lef"
+        if file_type == "flow_config":
+            if name.endswith(".tcl"):
+                return "flow_script"
+            if name.endswith(".mk"):
+                return "flow_setup"
+            if name.endswith(".cfg"):
+                return "flow_config"
+            if name.endswith(".cells"):
+                return "cell_list"
+        if file_type == "tech_config":
+            if name.endswith(".lydrc"):
+                return "drc_rule"
+            if name.endswith((".lyp", ".lyt")):
+                return "klayout"
+            if name.endswith(".rules"):
+                return "tech_rule"
         return file_type
 
 
