@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
-import json
+import contextlib
 import gzip
+import io
+import json
 import os
 import sys
 import tempfile
@@ -1641,12 +1643,42 @@ class ScanPipelineTest(unittest.TestCase):
 
         help_text = _build_parser().format_help()
 
-        self.assertIn("Examples", help_text)
+        self.assertIn("示例", help_text)
+        self.assertIn("日常流程", help_text)
         self.assertIn("lg.csh scan", help_text)
         self.assertIn("lg.ps1 scan", help_text)
-        self.assertIn("alias: fd", help_text)
-        self.assertIn("alias: cmp", help_text)
+        self.assertIn("file-diff -> fd", help_text)
+        self.assertIn("diff -> cmp", help_text)
+        self.assertIn("lg.csh override", help_text)
+        self.assertIn("lg.csh action", help_text)
+        self.assertIn("lg.csh rv-accept", help_text)
         self.assertIn("waiver ibis pwl snp cpm", help_text)
+        self.assertNotIn("filediff", help_text)
+        self.assertNotIn("refresh-diff", help_text)
+
+    def test_short_cli_rejects_removed_legacy_aliases(self) -> None:
+        from lib_guard.short_cli import _build_parser
+
+        parser = _build_parser()
+        with contextlib.redirect_stderr(io.StringIO()):
+            for argv in [
+                ["filediff", "ucie", "v1", "lef/ucie.lef"],
+                ["refresh-diff", "ucie"],
+                ["lib", "discover"],
+                ["act", "ucie"],
+                ["review", "ucie"],
+                ["compare", "ucie", "v1"],
+                ["rf", "ucie"],
+            ]:
+                with self.subTest(argv=argv):
+                    with self.assertRaises(SystemExit):
+                        parser.parse_args(argv)
+
+    def test_low_level_cli_hides_removed_update_command(self) -> None:
+        from lib_guard.cli import build_parser
+
+        help_text = build_parser().format_help()
+        self.assertNotIn("update", help_text)
 
     def test_short_cli_action_file_skips_existing_and_supports_redo_verbs(self) -> None:
         from lib_guard.short_cli import build_cli_commands, write_default_config

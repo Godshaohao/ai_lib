@@ -6,11 +6,10 @@ Commands:
 - history list/latest
 - render
 - release check/link
-- update file/type
 - catalog scan/compare/release
 - file-diff
 
-This CLI keeps scan, render, release, update, catalog, and diff boundaries explicit.
+This CLI keeps scan, render, release, catalog, and diff boundaries explicit.
 """
 
 from __future__ import annotations
@@ -20,6 +19,11 @@ from typing import Any
 import importlib
 import logging
 import sys
+
+from lib_guard.project_config import (
+    DEFAULT_RELEASE_POLICY_PATH,
+    PROJECT_CONFIG_DIR,
+)
 
 
 LOGGER = logging.getLogger("lib_guard")
@@ -83,8 +87,6 @@ run_review_list = _lazy_command("lib_guard.cli_commands.review", "run_review_lis
 run_review_waive = _lazy_command("lib_guard.cli_commands.review", "run_review_waive")
 run_scan_command = _lazy_command("lib_guard.cli_commands.scan", "run_scan_command")
 run_scan_status = _lazy_command("lib_guard.cli_commands.scan", "run_scan_status")
-run_update_file = _lazy_command("lib_guard.cli_commands.update", "run_update_file")
-run_update_type = _lazy_command("lib_guard.cli_commands.update", "run_update_type")
 run_version_list = _lazy_command("lib_guard.cli_commands.version", "run_version_list")
 run_version_register = _lazy_command("lib_guard.cli_commands.version", "run_version_register")
 
@@ -191,7 +193,7 @@ def add_release_parser(subparsers: Any) -> None:
         p.add_argument("--library-id")
         p.add_argument("--mode", default="signature")
         p.add_argument("--workdir", default="work")
-        p.add_argument("--policy", default="configs/release_policy.json")
+        p.add_argument("--policy", default=DEFAULT_RELEASE_POLICY_PATH)
         if name == "link":
             p.add_argument("--release-root", help="Required for --scan; optional override for --manifest.")
             p.add_argument("--alias", default="current")
@@ -238,31 +240,6 @@ def add_release_parser(subparsers: Any) -> None:
     p.set_defaults(func=run_release_manifest_from_snapshot)
 
 
-def add_update_parser(subparsers: Any) -> None:
-    root = subparsers.add_parser("update", help="Safe incremental update operations")
-    sp = root.add_subparsers(dest="update_cmd", required=True)
-    p = sp.add_parser("file")
-    p.add_argument("--library-id", required=True)
-    p.add_argument("--file", required=True)
-    p.add_argument("--mode", default="signature")
-    p.add_argument("--scope", default="summary", choices=["parser", "summary", "parser-summary", "all"])
-    p.add_argument("--workdir", default="work")
-    p.add_argument("--policy", default="configs/legacy_summary_policy.json")
-    p.add_argument("--no-rebuild-summary", action="store_true")
-    p.set_defaults(func=run_update_file)
-
-    p = sp.add_parser("type")
-    p.add_argument("--library-id", required=True)
-    p.add_argument("--type", required=True)
-    p.add_argument("--mode", default="signature")
-    p.add_argument("--scope", default="summary", choices=["parser", "summary", "parser-summary", "all"])
-    p.add_argument("--workdir", default="work")
-    p.add_argument("--policy", default="configs/legacy_summary_policy.json")
-    p.add_argument("--skip-cache", action="store_true")
-    p.add_argument("--no-rebuild-summary", action="store_true")
-    p.set_defaults(func=run_update_type)
-
-
 def add_package_parser(subparsers: Any) -> None:
     root = subparsers.add_parser("package", help="Delivery package classification, base binding, and snapshot assembly")
     sp = root.add_subparsers(dest="package_cmd", required=True)
@@ -305,14 +282,14 @@ def add_console_parser(subparsers: Any) -> None:
     p.add_argument("--library-id")
     p.add_argument("--mode", default="signature")
     p.add_argument("--workdir", default="work")
-    p.add_argument("--config-dir", default="configs")
+    p.add_argument("--config-dir", default=PROJECT_CONFIG_DIR)
     p.add_argument("--out")
     p.set_defaults(func=run_console_build)
 
     p = sp.add_parser("config", help="Export merged user-facing config view")
     p.add_argument("--library-id")
     p.add_argument("--workdir", default="work")
-    p.add_argument("--config-dir", default="configs")
+    p.add_argument("--config-dir", default=PROJECT_CONFIG_DIR)
     p.add_argument("--out", required=True)
     p.set_defaults(func=run_console_config)
 
@@ -323,7 +300,7 @@ def add_console_parser(subparsers: Any) -> None:
     p.add_argument("--library-id")
     p.add_argument("--mode", default="signature")
     p.add_argument("--workdir", default="work")
-    p.add_argument("--config-dir", default="configs")
+    p.add_argument("--config-dir", default=PROJECT_CONFIG_DIR)
     p.add_argument("--out", required=True)
     p.set_defaults(func=run_console_review)
 
@@ -497,7 +474,7 @@ def add_catalog_parser(subparsers: Any) -> None:
     p.add_argument("--catalog", required=True)
     p.add_argument("--library", required=True)
     p.add_argument("--version", required=True)
-    p.add_argument("--policy", default="configs/release_policy.json")
+    p.add_argument("--policy", default=DEFAULT_RELEASE_POLICY_PATH)
     p.add_argument("--alias", default="current")
     p.add_argument("--diff")
     p.add_argument("--diff-mode", choices=["adjacent", "cumulative"])
@@ -508,7 +485,7 @@ def add_catalog_parser(subparsers: Any) -> None:
     p.add_argument("--catalog", required=True)
     p.add_argument("--library", required=True)
     p.add_argument("--version", required=True)
-    p.add_argument("--policy", default="configs/release_policy.json")
+    p.add_argument("--policy", default=DEFAULT_RELEASE_POLICY_PATH)
     p.add_argument("--release-root", required=True)
     p.add_argument("--alias", default="current")
     p.add_argument("--apply", action="store_true")
@@ -533,7 +510,7 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--console-out")
     p.add_argument("--catalog-html-out")
     p.add_argument("--no-catalog-render", action="store_true")
-    p.add_argument("--config-dir", default="configs")
+    p.add_argument("--config-dir", default=PROJECT_CONFIG_DIR)
     p.add_argument("--state-dir")
     p.add_argument("--cache-dir")
     p.add_argument("--config")
@@ -561,7 +538,7 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--scan-if-missing", action="store_true", help="Scan only missing old/new scan evidence before compare")
     p.add_argument("--rescan", action="store_true", help="Force rescan of old and new versions before compare")
     p.add_argument("--scan-mode", default="candidate", choices=["quick", "inventory", "signature", "candidate", "release", "diff", "refresh", "full"])
-    p.add_argument("--config-dir", default="configs")
+    p.add_argument("--config-dir", default=PROJECT_CONFIG_DIR)
     p.add_argument("--state-dir")
     p.add_argument("--cache-dir")
     p.add_argument("--config")
@@ -587,7 +564,7 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--plan-only", action="store_true", help="Only write batch selection manifest; do not run scans")
     p.add_argument("--batch-run-id", help="Stable batch run id for manifest/progress outputs")
     p.add_argument("--batch-out", help="Explicit batch run directory")
-    p.add_argument("--config-dir", default="configs")
+    p.add_argument("--config-dir", default=PROJECT_CONFIG_DIR)
     p.add_argument("--state-dir")
     p.add_argument("--cache-dir")
     p.add_argument("--config")
@@ -622,7 +599,7 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--library")
     p.add_argument("--version", action="append", default=[], help="Version id or version_key. Repeat to select multiple versions.")
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"])
-    p.add_argument("--policy", default="configs/release_policy.json")
+    p.add_argument("--policy", default=DEFAULT_RELEASE_POLICY_PATH)
     p.add_argument("--release-root", required=True)
     p.add_argument("--alias", default="current")
     p.add_argument("--release-id")
@@ -678,7 +655,6 @@ def build_parser() -> ArgumentParser:
     add_render_parser(subparsers)
     add_release_parser(subparsers)
     add_package_parser(subparsers)
-    add_update_parser(subparsers)
     add_console_parser(subparsers)
     add_review_parser(subparsers)
     add_diff_parser(subparsers)

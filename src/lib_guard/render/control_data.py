@@ -5,16 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 import json
 
-
-CONFIG_SPECS = [
-    ("file_patterns", "configs/file_patterns.json", True, ["scan"], ["scan"]),
-    ("library_profiles", "configs/library_profiles.json", True, ["release_check"], ["release check"]),
-    ("scan_policy", "configs/scan_policy.json", True, ["scan", "cache"], ["scan"]),
-    ("legacy_summary_policy", "configs/legacy_summary_policy.json", True, ["scan_report"], ["scan"]),
-    ("release_policy", "configs/release_policy.json", True, ["release_check"], ["release check"]),
-    ("ignore_rules", "configs/ignore_rules.json", True, ["scan"], ["scan"]),
-    ("severity_policy", "configs/severity_policy.json", True, ["release_check"], ["release check"]),
-]
+from lib_guard.project_config import CONTROL_CONFIG_SPECS as CONFIG_SPECS, PROJECT_CONFIG_DIR
 
 
 def utc_now() -> str:
@@ -54,7 +45,7 @@ def _flatten_config(prefix: str, value: Any) -> list[tuple[str, Any]]:
     return [(prefix, value)]
 
 
-def build_config_view(config_dir: str | Path = "configs") -> dict[str, Any]:
+def build_config_view(config_dir: str | Path = PROJECT_CONFIG_DIR) -> dict[str, Any]:
     config_root = Path(config_dir)
     configs: list[dict[str, Any]] = []
     for group, rel_source, editable, impact, actions in CONFIG_SPECS:
@@ -91,10 +82,10 @@ def build_config_view(config_dir: str | Path = "configs") -> dict[str, Any]:
 
 
 def _config_suggestion(name: str) -> str:
+    if name.startswith("catalog_policy."):
+        return "After changing this item, rerun catalog scan/render; scan evidence is only required when discovered versions or file evidence change."
     if name.startswith("release_policy."):
         return "After changing this item, rerun release check; scan is usually not required."
-    if name.startswith("legacy_summary_policy."):
-        return "After changing this item, rerun scan for affected libraries if summary artifacts are still enabled."
     if name.startswith("scan_policy.") or name.startswith("file_patterns.") or name.startswith("ignore_rules."):
         return "After changing this item, rerun scan for affected libraries."
     return "Review impact before changing this item."
@@ -188,7 +179,7 @@ def _parser_object_count(result: Mapping[str, Any]) -> int:
     return 0
 
 
-def build_review_items(scan_dir: str | Path, config_dir: str | Path = "configs") -> dict[str, Any]:
+def build_review_items(scan_dir: str | Path, config_dir: str | Path = PROJECT_CONFIG_DIR) -> dict[str, Any]:
     scan = Path(scan_dir)
     meta = read_json(scan / "scan_meta.json", default={}) or {}
     inventory = read_json(scan / "file_inventory.json", default={}) or {}
@@ -223,7 +214,7 @@ def build_review_items(scan_dir: str | Path, config_dir: str | Path = "configs")
     for file_entry in parser_manifest.get("files", []) or []:
         for task in file_entry.get("parser_tasks", []) or []:
             if str(task.get("result_status", task.get("status", ""))).upper() == "FAILED":
-                add("error", "parser_quality", "Parser failed on key file", "Inspect parser error and rerun update type after fixing parser support.", file_entry.get("file"))
+                add("error", "parser_quality", "Parser failed on key file", "Inspect parser error and rerun scan with --rescan after fixing parser support.", file_entry.get("file"))
 
     required_docs = release_policy.get("required_docs", []) or []
     docs = release_input.get("docs", {}) if isinstance(release_input, Mapping) else {}
@@ -253,7 +244,7 @@ def build_review_items(scan_dir: str | Path, config_dir: str | Path = "configs")
                 f"{parser['parser_name']} returned PASS_EMPTY",
                 f"Check whether {file_type} files are valid or parser missed core objects.",
                 parser.get("empty_examples", [None])[0],
-                f"lib_guard update type --library-id {library_id} --type {file_type} --scope parser-summary --skip-cache",
+                "lg.csh scan <library> <version> --rescan",
             )
     return {"schema_version": "1.0", "generated_at": utc_now(), "library_id": library_id, "scan_id": meta.get("scan_id"), "review_items": items}
 
@@ -271,7 +262,7 @@ def build_recommended_actions(review_items: Mapping[str, Any], scan_dir: str | P
     return {"schema_version": "1.0", "generated_at": utc_now(), "recommended_actions": actions}
 
 
-def build_control_data(scan_dir: str | Path, workdir: str | Path = "work", config_dir: str | Path = "configs") -> dict[str, Any]:
+def build_control_data(scan_dir: str | Path, workdir: str | Path = "work", config_dir: str | Path = PROJECT_CONFIG_DIR) -> dict[str, Any]:
     scan = Path(scan_dir)
     meta = read_json(scan / "scan_meta.json", default={}) or {}
     manifest = read_json(scan / "manifest.json", default={}) or {}

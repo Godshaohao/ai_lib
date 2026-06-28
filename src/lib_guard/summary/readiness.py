@@ -416,7 +416,7 @@ def _manual_review(scope: str, component_id: str, file_type: str, files: list[st
 def _recommended_actions(component_id: str, blocking_items: list[dict[str, Any]], warning_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     actions = []
     for item in blocking_items:
-        actions.append({"title": item["title"], "component_id": component_id, "command": f"lib_guard update type --library-id {component_id} --type {item.get('file_type')} --scope parser-summary --skip-cache"})
+        actions.append({"title": item["title"], "component_id": component_id, "command": "lg.csh scan <library> <version> --rescan"})
     for item in warning_items:
-        actions.append({"title": item["title"], "component_id": component_id, "command": f"lib_guard console review --library-id {component_id} --latest"})
+        actions.append({"title": item["title"], "component_id": component_id, "command": "Open the Version Review page and record an owner decision if needed."})
     return actions

@@ -24,9 +24,8 @@ The review pipeline exchanges JSON artifacts between stages:
 | `release_link_result.json` | release linker | release result, postcheck |
 | `release_result.json` | release checker/linker | catalog state, release HTML |
 
-Policies in `configs/` define current catalog and release behavior.
-`configs/legacy_summary_policy.json` is retained only for compatibility with the
-old update path.
+Policies in `configs/` define current catalog and release behavior. The active
+project policy files are `catalog_policy.json` and `release_policy.json`.
 
 `review_gate.json` is a lightweight gate summary. `blocking_items` can block
 `current`; `attention_items`, including focused File Diff recommendations, do

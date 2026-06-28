@@ -1,17 +1,19 @@
 Status: current
 
-# Documentation Index
+# 文档索引
 
-This directory is the current documentation entry for `lib_guard`.
+这里是 `lib_guard` 当前文档入口。日常使用优先看用户流程、命令入口分层、
+人工确认与 Action 流程。
 
-- [Architecture](architecture.md)
-- [User guide](user_guide.md)
-- [CLI reference](cli_reference.md)
-- [Data contract](data_contract.md)
-- [Review gate](review_gate.md)
-- [Test plan](test_plan.md)
-- [Deprecation policy](deprecation_policy.md)
+- [架构说明](architecture.md)
+- [命令入口分层](command_surface.md)
+- [人工确认与 Action 流程](manual_confirmation_action.md)
+- [用户使用指南](user_guide.md)
+- [CLI 参考](cli_reference.md)
+- [数据契约](data_contract.md)
+- [Review Gate](review_gate.md)
+- [测试计划](test_plan.md)
+- [兼容层说明](compatibility.md)
 
-Historical migration notes and workflow-pack material are kept under
-`archive/`. They are useful for archaeology, but current behavior is documented
-by the files above.
+历史迁移说明和 workflow-pack 材料保留在 `archive/`。它们只用于追溯历史，
+当前行为以本索引列出的文档为准。

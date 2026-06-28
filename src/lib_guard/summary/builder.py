@@ -88,10 +88,6 @@ def load_policy(policy_path: str | Path | None) -> dict[str, Any]:
     if not policy_path:
         return {"affected_summary_map": DEFAULT_AFFECTED_SUMMARY_MAP}
     path = Path(policy_path)
-    if not path.exists() and path.name == "summary_policy.json":
-        candidate = path.with_name("legacy_summary_policy.json")
-        if candidate.exists():
-            path = candidate
     data = read_json(path, default={}) or {}
     data.setdefault("affected_summary_map", DEFAULT_AFFECTED_SUMMARY_MAP)
     return data

@@ -79,10 +79,12 @@ PYTHONPATH=src python -m unittest discover -s src/lib_guard/test -p "test*.py"
 ## Documentation
 
 - [Documentation index](docs/index.md)
+- [Command surface](docs/command_surface.md)
+- [Manual confirmation and action flow](docs/manual_confirmation_action.md)
 - [Architecture](docs/architecture.md)
 - [User guide](docs/user_guide.md)
 - [CLI reference](docs/cli_reference.md)
 - [Data contract](docs/data_contract.md)
 - [Review gate](docs/review_gate.md)
 - [Test plan](docs/test_plan.md)
-- [Deprecation policy](docs/deprecation_policy.md)
+- [Compatibility](docs/compatibility.md)

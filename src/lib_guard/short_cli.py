@@ -7,8 +7,17 @@ import json
 import os
 import sys
 
+from lib_guard.project_config import (
+    CATALOG_POLICY_FILE,
+    CONFIG_NAME,
+    DEFAULT_LIBRARY_TYPE,
+    DEFAULT_PARSE_JOBS,
+    DEFAULT_SCAN_MODE,
+    PROJECT_CONFIG_DIR,
+    project_policy_path,
+    workspace_defaults,
+)
 
-CONFIG_NAME = "lib_guard.yml"
 PAIRWISE_FILE_DIFF_TYPES = {
     "lef",
     "liberty",
@@ -28,11 +37,7 @@ PAIRWISE_FILE_DIFF_TYPES = {
 SHORT_COMMAND_ALIASES = {
     "cat": "catalog",
     "cmp": "diff",
-    "compare": "diff",
     "fd": "file-diff",
-    "filediff": "file-diff",
-    "rf": "refresh",
-    "refresh-diff": "refresh",
     "rel": "release",
 }
 
@@ -41,25 +46,33 @@ def _norm(path: str | Path) -> str:
     return str(Path(path))
 
 
-def write_default_config(workspace: str | Path, *, raw_root: str | Path | None = None, library_type: str = "ip") -> Path:
+def write_default_config(
+    workspace: str | Path,
+    *,
+    raw_root: str | Path | None = None,
+    library_type: str = DEFAULT_LIBRARY_TYPE,
+) -> Path:
     root = Path(workspace)
     root.mkdir(parents=True, exist_ok=True)
-    raw = Path(raw_root) if raw_root else root / "raw"
+    cfg = workspace_defaults(root, raw_root=raw_root, library_type=library_type)
+    ordered_keys = [
+        "workspace",
+        "raw_root",
+        "catalog",
+        "catalog_html",
+        "reports",
+        "diff",
+        "file_diff",
+        "release_root",
+        "versions",
+        "actions_dir",
+        "library_type",
+        "mode",
+        "parse_jobs",
+    ]
     lines = [
         "# lib_guard short command workspace",
-        f"workspace: {root}",
-        f"raw_root: {raw}",
-        f"catalog: {root / 'catalog' / 'catalog.json'}",
-        f"catalog_html: {root / 'catalog' / 'html'}",
-        f"reports: {root / 'reports'}",
-        f"diff: {root / 'diff'}",
-        f"file_diff: {root / 'file_diff'}",
-        f"release_root: {root / 'release_area'}",
-        f"versions: {root / 'config' / 'library_versions.tsv'}",
-        f"actions_dir: {root / 'actions'}",
-        f"library_type: {library_type}",
-        "mode: candidate",
-        "parse_jobs: 8",
+        *[f"{key}: {cfg[key]}" for key in ordered_keys],
     ]
     path = root / CONFIG_NAME
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -96,30 +109,26 @@ def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[st
     path = _find_config(cwd, explicit)
     cfg = _parse_config(path)
     project_root = os.environ.get("LIB_GUARD_PROJECT_ROOT")
-    default_policy = Path(project_root) / "configs" / "catalog_policy.json" if project_root else None
-    cfg.setdefault("workspace", str(path.parent))
-    cfg.setdefault("raw_root", str(path.parent / "raw"))
-    cfg.setdefault("catalog", str(path.parent / "catalog" / "catalog.json"))
-    cfg.setdefault("catalog_html", str(path.parent / "catalog" / "html"))
-    cfg.setdefault("reports", str(path.parent / "reports"))
-    cfg.setdefault("diff", str(path.parent / "diff"))
-    cfg.setdefault("file_diff", str(path.parent / "file_diff"))
-    cfg.setdefault("release_root", str(path.parent / "release_area"))
-    cfg.setdefault("config_dir", str(path.parent / "config"))
-    cfg.setdefault("library_list", str(Path(cfg["config_dir"]) / "library.list"))
-    cfg.setdefault("library_catalog", str(Path(cfg["config_dir"]) / "library_catalog.yml"))
-    cfg.setdefault("library_versions", cfg.get("versions") or str(Path(cfg["config_dir"]) / "library_versions.tsv"))
+    default_policy = project_policy_path(project_root, CATALOG_POLICY_FILE)
+    defaults = workspace_defaults(path.parent, library_type=cfg.get("library_type", DEFAULT_LIBRARY_TYPE))
+    derived_config_keys = {"library_list", "library_catalog", "library_versions", "versions"}
+    for key, value in defaults.items():
+        if key in derived_config_keys:
+            continue
+        cfg.setdefault(key, value)
+    config_dir = Path(cfg["config_dir"])
+    cfg.setdefault("library_list", str(config_dir / "library.list"))
+    cfg.setdefault("library_catalog", str(config_dir / "library_catalog.yml"))
+    cfg.setdefault("library_versions", cfg.get("versions") or defaults["library_versions"])
     cfg.setdefault("versions", cfg["library_versions"])
-    cfg.setdefault("actions_dir", str(path.parent / "actions"))
-    cfg.setdefault("library_type", "ip")
     if "catalog_policy" not in cfg:
         library_catalog = Path(cfg["library_catalog"])
         if library_catalog.exists():
             cfg["catalog_policy"] = str(library_catalog)
         elif default_policy and default_policy.exists():
             cfg["catalog_policy"] = str(default_policy)
-    cfg.setdefault("mode", "candidate")
-    cfg.setdefault("parse_jobs", "8")
+    cfg.setdefault("mode", DEFAULT_SCAN_MODE)
+    cfg.setdefault("parse_jobs", DEFAULT_PARSE_JOBS)
     return cfg
 
 
@@ -149,7 +158,7 @@ def _version_ref_map(cfg: dict[str, str], library: str) -> dict[str, str]:
     paths = [
         cfg.get("library_versions") or "",
         cfg.get("versions") or "",
-        str(Path(cfg["workspace"]) / "configs" / "library_versions.tsv"),
+        str(Path(cfg["workspace"]) / PROJECT_CONFIG_DIR / "library_versions.tsv"),
         str(Path(cfg["workspace"]) / "config" / "library_versions.tsv"),
     ]
     seen_paths: set[str] = set()
@@ -176,14 +185,14 @@ def _review_action_path(cfg: dict[str, str], library: str) -> Path:
     candidates = [
         actions_dir / f"{library}.action",
         actions_dir / f"{_safe_path_name(library)}.action",
-        Path(cfg["workspace"]) / "configs" / "actions" / f"{library}.action",
-        Path(cfg["workspace"]) / "configs" / "actions" / f"{_safe_path_name(library)}.action",
+        Path(cfg["workspace"]) / PROJECT_CONFIG_DIR / "actions" / f"{library}.action",
+        Path(cfg["workspace"]) / PROJECT_CONFIG_DIR / "actions" / f"{_safe_path_name(library)}.action",
         Path(cfg["workspace"]) / "work" / "actions" / f"{library}.action",
         Path(cfg["workspace"]) / "work" / "actions" / f"{_safe_path_name(library)}.action",
         actions_dir / f"{library}.review",
         actions_dir / f"{_safe_path_name(library)}.review",
-        Path(cfg["workspace"]) / "configs" / "actions" / f"{library}.review",
-        Path(cfg["workspace"]) / "configs" / "actions" / f"{_safe_path_name(library)}.review",
+        Path(cfg["workspace"]) / PROJECT_CONFIG_DIR / "actions" / f"{library}.review",
+        Path(cfg["workspace"]) / PROJECT_CONFIG_DIR / "actions" / f"{_safe_path_name(library)}.review",
         Path(cfg["workspace"]) / "work" / "actions" / f"{library}.review",
         Path(cfg["workspace"]) / "work" / "actions" / f"{_safe_path_name(library)}.review",
     ]
@@ -416,95 +425,66 @@ def _file_diff_out_dir(cfg: dict[str, str], library: str, version: str, relpath:
 def _build_parser() -> ArgumentParser:
     parser = ArgumentParser(
         prog="lg",
-        description="lib_guard short command shell",
+        description="lib_guard 日常短命令入口",
         formatter_class=RawDescriptionHelpFormatter,
-        epilog="""Examples:
-  Short aliases: catalog alias: cat, diff alias: cmp, file-diff alias: fd, release alias: rel
+        epilog="""示例:
+  当前推荐别名: catalog -> cat, diff -> cmp, file-diff -> fd, release -> rel
 
-  C Shell:
-    lg.csh init $WORK --raw-root $RAW
+  日常流程:
+    lg.csh init $WORK --raw-root $RAW --library-type ip
     cd $WORK
-    lg.csh cat
-    lg.csh cat ucie
-    lg.csh cat ucie --with-evidence
-    lg.csh scan
-    lg.csh scan ucie --limit 3
-    lg.csh scan ucie --missing
-    lg.csh scan ucie --all-versions
+    lg.csh library discover
+    vi $WORK/config/library.list        # 人工确认 library map
+    lg.csh library apply
+    lg.csh cat --with-evidence
+    lg.csh override ucie stable_20250608 --base initial_20250601 --stage stable
     lg.csh scan ucie stable_20250608
-    lg.csh cmp ucie stable_20250608
     lg.csh cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
-    lg.csh refresh ucie
-    lg.csh refresh --all
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
-    lg.csh fd ucie stable_20250608 model/ucie.ibs --base initial_20250601
-    lg.csh fd ucie stable_20250608 touch/chan.s2p --type snp
     lg.csh rv-check ucie stable_20250608 --gate current
+    lg.csh rv-accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason accepted
     lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
+
+  Action 文件批处理:
+    lg.csh scan ucie --missing
     lg.csh action ucie
 
-  Action file example ($WORK/actions/ucie.action):
-    @effect rec_20260624 stable_20260601 adhoc_01 adhoc_02
-    @scan auto final_20260625
-    @diff current rec_20260624 main
-    @release rec_20260624
-
-  PowerShell:
-    lg.ps1 init $WORK --raw-root $RAW
-    cd $WORK
-    lg.ps1 cat
-    lg.ps1 cat ucie
-    lg.ps1 cat ucie --with-evidence
-    lg.ps1 scan
-    lg.ps1 scan ucie --limit 3
-    lg.ps1 scan ucie --missing
-    lg.ps1 scan ucie --all-versions
+  PowerShell 使用同名命令，例如:
     lg.ps1 scan ucie stable_20250608
-    lg.ps1 cmp ucie stable_20250608
-    lg.ps1 cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
-    lg.ps1 refresh ucie
-    lg.ps1 refresh --all
-    lg.ps1 fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
-    lg.ps1 rv-check ucie stable_20250608 --gate current
-    lg.ps1 rel ucie stable_20250608 --check-first --link-mode symlink
-    lg.ps1 action ucie
 
-  Dry-run / without cd:
+  不 cd 到 WORK 时:
     setenv LIB_GUARD_CONFIG $WORK/lib_guard.yml
-    lg.csh --dry-run scan ucie stable_20250608
     lg.csh --dry-run cmp ucie stable_20250608 --base initial_20250601
-    lg.csh --dry-run fd ucie stable_20250608 waiver/rules.waiver --base initial_20250601
-    lg.csh --dry-run rv-accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason accepted
 
-  Pairwise file-diff types:
+  支持的两两文件 diff 类型:
     lef liberty verilog cdl sdc upf cpf spef db waiver ibis pwl snp cpm
 """,
     )
-    parser.add_argument("--config", help=f"Path to {CONFIG_NAME}")
-    parser.add_argument("--dry-run", action="store_true", help="Print expanded python commands without executing them")
+    parser.add_argument("--config", help=f"{CONFIG_NAME} 路径")
+    parser.add_argument("--dry-run", action="store_true", help="只打印展开后的底层 python 命令，不执行")
     sub = parser.add_subparsers(dest="short_command", required=True)
 
-    p = sub.add_parser("init", help="Create lib_guard.yml in a workspace")
+    p = sub.add_parser("init", help="在 workspace 中创建 lib_guard.yml")
     p.add_argument("workspace")
     p.add_argument("--raw-root")
     p.add_argument("--library-type", default="ip")
 
-    p = sub.add_parser("scan", help="Refresh catalog or scan explicit catalog versions")
+    p = sub.add_parser("scan", help="刷新 catalog 或扫描指定版本")
     p.add_argument("library", nargs="?")
     p.add_argument("version", nargs="?")
-    p.add_argument("--missing", action="store_true", help="Scan only versions without scan evidence")
-    p.add_argument("--all-versions", action="store_true", help="Explicitly scan all selected versions")
-    p.add_argument("--limit", type=int, help="Limit batch scan count for safe trial runs")
-    p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="Limit batch scan to one catalog stage")
-    p.add_argument("--with-evidence", action="store_true", help="Refresh catalog with file-type evidence before scanning")
+    p.add_argument("--missing", action="store_true", help="只扫描缺少 scan evidence 的版本")
+    p.add_argument("--all-versions", action="store_true", help="扫描选中 library 的全部版本")
+    p.add_argument("--limit", type=int, help="限制批量扫描数量，便于试跑")
+    p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="只扫描某个 catalog stage")
+    p.add_argument("--with-evidence", action="store_true", help="扫描前刷新带文件类型 evidence 的 catalog")
 
-    p = sub.add_parser("catalog", aliases=["cat"], help="Refresh catalog index and catalog HTML only")
+    p = sub.add_parser("catalog", aliases=["cat"], help="只刷新 catalog JSON 和 catalog HTML")
     p.add_argument("library", nargs="?")
-    p.add_argument("--full", action="store_true", help="Force full catalog refresh instead of using catalog_state.json")
-    p.add_argument("--fast", action="store_true", help="Directory-only catalog refresh. This is the default for short commands.")
-    p.add_argument("--with-evidence", action="store_true", help="Collect lightweight file-type evidence for discovered versions; slower on large RAW trees.")
+    p.add_argument("--full", action="store_true", help="强制全量 catalog refresh，不复用 catalog_state.json")
+    p.add_argument("--fast", action="store_true", help="只做目录级 catalog refresh；短命令默认使用该模式")
+    p.add_argument("--with-evidence", action="store_true", help="为发现的版本收集轻量文件类型 evidence；大 RAW 树会更慢")
 
-    p = sub.add_parser("override", help="Manually confirm package relation for one catalog version")
+    p = sub.add_parser("override", help="人工确认/修正一个 catalog 版本的 stage、base、package 关系")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"])
@@ -522,32 +502,32 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--note")
     p.add_argument("--updated-by", default="short_cli")
 
-    root_library = sub.add_parser("library", aliases=["lib"], help="Discover and apply the confirmed library registry")
+    root_library = sub.add_parser("library", help="发现并应用人工确认后的 library map")
     lsp = root_library.add_subparsers(dest="library_cmd", required=True)
-    p = lsp.add_parser("discover", help="Discover candidate library roots from RAW and write editable library.list")
-    p.add_argument("--out", help="Editable library.list output. Default: $WORK/config/library.list")
-    p.add_argument("--json-out", help="Machine discovery evidence JSON. Default: $WORK/config/library_discovery.json")
-    p.add_argument("--html-out", help="Discovery review HTML. Default: $WORK/config/library_discovery.html")
+    p = lsp.add_parser("discover", help="从 RAW 中发现候选 library root，写出可人工编辑的 library.list")
+    p.add_argument("--out", help="可编辑 library.list 输出，默认 $WORK/config/library.list")
+    p.add_argument("--json-out", help="机器发现 evidence JSON，默认 $WORK/config/library_discovery.json")
+    p.add_argument("--html-out", help="发现结果审查 HTML，默认 $WORK/config/library_discovery.html")
     p.add_argument("--max-depth", type=int, default=8)
     p.add_argument("--min-versions", type=int, default=2)
     p.add_argument("--default-status", choices=["REVIEW", "OK"], default="REVIEW")
 
-    p = lsp.add_parser("apply", help="Convert confirmed library.list into library_catalog.yml")
-    p.add_argument("--input", help="Input library.list. Default: $WORK/config/library.list")
-    p.add_argument("--out", help="Formal library_catalog.yml output. Default: $WORK/config/library_catalog.yml")
+    p = lsp.add_parser("apply", help="把人工确认后的 library.list 转成正式 library_catalog.yml")
+    p.add_argument("--input", help="输入 library.list，默认 $WORK/config/library.list")
+    p.add_argument("--out", help="正式 library_catalog.yml 输出，默认 $WORK/config/library_catalog.yml")
 
-    p = sub.add_parser("diff", aliases=["cmp", "compare"], help="Run base-aware catalog structural diff without hidden rescans")
+    p = sub.add_parser("diff", aliases=["cmp"], help="按 base 关系运行结构 diff；默认不偷偷重扫")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"], help="Catalog relation used when --base is not provided")
-    p.add_argument("--base", help="Explicit base version. Required when catalog cannot infer a trustworthy base.")
-    p.add_argument("--scan-if-missing", action="store_true", help="Scan only missing old/new scan evidence before compare")
-    p.add_argument("--rescan", action="store_true", help="Force rescan of old and new versions before compare")
-    p.add_argument("--auto-scan", action="store_true", help="Deprecated alias for --scan-if-missing; does not force rescan")
-    p.add_argument("--refresh-catalog", action="store_true", help="Refresh this library catalog before compare. Default is to use existing catalog.json.")
-    p.add_argument("--with-evidence", action="store_true", help="When --refresh-catalog is used, collect file-type evidence during catalog refresh")
+    p.add_argument("--base", help="显式指定 base version；catalog 无法可靠推断时必须传入")
+    p.add_argument("--scan-if-missing", action="store_true", help="compare 前只扫描缺少 evidence 的 old/new 版本")
+    p.add_argument("--rescan", action="store_true", help="compare 前强制重扫 old/new 版本")
+    p.add_argument("--auto-scan", action="store_true", help="已废弃的 --scan-if-missing 兼容别名；不会强制重扫")
+    p.add_argument("--refresh-catalog", action="store_true", help="compare 前刷新该 library catalog；默认使用已有 catalog.json")
+    p.add_argument("--with-evidence", action="store_true", help="配合 --refresh-catalog 收集文件类型 evidence")
 
-    p = sub.add_parser("refresh", aliases=["rf", "refresh-diff"], help="Refresh latest/current raw version update detail diff")
+    p = sub.add_parser("refresh", help="刷新 latest/current raw version 的更新详情 diff")
     p.add_argument("library", nargs="?")
     p.add_argument("--all", action="store_true", help="Refresh latest/current raw version diff for every catalog library")
     p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"], help="Catalog relation used when compare infers the base")
@@ -555,14 +535,14 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--refresh-catalog", action="store_true", help="Refresh catalog before resolving latest/current versions")
     p.add_argument("--with-evidence", action="store_true", help="When --refresh-catalog is used, collect file-type evidence during catalog refresh")
 
-    p = sub.add_parser("file-diff", aliases=["fd", "filediff"], help="Run pairwise file diff from catalog raw paths; never runs scan")
+    p = sub.add_parser("file-diff", aliases=["fd"], help="基于 catalog raw path 运行单文件两两 diff；不会运行 scan")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("relpath")
     p.add_argument("--base")
     p.add_argument("--type", choices=sorted(PAIRWISE_FILE_DIFF_TYPES), help="Override inferred file type")
 
-    p = sub.add_parser("release", aliases=["rel"], help="Run catalog release for an already-scanned version; never runs scan")
+    p = sub.add_parser("release", aliases=["rel"], help="对已扫描版本执行 release check/link/verify 规划；不会运行 scan")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("--alias", default="current")
@@ -578,18 +558,18 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--no-verify", action="store_true")
     p.add_argument("--no-render", action="store_true")
 
-    p = sub.add_parser("action", aliases=["act", "review"], help="Run one library action file from actions/<library>.action")
+    p = sub.add_parser("action", help="运行 $WORK/actions/<library>.action 中的人工编排动作")
     p.add_argument("library")
     p.add_argument("--action", help="Explicit action file path. Default: $WORK/actions/<library>.action")
 
     for name in ["rv-build", "rv-check", "rv-list"]:
-        p = sub.add_parser(name, help="Build/check/list lightweight review gate for a catalog version")
+        p = sub.add_parser(name, help="构建/检查/列出指定版本的轻量 Review Gate")
         p.add_argument("library")
         p.add_argument("version")
         p.add_argument("--gate", default="current", choices=["stage", "current", "approved"])
 
     for name in ["rv-accept", "rv-waive"]:
-        p = sub.add_parser(name, help="Record a lightweight review gate decision")
+        p = sub.add_parser(name, help="记录 owner accept/waive 人工决策")
         p.add_argument("library")
         p.add_argument("version")
         p.add_argument("--gate", default="current", choices=["stage", "current", "approved"])
