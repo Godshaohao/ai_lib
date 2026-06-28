@@ -4,8 +4,8 @@
   "library_name": "ucie",
   "discovery": {
     "mode": "map_first",
-    "library_map": null,
-    "pattern_fallback": true,
+    "library_map": "library_map.yml",
+    "pattern_fallback": false,
     "max_depth": 6,
     "patterns": [
       {

@@ -148,6 +148,26 @@ def _issue_rows(postcheck: Mapping[str, Any]) -> list[str]:
     return rows
 
 
+def _review_gate_panel(postcheck: Mapping[str, Any]) -> str:
+    from lib_guard.render import product_theme as ui
+
+    gate = postcheck.get("review_gate") if isinstance(postcheck.get("review_gate"), Mapping) else {}
+    status = str((gate or {}).get("status") or "NOT_PROVIDED")
+    return ui.panel(
+        "Review Gate",
+        "Release-check consumes this lightweight gate when available. Link/postcheck still records filesystem evidence only.",
+        ui.metric_grid([
+            ("Status", status, str((gate or {}).get("gate") or "-"), status),
+            ("Blocking Open", int((gate or {}).get("blocking_open", 0) or 0), "must be zero for current when policy requires it", "BLOCK" if int((gate or {}).get("blocking_open", 0) or 0) else "PASS"),
+            ("Attention", int((gate or {}).get("attention_count", 0) or 0), "recommendations, not current blockers", "WARNING" if int((gate or {}).get("attention_count", 0) or 0) else "PASS"),
+        ])
+        + ui.trace_link_list([
+            ("review_gate.json", _href((gate or {}).get("gate_file")), "Gate status used by release-check"),
+            ("review_overrides.json", _href((gate or {}).get("override_file")), "Owner accept/waive decisions"),
+        ]),
+    )
+
+
 def render_release_html(postcheck: Mapping[str, Any], out_dir: str | Path) -> dict[str, Any]:
     from lib_guard.render import product_theme as ui
 
@@ -180,6 +200,7 @@ def render_release_html(postcheck: Mapping[str, Any], out_dir: str | Path) -> di
             ]),
         )
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["decision"])
+        + _review_gate_panel(postcheck)
         + ui.panel("发布注意项", "只列出 missing / broken / mismatch / extra / manual_review。", ui.attention_items(attention))
         + ui.panel("Library 校验", "一行一个 library。文件级明细仍以 manifest / postcheck JSON 为准。", ui.filterable_table("release-lib-table", ["Library", "Expected", "Linked", "Missing", "Broken", "Mismatch", "Extra", "Link", "Target", "Evidence"], _library_rows(postcheck), "暂无 library", "筛选 library / version / status"))
         + ui.collapsible_panel(

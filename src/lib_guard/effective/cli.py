@@ -40,6 +40,10 @@ def _load_optional_json(path: str | None) -> dict[str, Any] | None:
     return read_json(p)
 
 
+def _normalized_link_mode(value: str) -> str:
+    return "link" if value == "symlink" else value
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     catalog = read_json(args.catalog)
     manifest = build_effective_manifest(
@@ -55,7 +59,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     preview = None
     release_preview_html = None
     if args.release_preview:
-        preview = release_preview(manifest, release_root=args.release_root, release_id=args.release_id, link_mode=args.link_mode)
+        preview = release_preview(manifest, release_root=args.release_root, release_id=args.release_id, link_mode=_normalized_link_mode(args.link_mode))
         write_release_preview_outputs(args.release_preview, preview)
         release_preview_html = str(Path(args.release_preview) / "index.html")
         write_effective_report(manifest, preview, release_preview_html)
@@ -74,7 +78,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     release_preview_html = None
     if args.release_preview:
         previous = _load_optional_json(args.previous_release)
-        preview = release_preview(manifest, previous_release=previous, release_root=args.release_root, release_id=args.release_id, link_mode=args.link_mode)
+        preview = release_preview(manifest, previous_release=previous, release_root=args.release_root, release_id=args.release_id, link_mode=_normalized_link_mode(args.link_mode))
         write_release_preview_outputs(args.release_preview, preview)
         release_preview_html = str(Path(args.release_preview) / "index.html")
         write_effective_report(manifest, preview, release_preview_html)
@@ -87,7 +91,7 @@ def cmd_add(args: argparse.Namespace) -> int:
 def cmd_release_preview(args: argparse.Namespace) -> int:
     manifest = read_json(args.effective)
     previous = _load_optional_json(args.previous_release)
-    preview = release_preview(manifest, previous_release=previous, release_root=args.release_root, release_id=args.release_id, link_mode=args.link_mode)
+    preview = release_preview(manifest, previous_release=previous, release_root=args.release_root, release_id=args.release_id, link_mode=_normalized_link_mode(args.link_mode))
     outputs = write_release_preview_outputs(args.out_dir, preview)
     html = args.html or str(Path(args.out_dir) / "index.html")
     write_effective_report(manifest, preview, html)
@@ -168,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--release-preview")
     p.add_argument("--release-root", default="release_area")
     p.add_argument("--release-id")
-    p.add_argument("--link-mode", choices=["link", "copy"], default="link")
+    p.add_argument("--link-mode", choices=["link", "symlink", "copy"], default="link")
     p.set_defaults(func=cmd_build)
 
     p = sub.add_parser("add", help="Add one update to an existing effective manifest")
@@ -184,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--previous-release")
     p.add_argument("--release-root", default="release_area")
     p.add_argument("--release-id")
-    p.add_argument("--link-mode", choices=["link", "copy"], default="link")
+    p.add_argument("--link-mode", choices=["link", "symlink", "copy"], default="link")
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("release-preview", help="Generate release manifest/delta from effective manifest")
@@ -192,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--previous-release")
     p.add_argument("--release-root", default="release_area")
     p.add_argument("--release-id")
-    p.add_argument("--link-mode", choices=["link", "copy"], default="link")
+    p.add_argument("--link-mode", choices=["link", "symlink", "copy"], default="link")
     p.add_argument("--out-dir", required=True)
     p.add_argument("--html")
     p.set_defaults(func=cmd_release_preview)

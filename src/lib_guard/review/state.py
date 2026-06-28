@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from .commands import derive_next_action
 from .io import read_json, utc_now
+from .overrides import apply_overrides_to_gate, read_review_overrides
 
 
 def _versions(lib: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -210,6 +211,212 @@ def _safe_name(value: Any) -> str:
     return text or "item"
 
 
+def _review_root_for_out(out_dir: str | Path | None) -> Path | None:
+    if not out_dir:
+        return None
+    out = Path(out_dir)
+    if out.name == "html" and out.parent.name == "catalog":
+        return out.parent.parent / "review"
+    if out.name == "catalog":
+        return out.parent / "review"
+    return out / "review"
+
+
+def review_paths_for_version(out_dir: str | Path | None, lib_name: str, version_id: str) -> dict[str, str]:
+    safe_lib = _safe_name(lib_name)
+    safe_ver = _safe_name(version_id)
+    relative = Path("review") / safe_lib / safe_ver
+    root = _review_root_for_out(out_dir)
+    if root is None:
+        base = relative
+    else:
+        base = root / safe_lib / safe_ver
+    return {
+        "override_file": str(base / "review_overrides.json"),
+        "gate_file": str(base / "review_gate.json"),
+    }
+
+
+def _gate_item(
+    item_id: str,
+    *,
+    category: str,
+    title: str,
+    message: str,
+    severity: str = "blocker",
+    source: str = "",
+    fatal: bool = False,
+    file: str | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "id": item_id,
+        "severity": severity,
+        "category": category,
+        "title": title,
+        "message": message,
+        "blocking": severity.lower() in {"blocker", "error"},
+        "fatal": fatal,
+    }
+    if source:
+        result["source"] = source
+    if file:
+        result["file"] = file
+    return result
+
+
+def _metadata_gate_items(diff_dir: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    if not diff_dir:
+        return []
+    diff = Path(diff_dir)
+    payload = read_json(diff / "metadata_review_tasks.json", {}) or {}
+    tasks = payload.get("tasks") if isinstance(payload, Mapping) else []
+    items: list[dict[str, Any]] = []
+    for task in list(tasks or [])[:limit]:
+        if not isinstance(task, Mapping):
+            continue
+        file_type = str(task.get("file_type") or "metadata")
+        path = str(task.get("path") or "")
+        change_type = str(task.get("change_type") or "changed")
+        item_id = f"metadata.{file_type}.{change_type}:{path or task.get('task_id')}"
+        items.append(
+            _gate_item(
+                item_id,
+                category="metadata_only",
+                title="Metadata-only view changed",
+                message="Binary/metadata-only view changed; human acceptance is required for current.",
+                source=str(diff / "metadata_review_tasks.json"),
+                file=path,
+            )
+        )
+    if items:
+        return items
+
+    issues = read_json(diff / "diff_issues.json", {}) or {}
+    for idx, issue in enumerate(list((issues.get("issues") if isinstance(issues, Mapping) else []) or [])[:limit], start=1):
+        if not isinstance(issue, Mapping):
+            continue
+        title = str(issue.get("title") or "")
+        category = str(issue.get("category") or "")
+        if "metadata" not in title.lower() and "metadata" not in category.lower():
+            continue
+        path = str(issue.get("file") or issue.get("path") or f"issue_{idx}")
+        items.append(
+            _gate_item(
+                f"metadata.review:{path}",
+                category="metadata_only",
+                title=title or "Metadata-only change needs review",
+                message=str(issue.get("message") or "Human acceptance is required for current."),
+                source=str(diff / "diff_issues.json"),
+                file=path,
+            )
+        )
+    return items
+
+
+def build_review_gate_for_version(
+    version: Mapping[str, Any],
+    *,
+    gate: str = "current",
+    overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    version_id = str(version.get("version_id") or version.get("version_key") or "unknown")
+    lib_name = str(version.get("display_name") or version.get("library_name") or version.get("library_id") or "unknown")
+    blocking_items: list[dict[str, Any]] = []
+    attention_items: list[dict[str, Any]] = []
+
+    catalog_status = str(version.get("catalog_status") or "")
+    if catalog_status in {"NEED_CONFIRM", "UNKNOWN_STAGE"}:
+        blocking_items.append(
+            _gate_item(
+                f"catalog.relation:{version_id}",
+                category="catalog_trust",
+                title="Catalog relation needs confirmation",
+                message="Version stage, parent, base, or package relation is not trusted yet.",
+            )
+        )
+
+    scan_status = str(version.get("scan_status") or "")
+    if scan_status in {"SCAN_BLOCK", "SCAN_FAILED"}:
+        blocking_items.append(
+            _gate_item(
+                f"scan.fatal:{version_id}",
+                category="scan",
+                title="Scan is blocked or failed",
+                message=f"scan_status={scan_status}",
+                fatal=True,
+            )
+        )
+
+    diff_status = str(version.get("diff_status") or "")
+    if diff_status in {"DIFF_BLOCK", "DIFF_FAILED"}:
+        blocking_items.append(
+            _gate_item(
+                f"diff.fatal:{version_id}",
+                category="diff",
+                title="Diff is blocked or failed",
+                message=f"diff_status={diff_status}",
+                fatal=True,
+            )
+        )
+
+    release_status = str(version.get("release_status") or "")
+    if release_status in {"RELEASE_BLOCKED", "RELEASE_VERIFY_FAILED"}:
+        blocking_items.append(
+            _gate_item(
+                f"release.fatal:{version_id}",
+                category="release",
+                title="Release evidence is blocked or failed",
+                message=f"release_status={release_status}",
+                fatal=True,
+            )
+        )
+
+    blocking_items.extend(_metadata_gate_items(_diff_dir(version)))
+
+    pairwise_status = str(version.get("pairwise_status") or "")
+    pairwise_summary = version.get("pairwise_summary") or {}
+    if pairwise_status in {"PAIRWISE_PENDING", "PAIRWISE_PARTIAL"}:
+        attention_items.append(
+            {
+                "id": f"pairwise.recommended:{version_id}",
+                "severity": "attention",
+                "category": "file_diff",
+                "title": "Focused File Diff recommended",
+                "message": "Selected Diff recommends pairwise File Diff for focused review; this does not block current by default.",
+                "blocking": False,
+                "pending": int((pairwise_summary or {}).get("pending", 0) or 0),
+                "total": int((pairwise_summary or {}).get("total", 0) or 0),
+            }
+        )
+    elif pairwise_status == "PAIRWISE_FAILED":
+        attention_items.append(
+            {
+                "id": f"pairwise.failed:{version_id}",
+                "severity": "warning",
+                "category": "file_diff",
+                "title": "Focused File Diff failed",
+                "message": "A recommended File Diff run failed; rerun it if this evidence is needed.",
+                "blocking": False,
+            }
+        )
+
+    status = "REVIEW_REQUIRED" if blocking_items else "ATTENTION" if attention_items else "READY"
+    result = {
+        "schema_version": "review_gate.v1",
+        "library": lib_name,
+        "version": version_id,
+        "gate": gate,
+        "status": status,
+        "blocking_open": len(blocking_items),
+        "attention_count": len(attention_items),
+        "blocking_items": blocking_items,
+        "attention_items": attention_items,
+        "accepted_items": [],
+        "waived_items": [],
+    }
+    return apply_overrides_to_gate(result, overrides)
+
+
 def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None = None) -> dict[str, Any]:
     libraries = []
     for lib in catalog.get("libraries", []) or []:
@@ -254,6 +461,12 @@ def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None
                 "pairwise_tasks": pairwise_tasks,
                 "release_result": _release_result(version),
             }
+            review_paths = review_paths_for_version(out_dir, lib_name, version_id)
+            overrides = read_review_overrides(review_paths["override_file"])
+            review_gate = build_review_gate_for_version(item, gate="current", overrides=overrides)
+            review_gate["override_file"] = review_paths["override_file"]
+            review_gate["gate_file"] = review_paths["gate_file"]
+            item["review_gate"] = review_gate
             item.update(derive_next_action(item))
             versions.append(item)
         latest = versions[-1]["version_id"] if versions else None

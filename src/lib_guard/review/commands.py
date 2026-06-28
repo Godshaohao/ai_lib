@@ -43,7 +43,7 @@ def derive_next_action(version: Mapping[str, Any]) -> dict[str, Any]:
         return {
             "next_action": "RUN_PAIRWISE",
             "next_command": str((task or {}).get("command") or ""),
-            "next_reason": "diff 发现内容级文件变化，release 前建议完成 pairwise file-diff。",
+            "next_reason": "diff 推荐做 focused File Diff；这是 attention，不默认阻塞 current release。",
         }
     if version.get("release_status") == "RELEASE_READY":
         return {

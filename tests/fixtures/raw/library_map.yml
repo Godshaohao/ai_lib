@@ -1,0 +1,82 @@
+libraries:
+  vendor_A.openroad_platform.openroad_asap7:
+    root: vendor_A/openroad_asap7
+    display_name: OpenROAD ASAP7
+    vendor: vendor_A
+    category: openroad_platform
+    library_type: ip
+    aliases:
+      - openroad_asap7
+      - asap7
+  vendor_A.openroad_platform.openroad_gf180:
+    root: vendor_A/openroad_gf180
+    display_name: OpenROAD GF180
+    vendor: vendor_A
+    category: openroad_platform
+    library_type: ip
+    aliases:
+      - openroad_gf180
+      - gf180
+  vendor_A.openroad_platform.openroad_nangate45:
+    root: vendor_A/openroad_nangate45
+    display_name: OpenROAD Nangate45
+    vendor: vendor_A
+    category: openroad_platform
+    library_type: ip
+    aliases:
+      - openroad_nangate45
+      - nangate45
+  vendor_B.openroad_platform.openroad_gt2n:
+    root: vendor_B/openroad_gt2n
+    display_name: OpenROAD GT2N
+    vendor: vendor_B
+    category: openroad_platform
+    library_type: ip
+    aliases:
+      - openroad_gt2n
+      - gt2n
+  vendor_B.openroad_platform.openroad_ihp_sg13g2:
+    root: vendor_B/openroad_ihp_sg13g2
+    display_name: OpenROAD IHP SG13G2
+    vendor: vendor_B
+    category: openroad_platform
+    library_type: ip
+    aliases:
+      - openroad_ihp_sg13g2
+      - ihp-sg13g2
+  vendor_B.openroad_platform.openroad_sky130hd:
+    root: vendor_B/openroad_sky130hd
+    display_name: OpenROAD Sky130HD
+    vendor: vendor_B
+    category: openroad_platform
+    library_type: ip
+    aliases:
+      - openroad_sky130hd
+      - sky130hd
+  vendor_C.openroad_platform.openroad_sky130hs:
+    root: vendor_C/openroad_sky130hs
+    display_name: OpenROAD Sky130HS
+    vendor: vendor_C
+    category: openroad_platform
+    library_type: ip
+    aliases:
+      - openroad_sky130hs
+      - sky130hs
+  vendor_C.openroad_platform.openroad_sky130io:
+    root: vendor_C/openroad_sky130io
+    display_name: OpenROAD Sky130IO
+    vendor: vendor_C
+    category: openroad_platform
+    library_type: ip
+    aliases:
+      - openroad_sky130io
+      - sky130io
+  vendor_C.openroad_platform.openroad_sky130ram:
+    root: vendor_C/openroad_sky130ram
+    display_name: OpenROAD Sky130RAM
+    vendor: vendor_C
+    category: openroad_platform
+    library_type: ip
+    aliases:
+      - openroad_sky130ram
+      - sky130ram

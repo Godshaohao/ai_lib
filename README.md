@@ -1,149 +1,90 @@
 # ai_lib / lib_guard
 
-`lib_guard` is a catalog-driven library asset management toolkit for IC library/IP delivery review.
+`lib_guard` is a catalog-driven review toolkit for IC library and IP delivery.
+It discovers raw delivery trees, scans selected versions, compares version
+updates, renders review HTML, and prepares release evidence.
 
-The current workflow focuses on:
-
-- Discovering libraries and version chains from RAW delivery trees.
-- Running lightweight catalog refresh before deeper scan work.
-- Scanning selected versions for inventory, required views, documentation evidence, readiness, and parser quality.
-- Comparing adjacent or selected versions with structural diff reports.
-- Supporting recommended pairwise file diff for LEF, Liberty, Verilog, CDL, SDC, UPF, CPF, SPEF, DB, waiver, IBIS, PWL, SNP, and CPM views.
-- Preparing release checks and file-level release link/verify manifests.
-- Rendering catalog, scan, diff, file-diff, and release HTML for review.
-
-## Current v5/v6 Review Flow
-
-The current review UI uses a guided navigation model:
+## Current Workflow
 
 ```text
-Catalog -> Library Version Timeline -> Version Review / Selected Diff -> recommended File Diff
+Catalog -> Library Workspace -> Version Review -> Comparison Review -> File Diff -> Release
 ```
 
-- Catalog is the asset map and report hub. It no longer expands direct File Diff commands.
-- A library has one mixed timeline. Raw deliveries and composed effective nodes are not separated into two version systems.
-- Version Review is the raw single-version detail page. Its first section is `更新详情（vs <previous_effective>）`, combining release_note/changelog text with the automatic diff summary for the current version.
-- Full packages use full compare semantics against the previous effective baseline. Partial, hotfix, and scoped update packages use incremental compare semantics, so files missing from the package are not treated as deletes.
-- Version Review also embeds scan inventory, Count-only + Corner Summary, parser-backed evidence summaries, and pre-diff readiness instead of sending normal reviewers to a separate scan page.
-- Page labels such as `Parser Summary`, `Diff Summary`, and `Corner Summary` mean HTML evidence summaries. They do not reintroduce the legacy standalone `summary rebuild` step.
-- Each timeline node carries `node_kind` (`raw`, `effective`, or `release`) and `package_type` (`full`, `partial`, `hotfix`, `doc`, `composed`, or `unknown`).
-- `latest_effective_ref` points to the current usable node. It can point directly to a full raw package or to an effective composed manifest.
-- Full raw packages can become the latest effective library without generating a duplicate effective node.
-- Partial raw packages stay as timeline events. They become `accepted` only when included by an effective composed node; otherwise they remain `pending_review`.
-- Selected Diff is the review surface for one comparison. It shows structural domains, release evidence changes, and the "key File Diff recommendation" queue.
-- File Diff is a recommendation model, not a completion scoreboard. The UI no longer shows `File Diff 2/5` or `done/total`.
-- Large or ambiguous comparisons first ask the reviewer to confirm base/comparison context. They do not generate a full File Diff command batch.
-- File Diff HTML shows structured field changes, raw text fallback, and best-effort source location from parser evidence.
+- Catalog is the asset map and report hub.
+- Library Workspace shows the version timeline for one library.
+- Version Review combines release notes, scan evidence, parser summaries,
+  count-only/corner summaries, readiness, and embedded diff evidence.
+- Comparison Review shows structural changes between a selected base and update.
+- File Diff is a focused downstream review for selected files, not a progress
+  scoreboard.
+- Review Gate records only real blockers and owner accept/waive decisions. It is
+  not a multi-department approval workflow.
+- Release commands use manifest-driven file-level symlink by default and build
+  link/verify evidence only after scan and comparison evidence is available.
 
-Desktop UI command policy:
+The normal daily interface is the short command wrapper in `scripts/lg.csh`,
+`scripts/lg.ps1`, or `scripts/lg.cmd`. The lower-level `python -m lib_guard.cli`
+entry remains available for debugging and automation.
 
-- Catalog command examples use `cat`, `scan`, `cmp`, and `rel`.
-- Scan "next action" uses `cmp ... --scan-if-missing`, not the older `lg diff ...` text.
-- Library Workspace shows `Library Version Timeline` as the primary organization, not separate Raw Sources and Effective Versions sections.
-- Version Review shows scan evidence directly. Standalone `scan_html` output may remain as compatibility/debug evidence, but it is not the normal Catalog/Version navigation target.
-- Selected Diff and Effective Compare expose File Diff commands only as focused recommendations using `fd ... --base ... --type ...`.
-- Generated HTML should not show the old completion wording `File Diff 2/5` or `done/total`.
-- Generated HTML should not expose low-level `python -m lib_guard.cli file-diff ...` commands except inside JSON/debug evidence.
+## Repository Map
 
-Key v6 parser/diff additions:
+```text
+configs/                 Current catalog and release policies
+docs/                    Current documentation and archived migration notes
+scripts/                 Thin user-facing wrappers
+examples/                Copyable action/file examples
+src/lib_guard/           Product source
+src/lib_guard/test/      Active automated tests
+tests/                   Integration fixtures and repository-level notes
+work/                    Generated local output, not source of truth
+```
 
-- Liberty now extracts `is_macro`, `is_pad`, and cell attribute lines.
-- SDC/UPF keep command counts and add semantic fields for clocks, uncertainty, loads, power domains, supplies, isolation, retention, and level shifters.
-- Waiver, IBIS, PWL, SNP/Touchstone, and CPM are available through scan parsers and the pairwise `file-diff` CLI.
-- Scan defaults use `candidate` evidence mode for normal review: lightweight key files run parsers for Version Review, while `.lib/.lib.gz`, `.db`, `.spef`, and layout/binary views stay Count-only inventory with count, type, path, and filename corner summary.
-- Compatibility modes still exist for debugging: `quick` / `inventory` skip parser work, `signature` builds signatures without parser content, and `release` / `diff` / `refresh` / `full` keep parser-enabled behavior for deeper workflows.
-- Parser Summary rows expose a folded `Parser Details` section with up to the first 10 extracted objects per parser so reviewers can inspect real extracted content without turning the page into a raw dump.
+Historical migration notes and workflow-pack material live under
+`docs/archive/`. They are not part of the current operating path.
 
-## Workflow Pack Integration
-
-This repository has absorbed the useful parts of `pd_agent_workflow_pack`:
-
-- `AGENT.md` defines the agent working rules and source-of-truth boundaries.
-- `docs/00_index.md` is the project navigation entry.
-- `docs/01_product_scope.md` captures lib_guard-specific product scope and users.
-- `docs/02_data_rule_contract.md` through `docs/06_manual_test_flow.md` document data, engineering, UI, handoff, and manual testing.
-- `flows/` keeps the reusable MVP, engineering, memory refresh, and UI iteration flows.
-- `scripts/build_ui_context.py` and `scripts/render_dashboard.py` remain generic workflow helpers for CSV-based UI experiments.
-
-Generated HTML under `work/` or `reports/` is output, not source of truth.
-
-## Common Commands
-
-Preferred short commands:
+## Common csh Commands
 
 ```csh
-setenv PROJ /path/to/ai_lib
+setenv PROJ /path/to/ai_lib/repo
 setenv WORK $PROJ/work/review
 setenv RAW  /path/to/raw_delivery
 
-$PROJ/scripts/lg.csh init $WORK --raw-root $RAW
-cd $WORK
-
-$PROJ/scripts/lg.csh cat
+$PROJ/scripts/lg.csh init $WORK --raw-root $RAW --library-type ip
+$PROJ/scripts/lg.csh cat --full --with-evidence
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
-$PROJ/scripts/lg.csh refresh <LIBRARY>
-$PROJ/scripts/lg.csh refresh --all
-$PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> lef/<FILE>.lef --base <BASE_VERSION>
-$PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> model/<FILE>.ibs --base <BASE_VERSION>
-$PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> touch/<FILE>.s2p --type snp --base <BASE_VERSION>
-$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first
+$PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --rescan
+$PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> --base <BASE_VERSION> --type <FILE_TYPE>
+$PROJ/scripts/lg.csh rv-check <LIBRARY> <VERSION> --gate current
+$PROJ/scripts/lg.csh rv-accept <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 ```
 
-Short aliases are intended for daily csh use:
-
-```text
-cat -> catalog
-cmp -> diff
-fd  -> file-diff
-rf  -> refresh
-rel -> release
-```
-
-Use `--dry-run` before expensive work:
+If `$WORK/lib_guard.yml` exists, `lg.csh` will use it automatically. You can
+also point at a config explicitly:
 
 ```csh
-$PROJ/scripts/lg.csh --dry-run cmp <LIBRARY> <VERSION> --base <BASE_VERSION>
-$PROJ/scripts/lg.csh --dry-run refresh --all
-$PROJ/scripts/lg.csh --dry-run fd <LIBRARY> <VERSION> waiver/<FILE>.waiver --base <BASE_VERSION>
+setenv LIB_GUARD_CONFIG $WORK/lib_guard.yml
 ```
 
-The short CLI still resolves paths from `catalog.json`; do not pass paths relative to `$RAW`.
-`refresh` resolves the current/latest raw version already known by `catalog.json`, then runs `compare --scan-if-missing` so the Version Review update-detail diff is rebuilt. Run `cat` first when new RAW directories must be discovered.
-`file-diff` relpaths are relative to the selected version root and support:
-`lef`, `liberty`, `verilog`, `cdl`, `sdc`, `upf`, `cpf`, `spef`, `db`, `waiver`, `ibis`, `pwl`, `snp`, and `cpm`.
+## Low-Level Commands
 
-Low-level commands remain useful for debugging:
-
-```powershell
-$env:PYTHONPATH='src'
-$PY='C:\Users\Polaris\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-
-& $PY -m lib_guard.cli catalog scan --root <RAW_ROOT> --out <WORK>\catalog --render --html-out <WORK>\catalog\html --policy configs\catalog_policy.json
-& $PY -m lib_guard.cli run-batch --catalog <WORK>\catalog\catalog.json --mode candidate --workdir <WORK> --parse-jobs 8
-& $PY -m lib_guard.cli compare --catalog <WORK>\catalog\catalog.json --library <LIBRARY> --new <VERSION> --workdir <WORK>
-& $PY -m lib_guard.cli file-diff sdc --old <OLD.sdc> --new <NEW.sdc> --out <WORK>\file_diff\sdc_case
-& $PY -m unittest discover -s src\lib_guard\test -p 'test*.py'
+```bash
+PYTHONPATH=src python -m lib_guard.cli catalog scan --root "$RAW" --out "$WORK/catalog" --render --html-out "$WORK/catalog/html" --policy configs/catalog_policy.json
+PYTHONPATH=src python -m lib_guard.cli run-batch --catalog "$WORK/catalog/catalog.json" --mode candidate --workdir "$WORK" --parse-jobs 8
+PYTHONPATH=src python -m lib_guard.cli compare --catalog "$WORK/catalog/catalog.json" --library <LIBRARY> --new <VERSION> --base <BASE_VERSION> --workdir "$WORK"
+PYTHONPATH=src python -m unittest discover -s src/lib_guard/test -p "test*.py"
 ```
 
-For shell wrappers, see `scripts/lg.csh`, `scripts/lg.ps1`, and `scripts/lg.cmd`.
+## Documentation
 
-## Latest Desktop UI Verification
-
-The desktop review smoke set covers:
-
-```text
-catalog/html/index.html
-scan_html/index.html
-diff_html/index.html
-effective_E3.html
-compare_E2_vs_E3/index.html
-release_preview/index.html
-release_html/index.html
-```
-
-The current audit checks for:
-
-- no stale `lg diff`, `lg.csh file-diff`, or `python -m lib_guard.cli file-diff` in user-facing HTML;
-- no placeholder/debug copy such as `TODO`, `TBD`, `FIXME`, `Lorem ipsum`, `File Diff 2/5`, or `done/total`;
-- desktop layout readability at 1440 px width, including long path/version truncation and scrollable tables.
+- [Documentation index](docs/index.md)
+- [Command surface](docs/command_surface.md)
+- [Manual confirmation and action flow](docs/manual_confirmation_action.md)
+- [Architecture](docs/architecture.md)
+- [User guide](docs/user_guide.md)
+- [CLI reference](docs/cli_reference.md)
+- [Data contract](docs/data_contract.md)
+- [Review gate](docs/review_gate.md)
+- [Test plan](docs/test_plan.md)
+- [Compatibility](docs/compatibility.md)

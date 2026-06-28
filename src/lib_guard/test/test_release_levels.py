@@ -10,7 +10,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
-def _scan(root: Path, out: Path, *, mode: str, version: str = "v1") -> None:
+def _scan(root: Path, out: Path, *, mode: str, version: str = "v1", parse_file_types: list[str] | None = None) -> None:
     from lib_guard.scan.scanner import ScanRunner
 
     ScanRunner(
@@ -29,6 +29,7 @@ def _scan(root: Path, out: Path, *, mode: str, version: str = "v1") -> None:
             no_progress=True,
             progress_interval=1,
             parse_jobs=1,
+            parse_file_types=parse_file_types,
             tool_version="0.5.0",
             schema_version="1.0",
         )
@@ -127,7 +128,17 @@ class ReleaseLevelTest(unittest.TestCase):
             (root / "README.md").write_text("demo readme\n", encoding="utf-8")
             (root / "release_note.txt").write_text("release note for v1\n", encoding="utf-8")
 
-            _scan(root, scan, mode="signature")
+            _scan(root, scan, mode="signature", parse_file_types=["verilog"])
+            from lib_guard.summary.readiness import DEFAULT_VALIDATION_LEVELS, build_release_readiness
+
+            strict_policy = {
+                "required_views": {"ip": ["verilog"]},
+                "validation_levels": {**DEFAULT_VALIDATION_LEVELS, "verilog": "parsed_required"},
+            }
+            (scan / "summary" / "release_readiness.json").write_text(
+                json.dumps(build_release_readiness(scan, policy_path=strict_policy), indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
             _write_diff(diff, diff_level="P2")
 
             from lib_guard.release.checker import check_release_scan

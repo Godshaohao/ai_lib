@@ -109,8 +109,8 @@ def _moved_files(old_items: dict[str, dict[str, Any]], new_items: dict[str, dict
 def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
     old_files = _inventory_index(old_scan)
     new_files = _inventory_index(new_scan)
-    added = sorted(set(new_files) - set(old_files))
-    removed = sorted(set(old_files) - set(new_files))
+    raw_added = set(new_files) - set(old_files)
+    raw_removed = set(old_files) - set(new_files)
     changed = _changed_files(old_files, new_files)
     metadata_only = []
     for key in changed:
@@ -119,6 +119,10 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
         if old.get("hash") == new.get("hash") and old.get("size_bytes") == new.get("size_bytes"):
             metadata_only.append(key)
     moved = _moved_files(old_files, new_files)
+    moved_old = {str(item.get("old")) for item in moved if item.get("old")}
+    moved_new = {str(item.get("new")) for item in moved if item.get("new")}
+    added = sorted(raw_added - moved_new)
+    removed = sorted(raw_removed - moved_old)
     unchanged = sorted((set(old_files) & set(new_files)) - set(changed))
     return {
         "schema_version": "1.0",
@@ -169,11 +173,19 @@ def _type_diff(file_diff: Mapping[str, Any]) -> dict[str, Any]:
         changed_by_type[str(item.get("file_type", "unknown"))] += 1
     by_type: dict[str, Any] = {}
     changed_types = 0
+    added_paths = set(file_diff.get("added") or [])
+    removed_paths = set(file_diff.get("removed") or [])
+    moved_by_type: Counter[str] = Counter()
+    for item in file_diff.get("renamed_or_moved", []) or []:
+        new_path = str((item or {}).get("new") or "")
+        old_path = str((item or {}).get("old") or "")
+        entry = new_items.get(new_path) or old_items.get(old_path) or {}
+        moved_by_type[str(entry.get("file_type", "unknown"))] += 1
     for file_type in sorted(set(old_counts) | set(new_counts) | set(changed_by_type)):
-        added = sorted(new_by_type.get(file_type, set()) - old_by_type.get(file_type, set()))
-        removed = sorted(old_by_type.get(file_type, set()) - new_by_type.get(file_type, set()))
+        added = sorted(path for path in added_paths if str((new_items.get(path) or {}).get("file_type", "unknown")) == file_type)
+        removed = sorted(path for path in removed_paths if str((old_items.get(path) or {}).get("file_type", "unknown")) == file_type)
         changed = [p for p in file_diff.get("changed", []) or [] if str((new_items.get(p) or old_items.get(p) or {}).get("file_type", "unknown")) == file_type]
-        changed_flag = bool(added or removed or changed or old_counts[file_type] != new_counts[file_type])
+        changed_flag = bool(added or removed or changed or old_counts[file_type] + moved_by_type[file_type] != new_counts[file_type] + moved_by_type[file_type])
         if changed_flag:
             changed_types += 1
         by_type[file_type] = {
@@ -182,6 +194,7 @@ def _type_diff(file_diff: Mapping[str, Any]) -> dict[str, Any]:
             "added_count": len(added),
             "removed_count": len(removed),
             "changed_count": len(changed),
+            "moved_count": moved_by_type[file_type],
             "added": added[:50],
             "removed": removed[:50],
             "changed": changed[:50],
@@ -578,6 +591,7 @@ def _diff_summary(
         "added_files": file_diff["counts"]["added"],
         "removed_files": file_diff["counts"]["removed"],
         "changed_files": file_diff["counts"]["changed"],
+        "renamed_or_moved": file_diff["counts"].get("renamed_or_moved", 0),
         "added_components": component_diff["counts"]["added"],
         "removed_components": component_diff["counts"]["removed"],
         "changed_components": component_diff["counts"]["changed"],

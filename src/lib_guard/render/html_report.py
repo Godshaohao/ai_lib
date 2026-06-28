@@ -23,7 +23,7 @@ CONSTRAINT_TYPES = {"sdc", "spef"}
 POWER_TYPES = {"upf", "cpf"}
 LAYOUT_TYPES = {"gds", "oas", "layout", "milkyway"}
 BINARY_METADATA_TYPES = {"db", "gds", "oas", "milkyway", "layout"}
-COUNT_ONLY_TYPES = {"liberty", "lib", "db", "spef", "gds", "oas", "milkyway", "layout"}
+COUNT_ONLY_TYPES = {"liberty", "lib", "db", "spef", "gds", "oas", "milkyway", "layout", "verilog"}
 DOC_TYPES = {"doc", "package", "waiver", "readme", "release_note", "update_note", "changelog", "known_issue", "integration_guide"}
 FILE_DIFF_TYPES = {"lef", "liberty", "lib", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db"}
 CORE_VIEW_TYPES = ["lef", "liberty", "verilog"]
@@ -151,7 +151,7 @@ def _type_meaning(file_type: str) -> str:
         "lef": "Parsed by default. Summarizes macro, pin, layer, OBS, and geometry hints.",
         "liberty": "Count-only by default. Corner hints come from file names; content parsing is opt-in.",
         "lib": "Count-only by default. Corner hints come from file names; content parsing is opt-in.",
-        "verilog": "Parsed by default. Summarizes module, port, and define structure.",
+        "verilog": "Count-only by default in normal review. Use opt-in parser or File Diff for focused RTL/interface checks.",
         "cdl": "Parsed by default. Summarizes subckt, pin, and instance structure.",
         "sdc": "Parsed by default. Summarizes clocks, groups, uncertainty, and load-like constraints.",
         "upf": "Parsed by default. Summarizes power domains, supplies, isolation, and related commands.",

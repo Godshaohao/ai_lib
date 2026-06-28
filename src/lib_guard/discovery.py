@@ -97,6 +97,12 @@ def _resolve_map_path(policy: Mapping[str, Any], policy_path: str | Path | None)
     return path
 
 
+def _library_map_value(policy: Mapping[str, Any]) -> str | None:
+    discovery = policy.get("discovery") if isinstance(policy.get("discovery"), Mapping) else {}
+    raw_value = discovery.get("library_map") or policy.get("library_map")
+    return str(raw_value) if raw_value else None
+
+
 def _resolve_library_root(raw_root: Path, map_path: Path, value: str) -> Path:
     path = Path(value)
     if path.is_absolute():
@@ -113,6 +119,13 @@ def load_library_map(raw_root: str | Path, policy: Mapping[str, Any], policy_pat
     if not map_path:
         return []
     map_path = map_path.resolve()
+    raw_value = _library_map_value(policy)
+    if not map_path.exists() and raw_value:
+        raw_relative = Path(raw_value)
+        if not raw_relative.is_absolute():
+            raw_candidate = (raw / raw_relative).resolve()
+            if raw_candidate.exists():
+                map_path = raw_candidate
     data = _load_mapping_file(map_path)
     libraries = data.get("libraries") if isinstance(data.get("libraries"), Mapping) else {}
     refs: list[LibraryRef] = []

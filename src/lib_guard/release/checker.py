@@ -42,6 +42,8 @@ class ReleaseChecker:
         out_dir: str | Path | None = None,
         diff_dir: str | Path | None = None,
         alias: str | None = None,
+        review_gate: Mapping[str, Any] | None = None,
+        review_gate_path: str | Path | None = None,
     ) -> dict[str, Any]:
         scan = Path(scan_dir)
         out = Path(out_dir) if out_dir else scan / "release"
@@ -105,7 +107,8 @@ class ReleaseChecker:
 
         diff_gate = self._check_diff_gate(diff_dir)
         issues.extend(diff_gate.get("issues", []))
-        alias_gate = self._check_alias_gate(alias, release_readiness, diff_gate)
+        review_gate_data = self._load_review_gate(review_gate=review_gate, review_gate_path=review_gate_path)
+        alias_gate = self._check_alias_gate(alias, release_readiness, diff_gate, review_gate_data)
         for reason in alias_gate.get("block_reasons", []):
             issues.append(_issue("blocker", "alias_gate", reason, f"alias={alias}"))
 
@@ -137,6 +140,7 @@ class ReleaseChecker:
             },
             "release_readiness": release_readiness,
             "diff_gate": diff_gate,
+            "review_gate": review_gate_data,
             **alias_gate,
             "issues": issues,
         }
@@ -150,7 +154,35 @@ class ReleaseChecker:
             pass
         return result
 
-    def _check_alias_gate(self, alias: str | None, release_readiness: Mapping[str, Any], diff_gate: Mapping[str, Any]) -> dict[str, Any]:
+    def _load_review_gate(
+        self,
+        *,
+        review_gate: Mapping[str, Any] | None = None,
+        review_gate_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        if review_gate is not None:
+            return dict(review_gate)
+        if review_gate_path:
+            loaded = _load_json(Path(review_gate_path), {})
+            if isinstance(loaded, dict):
+                loaded.setdefault("gate_file", str(review_gate_path))
+                return loaded
+        return {
+            "schema_version": "review_gate.v1",
+            "status": "NOT_PROVIDED",
+            "blocking_open": 0,
+            "attention_count": 0,
+            "blocking_items": [],
+            "attention_items": [],
+        }
+
+    def _check_alias_gate(
+        self,
+        alias: str | None,
+        release_readiness: Mapping[str, Any],
+        diff_gate: Mapping[str, Any],
+        review_gate: Mapping[str, Any],
+    ) -> dict[str, Any]:
         diff_summary = diff_gate.get("summary") if isinstance(diff_gate, Mapping) else {}
         diff_summary = diff_summary if isinstance(diff_summary, Mapping) else {}
         diff_level = str(diff_summary.get("diff_level") or release_readiness.get("diff_level") or "NONE")
@@ -179,6 +211,14 @@ class ReleaseChecker:
             block_reasons.append(f"{alias} requires P2 deep diff")
         if gate.get("require_manual_review_closed") and release_readiness.get("manual_review_items"):
             block_reasons.append(f"{alias} requires manual review closed")
+        if gate.get("require_review_gate_closed") and int(review_gate.get("blocking_open", 0) or 0) > 0:
+            block_reasons.append(f"{alias} requires review gate closed")
+        if gate.get("require_pairwise_done"):
+            for item in review_gate.get("attention_items", []) or []:
+                item_id = str((item or {}).get("id") or "")
+                if item_id.startswith("pairwise."):
+                    block_reasons.append(f"{alias} requires pairwise file diff complete")
+                    break
         if not gate.get("allow_warning", True) and release_readiness.get("bundle_status") == "PASS_WITH_WARNING":
             block_reasons.append(f"{alias} does not allow release warnings")
 
@@ -223,5 +263,14 @@ def check_release_scan(
     policy_path: str | Path | None = None,
     diff_dir: str | Path | None = None,
     alias: str | None = None,
+    review_gate_path: str | Path | None = None,
+    review_gate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return ReleaseChecker(ReleasePolicy.from_file(policy_path)).check(scan_dir, out_dir, diff_dir=diff_dir, alias=alias)
+    return ReleaseChecker(ReleasePolicy.from_file(policy_path)).check(
+        scan_dir,
+        out_dir,
+        diff_dir=diff_dir,
+        alias=alias,
+        review_gate=review_gate,
+        review_gate_path=review_gate_path,
+    )

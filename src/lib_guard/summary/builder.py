@@ -87,7 +87,8 @@ def atomic_write_text(path: str | Path, text: str) -> None:
 def load_policy(policy_path: str | Path | None) -> dict[str, Any]:
     if not policy_path:
         return {"affected_summary_map": DEFAULT_AFFECTED_SUMMARY_MAP}
-    data = read_json(policy_path, default={}) or {}
+    path = Path(policy_path)
+    data = read_json(path, default={}) or {}
     data.setdefault("affected_summary_map", DEFAULT_AFFECTED_SUMMARY_MAP)
     return data
 
@@ -404,7 +405,7 @@ def rebuild_summary_from_scan(
             "release_readiness": str(summary_dir / "release_readiness.json"),
             "summary_report": str(summary_dir / "summary_report.md"),
         },
-        "note": "This command rebuilds v5 parser summaries plus dashboard/release input summaries from existing scan output.",
+        "note": "This command rebuilds parser summaries plus dashboard/release input summaries from existing scan output.",
     }
     atomic_write_json(summary_dir / "summary_rebuild.json", result)
     return result

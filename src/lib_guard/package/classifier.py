@@ -21,6 +21,8 @@ FILE_TYPE_TO_VIEW = {
     "doc": "doc",
     "waiver": "waiver",
     "package": "doc",
+    "flow_config": "flow",
+    "tech_config": "tech",
 }
 
 FULL_PACKAGE_REQUIRED_VIEWS = {
@@ -32,7 +34,7 @@ FULL_PACKAGE_REQUIRED_VIEWS = {
 }
 
 DOC_VIEWS = {"doc", "waiver"}
-CORE_VIEWS = {"rtl", "lef", "lib", "db", "gds", "oas", "cdl", "sdc", "upf", "cpf"}
+CORE_VIEWS = {"rtl", "lef", "lib", "db", "gds", "oas", "cdl", "sdc", "upf", "cpf", "flow", "tech"}
 
 
 def file_type_to_view(file_type: str) -> str:
@@ -100,7 +102,8 @@ def classify_package(root: str | Path, *, library_type: str = "ip", limit: int =
     else:
         missing = []
 
-    scope = sorted(views, key=lambda v: ["rtl", "lef", "lib", "db", "gds", "oas", "cdl", "sdc", "upf", "cpf", "spef", "doc", "waiver"].index(v) if v in ["rtl", "lef", "lib", "db", "gds", "oas", "cdl", "sdc", "upf", "cpf", "spef", "doc", "waiver"] else 99)
+    view_order = ["rtl", "lef", "lib", "db", "gds", "oas", "cdl", "sdc", "upf", "cpf", "spef", "flow", "tech", "doc", "waiver"]
+    scope = sorted(views, key=lambda v: view_order.index(v) if v in view_order else 99)
     return {
         "schema_version": "1.0",
         "root": str(path),

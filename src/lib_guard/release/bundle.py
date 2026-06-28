@@ -29,12 +29,16 @@ VIEW_DIRS = {
     "docs",
     "waiver",
     "package",
+    "flow",
+    "tech",
 }
 
 FILE_TYPE_TO_VIEW = {
     "verilog": "rtl",
     "doc": "doc",
     "liberty": "lib",
+    "flow_config": "flow",
+    "tech_config": "tech",
 }
 
 
