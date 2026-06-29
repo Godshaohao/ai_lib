@@ -143,11 +143,11 @@ def _select_base(version: Mapping[str, Any]) -> tuple[str, str, str]:
     full_base = cr._base_full_version(version)
     if full_base:
         return "base_full", str(full_base), "base_full_version"
-    if diff_base:
-        return "recorded_base", str(diff_base), "diff.base_version:fallback"
     adjacent = diff.get("adjacent_old_version")
     if adjacent:
         return "adjacent_fallback", str(adjacent), "adjacent_old_version"
+    if diff_base:
+        return "recorded_base", str(diff_base), "diff.base_version:fallback"
     return "NEEDS_BASE_CONFIRM", "", "missing_base"
 
 
@@ -291,6 +291,16 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     metadata_only = [item for item in file_changes if item.get("review_lane") in {"Metadata-only", "Summary-only"}]
     commands = _file_diff_commands(lib, version, base_version, file_changes)
     md_path = out_path / "libraries" / safe_lib / "versions" / safe_ver / "current_lib_diff.md"
+    trace_links = {
+        "diff_summary": str(diff_dir / "diff_summary.json") if diff_dir else "",
+        "file_diff": str(diff_dir / "file_diff.json") if diff_dir else "",
+        "view_diff": str(diff_dir / "view_diff.json") if diff_dir else "",
+        "type_diff": str(diff_dir / "type_diff.json") if diff_dir else "",
+        "release_readiness_diff": str(diff_dir / "release_readiness_diff.json") if diff_dir else "",
+        "release_evidence_diff": str(diff_dir / "release_evidence_diff.json") if diff_dir else "",
+        "diff_issues": str(diff_dir / "diff_issues.json") if diff_dir else "",
+        "markdown_export": str(md_path),
+    }
     return {
         "schema_version": "version_update_detail.v1",
         "library_id": lib_id,
@@ -323,11 +333,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "recommended_actions": list(summary.get("recommended_actions", []) or []),
         "file_diff_recommendations": commands,
         "metadata_only_changes": metadata_only,
-        "trace_links": {
-            "diff_summary": str(diff_dir / "diff_summary.json") if diff_dir else "",
-            "file_diff": str(diff_dir / "file_diff.json") if diff_dir else "",
-            "markdown_export": str(md_path),
-        },
+        "trace_links": trace_links,
     }
 
 
