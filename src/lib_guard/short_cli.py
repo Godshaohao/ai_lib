@@ -405,9 +405,11 @@ def _refresh_commands(cfg: dict[str, str], args: Any) -> list[list[str]]:
         if not library_name or not version_id:
             continue
         mode = getattr(args, "mode", "previous_effective")
-        base = _refresh_base_version(lib, version, mode)
-        if mode in {"previous_effective", "current_effective"} and not base:
-            raise ValueError(f"refresh cannot resolve {mode} base for {library_name}/{version_id}; set previous_effective/current_effective or run cmp --base explicitly")
+        base = None
+        if mode in {"previous_effective", "current_effective"}:
+            base = _refresh_base_version(lib, version, mode)
+            if not base:
+                raise ValueError(f"refresh cannot resolve {mode} base for {library_name}/{version_id}; set previous_effective/current_effective or run cmp --base explicitly")
         commands.append(
             _refresh_compare_command(
                 cfg,
