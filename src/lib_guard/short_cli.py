@@ -503,6 +503,8 @@ def _build_parser() -> ArgumentParser:
     lg.csh cat --with-evidence
     lg.csh override ucie stable_20250608 --base initial_20250601 --stage stable
     lg.csh scan ucie stable_20250608
+    lg.csh refresh ucie
+    # 手动 compare/debug 时再显式指定 base 或 adjacent/cumulative
     lg.csh cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
     lg.csh rv-check ucie stable_20250608 --gate current

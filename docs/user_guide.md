@@ -51,16 +51,20 @@ $PROJ/scripts/lg.csh override <LIBRARY> <VERSION> --package-type PARTIAL_UPDATE 
 这一步会写入 catalog 的 manual override 状态。不要直接手改生成后的
 `libraries[].versions[]`，因为它会在下一次 catalog render 时重建。
 
-## 4. 扫描与对比
+## 4. 扫描与更新详情
 
 ```csh
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
+$PROJ/scripts/lg.csh refresh <LIBRARY>
+# 手动 compare/debug 时再显式指定 base 或 adjacent/cumulative
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
 ```
 
 使用规则：
 
-- `--scan-if-missing`：只补缺少的 scan evidence，适合日常对比。
+- `refresh`：刷新 Version Review 的日常更新详情，默认使用 current/previous effective 语义。
+- `cmp`：手动 structural compare/debug，适合显式指定 base 或 adjacent/cumulative。
+- `--scan-if-missing`：只补缺少的 scan evidence，适合手动对比。
 - `--rescan`：强制重扫，适合 parser、policy 或输入数据修正后刷新证据。
 
 Version Review 是正常的单版本详情页；独立 `scan_html` 只作为 debug evidence。

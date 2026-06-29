@@ -1692,6 +1692,7 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertIn("示例", help_text)
         self.assertIn("日常流程", help_text)
         self.assertIn("lg.csh scan", help_text)
+        self.assertIn("lg.csh refresh", help_text)
         self.assertIn("lg.ps1 scan", help_text)
         self.assertIn("file-diff -> fd", help_text)
         self.assertIn("diff -> cmp", help_text)

@@ -49,7 +49,7 @@ setenv RAW  /path/to/raw_delivery
 $PROJ/scripts/lg.csh init $WORK --raw-root $RAW --library-type ip
 $PROJ/scripts/lg.csh cat --full --with-evidence
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
-$PROJ/scripts/lg.csh refresh <LIBRARY> <VERSION>
+$PROJ/scripts/lg.csh refresh <LIBRARY>
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --rescan
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> --base <BASE_VERSION> --type <FILE_TYPE>

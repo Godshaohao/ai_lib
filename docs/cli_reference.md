@@ -39,7 +39,7 @@ lg.csh library apply
 lg.csh cat --with-evidence
 lg.csh override ucie stable_20250608 --stage stable --base stable_20250601
 lg.csh scan ucie stable_20250608
-lg.csh refresh ucie stable_20250608
+lg.csh refresh ucie
 lg.csh cmp ucie stable_20250608 --base stable_20250601 --scan-if-missing
 lg.csh fd ucie stable_20250608 lef/ucie.lef --base stable_20250601 --type lef
 lg.csh rv-check ucie stable_20250608 --gate current
@@ -59,7 +59,7 @@ lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
 `adjacent` 只用于手动 compare 场景，必须显式指定：
 
 ```csh
-lg.csh refresh ucie stable_20250608 --mode adjacent
+lg.csh refresh ucie --mode adjacent
 lg.csh cmp ucie stable_20250608 --mode adjacent --scan-if-missing
 ```
 
