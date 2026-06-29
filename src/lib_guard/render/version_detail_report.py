@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
+from lib_guard.render.catalog_workspace_report import catalog_browser_styles
 from lib_guard.render import product_theme as ui
 
 
@@ -138,7 +139,8 @@ def _select_base(version: Mapping[str, Any]) -> tuple[str, str, str]:
     diff_base_source = str(diff.get("base_source") or diff.get("base_version_source") or "").lower()
     diff_kind = str(diff.get("kind") or diff.get("diff_kind") or "").lower()
     if diff_base and (diff_base_source in {"explicit", "current_effective"} or diff_kind == "current_library_diff"):
-        return "current_effective" if diff_base_source == "current_effective" else "explicit", str(diff_base), f"diff.base_version:{diff_base_source or diff_kind}"
+        base_ref = "current_effective" if diff_base_source == "current_effective" or diff_kind == "current_library_diff" else "explicit"
+        return base_ref, str(diff_base), f"diff.base_version:{diff_base_source or diff_kind}"
     cr = _cr()
     full_base = cr._base_full_version(version)
     if full_base:
@@ -1047,7 +1049,7 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
         f"{lib.get('display_name') or lib_id} / {version_id}",
         "版本审查",
         "先看更新结论、证据状态和下一步动作，再展开 Parser 与原始证据。",
-        cr._catalog_browser_styles() + body,
+        catalog_browser_styles() + body,
         decision=version.get("overall_status") or ("REVIEW" if tags - {"clear"} else "PASS"),
         rail=rail,
         nav="<a href='../../../index.html'>目录</a><a class='active' href='#'>版本详情</a><a href='../index.html'>库工作台</a>",

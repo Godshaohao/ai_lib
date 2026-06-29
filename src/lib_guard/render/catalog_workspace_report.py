@@ -23,6 +23,10 @@ def render_library_workspace_page(
     return _render_library_home(Path(out), lib, effective_items, compare_items)
 
 
+def catalog_browser_styles() -> str:
+    return _catalog_browser_styles()
+
+
 def build_library_report_index_entry(
     out: str | Path,
     lib: Mapping[str, Any],

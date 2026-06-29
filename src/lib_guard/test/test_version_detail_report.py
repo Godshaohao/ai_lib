@@ -132,6 +132,44 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(current_model["base_ref"], "current_effective")
             self.assertEqual(current_model["base_version"], "effective_base")
 
+    def test_current_library_diff_uses_current_effective_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            current_diff = root / "current_diff"
+            stale_base_diff = root / "base_diff"
+            current_diff.mkdir()
+            stale_base_diff.mkdir()
+            (current_diff / "diff_summary.json").write_text(
+                json.dumps({"status": "DIFF", "changed_files": 2, "view_changes": 1}),
+                encoding="utf-8",
+            )
+            (stale_base_diff / "diff_summary.json").write_text(
+                json.dumps({"status": "SAME", "changed_files": 0}),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {
+                    "version_id": "patch_20260629",
+                    "diff": {
+                        "kind": "current_library_diff",
+                        "base_version": "effective_current",
+                        "base_diff_dir": str(stale_base_diff),
+                        "current_effective_diff_dir": str(current_diff),
+                    },
+                },
+            )
+
+            self.assertEqual(model["base_ref"], "current_effective")
+            self.assertEqual(model["base_version"], "effective_current")
+            self.assertEqual(model["base_source"], "diff.base_version:current_library_diff")
+            self.assertEqual(model["status"], "CHANGED")
+            self.assertEqual(model["diff_summary"]["changed_files"], 2)
+
     def test_adjacent_is_fallback_and_missing_base_needs_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -1158,11 +1158,11 @@ Expected: GitHub API returns issue JSON containing `"number":2`.
 
 ## Self-Review
 
-**Spec coverage:**  
+**Spec coverage:**
 P0-1 refresh semantics are covered by Task 5. P0-2 base precedence is covered by Tasks 1 and 2. P0-3 pairwise/file type lanes are covered by Tasks 3 and 4. P0-4 model completeness is covered by Tasks 1 and 2. P0-5 render/export split is covered by Task 6. P1 catalog workspace ownership is covered by Task 7. README/CLI/data contract/architecture documentation is covered by Task 8. Full validation and PR update are covered by Task 9.
 
-**Placeholder scan:**  
+**Placeholder scan:**
 The red-flag phrase scan from the skill was run against this plan. Every code-changing task includes concrete code blocks or exact replacement snippets.
 
-**Type consistency:**  
+**Type consistency:**
 The plan consistently uses `version_update_detail_model`, `SUMMARY_ONLY_TYPES`, `BINARY_METADATA_ONLY_TYPES`, `DEFAULT_FILE_DIFF_TYPES`, `DEFAULT_PAIRWISE_FILE_DIFF_TYPES`, `build_version_update_detail_model`, `render_version_detail_page`, and `export_current_lib_diff_markdown`.

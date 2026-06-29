@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -80,6 +82,23 @@ class PairwisePolicyTest(unittest.TestCase):
         from lib_guard.project_config import DEFAULT_FILE_DIFF_TYPES
 
         self.assertEqual(DEFAULT_PAIRWISE_FILE_DIFF_TYPES, DEFAULT_FILE_DIFF_TYPES)
+
+    def test_short_cli_file_diff_type_choices_match_project_defaults(self) -> None:
+        from lib_guard.project_config import DEFAULT_FILE_DIFF_TYPES
+        from lib_guard.short_cli import _build_parser
+
+        parser = _build_parser()
+        parser.parse_args(["fd", "ucie", "patch_20260628", "spice/top.sp", "--type", "spice"])
+        parser.parse_args(["fd", "ucie", "patch_20260628", "touchstone/top.s2p", "--type", "touchstone"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args(["fd", "ucie", "patch_20260628", "rtl/top.v", "--type", "verilog"])
+
+        file_diff_parser = next(
+            action
+            for action in parser._subparsers._group_actions[0].choices["file-diff"]._actions
+            if action.dest == "type"
+        )
+        self.assertEqual(set(file_diff_parser.choices), DEFAULT_FILE_DIFF_TYPES)
 
     def test_summary_only_types_include_text_summary_lanes(self) -> None:
         from lib_guard.project_config import SUMMARY_ONLY_TYPES

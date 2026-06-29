@@ -35,6 +35,7 @@ class ShortCliRefreshTest(unittest.TestCase):
                                     "version_key": "ip/ucie/patch_20260628",
                                     "raw_path": str(raw / "ucie" / "patch_20260628"),
                                     "current_effective_ref": "effective_20260620",
+                                    "previous_effective_version": "previous_20260610",
                                     "diff": {"adjacent_old_version": "raw_adjacent_wrong"},
                                 },
                             ],
@@ -65,6 +66,7 @@ class ShortCliRefreshTest(unittest.TestCase):
         self.assertIn("effective_20260620", command)
         self.assertNotIn("--mode", command)
         self.assertNotIn("raw_adjacent_wrong", command)
+        self.assertNotIn("previous_20260610", command)
 
     def test_refresh_adjacent_mode_is_explicit_manual_adjacent(self) -> None:
         from lib_guard.short_cli import build_cli_commands

@@ -11,6 +11,7 @@ from lib_guard.project_config import (
     CATALOG_POLICY_FILE,
     CONFIG_NAME,
     DEFAULT_LIBRARY_TYPE,
+    DEFAULT_FILE_DIFF_TYPES,
     DEFAULT_PARSE_JOBS,
     DEFAULT_SCAN_MODE,
     PROJECT_CONFIG_DIR,
@@ -18,22 +19,7 @@ from lib_guard.project_config import (
     workspace_defaults,
 )
 
-PAIRWISE_FILE_DIFF_TYPES = {
-    "lef",
-    "liberty",
-    "verilog",
-    "cdl",
-    "sdc",
-    "upf",
-    "cpf",
-    "spef",
-    "db",
-    "waiver",
-    "ibis",
-    "pwl",
-    "snp",
-    "cpm",
-}
+PAIRWISE_FILE_DIFF_TYPES = set(DEFAULT_FILE_DIFF_TYPES)
 SHORT_COMMAND_ALIASES = {
     "cat": "catalog",
     "cmp": "diff",
@@ -404,7 +390,7 @@ def _refresh_commands(cfg: dict[str, str], args: Any) -> list[list[str]]:
         version_id = str(version.get("version_id") or "")
         if not library_name or not version_id:
             continue
-        mode = getattr(args, "mode", "previous_effective")
+        mode = getattr(args, "mode", "current_effective")
         base = None
         if mode in {"previous_effective", "current_effective"}:
             base = _refresh_base_version(lib, version, mode)
@@ -596,7 +582,7 @@ def _build_parser() -> ArgumentParser:
     p = sub.add_parser("refresh", help="刷新 latest/current raw version 的更新详情 diff")
     p.add_argument("library", nargs="?")
     p.add_argument("--all", action="store_true", help="Refresh latest/current raw version diff for every catalog library")
-    p.add_argument("--mode", default="previous_effective", choices=["previous_effective", "current_effective", "adjacent", "cumulative"], help="更新详情默认使用 previous/current effective；adjacent 仅用于显式手动 compare")
+    p.add_argument("--mode", default="current_effective", choices=["current_effective", "previous_effective", "adjacent", "cumulative"], help="更新详情默认优先使用 current effective，previous effective 作为显式回退；adjacent 仅用于显式手动 compare")
     p.add_argument("--rescan", action="store_true", help="Force rescan before compare instead of scanning only missing evidence")
     p.add_argument("--refresh-catalog", action="store_true", help="Refresh catalog before resolving latest/current versions")
     p.add_argument("--with-evidence", action="store_true", help="When --refresh-catalog is used, collect file-type evidence during catalog refresh")
