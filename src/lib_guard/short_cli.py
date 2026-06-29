@@ -473,11 +473,12 @@ def _file_diff_out_dir(cfg: dict[str, str], library: str, version: str, relpath:
 
 
 def _build_parser() -> ArgumentParser:
+    file_diff_types = " ".join(sorted(PAIRWISE_FILE_DIFF_TYPES))
     parser = ArgumentParser(
         prog="lg",
         description="lib_guard 日常短命令入口",
         formatter_class=RawDescriptionHelpFormatter,
-        epilog="""示例:
+        epilog=f"""示例:
   当前推荐别名: catalog -> cat, diff -> cmp, file-diff -> fd, release -> rel
 
   日常流程:
@@ -509,7 +510,7 @@ def _build_parser() -> ArgumentParser:
     lg.csh --dry-run cmp ucie stable_20250608 --base initial_20250601
 
   支持的两两文件 diff 类型:
-    lef liberty verilog cdl sdc upf cpf spef db waiver ibis pwl snp cpm
+    {file_diff_types}
 """,
     )
     parser.add_argument("--config", help=f"{CONFIG_NAME} 路径")

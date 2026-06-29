@@ -1696,10 +1696,18 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertIn("lg.ps1 scan", help_text)
         self.assertIn("file-diff -> fd", help_text)
         self.assertIn("diff -> cmp", help_text)
+        self.assertIn("spice", help_text)
+        self.assertIn("touchstone", help_text)
+        supported_types = help_text.split("支持的两两文件 diff 类型:", 1)[1].splitlines()[1]
+        self.assertNotIn("verilog", supported_types)
+        self.assertNotIn("liberty", supported_types)
+        self.assertNotIn("spef", supported_types)
+        self.assertNotIn("db", supported_types)
         self.assertIn("lg.csh override", help_text)
         self.assertIn("lg.csh action", help_text)
         self.assertIn("lg.csh rv-accept", help_text)
-        self.assertIn("waiver ibis pwl snp cpm", help_text)
+        for token in ["waiver", "ibis", "pwl", "snp", "cpm"]:
+            self.assertIn(token, supported_types)
         self.assertNotIn("filediff", help_text)
         self.assertNotIn("refresh-diff", help_text)
 
