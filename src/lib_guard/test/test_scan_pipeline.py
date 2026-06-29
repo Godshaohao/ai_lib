@@ -1032,12 +1032,12 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(result["status"], "DIFF")
             self.assertFalse((diff_out / "parser_result_diff" / "lef_diff.json").exists())
             tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
-            self.assertGreaterEqual(len(tasks["tasks"]), 3)
+            self.assertEqual(len(tasks["tasks"]), 1)
             commands = "\n".join(task["command"] for task in tasks["tasks"])
             self.assertIn("$PROJ/scripts/lg.csh fd demo v1", commands)
             self.assertIn("lef", commands)
-            self.assertIn("verilog", commands)
-            self.assertIn("liberty", commands)
+            self.assertNotIn("--type verilog", commands)
+            self.assertNotIn("--type liberty", commands)
             self.assertNotIn("python -m lib_guard.cli file-diff", commands)
             status = json.loads((diff_out / "pairwise_diff_task_status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["summary"]["pending"], len(tasks["tasks"]))
@@ -1059,6 +1059,42 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(manual_tasks["summary"]["total"], len(tasks["tasks"]))
             self.assertEqual(summary["view_changes"], view_diff["summary"]["changed"])
             self.assertEqual(summary["type_changes"], type_diff["summary"]["changed_types"])
+
+    def test_pairwise_default_lane_excludes_summary_and_binary_metadata_types(self) -> None:
+        from lib_guard.diff.pairwise import DEFAULT_PAIRWISE_FILE_DIFF_TYPES, build_pairwise_diff_tasks
+        from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
+        from lib_guard.render.version_detail_report import BINARY_METADATA_ONLY_TYPES as DETAIL_BINARY_TYPES
+        from lib_guard.render.version_detail_report import SUMMARY_ONLY_TYPES as DETAIL_SUMMARY_TYPES
+
+        self.assertEqual(DEFAULT_PAIRWISE_FILE_DIFF_TYPES, DEFAULT_FILE_DIFF_TYPES)
+        self.assertEqual(DETAIL_SUMMARY_TYPES, SUMMARY_ONLY_TYPES)
+        self.assertEqual(DETAIL_BINARY_TYPES, BINARY_METADATA_ONLY_TYPES)
+
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            (old_scan / "scan_meta.json").write_text(json.dumps({"library_name": "demo", "version": "base"}), encoding="utf-8")
+            (new_scan / "scan_meta.json").write_text(json.dumps({"library_name": "demo", "version": "new"}), encoding="utf-8")
+            changed_types = ["lef", "verilog", "systemverilog", "liberty", "spef", "db", "gds", "oas"]
+            file_diff = {
+                "changed": [f"{file_type}/block.{file_type}" for file_type in changed_types],
+                "_old_items": {},
+                "_new_items": {},
+            }
+            for file_type in changed_types:
+                rel = f"{file_type}/block.{file_type}"
+                file_diff["_old_items"][rel] = {"path": rel, "file_type": file_type, "root_path": str(old_scan)}
+                file_diff["_new_items"][rel] = {"path": rel, "file_type": file_type, "root_path": str(new_scan)}
+
+            tasks = build_pairwise_diff_tasks(old_scan, new_scan, file_diff, output_root=Path(td) / "pairwise")
+            task_types = {item["file_type"] for item in tasks["tasks"]}
+            commands = "\n".join(item["command"] for item in tasks["tasks"])
+
+            self.assertEqual(task_types, {"lef"})
+            for file_type in ["verilog", "systemverilog", "liberty", "spef", "db", "gds", "oas"]:
+                self.assertNotIn(f"--type {file_type}", commands)
 
     def test_diff_treats_same_hash_path_prefix_change_as_move_not_added_removed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1119,8 +1155,8 @@ class ScanPipelineTest(unittest.TestCase):
             html_out = Path(td) / "diff_html"
             old_root.mkdir()
             new_root.mkdir()
-            (old_root / "top.v").write_text("module top(a, data);\ninput a;\noutput [31:0] data;\nendmodule\n", encoding="utf-8")
-            (new_root / "top.v").write_text("module top(data);\noutput [63:0] data;\nendmodule\n", encoding="utf-8")
+            (old_root / "constraints.sdc").write_text("create_clock -name core -period 1.0 [get_ports clk]\n", encoding="utf-8")
+            (new_root / "constraints.sdc").write_text("create_clock -name core -period 2.0 [get_ports clk]\n", encoding="utf-8")
 
             from lib_guard.scan.scanner import ScanRunner
             from lib_guard.diff.scan_diff import diff_scan_outputs
@@ -1425,7 +1461,8 @@ class ScanPipelineTest(unittest.TestCase):
                                         "version_id": "stable_20250608",
                                         "version_key": "ip/ucie/stable_20250608",
                                         "raw_path": str(raw / "ucie" / "stable_20250608"),
-                                        "diff": {"adjacent_old_version": "initial_20250601"},
+                                        "previous_effective_version": "initial_20250601",
+                                        "diff": {"adjacent_old_version": "wrong_adjacent"},
                                     },
                                 ],
                             },
@@ -1439,7 +1476,8 @@ class ScanPipelineTest(unittest.TestCase):
                                         "version_key": "ip/pcie/latest_20250608",
                                         "raw_path": str(raw / "pcie" / "latest_20250608"),
                                         "current_effective": True,
-                                        "diff": {"adjacent_old_version": "base_20250601"},
+                                        "previous_effective_version": "base_20250601",
+                                        "diff": {"adjacent_old_version": "wrong_adjacent"},
                                     },
                                 ],
                             }
@@ -1525,6 +1563,10 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("ucie", refresh_latest_cmds[0])
             self.assertIn("--new", refresh_latest_cmds[0])
             self.assertIn("stable_20250608", refresh_latest_cmds[0])
+            self.assertIn("--base", refresh_latest_cmds[0])
+            self.assertIn("initial_20250601", refresh_latest_cmds[0])
+            self.assertNotIn("wrong_adjacent", refresh_latest_cmds[0])
+            self.assertNotIn("--mode", refresh_latest_cmds[0])
             self.assertIn("--scan-if-missing", refresh_latest_cmds[0])
             self.assertIn("--scan-mode", refresh_latest_cmds[0])
             self.assertIn("candidate", refresh_latest_cmds[0])
@@ -1533,8 +1575,12 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(len(refresh_all_cmds), 2)
             self.assertEqual(refresh_all_cmds[0][0], "compare")
             self.assertIn("stable_20250608", refresh_all_cmds[0])
+            self.assertIn("--base", refresh_all_cmds[0])
+            self.assertIn("initial_20250601", refresh_all_cmds[0])
             self.assertIn("pcie", refresh_all_cmds[1])
             self.assertIn("latest_20250608", refresh_all_cmds[1])
+            self.assertIn("--base", refresh_all_cmds[1])
+            self.assertIn("base_20250601", refresh_all_cmds[1])
 
     def test_short_cli_can_use_env_config_without_repeating_config_arg(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1913,8 +1959,8 @@ class ScanPipelineTest(unittest.TestCase):
             diff_out = Path(td) / "diff"
             (old_root / "old_view").mkdir(parents=True)
             (new_root / "new_view").mkdir(parents=True)
-            (old_root / "old_view" / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
-            (new_root / "new_view" / "top.v").write_text("module top(input a, output b); endmodule\n", encoding="utf-8")
+            (old_root / "old_view" / "block.lef").write_text("VERSION 5.8 ;\nMACRO A\n  SIZE 1 BY 1 ;\nEND A\n", encoding="utf-8")
+            (new_root / "new_view" / "block.lef").write_text("VERSION 5.8 ;\nMACRO A\n  SIZE 2 BY 1 ;\nEND A\n", encoding="utf-8")
 
             from lib_guard.scan.scanner import ScanRunner
             from lib_guard.diff.scan_diff import diff_scan_outputs
@@ -1939,7 +1985,7 @@ class ScanPipelineTest(unittest.TestCase):
             diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
 
             tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
-            self.assertEqual(tasks["summary"]["by_type"]["verilog"], 1)
+            self.assertEqual(tasks["summary"]["by_type"]["lef"], 1)
             self.assertEqual(tasks["tasks"][0]["pairing_confidence"], "unique_file_type")
             self.assertIn("$PROJ/scripts/lg.csh fd", tasks["tasks"][0]["command"])
             self.assertNotIn("python -m lib_guard.cli file-diff", tasks["tasks"][0]["command"])

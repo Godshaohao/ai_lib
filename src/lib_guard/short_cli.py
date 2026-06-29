@@ -296,6 +296,51 @@ def _latest_refresh_version(library: dict[str, Any]) -> dict[str, Any] | None:
     return versions[-1]
 
 
+def _version_ref(value: Any, target_version: str = "") -> str | None:
+    if not value or isinstance(value, bool):
+        return None
+    text = str(value)
+    if target_version and text == target_version:
+        return None
+    return text
+
+
+def _library_summary_ref(library: dict[str, Any], target_version: str, keys: list[str]) -> str | None:
+    summary = library.get("summary", {}) or {}
+    for key in keys:
+        value = _version_ref(summary.get(key), target_version)
+        if value:
+            return value
+    for key in keys:
+        value = _version_ref(library.get(key), target_version)
+        if value:
+            return value
+    return None
+
+
+def _refresh_base_version(library: dict[str, Any], version: dict[str, Any], mode: str) -> str | None:
+    target = str(version.get("version_id") or "")
+    lineage = version.get("lineage", {}) or {}
+    diff = version.get("diff", {}) or {}
+    if mode == "adjacent":
+        return _version_ref(diff.get("adjacent_old_version"), target)
+    if mode == "cumulative":
+        return _version_ref(diff.get("cumulative_base_version") or version.get("base_full_version") or version.get("base_version") or lineage.get("base_candidate"), target)
+    if mode == "current_effective":
+        return (
+            _version_ref(version.get("current_effective_ref"), target)
+            or _version_ref(version.get("latest_effective_ref"), target)
+            or _library_summary_ref(library, target, ["current_effective", "current_effective_ref", "latest_effective_ref", "current_version"])
+            or _version_ref(version.get("previous_effective_version") or version.get("parent_version") or lineage.get("parent_candidate"), target)
+        )
+    return (
+        _version_ref(version.get("previous_effective_version") or version.get("parent_version") or lineage.get("parent_candidate"), target)
+        or _version_ref(version.get("current_effective_ref"), target)
+        or _version_ref(version.get("latest_effective_ref"), target)
+        or _library_summary_ref(library, target, ["current_effective", "current_effective_ref", "latest_effective_ref", "current_version"])
+    )
+
+
 def _library_cli_name(library: dict[str, Any]) -> str:
     return str(library.get("library_name") or library.get("library_id") or "")
 
@@ -305,7 +350,8 @@ def _refresh_compare_command(
     library: str,
     version: str,
     *,
-    mode: str = "adjacent",
+    mode: str | None = None,
+    base: str | None = None,
     rescan: bool = False,
 ) -> list[str]:
     command = [
@@ -316,13 +362,15 @@ def _refresh_compare_command(
         library,
         "--new",
         version,
-        "--mode",
-        mode,
         "--workdir",
         cfg["workspace"],
         "--catalog-html-out",
         cfg["catalog_html"],
     ]
+    if mode:
+        command.extend(["--mode", mode])
+    if base:
+        command.extend(["--base", base])
     command.append("--rescan" if rescan else "--scan-if-missing")
     command.extend(["--scan-mode", cfg["mode"]])
     command.extend(["--parse-jobs", cfg["parse_jobs"]])
@@ -356,12 +404,17 @@ def _refresh_commands(cfg: dict[str, str], args: Any) -> list[list[str]]:
         version_id = str(version.get("version_id") or "")
         if not library_name or not version_id:
             continue
+        mode = getattr(args, "mode", "previous_effective")
+        base = _refresh_base_version(lib, version, mode)
+        if mode in {"previous_effective", "current_effective"} and not base:
+            raise ValueError(f"refresh cannot resolve {mode} base for {library_name}/{version_id}; set previous_effective/current_effective or run cmp --base explicitly")
         commands.append(
             _refresh_compare_command(
                 cfg,
                 library_name,
                 version_id,
-                mode=getattr(args, "mode", "adjacent"),
+                mode=mode if mode in {"adjacent", "cumulative"} else None,
+                base=base,
                 rescan=bool(getattr(args, "rescan", False)),
             )
         )
@@ -373,7 +426,16 @@ def _refresh_commands(cfg: dict[str, str], args: Any) -> list[list[str]]:
 def _resolve_old_version(library: dict[str, Any], version: dict[str, Any], explicit_base: str | None) -> dict[str, Any]:
     if explicit_base:
         return _find_version(library, explicit_base)
-    old_id = ((version.get("diff") or {}).get("adjacent_old_version") or version.get("base_version") or (version.get("lineage") or {}).get("base_candidate"))
+    lineage = version.get("lineage") or {}
+    old_id = (
+        version.get("previous_effective_version")
+        or version.get("current_effective_ref")
+        or version.get("latest_effective_ref")
+        or version.get("base_version")
+        or lineage.get("parent_candidate")
+        or lineage.get("base_candidate")
+        or (version.get("diff") or {}).get("adjacent_old_version")
+    )
     if old_id:
         return _find_version(library, str(old_id))
     versions = list(library.get("versions", []) or [])
@@ -530,7 +592,7 @@ def _build_parser() -> ArgumentParser:
     p = sub.add_parser("refresh", help="刷新 latest/current raw version 的更新详情 diff")
     p.add_argument("library", nargs="?")
     p.add_argument("--all", action="store_true", help="Refresh latest/current raw version diff for every catalog library")
-    p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"], help="Catalog relation used when compare infers the base")
+    p.add_argument("--mode", default="previous_effective", choices=["previous_effective", "current_effective", "adjacent", "cumulative"], help="更新详情默认使用 previous/current effective；adjacent 仅用于显式手动 compare")
     p.add_argument("--rescan", action="store_true", help="Force rescan before compare instead of scanning only missing evidence")
     p.add_argument("--refresh-catalog", action="store_true", help="Refresh catalog before resolving latest/current versions")
     p.add_argument("--with-evidence", action="store_true", help="When --refresh-catalog is used, collect file-type evidence during catalog refresh")

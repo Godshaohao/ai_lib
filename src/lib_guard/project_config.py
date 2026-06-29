@@ -37,6 +37,24 @@ CONTROL_CONFIG_SPECS = [
     ("release_policy", DEFAULT_RELEASE_POLICY_PATH, True, ["release_check"], ["release check"]),
 ]
 
+SUMMARY_ONLY_TYPES = {"verilog", "systemverilog", "liberty", "lib", "spef"}
+BINARY_METADATA_ONLY_TYPES = {"db", "gds", "oas", "layout", "milkyway", "ndm"}
+DEFAULT_FILE_DIFF_TYPES = {
+    "lef",
+    "cdl",
+    "spice",
+    "sp",
+    "sdc",
+    "upf",
+    "cpf",
+    "waiver",
+    "ibis",
+    "pwl",
+    "snp",
+    "touchstone",
+    "cpm",
+}
+
 
 def workspace_path(workspace: str | Path, relative_path: str) -> str:
     return str(Path(workspace) / relative_path)

@@ -106,6 +106,74 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn("$PROJ/scripts/lg.csh fd ucie patch_20260627 db/macro.db", panel_html)
             self.assertEqual(panel_html, panel_html_after_delete)
 
+    def test_version_update_detail_prefers_current_effective_over_diff_base(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            current_diff = root / "current_diff"
+            stale_diff = root / "stale_diff"
+            current_diff.mkdir()
+            stale_diff.mkdir()
+            (current_diff / "diff_summary.json").write_text(
+                json.dumps({"status": "DIFF", "changed_files": 1, "view_changes": 1}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (current_diff / "view_diff.json").write_text(json.dumps({"summary": {"changed": 1}}, ensure_ascii=False), encoding="utf-8")
+            (current_diff / "type_diff.json").write_text(json.dumps({"summary": {"changed_types": 1}}, ensure_ascii=False), encoding="utf-8")
+            (current_diff / "release_readiness_diff.json").write_text(json.dumps({"status": "PASS"}, ensure_ascii=False), encoding="utf-8")
+            (current_diff / "diff_issues.json").write_text(json.dumps({"issues": [{"category": "view_diff"}]}, ensure_ascii=False), encoding="utf-8")
+            (current_diff / "file_diff.json").write_text(
+                json.dumps({"changed": [{"path": "lef/macro.lef", "file_type": "lef"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (stale_diff / "diff_summary.json").write_text(json.dumps({"status": "SAME"}, ensure_ascii=False), encoding="utf-8")
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {
+                    "version_id": "patch_20260628",
+                    "current_effective_ref": "effective_current",
+                    "diff": {
+                        "base_version": "stale_base",
+                        "base_source": "adjacent",
+                        "base_diff_dir": str(stale_diff),
+                        "current_effective_diff_dir": str(current_diff),
+                        "adjacent_old_version": "adjacent_only_fallback",
+                    },
+                },
+            )
+
+            self.assertEqual(model["base_ref"], "current_effective")
+            self.assertEqual(model["base_version"], "effective_current")
+            self.assertEqual(model["base_source"], "current_effective_ref")
+            self.assertEqual(model["status"], "CHANGED")
+            self.assertEqual(model["diff_summary"]["view_changes"], 1)
+            self.assertEqual(model["view_diff"]["summary"]["changed"], 1)
+            self.assertEqual(model["type_diff"]["summary"]["changed_types"], 1)
+            self.assertEqual(model["release_readiness_diff"]["status"], "PASS")
+            self.assertEqual(model["diff_issues"]["issues"][0]["category"], "view_diff")
+
+    def test_version_detail_needs_base_and_does_not_auto_export_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "html"
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model, render_version_detail_page
+
+            lib = {"library_id": "ip/ucie", "library_name": "ucie"}
+            version = {"version_id": "orphan_20260628"}
+            model = build_version_update_detail_model(out, lib, version)
+            page = Path(render_version_detail_page(out, lib, version))
+            html = page.read_text(encoding="utf-8")
+
+            self.assertEqual(model["status"], "NEEDS_BASE_CONFIRM")
+            self.assertIn("NEEDS_BASE_CONFIRM", html)
+            self.assertNotIn("NO_DIFF_SUMMARY", html)
+            self.assertNotIn("Comparison Review 是唯一 diff 入口", html)
+            self.assertFalse((page.parent / "current_lib_diff.md").exists())
+
     def test_catalog_scan_library_refresh_keeps_other_libraries(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

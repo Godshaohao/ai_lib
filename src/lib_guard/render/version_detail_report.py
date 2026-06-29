@@ -10,10 +10,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
 from lib_guard.render import product_theme as ui
 
 
-METADATA_ONLY_TYPES = {"db", "gds", "oas", "layout", "milkyway", "liberty", "lib", "spef", "verilog", "systemverilog"}
 P0_REVIEW_TYPES = {"lef", "cdl", "spice", "sp"}
 P1_REVIEW_TYPES = {"sdc", "upf", "cpf", "waiver", "ibis", "pwl", "snp", "touchstone", "cpm"}
 
@@ -64,7 +64,9 @@ def _infer_file_type(path: str, file_type: Any = None) -> str:
 
 def _review_lane(file_type: str) -> tuple[str, str]:
     key = str(file_type or "").lower()
-    if key in METADATA_ONLY_TYPES:
+    if key in SUMMARY_ONLY_TYPES:
+        return "Summary-only", "摘要级审查；默认不生成文件级 Diff 命令"
+    if key in BINARY_METADATA_ONLY_TYPES:
         return "Metadata-only", "metadata-only 审查；默认不生成文件级 Diff 命令"
     if key in P0_REVIEW_TYPES:
         return "P0", "建议优先做文件级 Diff"
@@ -121,26 +123,72 @@ def _select_base(version: Mapping[str, Any]) -> tuple[str, str, str]:
     explicit = (
         version.get("explicit_base_version")
         or diff.get("explicit_base_version")
-        or diff.get("base_version")
         or lineage.get("explicit_base_version")
     )
     if explicit:
         return "explicit", str(explicit), "catalog_recorded_base"
     for key in ["current_effective", "current_effective_ref", "latest_effective_ref"]:
         value = version.get(key) or diff.get(key) or lineage.get(key)
-        if value:
+        if value and not isinstance(value, bool):
             return "current_effective", str(value), key
     previous = version.get("previous_effective_version") or version.get("parent_version") or lineage.get("parent_candidate")
     if previous:
         return "previous_effective", str(previous), "previous_effective_version"
+    diff_base = diff.get("base_version")
+    diff_base_source = str(diff.get("base_source") or diff.get("base_version_source") or "").lower()
+    diff_kind = str(diff.get("kind") or diff.get("diff_kind") or "").lower()
+    if diff_base and (diff_base_source in {"explicit", "current_effective"} or diff_kind == "current_library_diff"):
+        return "current_effective" if diff_base_source == "current_effective" else "explicit", str(diff_base), f"diff.base_version:{diff_base_source or diff_kind}"
     cr = _cr()
     full_base = cr._base_full_version(version)
     if full_base:
         return "base_full", str(full_base), "base_full_version"
+    if diff_base:
+        return "recorded_base", str(diff_base), "diff.base_version:fallback"
     adjacent = diff.get("adjacent_old_version")
     if adjacent:
         return "adjacent_fallback", str(adjacent), "adjacent_old_version"
     return "NEEDS_BASE_CONFIRM", "", "missing_base"
+
+
+def _path_if_exists(value: Any) -> Path | None:
+    if not value:
+        return None
+    path = Path(str(value))
+    return path if path.exists() else None
+
+
+def _select_diff_dir(version: Mapping[str, Any], *, base_ref: str, base_version: str) -> Path | None:
+    diff = _as_mapping(version.get("diff"))
+    keyed_candidates: list[tuple[str, tuple[str, ...]]] = [
+        ("explicit", ("base_diff_dir", "current_effective_diff_dir", "diff_dir")),
+        ("current_effective", ("current_effective_diff_dir", "base_diff_dir", "diff_dir")),
+        ("previous_effective", ("previous_effective_diff_dir", "current_effective_diff_dir", "base_diff_dir", "diff_dir")),
+        ("base_full", ("cumulative_diff_dir", "base_diff_dir", "diff_dir")),
+        ("recorded_base", ("base_diff_dir", "diff_dir")),
+        ("adjacent_fallback", ("adjacent_diff_dir", "diff_dir")),
+    ]
+    for ref, keys in keyed_candidates:
+        if base_ref != ref:
+            continue
+        for key in keys:
+            path = _path_if_exists(diff.get(key))
+            if path:
+                return path
+    matching_legacy = [
+        ("base_version", "base_diff_dir"),
+        ("current_effective", "current_effective_diff_dir"),
+        ("current_effective_ref", "current_effective_diff_dir"),
+        ("latest_effective_ref", "current_effective_diff_dir"),
+        ("adjacent_old_version", "adjacent_diff_dir"),
+        ("cumulative_base_version", "cumulative_diff_dir"),
+    ]
+    for version_key, dir_key in matching_legacy:
+        if base_version and str(diff.get(version_key) or "") == str(base_version):
+            path = _path_if_exists(diff.get(dir_key))
+            if path:
+                return path
+    return None
 
 
 def _comparison_semantics(version: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -192,6 +240,8 @@ def _file_diff_commands(lib: Mapping[str, Any], version: Mapping[str, Any], base
         lane = str(item.get("review_lane") or "")
         if lane not in {"P0", "P1"}:
             continue
+        if str(item.get("file_type") or "").lower() not in DEFAULT_FILE_DIFF_TYPES:
+            continue
         path = str(item.get("path") or "")
         if not path or path in seen:
             continue
@@ -216,9 +266,14 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     safe_ver = cr._safe(version_id)
     base_ref, base_version, base_source = _select_base(version)
     comparison_semantics, compare_strategy, delete_semantics = _comparison_semantics(version)
-    diff_dir = cr._version_diff_dir(version)
+    diff_dir = _select_diff_dir(version, base_ref=base_ref, base_version=base_version)
     summary = dict(cr._version_diff_summary(diff_dir))
     file_diff = dict(cr._version_file_diff(diff_dir))
+    view_diff = dict(cr._version_diff_json(diff_dir, "view_diff.json"))
+    type_diff = dict(cr._version_diff_json(diff_dir, "type_diff.json"))
+    release_readiness_diff = dict(cr._version_diff_json(diff_dir, "release_readiness_diff.json"))
+    release_evidence_diff = dict(cr._version_diff_json(diff_dir, "release_evidence_diff.json"))
+    diff_issues = dict(cr._version_diff_json(diff_dir, "diff_issues.json"))
     file_changes = _iter_file_changes(file_diff, raw_path=version.get("raw_path"))
     changed_files = summary.get("changed_files")
     if changed_files is None:
@@ -227,13 +282,13 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     if base_ref == "NEEDS_BASE_CONFIRM":
         status = "NEEDS_BASE_CONFIRM"
     elif not summary and not diff_dir:
-        status = "NO_DIFF_SUMMARY"
+        status = "DIFF_NOT_RUN"
     elif summary_status in {"DIFF", "CHANGED"} or _as_int(changed_files):
         status = "CHANGED"
     else:
         status = summary_status or "SAME"
     release_notes = cr._version_release_notes(version.get("raw_path"))
-    metadata_only = [item for item in file_changes if item.get("review_lane") == "Metadata-only"]
+    metadata_only = [item for item in file_changes if item.get("review_lane") in {"Metadata-only", "Summary-only"}]
     commands = _file_diff_commands(lib, version, base_version, file_changes)
     md_path = out_path / "libraries" / safe_lib / "versions" / safe_ver / "current_lib_diff.md"
     return {
@@ -254,6 +309,13 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "diff_summary_path": str(diff_dir / "diff_summary.json") if diff_dir else "",
         "file_diff_path": str(diff_dir / "file_diff.json") if diff_dir else "",
         "markdown_export_path": str(md_path),
+        "diff_summary": summary,
+        "view_diff": view_diff,
+        "type_diff": type_diff,
+        "release_readiness_diff": release_readiness_diff,
+        "release_evidence_diff": release_evidence_diff,
+        "diff_issues": diff_issues,
+        "file_diff": file_diff,
         "changed_files": _as_int(changed_files),
         "summary_metrics": _summary_metrics(summary),
         "file_changes": file_changes,
@@ -395,7 +457,7 @@ def _version_overview_panel(
 ) -> str:
     decision = model.get("status") or version.get("overall_status") or "REVIEW"
     review_text = "可审查"
-    if str(decision).upper() in {"NEEDS_BASE_CONFIRM", "NO_DIFF_SUMMARY", "SCAN_BLOCKED", "DIFF_BLOCKED"}:
+    if str(decision).upper() in {"NEEDS_BASE_CONFIRM", "DIFF_NOT_RUN", "SCAN_BLOCKED", "DIFF_BLOCKED"}:
         review_text = "需补证据"
     elif str(decision).upper() in {"CHANGED", "DIFF", "REVIEW"}:
         review_text = "有变化，需审查"
@@ -601,7 +663,7 @@ def _view_coverage_rows(
         found = result.get("found")
         status = str(result.get("status") or ("FOUND" if count else "MISSING")).upper()
         parser = result.get("parser_status") or parser_status.get(file_type) or "-"
-        validation = result.get("validation_level") or ("metadata_required" if file_type in METADATA_ONLY_TYPES else "manual_review" if file_type in {"flow_config", "tech_config"} else "-")
+        validation = result.get("validation_level") or ("metadata_required" if file_type in SUMMARY_ONLY_TYPES | BINARY_METADATA_ONLY_TYPES else "manual_review" if file_type in {"flow_config", "tech_config"} else "-")
         example = _first_file_for_type(inventory, file_type)
         note = result.get("message")
         if not note:
@@ -841,6 +903,26 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
     for item in model.get("metadata_only_changes", []) or []:
         if isinstance(item, Mapping):
             lines.append(f"- {item.get('file_type')} {item.get('path')}")
+    lines.extend(["", "## View Diff", ""])
+    view_diff = _as_mapping(model.get("view_diff"))
+    for item in view_diff.get("views", []) or []:
+        if isinstance(item, Mapping):
+            lines.append(f"- {item.get('view') or item.get('file_type')}: {item.get('status')}")
+    if not view_diff.get("views"):
+        lines.append(f"- summary: {view_diff.get('summary') or {}}")
+    lines.extend(["", "## Type Diff", ""])
+    type_diff = _as_mapping(model.get("type_diff"))
+    for file_type, item in (_as_mapping(type_diff.get("by_type"))).items():
+        if isinstance(item, Mapping):
+            lines.append(f"- {file_type}: {item.get('status')} changed={item.get('changed_count', 0)} added={item.get('added_count', 0)} removed={item.get('removed_count', 0)}")
+    if not type_diff.get("by_type"):
+        lines.append(f"- summary: {type_diff.get('summary') or {}}")
+    lines.extend(["", "## Release Readiness Diff", ""])
+    lines.append(f"- {model.get('release_readiness_diff') or {}}")
+    lines.extend(["", "## Diff Issues", ""])
+    for item in (_as_mapping(model.get("diff_issues"))).get("issues", []) or []:
+        if isinstance(item, Mapping):
+            lines.append(f"- {item.get('severity', '-')}: {item.get('category', '-')} - {item.get('title') or item.get('message') or '-'}")
     lines.extend(["", "## Recommended File Diff", ""])
     for item in model.get("file_diff_recommendations", []) or []:
         if isinstance(item, Mapping):
@@ -857,7 +939,7 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
     return str(path)
 
 
-def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> str:
+def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version: Mapping[str, Any], *, export_markdown: bool = False) -> str:
     cr = _cr()
     out_path = Path(out)
     lib_id = _library_id(lib)
@@ -879,7 +961,8 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
     model = build_version_update_detail_model(out_path, lib, version)
     md_path = page.parent / "current_lib_diff.md"
     model["markdown_export_path"] = str(md_path)
-    export_current_lib_diff_markdown(model, md_path)
+    if export_markdown:
+        export_current_lib_diff_markdown(model, md_path)
     scan_dir = cr._version_scan_dir(version)
     inventory = cr._scan_inventory(scan_dir)
     parser_manifest = cr._scan_parser_manifest(scan_dir)
@@ -939,7 +1022,7 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
                     ("file_inventory.json", cr._href(scan_dir / "file_inventory.json") if scan_dir else "", "本页文件清单来源"),
                     ("parser_manifest.json", cr._href(scan_dir / "parser_manifest.json") if scan_dir else "", "Parser 任务清单"),
                     ("parser_results.json", cr._href(scan_dir / "parser_results.json") if scan_dir else "", "Parser 结果数据"),
-                    ("current_lib_diff.md", cr._href(md_path), "由 version_update_detail_model 生成的 Markdown 导出"),
+                    ("current_lib_diff.md", cr._href(md_path) if md_path.exists() else "", "显式导出时由 version_update_detail_model 生成"),
                 ]
             ),
             open=False,

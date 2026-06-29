@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from lib_guard.project_config import DEFAULT_FILE_DIFF_TYPES
+
 
 SUPPORTED_PAIRWISE_TYPES = {
     "lef",
@@ -20,6 +22,8 @@ SUPPORTED_PAIRWISE_TYPES = {
     "snp",
     "cpm",
 }
+
+DEFAULT_PAIRWISE_FILE_DIFF_TYPES = set(DEFAULT_FILE_DIFF_TYPES)
 
 
 def _file_key(item: Mapping[str, Any]) -> str:
@@ -153,11 +157,11 @@ def build_pairwise_diff_tasks(
             continue
         old_type = _file_type(old_item)
         new_type = _file_type(new_item)
-        if old_type != new_type or old_type not in SUPPORTED_PAIRWISE_TYPES:
+        if old_type != new_type or old_type not in DEFAULT_PAIRWISE_FILE_DIFF_TYPES:
             continue
         add_task(old_type, rel, old_item, rel, new_item, reason="changed_file", confidence="path_exact")
 
-    for file_type in sorted(SUPPORTED_PAIRWISE_TYPES):
+    for file_type in sorted(DEFAULT_PAIRWISE_FILE_DIFF_TYPES):
         old_candidates = [
             (key, item)
             for key, item in old_items.items()
@@ -181,7 +185,7 @@ def build_pairwise_diff_tasks(
         "summary": {
             "total": len(tasks),
             "pending": len([t for t in tasks if t.get("status") == "PENDING"]),
-            "by_type": {key: len([t for t in tasks if t.get("file_type") == key]) for key in sorted(SUPPORTED_PAIRWISE_TYPES)},
+            "by_type": {key: len([t for t in tasks if t.get("file_type") == key]) for key in sorted(DEFAULT_PAIRWISE_FILE_DIFF_TYPES)},
         },
     }
 

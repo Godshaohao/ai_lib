@@ -7,10 +7,13 @@ from collections import Counter
 import hashlib
 import json
 
+from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
+
 from .pairwise import build_pairwise_diff_tasks, build_pairwise_task_status
 
 
-METADATA_ONLY_TYPES = {"db", "gds", "oas", "ndm", "milkyway"}
+METADATA_ONLY_TYPES = set(BINARY_METADATA_ONLY_TYPES)
+SUMMARY_ONLY_DIFF_TYPES = set(SUMMARY_ONLY_TYPES)
 RELEASE_EVIDENCE_TYPES = {"doc", "waiver"}
 
 
@@ -199,7 +202,7 @@ def _type_diff(file_diff: Mapping[str, Any]) -> dict[str, Any]:
             "removed": removed[:50],
             "changed": changed[:50],
             "status": "CHANGED" if changed_flag else "SAME",
-            "review_mode": "metadata_only" if file_type in METADATA_ONLY_TYPES else "manual_pairwise" if file_type in {"lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef"} else "governance",
+            "review_mode": "metadata_only" if file_type in METADATA_ONLY_TYPES else "summary_only" if file_type in SUMMARY_ONLY_DIFF_TYPES else "manual_pairwise" if file_type in DEFAULT_FILE_DIFF_TYPES else "governance",
         }
     return {
         "schema_version": "1.0",
