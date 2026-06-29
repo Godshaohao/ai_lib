@@ -23,6 +23,19 @@ The current source-of-truth modules are:
 | Review rendering | `src/lib_guard/render/` |
 | CLI | `src/lib_guard/cli.py`, `src/lib_guard/short_cli.py`, `src/lib_guard/cli_commands/` |
 
+Render ownership:
+
+| Page / boundary | Owner |
+| --- | --- |
+| Catalog render orchestration | `src/lib_guard/render/catalog_report.py::render_catalog_html` |
+| Catalog Browser and Library Workspace pages | `src/lib_guard/render/catalog_workspace_report.py` |
+| Version Detail and update detail model | `src/lib_guard/render/version_detail_report.py` |
+| Shared visual components | `src/lib_guard/render/product_theme.py` |
+
+`catalog_report.py` should stay as the catalog render facade and state/task
+adapter. It should not become the owner of Version Detail or manual compare page
+logic.
+
 Generated HTML and JSON under `work/` are review artifacts. They should be
 recreated from source data and policies.
 

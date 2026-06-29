@@ -11,7 +11,8 @@ Status: current
 | `cat` | 刷新 catalog 和 catalog HTML |
 | `override` | 人工确认版本 stage/base/package 关系 |
 | `scan` | 扫描一个版本或一批版本 |
-| `cmp` | 对比更新版本和 base 版本 |
+| `refresh` | 刷新 Version Review 的更新详情，默认按当前有效库语义选择 base |
+| `cmp` | 手动对比更新版本和指定 base 版本 |
 | `fd` | 运行单文件两两 diff |
 | `rv-check` / `rv-list` | 查看 Review Gate 状态 |
 | `rv-accept` / `rv-waive` | 记录 owner 决策 |
@@ -38,6 +39,7 @@ lg.csh library apply
 lg.csh cat --with-evidence
 lg.csh override ucie stable_20250608 --stage stable --base stable_20250601
 lg.csh scan ucie stable_20250608
+lg.csh refresh ucie stable_20250608
 lg.csh cmp ucie stable_20250608 --base stable_20250601 --scan-if-missing
 lg.csh fd ucie stable_20250608 lef/ucie.lef --base stable_20250601 --type lef
 lg.csh rv-check ucie stable_20250608 --gate current
@@ -45,6 +47,37 @@ lg.csh rv-accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by
 lg.csh action ucie
 lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
 ```
+
+## `refresh` 和 `cmp` 的边界
+
+`refresh` 是版本详情页更新证据的日常入口。默认行为是：
+
+- 优先使用 `current_effective`。
+- 没有当前有效库时使用 `previous_effective`。
+- 找不到可信 base 时让状态进入 `NEEDS_BASE_CONFIRM`，不伪装成真实 diff。
+
+`adjacent` 只用于手动 compare 场景，必须显式指定：
+
+```csh
+lg.csh refresh ucie stable_20250608 --mode adjacent
+lg.csh cmp ucie stable_20250608 --mode adjacent --scan-if-missing
+```
+
+`cmp` 是手动比较工具，适合指定 `--base`、调试 adjacent/cumulative，或生成独立
+Comparison Review。
+
+## 文件类型 lane
+
+默认 File Diff 推荐只覆盖 `DEFAULT_FILE_DIFF_TYPES`，避免把大文件、多文件集合和
+二进制工艺视图当作普通文本 diff：
+
+| Lane | 类型 | 默认行为 |
+| --- | --- | --- |
+| `DEFAULT_FILE_DIFF_TYPES` | `lef`, `cdl`, `spice`, `sp`, `sdc`, `upf`, `cpf`, `waiver`, `ibis`, `pwl`, `snp`, `touchstone`, `cpm` | 可以生成推荐 File Diff |
+| `SUMMARY_ONLY_TYPES` | `verilog`, `systemverilog`, `liberty`, `lib`, `spef` | 只做 summary/count/corner/metadata，不默认生成 fd command |
+| `BINARY_METADATA_ONLY_TYPES` | `db`, `gds`, `oas`, `layout`, `milkyway`, `ndm` | 只做二进制 metadata/hash/路径证据，不默认生成 fd command |
+
+用户仍可在确认必要时手动运行 `fd`，但默认推荐列表必须遵守上述 lane。
 
 ## 配置默认值
 

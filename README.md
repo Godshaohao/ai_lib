@@ -1,30 +1,27 @@
 # ai_lib / lib_guard
 
-`lib_guard` is a catalog-driven review toolkit for IC library and IP delivery.
-It discovers raw delivery trees, scans selected versions, compares version
-updates, renders review HTML, and prepares release evidence.
+`lib_guard` 是面向 IC library / IP 交付的 catalog 驱动审查工具。它负责发现
+raw delivery、扫描版本、生成结构化更新证据、渲染 HTML，并在 release 前准备
+可追溯证据。
 
-## Current Workflow
+## 当前主流程
 
 ```text
-Catalog -> Library Workspace -> Version Review -> Comparison Review -> File Diff -> Release
+Catalog -> Version Review -> Release
 ```
 
-- Catalog is the asset map and report hub.
-- Library Workspace shows the version timeline for one library.
-- Version Review combines release notes, scan evidence, parser summaries,
-  count-only/corner summaries, readiness, and embedded diff evidence.
-- Comparison Review shows structural changes between a selected base and update.
-- File Diff is a focused downstream review for selected files, not a progress
-  scoreboard.
-- Review Gate records only real blockers and owner accept/waive decisions. It is
-  not a multi-department approval workflow.
-- Release commands use manifest-driven file-level symlink by default and build
-  link/verify evidence only after scan and comparison evidence is available.
+- Catalog 是库资产地图和报告入口。
+- Version Review 是普通 reviewer 的主页面，包含 release notes、scan evidence、
+  parser summary、count/corner summary、readiness，以及相对当前有效库的更新证据。
+- Release 使用 manifest 驱动的文件级 symlink，只有 scan/diff/review gate 证据满足
+  条件后才进入 link/verify。
+- Library Workspace 是高级账本，用来查看单库 timeline、effective 组合和历史报告。
+- Comparison Review 是手动 compare / debug 入口，不是普通用户查看更新详情的唯一入口。
+- File Diff 只用于推荐下钻的关键文件，不是全量完成度 scoreboard。
+- Review Gate 只记录真实 blocker 和 owner accept/waive 决策，不是多部门审批流。
 
-The normal daily interface is the short command wrapper in `scripts/lg.csh`,
-`scripts/lg.ps1`, or `scripts/lg.cmd`. The lower-level `python -m lib_guard.cli`
-entry remains available for debugging and automation.
+日常使用优先走短命令：`scripts/lg.csh`、`scripts/lg.ps1`、`scripts/lg.cmd`。
+底层 `python -m lib_guard.cli` 入口保留给自动化、调试和测试。
 
 ## Repository Map
 
@@ -42,7 +39,7 @@ work/                    Generated local output, not source of truth
 Historical migration notes and workflow-pack material live under
 `docs/archive/`. They are not part of the current operating path.
 
-## Common csh Commands
+## 常用 csh 命令
 
 ```csh
 setenv PROJ /path/to/ai_lib/repo
@@ -52,6 +49,7 @@ setenv RAW  /path/to/raw_delivery
 $PROJ/scripts/lg.csh init $WORK --raw-root $RAW --library-type ip
 $PROJ/scripts/lg.csh cat --full --with-evidence
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
+$PROJ/scripts/lg.csh refresh <LIBRARY> <VERSION>
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --rescan
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> --base <BASE_VERSION> --type <FILE_TYPE>
@@ -60,19 +58,22 @@ $PROJ/scripts/lg.csh rv-accept <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> 
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 ```
 
-If `$WORK/lib_guard.yml` exists, `lg.csh` will use it automatically. You can
-also point at a config explicitly:
+`refresh` 用于刷新 Version Review 的更新详情，默认选择 `current_effective` 或
+`previous_effective` 作为 base；`cmp` 用于手动指定 base 或 adjacent/cumulative 等比较。
+
+如果 `$WORK/lib_guard.yml` 存在，`lg.csh` 会自动使用它。也可以显式指定：
 
 ```csh
 setenv LIB_GUARD_CONFIG $WORK/lib_guard.yml
 ```
 
-## Low-Level Commands
+## 底层命令与验证
 
 ```bash
 PYTHONPATH=src python -m lib_guard.cli catalog scan --root "$RAW" --out "$WORK/catalog" --render --html-out "$WORK/catalog/html" --policy configs/catalog_policy.json
 PYTHONPATH=src python -m lib_guard.cli run-batch --catalog "$WORK/catalog/catalog.json" --mode candidate --workdir "$WORK" --parse-jobs 8
 PYTHONPATH=src python -m lib_guard.cli compare --catalog "$WORK/catalog/catalog.json" --library <LIBRARY> --new <VERSION> --base <BASE_VERSION> --workdir "$WORK"
+PYTHONPATH=src python -m compileall -q src
 PYTHONPATH=src python -m unittest discover -s src/lib_guard/test -p "test*.py"
 ```
 
