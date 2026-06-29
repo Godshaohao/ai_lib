@@ -105,6 +105,19 @@ class RepositoryCleanupTest(unittest.TestCase):
         self.assertIn("render_catalog_index_page", catalog_report)
         self.assertIn("render_library_workspace_page", catalog_report)
 
+    def test_catalog_workspace_does_not_call_catalog_report_private_page_helpers(self) -> None:
+        workspace_report = (ROOT / "src" / "lib_guard" / "render" / "catalog_workspace_report.py").read_text(encoding="utf-8")
+        forbidden = [
+            "cr._render_library_home",
+            "cr._library_browser",
+            "cr._catalog_filter_panel",
+            "cr._catalog_browser_styles",
+            "cr._command_examples",
+            "cr._task_rows",
+        ]
+        hits = [token for token in forbidden if token in workspace_report]
+        self.assertFalse(hits, "catalog_workspace_report still calls private catalog_report helpers:\n" + "\n".join(hits))
+
 
 if __name__ == "__main__":
     unittest.main()
