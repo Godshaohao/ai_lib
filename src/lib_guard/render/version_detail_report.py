@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
+from lib_guard.review.io import read_json
 from lib_guard.render.catalog_workspace_report import catalog_browser_styles
+from lib_guard.render import catalog_render_common as common
+from lib_guard.render import catalog_report as catalog
 from lib_guard.render import product_theme as ui
 
 
@@ -19,12 +22,6 @@ P0_REVIEW_TYPES = {"lef", "cdl", "spice", "sp"}
 P1_REVIEW_TYPES = {"sdc", "upf", "cpf", "waiver", "ibis", "pwl", "snp", "touchstone", "cpm"}
 STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
 FALLBACK_BASE_REFS = {"adjacent_fallback", "recorded_base", "recorded_base_fallback", "unknown"}
-
-
-def _cr():
-    from lib_guard.render import catalog_report as cr
-
-    return cr
 
 
 def _version_id(version: Mapping[str, Any]) -> str:
@@ -90,7 +87,6 @@ def _cn_change_kind(value: Any) -> str:
 
 
 def _iter_file_changes(file_diff: Mapping[str, Any], *, raw_path: Any = None) -> list[dict[str, Any]]:
-    cr = _cr()
     changes: list[dict[str, Any]] = []
     for kind in ["added", "removed", "changed"]:
         value = file_diff.get(kind)
@@ -102,10 +98,10 @@ def _iter_file_changes(file_diff: Mapping[str, Any], *, raw_path: Any = None) ->
             iterable = []
         for item in iterable:
             if isinstance(item, Mapping):
-                path = cr._relative_display_path(item.get("path") or item.get("relpath") or item.get("file") or "-", base=raw_path)
+                path = common.relative_display_path(item.get("path") or item.get("relpath") or item.get("file") or "-", base=raw_path)
                 file_type = _infer_file_type(path, item.get("file_type") or item.get("type"))
             else:
-                path = cr._relative_display_path(item, base=raw_path)
+                path = common.relative_display_path(item, base=raw_path)
                 file_type = _infer_file_type(path)
             lane, hint = _review_lane(file_type)
             changes.append(
@@ -143,8 +139,7 @@ def _select_base(version: Mapping[str, Any]) -> tuple[str, str, str]:
     if diff_base and (diff_base_source in {"explicit", "current_effective"} or diff_kind == "current_library_diff"):
         base_ref = "current_effective" if diff_base_source == "current_effective" or diff_kind == "current_library_diff" else "explicit"
         return base_ref, str(diff_base), f"diff.base_version:{diff_base_source or diff_kind}"
-    cr = _cr()
-    full_base = cr._base_full_version(version)
+    full_base = common.base_full_version(version)
     if full_base:
         return "base_full", str(full_base), "base_full_version"
     adjacent = diff.get("adjacent_old_version")
@@ -214,9 +209,8 @@ def _select_diff_dir(version: Mapping[str, Any], *, base_ref: str, base_version:
 
 
 def _comparison_semantics(version: Mapping[str, Any]) -> tuple[str, str, str]:
-    cr = _cr()
-    package = cr._package_type(version)
-    node_type = cr._node_package_type(version)
+    package = common.package_type(version)
+    node_type = common.node_package_type(version)
     if package in {"PARTIAL_UPDATE", "PARTIAL", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"} or node_type in {"partial", "hotfix", "doc"}:
         return "incremental", "incremental compare", "out_of_scope_missing"
     return "full", "full compare", "real_delete"
@@ -337,22 +331,21 @@ def _primary_next_action(status: str, recommended_count: int, command_count: int
 
 
 def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> dict[str, Any]:
-    cr = _cr()
     out_path = Path(out)
     lib_id = _library_id(lib)
     version_id = _version_id(version)
-    safe_lib = cr._safe(lib_id)
-    safe_ver = cr._safe(version_id)
+    safe_lib = common.safe(lib_id)
+    safe_ver = common.safe(version_id)
     base_ref, base_version, base_source = _select_base(version)
     comparison_semantics, compare_strategy, delete_semantics = _comparison_semantics(version)
     diff_dir = _select_diff_dir(version, base_ref=base_ref, base_version=base_version)
-    summary = dict(cr._version_diff_summary(diff_dir))
-    file_diff = dict(cr._version_file_diff(diff_dir))
-    view_diff = dict(cr._version_diff_json(diff_dir, "view_diff.json"))
-    type_diff = dict(cr._version_diff_json(diff_dir, "type_diff.json"))
-    release_readiness_diff = dict(cr._version_diff_json(diff_dir, "release_readiness_diff.json"))
-    release_evidence_diff = dict(cr._version_diff_json(diff_dir, "release_evidence_diff.json"))
-    diff_issues = dict(cr._version_diff_json(diff_dir, "diff_issues.json"))
+    summary = dict(common.version_diff_summary(diff_dir))
+    file_diff = dict(common.version_file_diff(diff_dir))
+    view_diff = dict(common.version_diff_json(diff_dir, "view_diff.json"))
+    type_diff = dict(common.version_diff_json(diff_dir, "type_diff.json"))
+    release_readiness_diff = dict(common.version_diff_json(diff_dir, "release_readiness_diff.json"))
+    release_evidence_diff = dict(common.version_diff_json(diff_dir, "release_evidence_diff.json"))
+    diff_issues = dict(common.version_diff_json(diff_dir, "diff_issues.json"))
     file_changes = _iter_file_changes(file_diff, raw_path=version.get("raw_path"))
     changed_files = summary.get("changed_files")
     if changed_files is None:
@@ -366,7 +359,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         status = "CHANGED"
     else:
         status = summary_status or "SAME"
-    release_notes = cr._version_release_notes(version.get("raw_path"))
+    release_notes = common.version_release_notes(version.get("raw_path"))
     recommended_file_diff, summary_only_reviewed, metadata_only_reviewed = _group_file_changes_by_review_mode(file_changes)
     metadata_only = summary_only_reviewed + metadata_only_reviewed
     commands = _file_diff_commands(lib, version, base_version, file_changes)
@@ -394,7 +387,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "base_source": base_source,
         "base_trust_status": _base_trust_status(base_ref),
         "base_trust_note": _base_trust_note(base_ref),
-        "package_type": cr._package_type(version),
+        "package_type": common.package_type(version),
         "compare_strategy": compare_strategy,
         "comparison_semantics": comparison_semantics,
         "delete_semantics": delete_semantics,
@@ -466,14 +459,13 @@ def _file_change_rows(model: Mapping[str, Any]) -> list[str]:
 
 
 def _release_note_rows(model: Mapping[str, Any]) -> list[str]:
-    cr = _cr()
     rows: list[str] = []
     for item in model.get("release_notes", []) or []:
         if not isinstance(item, Mapping):
             continue
         rows.append(
             "<tr>"
-            f"<td><code>{ui.esc(cr._relative_display_path(item.get('path') or '-'))}</code></td>"
+            f"<td><code>{ui.esc(common.relative_display_path(item.get('path') or '-'))}</code></td>"
             f"<td>{ui.esc(item.get('summary') or '-')}</td>"
             "</tr>"
         )
@@ -575,7 +567,7 @@ def _version_overview_panel(
         f"<div class='overview-cell'><b>证据</b><em>{ui.esc(file_total)} 文件 / {ui.esc(parser_task_count)} Parser / {ui.esc(count_only_total)} 大文件</em></div>"
         f"<div class='overview-cell'><b>Scan</b><em>{ui.esc(ui.status_label(version.get('scan_status')))}</em></div>"
         f"<div class='overview-cell'><b>Diff</b><em>{ui.esc(ui.status_label(version.get('diff_status') or model.get('status')))}</em></div>"
-        f"<div class='overview-cell'><b>关系</b><em>{ui.esc(_cr()._relation_label(relation))}</em></div>"
+        f"<div class='overview-cell'><b>关系</b><em>{ui.esc(common.relation_label(relation))}</em></div>"
         f"<div class='overview-cell'><b>包类型</b><em>{ui.esc(model.get('package_type') or '-')}</em></div>"
         "</div></section>"
     )
@@ -590,7 +582,6 @@ def _version_context_panel(
     model: Mapping[str, Any],
     scan_dir: Path | None,
 ) -> str:
-    cr = _cr()
     rows = [
         ("库", lib_id),
         ("版本", version_id),
@@ -598,15 +589,15 @@ def _version_context_panel(
         ("对比语义", _cn_semantics(model.get("comparison_semantics"))),
         ("删除语义", _cn_delete_semantics(model.get("delete_semantics"))),
         ("scan_id", (version.get("scan") or {}).get("scan_id") or version.get("scan_id") or "-"),
-        ("Raw Relpath", cr._raw_relpath(version.get("raw_path"))),
+        ("Raw Relpath", catalog._raw_relpath(version.get("raw_path"))),
     ]
     body = "<div class='context-list'>" + "".join(
         f"<div class='context-row'><b>{ui.esc(label)}</b><em>{ui.esc(value)}</em></div>" for label, value in rows
     ) + "</div>"
-    body += cr._absolute_path_box("绝对 Raw 路径", version.get("raw_path"))
+    body += catalog._absolute_path_box("绝对 Raw 路径", version.get("raw_path"))
     body += ui.action_strip([
-        ui.button("库工作台", cr._href(out_path / "libraries" / safe_lib / "index.html"), "primary", target="_blank"),
-        ui.button("Scan 目录", cr._href(scan_dir), "secondary", disabled=not bool(scan_dir), target="_blank"),
+        ui.button("库工作台", common.href(out_path / "libraries" / safe_lib / "index.html"), "primary", target="_blank"),
+        ui.button("Scan 目录", common.href(scan_dir), "secondary", disabled=not bool(scan_dir), target="_blank"),
     ])
     return ui.panel("版本上下文", "固定查看当前版本的来源、Base 和证据入口。", body)
 
@@ -714,7 +705,7 @@ def _unknown_file_breakdown_rows(inventory: Mapping[str, Any]) -> list[str]:
     return rows
 
 
-def _unknown_file_breakdown_html(cr: Any, inventory: Mapping[str, Any]) -> str:
+def _unknown_file_breakdown_html(inventory: Mapping[str, Any]) -> str:
     rows = _unknown_file_breakdown_rows(inventory)
     if not rows:
         return ""
@@ -722,7 +713,7 @@ def _unknown_file_breakdown_html(cr: Any, inventory: Mapping[str, Any]) -> str:
         "<details class='detail-fold review-fold unknown-detail'>"
         "<summary>未知文件细分</summary>"
         "<div class='muted-box'>unknown 不是最终分类；这里按扩展名和无扩展名聚合，方便补规则或人工确认。</div>"
-        + cr._scroll_table(["类型线索", "数量", "代表文件", "审查动作"], rows, "当前没有 unknown 文件", "unknown-detail-scroll")
+        + catalog._scroll_table(["类型线索", "数量", "代表文件", "审查动作"], rows, "当前没有 unknown 文件", "unknown-detail-scroll")
         + "</details>"
     )
 
@@ -793,7 +784,6 @@ def _view_coverage_rows(
 
 
 def _view_coverage_panel(
-    cr: Any,
     inventory: Mapping[str, Any],
     parser_manifest: Mapping[str, Any],
     readiness: Mapping[str, Any],
@@ -814,34 +804,34 @@ def _view_coverage_panel(
             ("未知文件", unknown_count, "需要补分类或人工确认", "WARNING" if unknown_count else "PASS"),
             ("流程/技术配置", manual_count, "flow_config / tech_config", "WARNING" if manual_count else "INFO"),
         ])
-        + cr._scroll_table(
+        + catalog._scroll_table(
             ["View / Scope", "要求", "文件数", "状态", "Parser", "校验级别", "代表路径 / 说明"],
             rows,
             "当前 Scan 没有可展示的 view 覆盖信息",
             "view-coverage-scroll",
         )
-        + _unknown_file_breakdown_html(cr, inventory),
+        + _unknown_file_breakdown_html(inventory),
     )
 
 
-def _count_only_panel(cr: Any, counts: Mapping[str, int], corner_summary: Mapping[str, Any], count_only_total: int) -> str:
+def _count_only_panel(counts: Mapping[str, int], corner_summary: Mapping[str, Any], count_only_total: int) -> str:
     empty = ""
     if not count_only_total:
         empty += "<div class='empty-guidance'><b>当前 Raw Scan 没有发现大文件计数项</b>如果这是增量包，base/effective 中的 .lib/.db/.gds/.spef 不会在本页重复统计。</div>"
     if not (corner_summary or {}).get("total_corner_files"):
         empty += "<div class='empty-guidance'><b>当前 Raw Scan 没有识别到 PVT Corner 文件名</b>只有文件名中带 PVT 信息的库文件会进入 Corner 汇总。</div>"
-    corner_rows = cr._version_corner_rows(corner_summary and {"corner_filename_summary": corner_summary} or {})
+    corner_rows = catalog._version_corner_rows(corner_summary and {"corner_filename_summary": corner_summary} or {})
     corner_detail = (
         "<details class='detail-fold review-fold corner-detail'>"
         "<summary>PVT Corner 明细</summary>"
-        + cr._scroll_table(["文件类型", "工艺", "电压", "温度", "路径"], corner_rows, "当前 Raw Scan 没有识别到 PVT Corner 文件名", "corner-detail-scroll")
+        + catalog._scroll_table(["文件类型", "工艺", "电压", "温度", "路径"], corner_rows, "当前 Raw Scan 没有识别到 PVT Corner 文件名", "corner-detail-scroll")
         + "</details>"
     )
     return ui.panel(
         "大文件与 PVT Corner",
         "GDS/SPEF/Liberty/DB/OAS/Verilog 默认按大文件/多文件策略处理：统计数量、识别文件名 PVT，不在常规版本审查中读取完整内容。",
         ui.metric_grid([
-            ("大文件计数", count_only_total, ", ".join(f"{k}:{counts[k]}" for k in sorted(cr.VERSION_COUNT_ONLY_TYPES) if counts.get(k)) or "无", "INFO" if count_only_total else "PASS"),
+            ("大文件计数", count_only_total, ", ".join(f"{k}:{counts[k]}" for k in sorted(catalog.VERSION_COUNT_ONLY_TYPES) if counts.get(k)) or "无", "INFO" if count_only_total else "PASS"),
             ("工艺角", len((corner_summary or {}).get("process_counts") or {}), ", ".join(f"{k}:{v}" for k, v in ((corner_summary or {}).get("process_counts") or {}).items()) or "无", "PASS" if (corner_summary or {}).get("process_counts") else "INFO"),
             ("电压角", len((corner_summary or {}).get("voltage_counts") or {}), ", ".join(f"{k}:{v}" for k, v in ((corner_summary or {}).get("voltage_counts") or {}).items()) or "无", "PASS" if (corner_summary or {}).get("voltage_counts") else "INFO"),
             ("温度角", len((corner_summary or {}).get("temperature_counts") or {}), ", ".join(f"{k}:{v}" for k, v in ((corner_summary or {}).get("temperature_counts") or {}).items()) or "无", "PASS" if (corner_summary or {}).get("temperature_counts") else "INFO"),
@@ -850,7 +840,7 @@ def _count_only_panel(cr: Any, counts: Mapping[str, int], corner_summary: Mappin
         + ui.faceted_table(
             "count-only-files",
             ["文件类型", "数量", "默认处理"],
-            cr._version_count_only_rows(counts),
+            catalog._version_count_only_rows(counts),
             "当前 Raw Scan 没有发现大文件计数项",
             "搜索大文件类型 / 处理方式",
             [(0, "文件类型"), (2, "默认处理")],
@@ -859,8 +849,8 @@ def _count_only_panel(cr: Any, counts: Mapping[str, int], corner_summary: Mappin
     )
 
 
-def _parser_panel(cr: Any, parser_manifest: Mapping[str, Any], parser_results: Mapping[str, Any]) -> str:
-    rows = cr._version_parser_aggregate_rows(parser_manifest, parser_results)
+def _parser_panel(parser_manifest: Mapping[str, Any], parser_results: Mapping[str, Any]) -> str:
+    rows = catalog._version_parser_aggregate_rows(parser_manifest, parser_results)
     empty = ""
     if not rows:
         empty = "<div class='empty-guidance'><b>当前 Scan 没有生成可展示的 Parser 结果</b>常见原因：本次 raw 包只包含文档/脚本，或相关文件类型没有 parser 任务。</div>"
@@ -894,7 +884,6 @@ def _quality_panel(parser_task_count: int, count_only_total: int, file_total: in
 
 
 def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
-    cr = _cr()
     base_version = model.get("base_version") or "-"
     base_ref = model.get("base_ref") or "NEEDS_BASE_CONFIRM"
     diff_hint = model.get("diff_summary_path") or "请运行 lg lib-diff / lg cmp 生成 diff_summary.json"
@@ -956,12 +945,12 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
             ]
         )
         + "<h3>Diff 指标</h3>"
-        + cr._scroll_table(["指标", "数值"], _metric_rows(model), "暂无自动 Diff 结果；下一步运行 lg cmp 或 lg lib-diff。", "metric-scroll")
+        + catalog._scroll_table(["指标", "数值"], _metric_rows(model), "暂无自动 Diff 结果；下一步运行 lg cmp 或 lg lib-diff。", "metric-scroll")
         + "<h3>变化文件</h3>"
         + metadata_note
-        + cr._scroll_table(["变化", "类型", "路径", "审查级别", "建议"], _file_change_rows(model), empty_next, "change-scroll")
+        + catalog._scroll_table(["变化", "类型", "路径", "审查级别", "建议"], _file_change_rows(model), empty_next, "change-scroll")
         + "<h3>Recommended File Diff</h3>"
-        + cr._scroll_table(
+        + catalog._scroll_table(
             ["变化", "类型", "路径", "审查级别", "建议"],
             _file_change_rows_for(model.get("recommended_file_diff", [])),
             "暂无 P0/P1 文件级 Diff 建议。",
@@ -969,7 +958,7 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         )
         + "<h3>Summary-only Reviewed</h3>"
         + "<div class='quality-note'>已完成摘要级审查；默认无需展开全文。</div>"
-        + cr._scroll_table(
+        + catalog._scroll_table(
             ["变化", "类型", "路径", "审查级别", "建议"],
             _file_change_rows_for(model.get("summary_only_reviewed", [])),
             "暂无 summary-only 审查项。",
@@ -977,7 +966,7 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         )
         + "<h3>Metadata-only Reviewed</h3>"
         + "<div class='quality-note'>已完成 metadata-only 审查；二进制/版图文件默认不做全文 diff。</div>"
-        + cr._scroll_table(
+        + catalog._scroll_table(
             ["变化", "类型", "路径", "审查级别", "建议"],
             _file_change_rows_for(model.get("metadata_only_reviewed", [])),
             "暂无 metadata-only 审查项。",
@@ -1088,22 +1077,21 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
 
 
 def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version: Mapping[str, Any], *, export_markdown: bool = False) -> str:
-    cr = _cr()
     out_path = Path(out)
     lib_id = _library_id(lib)
     version_id = _version_id(version)
-    safe_lib = cr._safe(lib_id)
-    safe_ver = cr._safe(version_id)
+    safe_lib = common.safe(lib_id)
+    safe_ver = common.safe(version_id)
     page = out_path / "libraries" / safe_lib / "versions" / safe_ver / "index.html"
-    tags = cr._version_tags(version)
-    relation = cr._relation_status(version)
+    tags = catalog._version_tags(version)
+    relation = common.relation_status(version)
     rail = ui.status_rail(
         [
             ("Catalog", "DISCOVERED", "Version is registered in the catalog"),
             ("Scan", version.get("scan_status") or "NOT_SCANNED", "Single-version scan evidence"),
-            ("Relation", relation, cr._relation_label(relation)),
+            ("Relation", relation, common.relation_label(relation)),
             ("Compare", version.get("diff_status") or "COMPARE_PENDING", "Current-library update detail"),
-            ("File Review", cr._file_review_status(version), cr._file_review_text(version)),
+            ("File Review", common.file_review_status(version), common.file_review_text(version)),
         ]
     )
     model = build_version_update_detail_model(out_path, lib, version)
@@ -1111,13 +1099,13 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
     model["markdown_export_path"] = str(md_path)
     if export_markdown:
         export_current_lib_diff_markdown(model, md_path)
-    scan_dir = cr._version_scan_dir(version)
-    inventory = cr._scan_inventory(scan_dir)
-    parser_manifest = cr._scan_parser_manifest(scan_dir)
-    parser_results = cr._scan_parser_results(scan_dir)
-    release_readiness = cr.read_json(scan_dir / "summary" / "release_readiness.json", default={}) if scan_dir else {}
-    counts = cr._version_file_type_counts(inventory)
-    count_only_total = sum(int(counts.get(item, 0) or 0) for item in cr.VERSION_COUNT_ONLY_TYPES)
+    scan_dir = catalog._version_scan_dir(version)
+    inventory = catalog._scan_inventory(scan_dir)
+    parser_manifest = catalog._scan_parser_manifest(scan_dir)
+    parser_results = catalog._scan_parser_results(scan_dir)
+    release_readiness = read_json(scan_dir / "summary" / "release_readiness.json", default={}) if scan_dir else {}
+    counts = catalog._version_file_type_counts(inventory)
+    count_only_total = sum(int(counts.get(item, 0) or 0) for item in catalog.VERSION_COUNT_ONLY_TYPES)
     parser_task_count = sum(
         1
         for file_entry in (parser_manifest.get("files", []) or [])
@@ -1141,9 +1129,9 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
         + "<div class='version-dashboard'><main class='version-main'>"
         + render_version_update_detail_panel(model)
         + _raw_scan_scope_note(model, parser_task_count=parser_task_count, count_only_total=count_only_total)
-        + _view_coverage_panel(cr, inventory, parser_manifest, release_readiness, counts)
-        + _count_only_panel(cr, counts, corner_summary, count_only_total)
-        + _parser_panel(cr, parser_manifest, parser_results)
+        + _view_coverage_panel(inventory, parser_manifest, release_readiness, counts)
+        + _count_only_panel(counts, corner_summary, count_only_total)
+        + _parser_panel(parser_manifest, parser_results)
         + "</main><aside class='version-side'>"
         + _version_context_panel(out_path, safe_lib, lib_id, version_id, version, model, scan_dir)
         + _quality_panel(parser_task_count, count_only_total, file_total, corner_summary, model)
@@ -1156,7 +1144,7 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
                     ("Parser 视图", parser_task_count, "LEF / RTL / CDL / SDC / UPF", "PASS" if parser_task_count else "WARNING"),
                     ("大文件计数", count_only_total, "常规审查不读取完整内容", "INFO" if count_only_total else "PASS"),
                     ("Diff 状态", ui.status_label(version.get("diff_status") or model.get("status")), "当前版本更新详情", version.get("diff_status") or model.get("status")),
-                    ("文件审查", cr._file_review_text(version), "优先查看 P0/P1 文件级 Diff", cr._file_review_status(version)),
+                    ("文件审查", common.file_review_text(version), "优先查看 P0/P1 文件级 Diff", common.file_review_status(version)),
                 ]
             ),
         )
@@ -1166,11 +1154,11 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
             "原始 JSON、Scan 目录和 Markdown 导出默认折叠，便于人工追溯。",
             ui.trace_link_list(
                 [
-                    ("scan_dir", cr._href(scan_dir), "Raw Scan 输出目录"),
-                    ("file_inventory.json", cr._href(scan_dir / "file_inventory.json") if scan_dir else "", "本页文件清单来源"),
-                    ("parser_manifest.json", cr._href(scan_dir / "parser_manifest.json") if scan_dir else "", "Parser 任务清单"),
-                    ("parser_results.json", cr._href(scan_dir / "parser_results.json") if scan_dir else "", "Parser 结果数据"),
-                    ("current_lib_diff.md", cr._href(md_path) if md_path.exists() else "", "显式导出时由 version_update_detail_model 生成"),
+                    ("scan_dir", common.href(scan_dir), "Raw Scan 输出目录"),
+                    ("file_inventory.json", common.href(scan_dir / "file_inventory.json") if scan_dir else "", "本页文件清单来源"),
+                    ("parser_manifest.json", common.href(scan_dir / "parser_manifest.json") if scan_dir else "", "Parser 任务清单"),
+                    ("parser_results.json", common.href(scan_dir / "parser_results.json") if scan_dir else "", "Parser 结果数据"),
+                    ("current_lib_diff.md", common.href(md_path) if md_path.exists() else "", "显式导出时由 version_update_detail_model 生成"),
                 ]
             ),
             open=False,
@@ -1180,9 +1168,9 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
         [
             ("目录", "DISCOVERED", "版本已进入 catalog"),
             ("Scan", version.get("scan_status") or "NOT_SCANNED", "单版本扫描证据"),
-            ("关系", relation, cr._relation_label(relation)),
+            ("关系", relation, common.relation_label(relation)),
             ("Diff", version.get("diff_status") or model.get("status") or "COMPARE_PENDING", "当前版本对比状态"),
-            ("文件审查", cr._file_review_status(version), cr._file_review_text(version)),
+            ("文件审查", common.file_review_status(version), common.file_review_text(version)),
         ]
     )
     html = ui.review_page_shell(
@@ -1195,5 +1183,5 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
         nav="<a href='../../../index.html'>目录</a><a class='active' href='#'>版本详情</a><a href='../index.html'>库工作台</a>",
         meta=ui.compact_meta([("库", lib_id), ("版本", version_id), ("标签", ", ".join(sorted(tags)))]),
     )
-    cr._write_text(page, html)
+    common.write_text(page, html)
     return str(page)

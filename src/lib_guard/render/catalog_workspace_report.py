@@ -5,13 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from lib_guard.render import catalog_render_common as common
+from lib_guard.render import catalog_report as catalog
 from lib_guard.render import product_theme as ui
-
-
-def _cr():
-    from lib_guard.render import catalog_report as cr
-
-    return cr
 
 
 def render_library_workspace_page(
@@ -33,27 +29,26 @@ def build_library_report_index_entry(
     effective_items: list[dict[str, Any]],
     compare_items: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    cr = _cr()
     out_path = Path(out)
     lib_id = str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "")
-    timeline, latest_effective_ref = cr._library_timeline(lib, effective_items)
+    timeline, latest_effective_ref = catalog._library_timeline(lib, effective_items)
     versions: dict[str, Any] = {}
     for version in lib.get("versions", []) or []:
         version_id = str(version.get("version_id") or version.get("version") or "")
-        links = cr._version_links(version)
-        refs = cr._version_effective_refs(version_id, effective_items)
+        links = common.version_links(version)
+        refs = catalog._version_effective_refs(version_id, effective_items)
         versions[version_id] = {
-            "home": cr._rel_href(out_path, links.get("version_review_html")),
-            "scan": cr._rel_href(out_path, links.get("scan_html")),
-            "diffs": [cr._rel_href(out_path, links.get("diff_html"))] if links.get("diff_html") else [],
+            "home": common.rel_href(out_path, links.get("version_review_html")),
+            "scan": common.rel_href(out_path, links.get("scan_html")),
+            "diffs": [common.rel_href(out_path, links.get("diff_html"))] if links.get("diff_html") else [],
             "contributes_to_effective": [str(item.get("effective_id")) for item in refs],
         }
     effective = {
         str(item.get("effective_id")): {
-            "html": cr._rel_href(out_path, item.get("html")),
-            "manifest": cr._rel_href(out_path, item.get("manifest")),
-            "release_preview": cr._rel_href(out_path, item.get("release_preview")),
-            "release_manifest": cr._rel_href(out_path, item.get("release_manifest")),
+            "html": common.rel_href(out_path, item.get("html")),
+            "manifest": common.rel_href(out_path, item.get("manifest")),
+            "release_preview": common.rel_href(out_path, item.get("release_preview")),
+            "release_manifest": common.rel_href(out_path, item.get("release_manifest")),
             "summary": {
                 "file_count": item.get("file_count", 0),
                 "component_count": item.get("component_count", 0),
@@ -64,15 +59,15 @@ def build_library_report_index_entry(
         }
         for item in effective_items
     }
-    current_effective = cr._latest_effective_item(effective_items) or {}
+    current_effective = catalog._latest_effective_item(effective_items) or {}
     compare_reports = {
         str(item.get("compare_id")): {
             "mode": item.get("mode"),
             "old_target": item.get("old_target", {}),
             "new_target": item.get("new_target", {}),
             "owner_target": item.get("owner_target") or "",
-            "html": cr._rel_href(out_path, item.get("html")),
-            "manifest": cr._rel_href(out_path, item.get("manifest")),
+            "html": common.rel_href(out_path, item.get("html")),
+            "manifest": common.rel_href(out_path, item.get("manifest")),
             "summary": {
                 "changed_files": item.get("changed_files", 0),
                 "risk_count": item.get("risk_count", 0),
@@ -84,38 +79,37 @@ def build_library_report_index_entry(
     }
     return {
         "library_id": lib_id,
-        "home": cr._rel_href(out_path, lib.get("library_home_html")),
+        "home": common.rel_href(out_path, lib.get("library_home_html")),
         "versions": versions,
         "effective": effective,
         "current_effective": str(current_effective.get("effective_id") or "") if current_effective else "",
         "latest_effective_ref": latest_effective_ref,
-        "timeline": cr._timeline_for_report_index(out_path, timeline),
+        "timeline": catalog._timeline_for_report_index(out_path, timeline),
         "compare_reports": compare_reports,
     }
 
 
 def _safe(value: Any) -> str:
-    return _cr()._safe(value)
+    return common.safe(value)
 
 
 def _write_text(path: Path, text: str) -> None:
-    _cr()._write_text(path, text)
+    common.write_text(path, text)
 
 
 def _href(path: Any) -> str:
-    return _cr()._href(path)
+    return common.href(path)
 
 
 def _short_path(path: Any, limit: int = 72) -> str:
-    return _cr()._short_path(path, limit)
+    return common.short_path(path, limit)
 
 
 def _version_display_text(version: Mapping[str, Any]) -> str:
-    return _cr()._version_display_text(version)
+    return catalog._version_display_text(version)
 
 
 def _timeline_rows(out: Path, timeline: list[dict[str, Any]], latest_effective_ref: str) -> list[str]:
-    cr = _cr()
     rows = []
     for node in reversed(timeline):
         node_kind = str(node.get("node_kind") or "-")
@@ -130,11 +124,11 @@ def _timeline_rows(out: Path, timeline: list[dict[str, Any]], latest_effective_r
         rows.append(
             "<tr>"
             f"<td>{ui.esc(node.get('event_time') or '-')}</td>"
-            f"<td><b title='{ui.esc(version_id)}'>{ui.esc(cr._short_name(version_id))}</b></td>"
+            f"<td><b title='{ui.esc(version_id)}'>{ui.esc(common.short_name(version_id))}</b></td>"
             f"<td>{ui.badge(node_kind, node_kind)} {ui.badge(package_type, package_type)}</td>"
             f"<td>{ui.badge(usage, usage.replace('_', ' '))}</td>"
             f"<td>{ui.badge('CURRENT' if pointer == 'current' else 'INFO', pointer)}</td>"
-            f"<td><span title='{ui.esc(source_text)}'>{ui.esc(cr._short_name(source_text))}</span></td>"
+            f"<td><span title='{ui.esc(source_text)}'>{ui.esc(common.short_name(source_text))}</span></td>"
             f"<td>{ui.action_strip([ui.button('Open', _href(detail_href), 'primary' if pointer == 'current' else 'secondary', disabled=not bool(detail_href), target='_blank')])}</td>"
             "</tr>"
         )
@@ -142,9 +136,8 @@ def _timeline_rows(out: Path, timeline: list[dict[str, Any]], latest_effective_r
 
 
 def _version_primary_action(version: Mapping[str, Any]) -> tuple[str, str, str, bool]:
-    cr = _cr()
-    links = cr._version_links(version)
-    relation = cr._relation_status(version)
+    links = common.version_links(version)
+    relation = common.relation_status(version)
     version_review = _href(links.get("version_review_html"))
     if relation == "NEED_BINDING":
         return "绑定", version_review, "primary", not bool(version_review)
@@ -164,7 +157,6 @@ def _compare_target_label(target: Mapping[str, Any]) -> str:
 
 
 def _compare_index_rows(lib: Mapping[str, Any], compare_items: list[dict[str, Any]] | None = None) -> list[str]:
-    cr = _cr()
     rows = []
     for item in compare_items or []:
         old_label = _compare_target_label(item.get("old_target", {}) or {})
@@ -174,26 +166,26 @@ def _compare_index_rows(lib: Mapping[str, Any], compare_items: list[dict[str, An
         rows.append(
             "<tr>"
             f"<td><code>{ui.esc(item.get('mode') or '-')}</code><div class='muted'>{ui.esc(item.get('compare_id') or '-')}</div></td>"
-            f"<td><span title='{ui.esc(old_label)}'>{ui.esc(cr._short_name(old_label))}</span></td>"
-            f"<td><span title='{ui.esc(new_label)}'>{ui.esc(cr._short_name(new_label))}</span></td>"
+            f"<td><span title='{ui.esc(old_label)}'>{ui.esc(common.short_name(old_label))}</span></td>"
+            f"<td><span title='{ui.esc(new_label)}'>{ui.esc(common.short_name(new_label))}</span></td>"
             f"<td>{ui.badge(status, {'RISK': '需复核', 'CHANGED': '有变化', 'OK': '无变化'}.get(status, status))}</td>"
             f"<td>{ui.esc(item.get('changed_files', 0))}</td>"
             f"<td>{ui.esc(actions.get('replace', 0))}</td>"
-            f"<td><span title='{ui.esc(item.get('owner_target') or '')}'>{ui.esc(cr._short_name(item.get('owner_target') or '-'))}</span></td>"
+            f"<td><span title='{ui.esc(item.get('owner_target') or '')}'>{ui.esc(common.short_name(item.get('owner_target') or '-'))}</span></td>"
             f"<td>{ui.action_strip([ui.button('打开报告', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('Manifest', _href(item.get('manifest')), 'secondary', disabled=not bool(item.get('manifest')), target='_blank')])}</td>"
             "</tr>"
         )
     if rows:
         return rows
-    for item in cr._build_comparisons_for_library(lib):
+    for item in catalog._build_comparisons_for_library(lib):
         old_version = str(item.get("old_version") or "-")
         new_version = str(item.get("new_version") or "-")
         diff_html = item.get("diff_html")
         rows.append(
             "<tr>"
             f"<td><code>{ui.esc(item.get('mode') or '-')}</code></td>"
-            f"<td><span title='{ui.esc(old_version)}'>{ui.esc(cr._short_name(old_version))}</span></td>"
-            f"<td><span title='{ui.esc(new_version)}'>{ui.esc(cr._short_name(new_version))}</span></td>"
+            f"<td><span title='{ui.esc(old_version)}'>{ui.esc(common.short_name(old_version))}</span></td>"
+            f"<td><span title='{ui.esc(new_version)}'>{ui.esc(common.short_name(new_version))}</span></td>"
             f"<td>{ui.badge(item.get('status') or 'COMPARE_PENDING')}</td>"
             f"<td>{ui.esc(item.get('recommended_total', 0))}</td>"
             f"<td>{ui.esc(item.get('candidate_total', 0))}</td>"
@@ -205,17 +197,16 @@ def _compare_index_rows(lib: Mapping[str, Any], compare_items: list[dict[str, An
 
 
 def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: list[dict[str, Any]], compare_items: list[dict[str, Any]] | None = None) -> str:
-    cr = _cr()
     lib_id = str(lib.get("library_id") or lib.get("display_name") or "library")
     safe = _safe(lib_id)
     html_path = out / "libraries" / safe / "index.html"
     versions = list(lib.get("versions", []) or [])
-    timeline, latest_effective_ref = cr._library_timeline(lib, effective_items)
-    latest_effective = cr._latest_effective_item(effective_items)
+    timeline, latest_effective_ref = catalog._library_timeline(lib, effective_items)
+    latest_effective = catalog._latest_effective_item(effective_items)
     latest_node = next((node for node in timeline if str(node.get("version_id") or "") == latest_effective_ref), {})
-    not_scanned = sum(1 for v in versions if "not_scanned" in cr._version_tags(v))
-    diff_pending = sum(1 for v in versions if cr._status_key(v.get("diff_status")) in {"DIFF_PENDING", "DIFF_NOT_READY", "COMPARE_PENDING"})
-    need_bind = sum(1 for v in versions if cr._relation_status(v) == "NEED_BINDING")
+    not_scanned = sum(1 for v in versions if "not_scanned" in catalog._version_tags(v))
+    diff_pending = sum(1 for v in versions if common.status_key(v.get("diff_status")) in {"DIFF_PENDING", "DIFF_NOT_READY", "COMPARE_PENDING"})
+    need_bind = sum(1 for v in versions if common.relation_status(v) == "NEED_BINDING")
     body = (
         _catalog_browser_styles()
         + ui.panel(
@@ -278,38 +269,35 @@ def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: lis
 
 
 def _latest_full_version(versions: list[Mapping[str, Any]]) -> str:
-    cr = _cr()
     for version in reversed(versions):
-        if cr._is_full_baseline(version):
+        if common.is_full_baseline(version):
             return str(version.get("version_id") or version.get("version") or "-")
     return "-"
 
 
 def _latest_effective_version(lib: Mapping[str, Any], versions: list[Mapping[str, Any]]) -> str:
-    cr = _cr()
     for key in ["current_effective_version", "approved_version", "current_version"]:
         if lib.get(key):
             return str(lib.get(key))
     for version in reversed(versions):
-        if cr._truthy(version.get("current_effective")):
+        if common.truthy(version.get("current_effective")):
             return str(version.get("version_id") or version.get("version") or "-")
     return str(versions[-1].get("version_id") or versions[-1].get("version") or "-") if versions else "-"
 
 
 def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any) -> str:
-    cr = _cr()
     version_id = str(version.get("version_id") or version.get("version") or "-")
     is_latest = "1" if str(version_id) == str(latest) else "0"
-    tags = ",".join(sorted(cr._version_tags(version)))
+    tags = ",".join(sorted(catalog._version_tags(version)))
     stage = str(version.get("stage") or "-")
-    pkg_status, pkg_label = cr._package_label(version)
-    scan_status, scan_text = cr._scan_label(version)
-    file_status = cr._file_review_status(version)
-    base_full = cr._base_full_version(version)
-    prev_eff = cr._previous_effective_version(version)
+    pkg_status, pkg_label = catalog._package_label(version)
+    scan_status, scan_text = catalog._scan_label(version)
+    file_status = common.file_review_status(version)
+    base_full = common.base_full_version(version)
+    prev_eff = common.previous_effective_version(version)
     label, href, kind, disabled = _version_primary_action(version)
-    release_html = f"<span class='release-mini'>{ui.badge(version.get('release_status'), '发布')}</span>" if cr._release_is_visible(version, lib) else ""
-    review_hint = ui.badge(file_status, cr._file_review_text(version)) if file_status != "PAIRWISE_EMPTY" else ""
+    release_html = f"<span class='release-mini'>{ui.badge(version.get('release_status'), '发布')}</span>" if catalog._release_is_visible(version, lib) else ""
+    review_hint = ui.badge(file_status, common.file_review_text(version)) if file_status != "PAIRWISE_EMPTY" else ""
     stage_html = "" if stage.lower() in {"", "-", "unknown"} else ui.badge(stage, stage)
     scan_html = "" if scan_status == "NOT_SCANNED" else ui.badge(scan_status, scan_text)
     relation_html = "<div class='version-relation version-relation-empty' aria-hidden='true'></div>"
@@ -336,7 +324,6 @@ def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any
 
 
 def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[str, Any]]) -> str:
-    cr = _cr()
     versions = list(lib.get("versions", []) or [])
     latest = lib.get("latest_version") or (versions[-1].get("version_id") if versions else "-")
     latest_full = _latest_full_version(versions)
@@ -345,10 +332,10 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
     vendor = str(lib.get("vendor") or "Unknown")
     middle = str(lib.get("middle_path") or lib.get("library_root") or "-")
     stages = sorted({str(v.get("stage") or "unknown") for v in versions})
-    tags = cr._library_tags(lib)
+    tags = catalog._library_tags(lib)
     home_path = str(lib.get("library_home_html") or "")
-    latest_effective_item = cr._latest_effective_item(effective_items)
-    changed = sum(1 for v in versions if "changed" in cr._version_tags(v))
+    latest_effective_item = catalog._latest_effective_item(effective_items)
+    changed = sum(1 for v in versions if "changed" in catalog._version_tags(v))
     version_rows = "".join(_version_row(lib, v, latest) for v in reversed(versions))
     library_label = lib.get("display_name") or lib.get("library_name") or lib.get("library_id")
     empty_versions = "<div class='catalog-empty'>暂无 version</div>"
@@ -358,7 +345,7 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
         ui.button("Effective", _href((latest_effective_item or {}).get("html")), "secondary", disabled=not bool((latest_effective_item or {}).get("html")), target="_blank"),
     ])
     effective_label = str((latest_effective_item or {}).get("effective_id") or latest_effective)
-    status_badge = "" if cr._status_key(status) == "UNKNOWN" else ui.badge(status)
+    status_badge = "" if common.status_key(status) == "UNKNOWN" else ui.badge(status)
     changed_badge = ui.quiet_badge("CHANGED", changed) if changed else ""
     return (
         f"<section class='library-card' data-overall='{ui.esc(status)}' data-vendor='{ui.esc(vendor)}' data-stages='{ui.esc(','.join(stages))}' data-tags='{ui.esc(','.join(sorted(tags)))}'>"
@@ -386,13 +373,12 @@ def _group_libraries(libraries: list[Mapping[str, Any]]) -> dict[tuple[str, str]
 
 
 def _library_browser(out: Path, state: Mapping[str, Any], effective_by_lib: Mapping[str, list[dict[str, Any]]]) -> str:
-    cr = _cr()
     libraries = list(state.get("libraries", []) or [])
     groups = _group_libraries(libraries)
     group_html = []
     for (vendor, middle), libs in groups.items():
-        cards = "".join(_library_card(out, lib, cr._effective_items_for_lib(effective_by_lib, lib)) for lib in libs)
-        has_attention = any((cr._library_tags(lib) & {"review", "block", "file_review_pending", "file_review_recommended", "not_scanned", "needs_comparison_confirm"}) for lib in libs)
+        cards = "".join(_library_card(out, lib, catalog._effective_items_for_lib(effective_by_lib, lib)) for lib in libs)
+        has_attention = any((catalog._library_tags(lib) & {"review", "block", "file_review_pending", "file_review_recommended", "not_scanned", "needs_comparison_confirm"}) for lib in libs)
         group_html.append(
             f"<details class='library-group' {'open' if has_attention else ''}>"
             f"<summary><div class='library-group-title'><b>{ui.esc(vendor)}</b><span>{ui.esc(middle)}</span></div><span class='browser-count'>{len(libs)} 库</span></summary>"
@@ -484,14 +470,13 @@ def render_catalog_index_page(
     catalog_json: str | Path | None = None,
 ) -> str:
     del compare_by_lib, max_attention_items, max_report_rows
-    cr = _cr()
     out_path = Path(out)
     body = (
         _catalog_browser_styles()
         + ui.panel(
             "Catalog 总览",
             "面向 IP 使用者：先搜索库，再进入库工作台查看更新文件和可执行脚本。库管理者证据放在下方折叠区。",
-            ui.metric_grid(cr._summary_metrics(state, tasks))
+            ui.metric_grid(catalog._summary_metrics(state, tasks))
             + "<p class='catalog-note'>主流程是获取库更新信息、更新文件和执行脚本；管理补证据不作为普通使用者的首要任务。</p>",
         )
         + "<div class='catalog-layout'>"
@@ -509,10 +494,10 @@ def render_catalog_index_page(
             "Catalog 原始证据和统一报告索引。manager_tasks.json 的定位是管理者任务证据。",
             ui.trace_link_list(
                 [
-                    ("report_index.json", cr._href(report_index), "Catalog / Scan / Diff / Effective / Release Preview 的链接索引"),
-                    ("catalog_state.json", cr._href(out_path / "catalog_state.json"), "Catalog 页面使用的状态模型"),
-                    ("manager_tasks.json", cr._href(out_path / "manager_tasks.json"), "管理者建议动作列表"),
-                    ("catalog.json", cr._href(catalog_json), "原始 catalog"),
+                    ("report_index.json", common.href(report_index), "Catalog / Scan / Diff / Effective / Release Preview 的链接索引"),
+                    ("catalog_state.json", common.href(out_path / "catalog_state.json"), "Catalog 页面使用的状态模型"),
+                    ("manager_tasks.json", common.href(out_path / "manager_tasks.json"), "管理者建议动作列表"),
+                    ("catalog.json", common.href(catalog_json), "原始 catalog"),
                 ]
             ),
             open=True,

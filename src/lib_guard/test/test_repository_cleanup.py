@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import compileall
 from pathlib import Path
 import re
@@ -7,6 +8,63 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[3]
+
+FORBIDDEN_CATALOG_REPORT_COMMON_HELPERS = {
+    "_safe",
+    "_href",
+    "_rel_href",
+    "_write_text",
+    "_short_path",
+    "_status_key",
+    "_truthy",
+    "_version_links",
+    "_relation_status",
+    "_relation_label",
+    "_file_review_status",
+    "_file_review_text",
+    "_package_type",
+    "_node_package_type",
+    "_version_diff_summary",
+    "_version_file_diff",
+    "_version_diff_json",
+    "_relative_display_path",
+    "_version_release_notes",
+}
+
+
+def _catalog_report_private_helper_hits(tree: ast.AST, rel: str) -> list[str]:
+    catalog_aliases: set[str] = set()
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "lib_guard.render":
+                for alias in node.names:
+                    if alias.name == "catalog_report":
+                        catalog_aliases.add(alias.asname or alias.name)
+            elif node.module == "lib_guard.render.catalog_report" or (node.level and node.module == "catalog_report"):
+                import_label = "lib_guard.render.catalog_report" if node.module == "lib_guard.render.catalog_report" else ".catalog_report"
+                for alias in node.names:
+                    if alias.name in FORBIDDEN_CATALOG_REPORT_COMMON_HELPERS:
+                        hits.append(f"{rel}: direct import {alias.name} from {import_label}")
+            elif node.level and node.module in {None, ""}:
+                for alias in node.names:
+                    if alias.name == "catalog_report":
+                        catalog_aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "lib_guard.render.catalog_report" and alias.asname:
+                    catalog_aliases.add(alias.asname)
+        elif isinstance(node, ast.FunctionDef) and node.name == "_cr":
+            hits.append(f"{rel}: def _cr")
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        if node.attr not in FORBIDDEN_CATALOG_REPORT_COMMON_HELPERS:
+            continue
+        if isinstance(node.value, ast.Name) and node.value.id in catalog_aliases:
+            hits.append(f"{rel}: {node.value.id}.{node.attr}")
+    return hits
 
 
 class RepositoryCleanupTest(unittest.TestCase):
@@ -130,6 +188,36 @@ class RepositoryCleanupTest(unittest.TestCase):
         ]
         hits = [token for token in forbidden if token in catalog_report]
         self.assertFalse(hits, "catalog_report still defines workspace page helpers:\n" + "\n".join(hits))
+
+    def test_workspace_and_version_detail_do_not_import_catalog_report_private_helpers_after_common_split(self) -> None:
+        common = ROOT / "src" / "lib_guard" / "render" / "catalog_render_common.py"
+        self.assertTrue(common.exists(), "catalog_render_common.py must own shared render/data helpers")
+        paths = [
+            ROOT / "src" / "lib_guard" / "render" / "catalog_workspace_report.py",
+            ROOT / "src" / "lib_guard" / "render" / "version_detail_report.py",
+        ]
+        hits: list[str] = []
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            rel = path.relative_to(ROOT).as_posix()
+            hits.extend(_catalog_report_private_helper_hits(ast.parse(text), rel))
+        self.assertFalse(hits, "renderers still depend on catalog_report private common helpers:\n" + "\n".join(hits))
+
+    def test_catalog_report_private_helper_guard_catches_alias_and_direct_imports(self) -> None:
+        source = """
+from lib_guard.render import catalog_report as catalog
+from lib_guard.render.catalog_report import _href
+from .catalog_report import _rel_href
+from . import catalog_report as rel_catalog
+
+def demo():
+    return catalog._href("x"), _href("y"), _rel_href("base", "path"), rel_catalog._safe("x")
+"""
+        hits = _catalog_report_private_helper_hits(ast.parse(source), "sample.py")
+        self.assertIn("sample.py: catalog._href", hits)
+        self.assertIn("sample.py: direct import _href from lib_guard.render.catalog_report", hits)
+        self.assertIn("sample.py: direct import _rel_href from .catalog_report", hits)
+        self.assertIn("sample.py: rel_catalog._safe", hits)
 
 
 if __name__ == "__main__":

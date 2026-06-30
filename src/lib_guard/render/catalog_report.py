@@ -19,6 +19,7 @@ import re
 
 from lib_guard.review import build_review_state, build_review_tasks
 from lib_guard.review.io import as_file_href, read_json, write_json
+from lib_guard.render import catalog_render_common as common
 from lib_guard.render import product_theme as ui
 
 try:
@@ -30,62 +31,43 @@ except Exception:  # pragma: no cover - optional effective workflow import
 
 
 def _safe(value: Any) -> str:
-    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "item")).strip("._")
-    return text or "item"
+    return common.safe(value)
 
 
 def _write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    common.write_text(path, text)
 
 
 def _version_links(version: Mapping[str, Any]) -> Mapping[str, Any]:
-    links = version.get("links") or {}
-    return links if isinstance(links, Mapping) else {}
+    return common.version_links(version)
 
 
 def _href(path: Any) -> str:
-    return as_file_href(path) if path else ""
+    return common.href(path)
 
 
 def _rel_href(base: Path, path: Any) -> str:
-    if not path:
-        return ""
-    try:
-        target = Path(str(path))
-        if target.is_absolute():
-            return Path(os.path.relpath(target, base)).as_posix()
-    except Exception:
-        pass
-    return str(path).replace("\\", "/")
+    return common.rel_href(base, path)
 
 
 def _status_key(value: Any) -> str:
-    return str(value or "UNKNOWN").strip().upper()
+    return common.status_key(value)
 
 
 def _truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "ok"}
+    return common.truthy(value)
 
 
 def _short_path(path: Any, limit: int = 72) -> str:
-    text = str(path or "-")
-    if len(text) <= limit:
-        return text
-    return "…" + text[-limit:]
+    return common.short_path(path, limit)
 
 
 def _short_name(value: Any, head: int = 26, tail: int = 18) -> str:
-    text = str(value or "-")
-    if len(text) <= head + tail + 3:
-        return text
-    return f"{text[:head]}...{text[-tail:]}"
+    return common.short_name(value, head, tail)
 
 
 def _package_type(version: Mapping[str, Any]) -> str:
-    return str(version.get("package_type") or version.get("version_type") or version.get("stage") or "UNKNOWN").upper()
+    return common.package_type(version)
 
 
 def _package_label(version: Mapping[str, Any]) -> tuple[str, str]:
@@ -111,59 +93,23 @@ def _package_label(version: Mapping[str, Any]) -> tuple[str, str]:
 
 
 def _base_full_version(version: Mapping[str, Any]) -> str | None:
-    diff = version.get("diff") or {}
-    lineage = version.get("lineage") or {}
-    for key in ["base_full_version", "base_version"]:
-        value = version.get(key)
-        if value:
-            return str(value)
-    for value in [diff.get("cumulative_base_version"), diff.get("base_version"), lineage.get("base_candidate")]:
-        if value:
-            return str(value)
-    return None
+    return common.base_full_version(version)
 
 
 def _previous_effective_version(version: Mapping[str, Any]) -> str | None:
-    diff = version.get("diff") or {}
-    lineage = version.get("lineage") or {}
-    for key in ["previous_effective_version", "parent_version"]:
-        value = version.get(key)
-        if value:
-            return str(value)
-    for value in [diff.get("adjacent_old_version"), lineage.get("parent_candidate")]:
-        if value:
-            return str(value)
-    return None
+    return common.previous_effective_version(version)
 
 
 def _is_full_baseline(version: Mapping[str, Any]) -> bool:
-    pkg = _package_type(version)
-    return bool(_truthy(version.get("standalone")) or pkg in {"FULL_PACKAGE", "FULL"})
+    return common.is_full_baseline(version)
 
 
 def _relation_status(version: Mapping[str, Any]) -> str:
-    pkg = _package_type(version)
-    if _is_full_baseline(version):
-        return "FULL_BASELINE"
-    base_full = _base_full_version(version)
-    prev_eff = _previous_effective_version(version)
-    base_required = _truthy(version.get("base_required")) or pkg in {"PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"}
-    if base_required and (not base_full or not prev_eff):
-        return "NEED_BINDING"
-    if prev_eff:
-        return "RELATION_OK"
-    if bool(version.get("manual_review")):
-        return "NEED_BINDING"
-    return "RELATION_UNKNOWN"
+    return common.relation_status(version)
 
 
 def _relation_label(status: str) -> str:
-    return {
-        "FULL_BASELINE": "完整基线",
-        "RELATION_OK": "关系OK",
-        "NEED_BINDING": "需绑定",
-        "RELATION_UNKNOWN": "关系未知",
-    }.get(status, status)
+    return common.relation_label(status)
 
 
 def _release_is_visible(version: Mapping[str, Any], lib: Mapping[str, Any] | None = None) -> bool:
@@ -210,32 +156,11 @@ def _file_review_recommendation(version: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _file_review_text(version: Mapping[str, Any]) -> str:
-    rec = _file_review_recommendation(version)
-    quality = str(rec.get("comparison_quality") or "NORMAL")
-    recommended = int(rec.get("recommended_total", 0) or 0)
-    generated = int(rec.get("result_generated", 0) or 0)
-    candidates = int(rec.get("candidate_total", 0) or 0)
-    if quality.upper() not in {"NORMAL", "PASS", "OK", ""}:
-        return f"{ui.status_label(quality)} · 重点 {recommended} · 候选 {candidates}"
-    if recommended:
-        return f"重点 {recommended} · 已生成 {generated}"
-    if candidates:
-        return f"候选 {candidates}"
-    return "无重点"
+    return common.file_review_text(version)
 
 
 def _file_review_status(version: Mapping[str, Any]) -> str:
-    rec = _file_review_recommendation(version)
-    quality = str(rec.get("comparison_quality") or "NORMAL").upper()
-    if quality not in {"NORMAL", "PASS", "OK", ""}:
-        return quality
-    if int(rec.get("needs_run", 0) or 0):
-        return "FILE_DIFF_RECOMMENDED"
-    if int(rec.get("result_generated", 0) or 0):
-        return "FILE_DIFF_DONE"
-    if int(rec.get("recommended_total", 0) or 0):
-        return "FILE_DIFF_RECOMMENDED"
-    return "PAIRWISE_EMPTY"
+    return common.file_review_status(version)
 
 
 def _version_tags(version: Mapping[str, Any]) -> set[str]:
@@ -410,18 +335,7 @@ def _event_time_for_node(*values: Any, fallback_index: int = 0) -> tuple[str, st
 
 
 def _node_package_type(version: Mapping[str, Any]) -> str:
-    pkg = _package_type(version)
-    version_id = str(version.get("version_id") or version.get("version") or "").lower()
-    stage = str(version.get("stage") or "").lower()
-    if pkg in {"FULL_PACKAGE", "FULL"} or version_id.startswith(("stable_", "final_", "initial_")) or stage in {"stable", "final", "initial"}:
-        return "full"
-    if pkg == "HOTFIX" or stage == "ad-hoc":
-        return "hotfix"
-    if pkg in {"DOC_UPDATE", "DOC_ONLY"}:
-        return "doc"
-    if pkg in {"PARTIAL_UPDATE", "PARTIAL"} or version_id.startswith(("patch_", "update_")) or version.get("update_scope"):
-        return "partial"
-    return "unknown"
+    return common.node_package_type(version)
 
 
 def _explicit_latest_effective_ref(lib: Mapping[str, Any], effective_items: list[dict[str, Any]]) -> str:
@@ -943,15 +857,15 @@ def _version_compare_strategy(version: Mapping[str, Any]) -> tuple[str, str]:
 
 
 def _version_diff_summary(diff_dir: Path | None) -> Mapping[str, Any]:
-    return read_json(diff_dir / "diff_summary.json", default={}) if diff_dir else {}
+    return common.version_diff_summary(diff_dir)
 
 
 def _version_file_diff(diff_dir: Path | None) -> Mapping[str, Any]:
-    return read_json(diff_dir / "file_diff.json", default={}) if diff_dir else {}
+    return common.version_file_diff(diff_dir)
 
 
 def _version_diff_json(diff_dir: Path | None, name: str) -> Mapping[str, Any]:
-    return read_json(diff_dir / name, default={}) if diff_dir else {}
+    return common.version_diff_json(diff_dir, name)
 
 
 def _clip_text(text: str, limit: int = 900) -> str:
@@ -960,25 +874,7 @@ def _clip_text(text: str, limit: int = 900) -> str:
 
 
 def _version_release_notes(raw_path: Any, *, limit: int = 3) -> list[dict[str, str]]:
-    root = Path(str(raw_path or ""))
-    if not root.exists() or not root.is_dir():
-        return []
-    patterns = ["release_note", "release-notes", "releasenote", "changelog", "change_log", "update_note"]
-    found: list[dict[str, str]] = []
-    for path in root.rglob("*"):
-        if len(found) >= limit:
-            break
-        if not path.is_file():
-            continue
-        lower = path.name.lower()
-        if not any(pattern in lower for pattern in patterns):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        found.append({"path": str(path), "summary": _clip_text(text)})
-    return found
+    return common.version_release_notes(raw_path, limit=limit)
 
 
 def _scan_inventory(scan_dir: Path | None) -> Mapping[str, Any]:
@@ -1636,19 +1532,7 @@ def _as_int(value: Any) -> int:
 
 
 def _relative_display_path(path: Any, *, base: Any = None, tail_parts: int = 4) -> str:
-    text = str(path or "-")
-    if text == "-":
-        return text
-    p = Path(text)
-    if base:
-        try:
-            return p.relative_to(Path(str(base))).as_posix()
-        except Exception:
-            pass
-    if p.is_absolute():
-        parts = p.parts[-tail_parts:]
-        return Path(*parts).as_posix() if parts else p.name
-    return text.replace("\\", "/")
+    return common.relative_display_path(path, base=base, tail_parts=tail_parts)
 
 
 def _raw_relpath(raw_path: Any) -> str:
