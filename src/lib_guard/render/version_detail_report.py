@@ -500,6 +500,66 @@ def _file_change_rows(model: Mapping[str, Any]) -> list[str]:
     return _file_change_rows_for(model.get("file_changes", []))
 
 
+def _command_for_path(model: Mapping[str, Any], path: str) -> str:
+    target = str(path or "")
+    for item in model.get("file_diff_recommendations", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("path") or "") == target:
+            return str(item.get("command") or "")
+    return ""
+
+
+def _recommended_file_diff_rows(model: Mapping[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for item in model.get("recommended_file_diff", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        path = str(item.get("path") or "-")
+        rows.append(
+            "<tr>"
+            f"<td>{ui.badge(item.get('review_lane') or 'Review')}</td>"
+            f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
+            f"<td><code>{ui.esc(path)}</code></td>"
+            f"<td>{ui.esc(item.get('reason') or item.get('hint') or '-')}</td>"
+            f"<td>{ui.command_chip(_command_for_path(model, path), label='复制')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _summary_only_rows(model: Mapping[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for item in model.get("summary_only_reviewed", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
+            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
+            f"<td>{ui.esc(item.get('summary_evidence') or item.get('metadata_evidence') or item.get('hint') or '-')}</td>"
+            f"<td>{ui.esc(item.get('reason') or '已完成摘要级审查')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _metadata_only_rows(model: Mapping[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for item in model.get("metadata_only_reviewed", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
+            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
+            f"<td>{ui.esc(item.get('metadata_evidence') or item.get('hint') or 'hash/size/path/count')}</td>"
+            f"<td>{ui.esc(item.get('reason') or 'metadata-only 审查')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
 def _release_note_rows(model: Mapping[str, Any]) -> list[str]:
     rows: list[str] = []
     for item in model.get("release_notes", []) or []:
@@ -1029,25 +1089,26 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         + metadata_note
         + catalog._scroll_table(["变化", "类型", "路径", "审查级别", "建议"], _file_change_rows(model), empty_next, "change-scroll")
         + "<h3>Recommended File Diff</h3>"
+        + "<div class='quality-note'>建议对这些 P0/P1 变化运行 File Diff 后再完成最终审查。</div>"
         + catalog._scroll_table(
-            ["变化", "类型", "路径", "审查级别", "建议"],
-            _file_change_rows_for(model.get("recommended_file_diff", [])),
+            ["Priority", "file_type", "path", "reason", "command"],
+            _recommended_file_diff_rows(model),
             "暂无 P0/P1 文件级 Diff 建议。",
             "change-scroll",
         )
         + "<h3>Summary-only Reviewed</h3>"
         + "<div class='quality-note'>已完成摘要级审查；默认无需展开全文。</div>"
         + catalog._scroll_table(
-            ["变化", "类型", "路径", "审查级别", "建议"],
-            _file_change_rows_for(model.get("summary_only_reviewed", [])),
+            ["file_type", "path", "summary evidence", "reason"],
+            _summary_only_rows(model),
             "暂无 summary-only 审查项。",
             "change-scroll",
         )
         + "<h3>Metadata-only Reviewed</h3>"
-        + "<div class='quality-note'>已完成 metadata-only 审查；二进制/版图文件默认不做全文 diff。</div>"
+        + "<div class='quality-note'>已完成 metadata-only 审查；二进制/版图文件默认只使用 hash/size/path/count 证据。</div>"
         + catalog._scroll_table(
-            ["变化", "类型", "路径", "审查级别", "建议"],
-            _file_change_rows_for(model.get("metadata_only_reviewed", [])),
+            ["file_type", "path", "metadata evidence", "reason"],
+            _metadata_only_rows(model),
             "暂无 metadata-only 审查项。",
             "change-scroll",
         )

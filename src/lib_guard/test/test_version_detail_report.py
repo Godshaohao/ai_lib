@@ -76,11 +76,67 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("Summary-only Reviewed", html)
             self.assertIn("Metadata-only Reviewed", html)
             self.assertIn("已完成摘要级审查；默认无需展开全文。", html)
-            self.assertIn("已完成 metadata-only 审查；二进制/版图文件默认不做全文 diff。", html)
+            self.assertIn("已完成 metadata-only 审查；二进制/版图文件默认只使用 hash/size/path/count 证据。", html)
             summary_section = html.split("Summary-only Reviewed", 1)[1].split("Metadata-only Reviewed", 1)[0]
             metadata_section = html.split("Metadata-only Reviewed", 1)[1].split("Release note", 1)[0]
             self.assertNotIn("未生成 File Diff", summary_section)
             self.assertNotIn("未生成 File Diff", metadata_section)
+
+    def test_update_detail_lane_sections_use_reviewer_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            model["recommended_file_diff"][0]["reason"] = "sentinel recommended reason"
+            model["summary_only_reviewed"][0]["summary_evidence"] = "sentinel summary evidence"
+            model["summary_only_reviewed"][0]["reason"] = "sentinel summary reason"
+            model["metadata_only_reviewed"][0]["metadata_evidence"] = "sentinel metadata evidence"
+            model["metadata_only_reviewed"][0]["reason"] = "sentinel metadata reason"
+            html = render_version_update_detail_panel(model)
+
+            recommended_section = html.split("Recommended File Diff", 1)[1].split("Summary-only Reviewed", 1)[0]
+            summary_section = html.split("Summary-only Reviewed", 1)[1].split("Metadata-only Reviewed", 1)[0]
+            metadata_section = html.split("Metadata-only Reviewed", 1)[1].split("Release note", 1)[0]
+
+            for header in ["Priority", "file_type", "path", "reason", "command"]:
+                self.assertIn(header, recommended_section)
+            for header in ["file_type", "path", "summary evidence", "reason"]:
+                self.assertIn(header, summary_section)
+            for header in ["file_type", "path", "metadata evidence", "reason"]:
+                self.assertIn(header, metadata_section)
+            self.assertIn("建议对这些 P0/P1 变化运行 File Diff 后再完成最终审查。", recommended_section)
+            self.assertIn("lef/top.lef", recommended_section)
+            self.assertIn("constraints/top.sdc", recommended_section)
+            self.assertIn("File Diff", recommended_section)
+            self.assertIn("lg.csh fd lane_demo patch_20260630 lef/top.lef", recommended_section)
+            self.assertIn("sentinel recommended reason", recommended_section)
+            for path in ["rtl/top.v", "timing/top.lib", "parasitics/top.spef"]:
+                self.assertIn(path, summary_section)
+            self.assertIn("sentinel summary evidence", summary_section)
+            self.assertIn("sentinel summary reason", summary_section)
+            self.assertIn(
+                "<td><code>timing/top.lib</code></td>"
+                "<td>摘要级审查；默认不生成文件级 Diff 命令</td>"
+                "<td>已完成摘要级审查</td>",
+                summary_section,
+            )
+            for path in ["db/top.db", "layout/top.gds", "layout/top.oas"]:
+                self.assertIn(path, metadata_section)
+            self.assertIn("sentinel metadata evidence", metadata_section)
+            self.assertIn("sentinel metadata reason", metadata_section)
+            self.assertIn(
+                "<td><code>layout/top.gds</code></td>"
+                "<td>metadata-only 审查；默认不生成文件级 Diff 命令</td>"
+                "<td>metadata-only 审查</td>",
+                metadata_section,
+            )
+            self.assertIn("hash/size/path/count", metadata_section)
 
     def test_markdown_export_uses_same_headline_and_evidence_counts_as_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
