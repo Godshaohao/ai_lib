@@ -259,6 +259,26 @@ def _file_diff_commands(lib: Mapping[str, Any], version: Mapping[str, Any], base
     return commands
 
 
+def _group_file_changes_by_review_mode(file_changes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    lane_priority = {"P0": 0, "P1": 1}
+    recommended = [
+        item
+        for item in file_changes
+        if item.get("review_lane") in lane_priority
+        and str(item.get("file_type") or "").lower() in DEFAULT_FILE_DIFF_TYPES
+    ]
+    recommended = sorted(
+        recommended,
+        key=lambda item: (
+            lane_priority.get(str(item.get("review_lane") or ""), 99),
+            str(item.get("path") or ""),
+        ),
+    )
+    summary_only = [item for item in file_changes if item.get("review_lane") == "Summary-only"]
+    metadata_only = [item for item in file_changes if item.get("review_lane") == "Metadata-only"]
+    return recommended, summary_only, metadata_only
+
+
 def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> dict[str, Any]:
     cr = _cr()
     out_path = Path(out)
@@ -290,7 +310,8 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     else:
         status = summary_status or "SAME"
     release_notes = cr._version_release_notes(version.get("raw_path"))
-    metadata_only = [item for item in file_changes if item.get("review_lane") in {"Metadata-only", "Summary-only"}]
+    recommended_file_diff, summary_only_reviewed, metadata_only_reviewed = _group_file_changes_by_review_mode(file_changes)
+    metadata_only = summary_only_reviewed + metadata_only_reviewed
     commands = _file_diff_commands(lib, version, base_version, file_changes)
     md_path = out_path / "libraries" / safe_lib / "versions" / safe_ver / "current_lib_diff.md"
     trace_links = {
@@ -331,6 +352,9 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "changed_files": _as_int(changed_files),
         "summary_metrics": _summary_metrics(summary),
         "file_changes": file_changes,
+        "recommended_file_diff": recommended_file_diff,
+        "summary_only_reviewed": summary_only_reviewed,
+        "metadata_only_reviewed": metadata_only_reviewed,
         "release_notes": release_notes,
         "recommended_actions": list(summary.get("recommended_actions", []) or []),
         "file_diff_recommendations": commands,
@@ -355,9 +379,11 @@ def _summary_metric_value(model: Mapping[str, Any], key: str, default: Any = 0) 
     return default
 
 
-def _file_change_rows(model: Mapping[str, Any]) -> list[str]:
+def _file_change_rows_for(items: Any) -> list[str]:
     rows: list[str] = []
-    for item in model.get("file_changes", []) or []:
+    for item in items or []:
+        if not isinstance(item, Mapping):
+            continue
         rows.append(
             "<tr>"
             f"<td>{ui.badge(str(item.get('change') or '').upper(), _cn_change_kind(item.get('change')))}</td>"
@@ -368,6 +394,10 @@ def _file_change_rows(model: Mapping[str, Any]) -> list[str]:
             "</tr>"
         )
     return rows
+
+
+def _file_change_rows(model: Mapping[str, Any]) -> list[str]:
+    return _file_change_rows_for(model.get("file_changes", []))
 
 
 def _release_note_rows(model: Mapping[str, Any]) -> list[str]:
@@ -843,6 +873,29 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         + "<h3>变化文件</h3>"
         + metadata_note
         + cr._scroll_table(["变化", "类型", "路径", "审查级别", "建议"], _file_change_rows(model), empty_next, "change-scroll")
+        + "<h3>Recommended File Diff</h3>"
+        + cr._scroll_table(
+            ["变化", "类型", "路径", "审查级别", "建议"],
+            _file_change_rows_for(model.get("recommended_file_diff", [])),
+            "暂无 P0/P1 文件级 Diff 建议。",
+            "change-scroll",
+        )
+        + "<h3>Summary-only Reviewed</h3>"
+        + "<div class='quality-note'>已完成摘要级审查；默认无需展开全文。</div>"
+        + cr._scroll_table(
+            ["变化", "类型", "路径", "审查级别", "建议"],
+            _file_change_rows_for(model.get("summary_only_reviewed", [])),
+            "暂无 summary-only 审查项。",
+            "change-scroll",
+        )
+        + "<h3>Metadata-only Reviewed</h3>"
+        + "<div class='quality-note'>已完成 metadata-only 审查；二进制/版图文件默认不做全文 diff。</div>"
+        + cr._scroll_table(
+            ["变化", "类型", "路径", "审查级别", "建议"],
+            _file_change_rows_for(model.get("metadata_only_reviewed", [])),
+            "暂无 metadata-only 审查项。",
+            "change-scroll",
+        )
         + "<h3>Release note</h3>"
         + ui.faceted_table(
             "release-note-table",

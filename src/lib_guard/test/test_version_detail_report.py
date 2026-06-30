@@ -9,7 +9,79 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
+def _write_version_detail_lane_fixture(root: Path) -> tuple[dict[str, str], dict[str, object]]:
+    diff_dir = root / "diff"
+    diff_dir.mkdir()
+    (diff_dir / "diff_summary.json").write_text(
+        json.dumps({"status": "DIFF", "added_files": 1, "changed_files": 7}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (diff_dir / "file_diff.json").write_text(
+        json.dumps(
+            {
+                "changed": [
+                    {"path": "lef/top.lef", "file_type": "lef"},
+                    {"path": "rtl/top.v", "file_type": "verilog"},
+                    {"path": "timing/top.lib", "file_type": "liberty"},
+                    {"path": "parasitics/top.spef", "file_type": "spef"},
+                    {"path": "db/top.db", "file_type": "db"},
+                    {"path": "layout/top.gds", "file_type": "gds"},
+                    {"path": "layout/top.oas", "file_type": "oas"},
+                ],
+                "added": [{"path": "constraints/top.sdc", "file_type": "sdc"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    lib = {"library_id": "ip/lane_demo", "library_name": "lane_demo"}
+    version = {
+        "version_id": "patch_20260630",
+        "diff": {
+            "base_version": "base_20260629",
+            "base_source": "explicit",
+            "base_diff_dir": str(diff_dir),
+        },
+    }
+    return lib, version
+
+
 class VersionDetailReportTest(unittest.TestCase):
+    def test_version_detail_groups_file_diff_evidence_by_review_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            html = render_version_update_detail_panel(model)
+
+            self.assertEqual(
+                [item["path"] for item in model["recommended_file_diff"]],
+                ["lef/top.lef", "constraints/top.sdc"],
+            )
+            self.assertEqual(
+                [item["path"] for item in model["summary_only_reviewed"]],
+                ["rtl/top.v", "timing/top.lib", "parasitics/top.spef"],
+            )
+            self.assertEqual(
+                [item["path"] for item in model["metadata_only_reviewed"]],
+                ["db/top.db", "layout/top.gds", "layout/top.oas"],
+            )
+            self.assertIn("Recommended File Diff", html)
+            self.assertIn("Summary-only Reviewed", html)
+            self.assertIn("Metadata-only Reviewed", html)
+            self.assertIn("已完成摘要级审查；默认无需展开全文。", html)
+            self.assertIn("已完成 metadata-only 审查；二进制/版图文件默认不做全文 diff。", html)
+            summary_section = html.split("Summary-only Reviewed", 1)[1].split("Metadata-only Reviewed", 1)[0]
+            metadata_section = html.split("Metadata-only Reviewed", 1)[1].split("Release note", 1)[0]
+            self.assertNotIn("未生成 File Diff", summary_section)
+            self.assertNotIn("未生成 File Diff", metadata_section)
+
     def test_current_effective_wins_over_stale_diff_base(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
