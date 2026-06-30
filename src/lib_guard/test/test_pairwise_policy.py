@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 import contextlib
 import io
+import json
+import shlex
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,44 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class PairwisePolicyTest(unittest.TestCase):
+    def _fd_workspace(self, root: Path, file_name: str = "top.v") -> Path:
+        workspace = root / "work"
+        raw = root / "raw"
+        base_dir = raw / "ucie" / "base"
+        patch_dir = raw / "ucie" / "patch"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        patch_dir.mkdir(parents=True, exist_ok=True)
+        (base_dir / file_name).write_text("module top; endmodule\n", encoding="utf-8")
+        (patch_dir / file_name).write_text("module top; wire a; endmodule\n", encoding="utf-8")
+        catalog = workspace / "catalog" / "catalog.json"
+        catalog.parent.mkdir(parents=True, exist_ok=True)
+        catalog.write_text(
+            json.dumps(
+                {
+                    "libraries": [
+                        {
+                            "library_id": "ip/ucie",
+                            "library_name": "ucie",
+                            "versions": [
+                                {"version_id": "base", "raw_path": str(base_dir)},
+                                {
+                                    "version_id": "patch",
+                                    "raw_path": str(patch_dir),
+                                    "previous_effective_version": "base",
+                                },
+                            ],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        from lib_guard.short_cli import write_default_config
+
+        write_default_config(workspace, raw_root=raw)
+        return workspace
+
     def test_build_pairwise_diff_tasks_uses_default_file_diff_types_only(self) -> None:
         from lib_guard.diff.pairwise import build_pairwise_diff_tasks
 
@@ -83,22 +122,28 @@ class PairwisePolicyTest(unittest.TestCase):
 
         self.assertEqual(DEFAULT_PAIRWISE_FILE_DIFF_TYPES, DEFAULT_FILE_DIFF_TYPES)
 
-    def test_short_cli_file_diff_type_choices_match_project_defaults(self) -> None:
-        from lib_guard.project_config import DEFAULT_FILE_DIFF_TYPES
+    def test_short_cli_file_diff_type_choices_include_expert_manual_types(self) -> None:
+        from lib_guard.project_config import (
+            BINARY_METADATA_ONLY_TYPES,
+            DEFAULT_FILE_DIFF_TYPES,
+            SUMMARY_ONLY_TYPES,
+        )
         from lib_guard.short_cli import _build_parser
 
         parser = _build_parser()
         parser.parse_args(["fd", "ucie", "patch_20260628", "spice/top.sp", "--type", "spice"])
         parser.parse_args(["fd", "ucie", "patch_20260628", "touchstone/top.s2p", "--type", "touchstone"])
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            parser.parse_args(["fd", "ucie", "patch_20260628", "rtl/top.v", "--type", "verilog"])
+        parser.parse_args(["fd", "ucie", "patch_20260628", "rtl/top.v", "--type", "verilog"])
 
         file_diff_parser = next(
             action
             for action in parser._subparsers._group_actions[0].choices["file-diff"]._actions
             if action.dest == "type"
         )
-        self.assertEqual(set(file_diff_parser.choices), DEFAULT_FILE_DIFF_TYPES)
+        self.assertEqual(
+            set(file_diff_parser.choices),
+            DEFAULT_FILE_DIFF_TYPES | SUMMARY_ONLY_TYPES | BINARY_METADATA_ONLY_TYPES,
+        )
 
     def test_summary_only_types_include_text_summary_lanes(self) -> None:
         from lib_guard.project_config import SUMMARY_ONLY_TYPES
@@ -121,6 +166,141 @@ class PairwisePolicyTest(unittest.TestCase):
 
         self.assertEqual(DETAIL_SUMMARY_TYPES, SUMMARY_ONLY_TYPES)
         self.assertEqual(DETAIL_BINARY_TYPES, BINARY_METADATA_ONLY_TYPES)
+
+    def test_fd_summary_only_without_force_large_fails_with_clear_message(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._fd_workspace(Path(td), "top.v")
+            with self.assertRaisesRegex(ValueError, "summary-only.*--force-large"):
+                build_cli_commands(["fd", "ucie", "patch", "top.v", "--type", "verilog"], cwd=workspace)
+
+    def test_fd_force_large_allows_manual_summary_only_type(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._fd_workspace(Path(td), "top.v")
+            commands = build_cli_commands(
+                ["fd", "ucie", "patch", "top.v", "--type", "verilog", "--force-large"],
+                cwd=workspace,
+            )
+
+        self.assertEqual(commands[0][0], "file-diff")
+        self.assertEqual(commands[0][1], "verilog")
+        self.assertIn("--manual-large-file-opt-in", commands[0])
+
+    def test_fd_force_large_allows_manual_metadata_only_type_supported_by_cli(self) -> None:
+        from lib_guard.cli import build_parser
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._fd_workspace(Path(td), "top.gds")
+            commands = build_cli_commands(
+                ["fd", "ucie", "patch", "top.gds", "--type", "gds", "--force-large"],
+                cwd=workspace,
+            )
+
+        self.assertEqual(commands[0][0], "file-diff")
+        self.assertEqual(commands[0][1], "gds")
+        self.assertIn("--manual-large-file-opt-in", commands[0])
+        build_parser().parse_args([item for item in commands[0] if item != "--manual-large-file-opt-in"])
+
+    def test_short_cli_dry_run_force_large_prints_executable_lower_cli_command(self) -> None:
+        from lib_guard.cli import build_parser
+        from lib_guard.short_cli import main as short_main
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._fd_workspace(Path(td), "top.gds")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = short_main(
+                    [
+                        "--config",
+                        str(workspace / "lib_guard.yml"),
+                        "--dry-run",
+                        "fd",
+                        "ucie",
+                        "patch",
+                        "top.gds",
+                        "--type",
+                        "gds",
+                        "--force-large",
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        printed = output.getvalue().strip()
+        self.assertNotIn("--manual-large-file-opt-in", printed)
+        self.assertTrue(printed.startswith("python -m lib_guard.cli "))
+        build_parser().parse_args(shlex.split(printed.removeprefix("python -m lib_guard.cli ")))
+
+    def test_short_cli_dry_run_quotes_paths_with_spaces_for_lower_cli_command(self) -> None:
+        from lib_guard.cli import build_parser
+        from lib_guard.short_cli import main as short_main
+
+        with tempfile.TemporaryDirectory(prefix="fd workspace ") as td:
+            workspace = self._fd_workspace(Path(td), "top.gds")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = short_main(
+                    [
+                        "--config",
+                        str(workspace / "lib_guard.yml"),
+                        "--dry-run",
+                        "fd",
+                        "ucie",
+                        "patch",
+                        "top.gds",
+                        "--type",
+                        "gds",
+                        "--force-large",
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        printed = output.getvalue().strip()
+        self.assertNotIn("--manual-large-file-opt-in", printed)
+        argv = shlex.split(printed.removeprefix("python -m lib_guard.cli "))
+        parsed = build_parser().parse_args(argv)
+        self.assertIn(" ", parsed.old)
+        self.assertIn(" ", parsed.new)
+        self.assertTrue(parsed.old.endswith("top.gds"))
+        self.assertTrue(parsed.new.endswith("top.gds"))
+
+    def test_cli_file_diff_rejects_unsupported_type(self) -> None:
+        from lib_guard.cli import build_parser
+
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            build_parser().parse_args(["file-diff", "unknown", "--old", "old", "--new", "new", "--out", "out"])
+
+    def test_unsupported_metadata_only_file_diff_uses_content_sensitive_metadata(self) -> None:
+        from lib_guard.diff.file_diff import diff_pairwise_files
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old = root / "old.gds"
+            new = root / "new.gds"
+            out = root / "out"
+            old.write_bytes(b"GDS2\x00old-bytes\n")
+            new.write_bytes(b"GDS2\x00new-different-bytes\n")
+
+            result = diff_pairwise_files("gds", old, new, out)
+
+            summary = json.loads((out / "file_diff_summary.json").read_text(encoding="utf-8"))
+            old_extract = json.loads((out / "old_extract.json").read_text(encoding="utf-8"))
+            new_extract = json.loads((out / "new_extract.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result["status"], "DIFF")
+        self.assertEqual(summary["status"], "DIFF")
+        self.assertTrue(summary["changed"])
+        self.assertNotEqual(summary["old_hash"], summary["new_hash"])
+        self.assertEqual(old_extract["parser_status"], "UNSUPPORTED")
+        self.assertEqual(new_extract["parser_status"], "UNSUPPORTED")
+        self.assertEqual(old_extract["data"]["byte_size"], len(b"GDS2\x00old-bytes\n"))
+        self.assertEqual(new_extract["data"]["byte_size"], len(b"GDS2\x00new-different-bytes\n"))
+        self.assertNotEqual(old_extract["data"]["sha256_bytes"], new_extract["data"]["sha256_bytes"])
+        self.assertEqual(old_extract["data"]["file_type"], "gds")
+        self.assertEqual(new_extract["data"]["extension"], ".gds")
 
 
 if __name__ == "__main__":

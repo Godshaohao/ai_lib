@@ -21,12 +21,20 @@ import logging
 import sys
 
 from lib_guard.project_config import (
+    BINARY_METADATA_ONLY_TYPES,
+    DEFAULT_FILE_DIFF_TYPES,
     DEFAULT_RELEASE_POLICY_PATH,
     PROJECT_CONFIG_DIR,
+    SUMMARY_ONLY_TYPES,
 )
 
 
 LOGGER = logging.getLogger("lib_guard")
+MANUAL_FILE_DIFF_TYPES = (
+    set(DEFAULT_FILE_DIFF_TYPES)
+    | set(SUMMARY_ONLY_TYPES)
+    | set(BINARY_METADATA_ONLY_TYPES)
+)
 
 
 def _lazy_command(module_name: str, function_name: str):
@@ -381,7 +389,7 @@ def add_diff_parser(subparsers: Any) -> None:
 def add_file_diff_parser(subparsers: Any) -> None:
     root = subparsers.add_parser("file-diff", help="Run explicit pairwise file diff")
     sp = root.add_subparsers(dest="file_type", required=True)
-    for file_type in ["lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db", "waiver", "ibis", "pwl", "snp", "cpm"]:
+    for file_type in sorted(MANUAL_FILE_DIFF_TYPES):
         p = sp.add_parser(file_type, help=f"Compare two {file_type} files")
         p.add_argument("--old", required=True)
         p.add_argument("--new", required=True)

@@ -267,6 +267,44 @@ def _fallback_parse(file_type: str, path: Path, status: str = "PASS") -> dict[st
     return {"schema_version": "1.0", "result_type": "parser_result", "parser_name": "FallbackTextParser", "file": str(path), "file_type": file_type, "status": status, "data": data, "issues": []}
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _unsupported_metadata_parse(file_type: str, path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    data = {
+        "evidence_mode": "metadata-only",
+        "byte_size": stat.st_size,
+        "sha256_bytes": _sha256_file(path),
+        "path": str(path),
+        "abs_path": str(path.resolve()),
+        "name": path.name,
+        "extension": path.suffix.lower(),
+        "file_type": file_type,
+    }
+    return {
+        "schema_version": "1.0",
+        "result_type": "parser_result",
+        "parser_name": "UnsupportedParser",
+        "file": str(path),
+        "file_type": file_type,
+        "status": "UNSUPPORTED",
+        "data": data,
+        "issues": [
+            {
+                "severity": "warning",
+                "category": "unsupported",
+                "message": f"unsupported pairwise file type: {file_type}; using metadata/hash-only evidence",
+            }
+        ],
+    }
+
+
 def _parse_file(file_type: str, path: Path) -> dict[str, Any]:
     try:
         from lib_guard.scan.parser_registry import ParserRegistry
@@ -278,7 +316,7 @@ def _parse_file(file_type: str, path: Path) -> dict[str, Any]:
                 return parser.parse(record, context)
     except Exception as exc:
         return _fallback_parse(file_type, path, status="PASS") | {"issues": [{"severity": "warning", "category": "parser_fallback", "message": f"使用 fallback parser: {type(exc).__name__}"}]}
-    return {"schema_version": "1.0", "result_type": "parser_result", "parser_name": "UnsupportedParser", "file": str(path), "file_type": file_type, "status": "UNSUPPORTED", "data": {}, "issues": [{"severity": "warning", "category": "unsupported", "message": f"unsupported pairwise file type: {file_type}"}]}
+    return _unsupported_metadata_parse(file_type, path)
 
 
 def _utc_now() -> str:

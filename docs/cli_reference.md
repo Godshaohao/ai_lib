@@ -77,7 +77,25 @@ Comparison Review。
 | `SUMMARY_ONLY_TYPES` | `verilog`, `systemverilog`, `liberty`, `lib`, `spef` | 只做 summary/count/corner/metadata，不默认生成 fd command |
 | `BINARY_METADATA_ONLY_TYPES` | `db`, `gds`, `oas`, `layout`, `milkyway`, `ndm` | 只做二进制 metadata/hash/路径证据，不默认生成 fd command |
 
-用户仍可在确认必要时手动运行 `fd`，但默认推荐列表必须遵守上述 lane。
+默认 Version Review / pairwise 推荐只会展开 `DEFAULT_FILE_DIFF_TYPES`。这条默认线
+适合小到中等规模、可直接阅读的文本视图；`verilog`、`liberty`、`spef`、`db`、
+`gds`、`oas` 等 lane 不会自动生成 `fd` 命令。
+
+### 专家 opt-in：`fd --force-large`
+
+`SUMMARY_ONLY_TYPES` 和 `BINARY_METADATA_ONLY_TYPES` 只能在人工确认必要时手动运行。
+不加 `--force-large` 会报错，并提示该类型默认走 summary-only 或 metadata-only 审查。
+
+```csh
+lg.csh fd ucie patch_20260630 rtl/top.v --type verilog --force-large
+lg.csh fd ucie patch_20260630 timing/top.lib --type liberty --force-large
+lg.csh fd ucie patch_20260630 db/ucie.db --type db --force-large
+```
+
+这类命令表示 owner/专家明确接受大文件、集合文件或二进制 metadata lane 的人工审查
+成本；默认推荐列表仍必须遵守安全 lane。`--dry-run` 打印的是可直接执行的底层
+`python -m lib_guard.cli file-diff ...` 命令，不会把短命令内部的 opt-in 审计标记当作
+底层 CLI 参数输出。
 
 ## 配置默认值
 

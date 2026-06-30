@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Any
 import json
 import os
+import shlex
 import sys
 
 from lib_guard.project_config import (
+    BINARY_METADATA_ONLY_TYPES,
     CATALOG_POLICY_FILE,
     CONFIG_NAME,
     DEFAULT_LIBRARY_TYPE,
@@ -15,11 +17,14 @@ from lib_guard.project_config import (
     DEFAULT_PARSE_JOBS,
     DEFAULT_SCAN_MODE,
     PROJECT_CONFIG_DIR,
+    SUMMARY_ONLY_TYPES,
     project_policy_path,
     workspace_defaults,
 )
 
 PAIRWISE_FILE_DIFF_TYPES = set(DEFAULT_FILE_DIFF_TYPES)
+FORCE_LARGE_FILE_DIFF_TYPES = set(SUMMARY_ONLY_TYPES) | set(BINARY_METADATA_ONLY_TYPES)
+MANUAL_FILE_DIFF_TYPES = PAIRWISE_FILE_DIFF_TYPES | FORCE_LARGE_FILE_DIFF_TYPES
 SHORT_COMMAND_ALIASES = {
     "cat": "catalog",
     "cmp": "diff",
@@ -438,9 +443,30 @@ def _infer_file_type(relpath: str) -> str:
 
     record = FileClassifier().classify({"path": relpath, "name": Path(relpath).name})
     file_type = str(record.get("file_type") or "unknown")
-    if file_type not in PAIRWISE_FILE_DIFF_TYPES:
+    if file_type not in MANUAL_FILE_DIFF_TYPES:
         raise ValueError(f"file type {file_type!r} is not supported by pairwise file-diff")
     return file_type
+
+
+def _file_diff_lane(file_type: str) -> str:
+    if file_type in SUMMARY_ONLY_TYPES:
+        return "summary-only"
+    if file_type in BINARY_METADATA_ONLY_TYPES:
+        return "metadata-only"
+    return "default"
+
+
+def _validate_manual_file_diff_type(file_type: str, *, force_large: bool) -> None:
+    if file_type in PAIRWISE_FILE_DIFF_TYPES:
+        return
+    if file_type in FORCE_LARGE_FILE_DIFF_TYPES:
+        lane = _file_diff_lane(file_type)
+        if force_large:
+            return
+        raise ValueError(
+            f"file type {file_type!r} is {lane}; pass --force-large only for expert manual review."
+        )
+    raise ValueError(f"file type {file_type!r} is not supported by pairwise file-diff")
 
 
 def _canonical_command(name: str | None) -> str | None:
@@ -474,6 +500,7 @@ def _file_diff_out_dir(cfg: dict[str, str], library: str, version: str, relpath:
 
 def _build_parser() -> ArgumentParser:
     file_diff_types = " ".join(sorted(PAIRWISE_FILE_DIFF_TYPES))
+    manual_file_diff_types = " ".join(sorted(MANUAL_FILE_DIFF_TYPES))
     parser = ArgumentParser(
         prog="lg",
         description="lib_guard 日常短命令入口",
@@ -511,6 +538,9 @@ def _build_parser() -> ArgumentParser:
 
   支持的两两文件 diff 类型:
     {file_diff_types}
+
+  专家手动 fd 可显式 --force-large 选择:
+    {manual_file_diff_types}
 """,
     )
     parser.add_argument("--config", help=f"{CONFIG_NAME} 路径")
@@ -593,7 +623,8 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("version")
     p.add_argument("relpath")
     p.add_argument("--base")
-    p.add_argument("--type", choices=sorted(PAIRWISE_FILE_DIFF_TYPES), help="Override inferred file type")
+    p.add_argument("--type", choices=sorted(MANUAL_FILE_DIFF_TYPES), help="Override inferred file type")
+    p.add_argument("--force-large", action="store_true", help="Expert opt-in: allow summary-only or metadata-only file types to run manual file diff")
 
     p = sub.add_parser("release", aliases=["rel"], help="对已扫描版本执行 release check/link/verify 规划；不会运行 scan")
     p.add_argument("library")
@@ -1114,29 +1145,29 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         new_version = _find_version(lib, args.version)
         old_version = _resolve_old_version(lib, new_version, args.base)
         file_type = args.type or _infer_file_type(args.relpath)
-        if file_type not in PAIRWISE_FILE_DIFF_TYPES:
-            raise ValueError(f"file type {file_type!r} is not supported by pairwise file-diff")
+        _validate_manual_file_diff_type(file_type, force_large=bool(getattr(args, "force_large", False)))
         old_file = _resolved_version_file(old_version, args.relpath)
         new_file = _resolved_version_file(new_version, args.relpath)
         out = _file_diff_out_dir(cfg, args.library, args.version, args.relpath, file_type)
-        return [
-            [
-                "file-diff",
-                file_type,
-                "--old",
-                str(old_file),
-                "--new",
-                str(new_file),
-                "--out",
-                str(out),
-                "--library-id",
-                str(lib.get("library_id") or lib.get("library_name") or args.library),
-                "--version-id",
-                str(new_version.get("version_id") or args.version),
-                "--base-version",
-                str(old_version.get("version_id") or args.base or ""),
-            ]
+        command = [
+            "file-diff",
+            file_type,
+            "--old",
+            str(old_file),
+            "--new",
+            str(new_file),
+            "--out",
+            str(out),
+            "--library-id",
+            str(lib.get("library_id") or lib.get("library_name") or args.library),
+            "--version-id",
+            str(new_version.get("version_id") or args.version),
+            "--base-version",
+            str(old_version.get("version_id") or args.base or ""),
         ]
+        if bool(getattr(args, "force_large", False)) and file_type in FORCE_LARGE_FILE_DIFF_TYPES:
+            command.append("--manual-large-file-opt-in")
+        return [command]
     if args.short_command == "release":
         commands: list[list[str]] = []
         check_cmd = [
@@ -1198,6 +1229,10 @@ def build_cli_command(argv: list[str], *, cwd: str | Path | None = None) -> list
     return commands[-1] if commands else []
 
 
+def _command_for_execution(command: list[str]) -> list[str]:
+    return [item for item in command if item != "--manual-large-file-opt-in"]
+
+
 def run_init(args: Namespace) -> int:
     path = write_default_config(args.workspace, raw_root=args.raw_root, library_type=args.library_type)
     print(json.dumps({"status": "PASS", "config": _norm(path)}, ensure_ascii=False, indent=2))
@@ -1219,13 +1254,13 @@ def main(argv: list[str] | None = None) -> int:
         print("[WARN] 'lg diff --auto-scan' is deprecated and now means --scan-if-missing, not forced rescan.", file=sys.stderr)
         print("[INFO] Use --rescan only when you intentionally want to rebuild both scan outputs.", file=sys.stderr)
     for command in commands:
-        print("python -m lib_guard.cli " + " ".join(command))
+        print("python -m lib_guard.cli " + shlex.join(_command_for_execution(command)))
     if args.dry_run:
         return 0
     from lib_guard.cli import main as cli_main
 
     for command in commands:
-        code = cli_main(command)
+        code = cli_main(_command_for_execution(command))
         if code != 0:
             return int(code)
     return 0
