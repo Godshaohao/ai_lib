@@ -23,6 +23,13 @@ P0_REVIEW_TYPES = {"lef", "cdl", "spice", "sp"}
 P1_REVIEW_TYPES = {"sdc", "upf", "cpf", "waiver", "ibis", "pwl", "snp", "touchstone", "cpm"}
 STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
 FALLBACK_BASE_REFS = {"adjacent_fallback", "recorded_base", "recorded_base_fallback", "unknown"}
+UPDATE_STATUS_COPY = {
+    "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg refresh <LIB>。",
+    "NEEDS_BASE_CONFIRM": "无法确定 base；请先确认 current_effective 或 previous_effective。",
+    "NO_DIFF_SUMMARY": "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
+    "CHANGED": "已完成比较，有变化。",
+    "SAME": "已完成比较，无变化。",
+}
 
 
 def _version_id(version: Mapping[str, Any]) -> str:
@@ -167,6 +174,11 @@ def _base_trust_note(base_ref: str) -> str:
     if base_ref in STANDARD_BASE_REFS:
         return "Base 已确认；该结果可作为标准更新详情。"
     return "该结果不是标准 current-effective 更新详情，仅供手动 compare/debug；release 前请确认 base。"
+
+
+def _update_status_message(status: Any) -> str:
+    key = str(status or "").upper()
+    return UPDATE_STATUS_COPY.get(key, f"更新详情状态：{key or 'UNKNOWN'}。")
 
 
 def _path_if_exists(value: Any) -> Path | None:
@@ -354,6 +366,8 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     summary_status = str(summary.get("status") or "").upper()
     if base_ref == "NEEDS_BASE_CONFIRM":
         status = "NEEDS_BASE_CONFIRM"
+    elif diff_dir and not summary:
+        status = "NO_DIFF_SUMMARY"
     elif not summary and not diff_dir:
         status = "DIFF_NOT_RUN"
     elif summary_status in {"DIFF", "CHANGED"} or _as_int(changed_files):
@@ -393,6 +407,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "comparison_semantics": comparison_semantics,
         "delete_semantics": delete_semantics,
         "status": status,
+        "status_message": _update_status_message(status),
         "diff_dir": str(diff_dir or ""),
         "diff_summary_path": str(diff_dir / "diff_summary.json") if diff_dir else "",
         "file_diff_path": str(diff_dir / "file_diff.json") if diff_dir else "",
@@ -953,6 +968,12 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         f"{meta}"
         "</div>"
     )
+    status_message = ui.esc(model.get("status_message") or _update_status_message(status))
+    status_message_html = (
+        "<div class='quality-note'>"
+        f"<b>{ui.esc(status)}</b> {status_message}"
+        "</div>"
+    )
     added_files = _as_int(_summary_metric_value(model, "added_files"))
     removed_files = _as_int(_summary_metric_value(model, "removed_files"))
     changed_files = _as_int(_summary_metric_value(model, "changed_files", model.get("changed_files")))
@@ -962,6 +983,7 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         "先看本次版本相对 Base 的变化、风险和下一步动作；文件级 Diff 只展示 P0/P1 推荐。",
         primary_action_html
         + trust_context_html
+        + status_message_html
         + ui.metric_grid(
             [
                 (

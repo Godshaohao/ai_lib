@@ -454,6 +454,77 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("无法确定 base；请先确认 current_effective 或 previous_effective。", html)
             self.assertIn("BLOCKING", html)
 
+    def test_update_detail_status_copy_is_actionable(self) -> None:
+        from lib_guard.render.version_detail_report import render_version_update_detail_panel
+
+        cases = {
+            "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg refresh <LIB>。",
+            "NEEDS_BASE_CONFIRM": "无法确定 base；请先确认 current_effective 或 previous_effective。",
+            "NO_DIFF_SUMMARY": "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
+            "CHANGED": "已完成比较，有变化。",
+            "SAME": "已完成比较，无变化。",
+        }
+        for status, expected in cases.items():
+            with self.subTest(status=status):
+                model = {
+                    "status": status,
+                    "base_ref": "current_effective",
+                    "base_version": "base_20260629",
+                    "target_version": "patch_20260630",
+                    "comparison_semantics": "full",
+                    "delete_semantics": "real_delete",
+                    "headline": "当前版本相对 current_effective 有 0 个变化文件，0 个建议下钻，0 个已按 Summary/Metadata-only 审查。",
+                    "confidence_note": "Base source=current_effective ref=base_20260629 source_detail=current_effective_ref; comparison_semantics=full; delete_semantics=real_delete",
+                    "primary_next_action": {
+                        "kind": "review_evidence",
+                        "label": "Review evidence",
+                        "command_count": 0,
+                    },
+                    "summary_metrics": [],
+                    "file_changes": [],
+                    "recommended_file_diff": [],
+                    "summary_only_reviewed": [],
+                    "metadata_only_reviewed": [],
+                    "release_notes": [],
+                    "recommended_actions": [],
+                    "file_diff_recommendations": [],
+                    "metadata_only_changes": [],
+                }
+
+                html = render_version_update_detail_panel(model)
+
+                if status == "DIFF_NOT_RUN":
+                    self.assertIn("尚未生成更新详情；请运行 lg refresh &lt;LIB&gt;。", html)
+                    self.assertNotIn("lg refresh <LIB>", html)
+                else:
+                    self.assertIn(expected, html)
+
+    def test_existing_diff_dir_without_summary_is_reported_as_missing_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            diff_dir = root / "diff"
+            diff_dir.mkdir()
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {
+                    "version_id": "patch_20260630",
+                    "current_effective_ref": "base_20260629",
+                    "diff": {
+                        "current_effective_diff_dir": str(diff_dir),
+                    },
+                },
+            )
+
+            self.assertEqual(model["status"], "NO_DIFF_SUMMARY")
+            self.assertEqual(
+                model["status_message"],
+                "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
+            )
+
     def test_html_does_not_require_or_auto_export_current_lib_diff_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
