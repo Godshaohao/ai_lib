@@ -203,6 +203,21 @@ class RepositoryCleanupTest(unittest.TestCase):
             hits.extend(_catalog_report_private_helper_hits(ast.parse(text), rel))
         self.assertFalse(hits, "renderers still depend on catalog_report private common helpers:\n" + "\n".join(hits))
 
+    def test_common_render_helpers_are_not_reimported_from_catalog_report(self) -> None:
+        common = (ROOT / "src" / "lib_guard" / "render" / "catalog_render_common.py").read_text(encoding="utf-8")
+        self.assertIn("def safe", common)
+        self.assertIn("def version_diff_summary", common)
+
+        for path in [
+            ROOT / "src" / "lib_guard" / "render" / "catalog_workspace_report.py",
+            ROOT / "src" / "lib_guard" / "render" / "version_detail_report.py",
+        ]:
+            with self.subTest(path=path.relative_to(ROOT).as_posix()):
+                text = path.read_text(encoding="utf-8")
+                rel = path.relative_to(ROOT).as_posix()
+                hits = _catalog_report_private_helper_hits(ast.parse(text), rel)
+                self.assertFalse(hits, "common helpers were reimported from catalog_report:\n" + "\n".join(hits))
+
     def test_catalog_report_private_helper_guard_catches_alias_and_direct_imports(self) -> None:
         source = """
 from lib_guard.render import catalog_report as catalog

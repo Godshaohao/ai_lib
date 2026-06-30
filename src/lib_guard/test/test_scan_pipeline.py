@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import argparse
 import contextlib
 import gzip
 import io
@@ -1696,6 +1697,7 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertIn("lg.ps1 scan", help_text)
         self.assertIn("file-diff -> fd", help_text)
         self.assertIn("diff -> cmp", help_text)
+        self.assertIn("--force-large", help_text)
         self.assertIn("spice", help_text)
         self.assertIn("touchstone", help_text)
         supported_types = help_text.split("支持的两两文件 diff 类型:", 1)[1].splitlines()[1]
@@ -1710,6 +1712,18 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn(token, supported_types)
         self.assertNotIn("filediff", help_text)
         self.assertNotIn("refresh-diff", help_text)
+
+    def test_short_cli_file_diff_help_documents_force_large(self) -> None:
+        from lib_guard.short_cli import _build_parser
+
+        parser = _build_parser()
+        subparsers = [action for action in parser._actions if isinstance(action, argparse._SubParsersAction)]
+        self.assertEqual(1, len(subparsers))
+        file_diff_parser = subparsers[0].choices["file-diff"]
+        help_text = file_diff_parser.format_help()
+
+        self.assertIn("--force-large", help_text)
+        self.assertIn("Expert opt-in", help_text)
 
     def test_short_cli_rejects_removed_legacy_aliases(self) -> None:
         from lib_guard.short_cli import _build_parser
