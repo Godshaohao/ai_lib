@@ -82,6 +82,30 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertNotIn("未生成 File Diff", summary_section)
             self.assertNotIn("未生成 File Diff", metadata_section)
 
+    def test_markdown_export_uses_same_headline_and_evidence_counts_as_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                export_current_lib_diff_markdown,
+            )
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            md_path = root / "current_lib_diff.md"
+            export_current_lib_diff_markdown(model, md_path)
+            text = md_path.read_text(encoding="utf-8")
+
+            self.assertIn(model["headline"], text)
+            self.assertIn(model["confidence_note"], text)
+            self.assertIn(f"recommended_file_diff: {len(model['recommended_file_diff'])}", text)
+            self.assertIn(f"summary_only_reviewed: {len(model['summary_only_reviewed'])}", text)
+            self.assertIn(f"metadata_only_reviewed: {len(model['metadata_only_reviewed'])}", text)
+            self.assertIn("## Summary-only Reviewed", text)
+            self.assertIn("## Metadata-only Reviewed", text)
+            self.assertIn("## Diff Issues", text)
+
     def test_view_type_release_issues_are_visible_in_update_detail_panel(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

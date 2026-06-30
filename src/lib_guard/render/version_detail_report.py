@@ -1094,6 +1094,7 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
 def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Path) -> str:
     path = Path(out_md)
     path.parent.mkdir(parents=True, exist_ok=True)
+    primary_next_action = _as_mapping(model.get("primary_next_action"))
     lines = [
         "---",
         "schema_version: version_update_detail.v1",
@@ -1106,9 +1107,25 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
         f"delete_semantics: {model.get('delete_semantics') or '-'}",
         f"status: {model.get('status') or '-'}",
         f"changed_files: {_as_int(model.get('changed_files'))}",
+        f"recommended_file_diff: {len(model.get('recommended_file_diff', []) or [])}",
+        f"summary_only_reviewed: {len(model.get('summary_only_reviewed', []) or [])}",
+        f"metadata_only_reviewed: {len(model.get('metadata_only_reviewed', []) or [])}",
         "---",
         "",
         "# Current Library Diff",
+        "",
+        f"{model.get('headline') or '-'}",
+        "",
+        f"{model.get('confidence_note') or '-'}",
+        "",
+        "## Reviewer Context",
+        "",
+        f"- primary_next_action: {primary_next_action.get('kind') or 'review_evidence'}",
+        f"- primary_next_action_label: {primary_next_action.get('label') or 'Review evidence'}",
+        f"- command_count: {primary_next_action.get('command_count') or 0}",
+        f"- base_trust_status: {model.get('base_trust_status') or '-'}",
+        f"- base_trust_note: {model.get('base_trust_note') or '-'}",
+        f"- status_message: {model.get('status_message') or _update_status_message(model.get('status'))}",
         "",
         "## Compare Context",
         "",
@@ -1126,10 +1143,18 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
     for item in model.get("file_changes", []) or []:
         if isinstance(item, Mapping):
             lines.append(f"- [{item.get('review_lane')}] {item.get('change')} {item.get('file_type')} {item.get('path')}")
-    lines.extend(["", "## Metadata-only Changes", ""])
-    for item in model.get("metadata_only_changes", []) or []:
+    lines.extend(["", "## Recommended File Diff", ""])
+    for item in model.get("recommended_file_diff", []) or []:
         if isinstance(item, Mapping):
-            lines.append(f"- {item.get('file_type')} {item.get('path')}")
+            lines.append(f"- [{item.get('review_lane')}] {item.get('change')} {item.get('file_type')} {item.get('path')}")
+    lines.extend(["", "## Summary-only Reviewed", ""])
+    for item in model.get("summary_only_reviewed", []) or []:
+        if isinstance(item, Mapping):
+            lines.append(f"- [{item.get('review_lane')}] {item.get('change')} {item.get('file_type')} {item.get('path')} - {item.get('hint')}")
+    lines.extend(["", "## Metadata-only Reviewed", ""])
+    for item in model.get("metadata_only_reviewed", []) or []:
+        if isinstance(item, Mapping):
+            lines.append(f"- [{item.get('review_lane')}] {item.get('change')} {item.get('file_type')} {item.get('path')} - {item.get('hint')}")
     lines.extend(["", "## View Diff", ""])
     view_diff = _as_mapping(model.get("view_diff"))
     for item in view_diff.get("views", []) or []:
@@ -1150,7 +1175,7 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
     for item in (_as_mapping(model.get("diff_issues"))).get("issues", []) or []:
         if isinstance(item, Mapping):
             lines.append(f"- {item.get('severity', '-')}: {item.get('category', '-')} - {item.get('title') or item.get('message') or '-'}")
-    lines.extend(["", "## Recommended File Diff", ""])
+    lines.extend(["", "## File Diff Commands", ""])
     for item in model.get("file_diff_recommendations", []) or []:
         if isinstance(item, Mapping):
             lines.append(f"- {item.get('lane')} `{item.get('command')}`")

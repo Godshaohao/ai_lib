@@ -58,6 +58,26 @@ If no trusted base is available, the model status is `NEEDS_BASE_CONFIRM`.
 If compare has not run, the status is `DIFF_NOT_RUN`. These states must not be
 rendered as a real diff.
 
+## Version Update Detail Reviewer Fields
+
+The Version Update Detail reviewer surface uses these model fields as the
+reviewer's source of truth:
+
+| Field | Meaning |
+| --- | --- |
+| `headline` | One-line summary of base relationship, changed-file count, recommended file-diff count, and already-reviewed lane count |
+| `confidence_note` | Compact provenance note for base source, base reference, comparison semantics, and delete semantics |
+| `primary_next_action` | Structured next action with `kind`, display label, and command count |
+| `recommended_file_diff` | P0/P1 text-like file changes that should receive focused File Diff review |
+| `summary_only_reviewed` | Large logical text views reviewed at summary level without default full file diff |
+| `metadata_only_reviewed` | Binary/layout/database views reviewed through metadata, hash, path, and summary evidence |
+| `base_trust_status` | Trust state for the selected base, such as `PASS`, `WARNING`, or `BLOCKING` |
+| `base_trust_note` | Human-readable explanation of whether the selected base is release-grade evidence |
+| `status_message` | Actionable copy for the current update-detail status |
+
+HTML renders from this model directly. Markdown export is optional evidence
+generated from the same model and is never an HTML input.
+
 ## File type lanes
 
 File types are split by review lane in `src/lib_guard/project_config.py`:
