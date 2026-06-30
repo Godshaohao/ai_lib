@@ -464,7 +464,7 @@ def _validate_manual_file_diff_type(file_type: str, *, force_large: bool) -> Non
         if force_large:
             return
         raise ValueError(
-            f"file type {file_type!r} is {lane}; pass --force-large only for expert manual review."
+            f"{file_type} is {lane}; pass --force-large only for expert manual review."
         )
     raise ValueError(f"file type {file_type!r} is not supported by pairwise file-diff")
 

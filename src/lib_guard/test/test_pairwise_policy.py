@@ -172,10 +172,14 @@ class PairwisePolicyTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             workspace = self._fd_workspace(Path(td), "top.v")
-            with self.assertRaisesRegex(ValueError, "summary-only.*--force-large"):
+            with self.assertRaises(ValueError) as cm:
                 build_cli_commands(["fd", "ucie", "patch", "top.v", "--type", "verilog"], cwd=workspace)
+        self.assertEqual(
+            str(cm.exception),
+            "verilog is summary-only; pass --force-large only for expert manual review.",
+        )
 
-    def test_fd_force_large_allows_manual_summary_only_type(self) -> None:
+    def test_fd_summary_only_with_force_large_generates_command(self) -> None:
         from lib_guard.short_cli import build_cli_commands
 
         with tempfile.TemporaryDirectory() as td:
@@ -189,21 +193,95 @@ class PairwisePolicyTest(unittest.TestCase):
         self.assertEqual(commands[0][1], "verilog")
         self.assertIn("--manual-large-file-opt-in", commands[0])
 
-    def test_fd_force_large_allows_manual_metadata_only_type_supported_by_cli(self) -> None:
+    def test_fd_binary_metadata_only_without_force_large_fails_with_clear_message(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._fd_workspace(Path(td), "top.db")
+            with self.assertRaises(ValueError) as cm:
+                build_cli_commands(["fd", "ucie", "patch", "top.db", "--type", "db"], cwd=workspace)
+        self.assertEqual(
+            str(cm.exception),
+            "db is metadata-only; pass --force-large only for expert manual review.",
+        )
+
+    def test_fd_binary_metadata_only_with_force_large_generates_command(self) -> None:
         from lib_guard.cli import build_parser
         from lib_guard.short_cli import build_cli_commands
 
         with tempfile.TemporaryDirectory() as td:
-            workspace = self._fd_workspace(Path(td), "top.gds")
+            workspace = self._fd_workspace(Path(td), "top.db")
             commands = build_cli_commands(
-                ["fd", "ucie", "patch", "top.gds", "--type", "gds", "--force-large"],
+                ["fd", "ucie", "patch", "top.db", "--type", "db", "--force-large"],
                 cwd=workspace,
             )
 
         self.assertEqual(commands[0][0], "file-diff")
-        self.assertEqual(commands[0][1], "gds")
+        self.assertEqual(commands[0][1], "db")
         self.assertIn("--manual-large-file-opt-in", commands[0])
         build_parser().parse_args([item for item in commands[0] if item != "--manual-large-file-opt-in"])
+
+    def test_pairwise_still_never_generates_force_large_tasks(self) -> None:
+        from lib_guard.diff.pairwise import build_pairwise_diff_tasks
+
+        changed_types = [
+            "lef",
+            "cdl",
+            "sdc",
+            "verilog",
+            "systemverilog",
+            "liberty",
+            "lib",
+            "spef",
+            "db",
+            "gds",
+            "oas",
+            "layout",
+            "milkyway",
+            "ndm",
+        ]
+
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            (old_scan / "scan_meta.json").write_text(
+                json.dumps({"library_name": "demo", "version": "base"}),
+                encoding="utf-8",
+            )
+            (new_scan / "scan_meta.json").write_text(
+                json.dumps({"library_name": "demo", "version": "new"}),
+                encoding="utf-8",
+            )
+            file_diff = {
+                "changed": [f"{file_type}/block.{file_type}" for file_type in changed_types],
+                "_old_items": {},
+                "_new_items": {},
+            }
+            for file_type in changed_types:
+                relpath = f"{file_type}/block.{file_type}"
+                file_diff["_old_items"][relpath] = {
+                    "path": relpath,
+                    "file_type": file_type,
+                    "root_path": str(old_scan),
+                }
+                file_diff["_new_items"][relpath] = {
+                    "path": relpath,
+                    "file_type": file_type,
+                    "root_path": str(new_scan),
+                }
+
+            tasks = build_pairwise_diff_tasks(
+                old_scan,
+                new_scan,
+                file_diff,
+                output_root=Path(td) / "pairwise",
+            )
+
+        commands = "\n".join(item["command"] for item in tasks["tasks"])
+        self.assertNotIn("--force-large", commands)
+        self.assertNotIn("--manual-large-file-opt-in", commands)
 
     def test_short_cli_dry_run_force_large_prints_executable_lower_cli_command(self) -> None:
         from lib_guard.cli import build_parser
