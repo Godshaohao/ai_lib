@@ -61,6 +61,24 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 `refresh` 用于刷新 Version Review 的更新详情，默认选择 `current_effective` 或
 `previous_effective` 作为 base；`cmp` 用于手动指定 base 或 adjacent/cumulative 等比较。
 
+## Version Review lane policy
+
+`refresh` 是普通 Version Review 更新详情入口。它默认先使用 `current_effective`
+作为 base；如果当前有效库不存在，再退到 `previous_effective`。找不到可信 base 时，
+页面会要求人工确认，而不是把 adjacent 结果伪装成日常更新详情。
+
+`cmp` 是手动 compare/debug 工具，适合显式指定 base、调试 adjacent/cumulative，
+或生成独立 Comparison Review。`fd` 是手动 file drill-down，只用于 reviewer 或 owner
+确认需要逐文件查看的重点文件。
+
+File Diff lane 的含义是审查方式，不是漏跑检查。`summary-only` 表示大型逻辑视图已经
+通过 summary/count/corner 等证据审查；`metadata-only` 表示二进制、layout 或 database
+视图通过 hash、size、path、count 等 metadata 证据审查。
+
+`--force-large` 只允许专家在显式手动 `fd` 时 opt in 大文件、集合文件或二进制 metadata
+lane 的人工下钻成本。它不会改变 `refresh`、`cmp` 或自动 pairwise 推荐的默认 lane
+策略。
+
 如果 `$WORK/lib_guard.yml` 存在，`lg.csh` 会自动使用它。也可以显式指定：
 
 ```csh

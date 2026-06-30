@@ -148,6 +148,41 @@ class RepositoryCleanupTest(unittest.TestCase):
         missing = [token for token in required if token not in text]
         self.assertFalse(missing, "data contract missing tokens:\n" + "\n".join(missing))
 
+    def test_current_docs_explain_refresh_cmp_fd_lanes_and_force_large(self) -> None:
+        required = [
+            "refresh",
+            "current_effective",
+            "cmp",
+            "summary-only",
+            "metadata-only",
+            "--force-large",
+            "Version Review",
+        ]
+        paths = [
+            ROOT / "README.md",
+            ROOT / "docs" / "user_guide.md",
+            ROOT / "docs" / "cli_reference.md",
+            ROOT / "docs" / "data_contract.md",
+        ]
+        missing: list[str] = []
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            rel = path.relative_to(ROOT).as_posix()
+            for token in required:
+                if token not in text:
+                    missing.append(f"{rel}: {token}")
+        self.assertFalse(missing, "current docs missing lane-policy wording:\n" + "\n".join(missing))
+        data_contract = (ROOT / "docs" / "data_contract.md").read_text(encoding="utf-8")
+        for token in [
+            "lane_counts",
+            "summary_only_changes",
+            "metadata_only_reviewed_changes",
+            "metadata_only_changes",
+            "summary_only_reviewed + metadata_only_reviewed",
+            "Backward-compatible aggregate",
+        ]:
+            self.assertIn(token, data_contract)
+
     def test_current_tests_are_not_v5_named(self) -> None:
         stale = sorted((ROOT / "src" / "lib_guard" / "test").glob("test_v5_*.py"))
         self.assertEqual([], [path.relative_to(ROOT).as_posix() for path in stale])

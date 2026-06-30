@@ -41,6 +41,12 @@ Review to render “更新详情”. HTML must be generated from this model dire
 `current_lib_diff.md` is only an optional export from the same model and is not a
 page input.
 
+The normal Version Review update detail is populated by `refresh`. Base
+selection defaults to `current_effective`, then `previous_effective`; manual
+`cmp` remains the compare/debug path for explicit base, adjacent, or cumulative
+investigation. Focused `fd` output is a manual drill-down artifact, not the
+primary model input.
+
 The model aggregates:
 
 | Field | Source |
@@ -71,6 +77,10 @@ reviewer's source of truth:
 | `recommended_file_diff` | P0/P1 text-like file changes that should receive focused File Diff review |
 | `summary_only_reviewed` | Large logical text views reviewed at summary level without default full file diff |
 | `metadata_only_reviewed` | Binary/layout/database views reviewed through metadata, hash, path, and summary evidence |
+| `lane_counts` | Counts for recommended file diff, `summary-only`, `metadata-only`, and blocking issue lanes shown in Version Review |
+| `summary_only_changes` | Alias for the reviewed `summary-only` lane so downstream reviewers can read changes without treating them as missed `fd` work |
+| `metadata_only_reviewed_changes` | Alias for only the reviewed `metadata-only` lane so binary/layout/database changes stay tied to metadata evidence |
+| `metadata_only_changes` | Backward-compatible aggregate of `summary_only_reviewed + metadata_only_reviewed`; kept for older downstream readers that treat both lanes as reviewed without default `fd` work |
 | `base_trust_status` | Trust state for the selected base, such as `PASS`, `WARNING`, or `BLOCKING` |
 | `base_trust_note` | Human-readable explanation of whether the selected base is release-grade evidence |
 | `status_message` | Actionable copy for the current update-detail status |
@@ -91,3 +101,11 @@ File types are split by review lane in `src/lib_guard/project_config.py`:
 `pairwise.py`, `scan_diff.py`, and `version_detail_report.py` must use the same
 lane constants so the command recommendation, scan summary, and Version Review
 page cannot disagree.
+
+The lane labels are reviewer evidence semantics. `summary-only` means large
+logical views were reviewed through summary/count/corner evidence; `metadata-only`
+means binary, layout, or database views were reviewed through hash, size, path,
+count, and related metadata. These lanes must not be converted into default
+pairwise or `refresh` work just because a file changed. `--force-large` is only
+an explicit expert opt-in for manual `fd`; it must not affect `refresh`, `cmp`,
+or automatic pairwise recommendation generation.
