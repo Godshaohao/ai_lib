@@ -311,6 +311,69 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(missing_model["status"], "NEEDS_BASE_CONFIRM")
             self.assertEqual(missing_model["base_ref"], "NEEDS_BASE_CONFIRM")
 
+    def test_adjacent_fallback_warns_that_update_detail_is_manual_compare_debug_only(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            diff_dir = root / "adjacent_diff"
+            diff_dir.mkdir()
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps({"status": "DIFF", "changed_files": 1}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {
+                    "version_id": "patch_20260630",
+                    "diff": {
+                        "adjacent_old_version": "raw_previous",
+                        "adjacent_diff_dir": str(diff_dir),
+                    },
+                },
+            )
+            html = render_version_update_detail_panel(model)
+
+            self.assertEqual(model["base_ref"], "adjacent_fallback")
+            self.assertEqual(model["base_trust_status"], "WARNING")
+            self.assertIn("该结果不是标准 current-effective 更新详情，仅供手动 compare/debug；release 前请确认 base。", html)
+            for label in [
+                "Base source",
+                "Base version",
+                "Target version",
+                "Comparison semantics",
+                "Delete semantics",
+                "Markdown export",
+            ]:
+                self.assertIn(label, html)
+
+    def test_missing_base_blocks_update_detail_and_drives_primary_next_action(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {"version_id": "orphan_20260630"},
+            )
+            html = render_version_update_detail_panel(model)
+
+            self.assertEqual(model["status"], "NEEDS_BASE_CONFIRM")
+            self.assertEqual(model["base_trust_status"], "BLOCKING")
+            self.assertEqual(model["primary_next_action"]["kind"], "base_confirm_required")
+            self.assertIn("无法确定 base；请先确认 current_effective 或 previous_effective。", html)
+            self.assertIn("BLOCKING", html)
+
     def test_html_does_not_require_or_auto_export_current_lib_diff_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

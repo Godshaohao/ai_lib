@@ -17,6 +17,8 @@ from lib_guard.render import product_theme as ui
 
 P0_REVIEW_TYPES = {"lef", "cdl", "spice", "sp"}
 P1_REVIEW_TYPES = {"sdc", "upf", "cpf", "waiver", "ibis", "pwl", "snp", "touchstone", "cpm"}
+STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
+FALLBACK_BASE_REFS = {"adjacent_fallback", "recorded_base", "recorded_base_fallback", "unknown"}
 
 
 def _cr():
@@ -151,6 +153,24 @@ def _select_base(version: Mapping[str, Any]) -> tuple[str, str, str]:
     if diff_base:
         return "recorded_base", str(diff_base), "diff.base_version:fallback"
     return "NEEDS_BASE_CONFIRM", "", "missing_base"
+
+
+def _base_trust_status(base_ref: str) -> str:
+    if base_ref == "NEEDS_BASE_CONFIRM":
+        return "BLOCKING"
+    if base_ref in STANDARD_BASE_REFS:
+        return "PASS"
+    if base_ref in FALLBACK_BASE_REFS or not base_ref:
+        return "WARNING"
+    return "WARNING"
+
+
+def _base_trust_note(base_ref: str) -> str:
+    if base_ref == "NEEDS_BASE_CONFIRM":
+        return "无法确定 base；请先确认 current_effective 或 previous_effective。"
+    if base_ref in STANDARD_BASE_REFS:
+        return "Base 已确认；该结果可作为标准更新详情。"
+    return "该结果不是标准 current-effective 更新详情，仅供手动 compare/debug；release 前请确认 base。"
 
 
 def _path_if_exists(value: Any) -> Path | None:
@@ -372,6 +392,8 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "base_ref": base_ref,
         "base_version": base_version,
         "base_source": base_source,
+        "base_trust_status": _base_trust_status(base_ref),
+        "base_trust_note": _base_trust_note(base_ref),
         "package_type": cr._package_type(version),
         "compare_strategy": compare_strategy,
         "comparison_semantics": comparison_semantics,
@@ -507,7 +529,7 @@ def _cn_delete_semantics(value: Any) -> str:
 def _version_detail_styles() -> str:
     return """
 <style>
-.version-dashboard{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start}.version-main,.version-side{display:flex;flex-direction:column;gap:18px}.version-side{position:sticky;top:18px}.version-overview{border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}.overview-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}.overview-title h2{margin:0 0 4px;font-size:20px}.overview-title p{font-size:13px}.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.overview-cell{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px}.overview-cell b{display:block;font-size:12px;color:#667085}.overview-cell em{display:block;font-style:normal;font-weight:800;color:#172033;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.version-update-lead{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin-bottom:12px}.version-update-lead b{display:block;color:#172033;margin-bottom:5px}.version-update-lead p{margin:0 0 10px;color:#667085;font-size:13px}.primary-action-line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.primary-action-line em{font-style:normal;color:#667085;font-size:12px}.context-list{display:flex;flex-direction:column;gap:8px}.context-row{border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:9px 10px}.context-row b{display:block;font-size:12px;color:#667085}.context-row code,.context-row em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.section-label{margin:18px 0 8px;font-weight:900;color:#344054}.empty-guidance{border:1px dashed #d3dae6;border-radius:10px;background:#fbfcff;color:#667085;padding:12px 14px;margin:10px 0}.empty-guidance b{display:block;color:#344054;margin-bottom:3px}.quality-note{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin:12px 0;color:#667085}.quality-note b{color:#344054}.panel-body>h3{font-size:14px;margin:18px 0 8px;color:#344054}.version-scroll-table.change-scroll td:nth-child(5){min-width:220px}.version-scroll-table.change-scroll td:nth-child(3) code{min-width:860px}.version-scroll-table.corner-detail-scroll{max-height:320px}.version-scroll-table.corner-detail-scroll table{min-width:980px}.version-scroll-table.unknown-detail-scroll{max-height:260px}.version-scroll-table.unknown-detail-scroll table{min-width:860px}.detail-fold.review-fold{border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;margin-top:12px}.detail-fold.review-fold summary{color:#344054}.raw-scan-note{border-left:4px solid #a15c00;background:#fff7e8;border-radius:10px;padding:12px 14px;margin:12px 0;color:#664000}.raw-scan-note b{display:block;color:#4f2f00}.side-panel .panel{box-shadow:none}.evidence-actions{display:grid;gap:8px}.evidence-actions .btn{justify-content:flex-start}@media(max-width:1100px){.version-dashboard{grid-template-columns:1fr}.version-side{position:static}.overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.overview-head{display:block}.overview-grid{grid-template-columns:1fr}.version-dashboard{gap:12px}.panel-head{display:block}.panel-actions{margin-top:10px}.version-scroll-table.change-scroll{height:360px}}
+.version-dashboard{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start}.version-main,.version-side{display:flex;flex-direction:column;gap:18px}.version-side{position:sticky;top:18px}.version-overview{border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}.overview-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}.overview-title h2{margin:0 0 4px;font-size:20px}.overview-title p{font-size:13px}.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.overview-cell{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px}.overview-cell b{display:block;font-size:12px;color:#667085}.overview-cell em{display:block;font-style:normal;font-weight:800;color:#172033;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.version-update-lead{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin-bottom:12px}.version-update-lead b{display:block;color:#172033;margin-bottom:5px}.version-update-lead p{margin:0 0 10px;color:#667085;font-size:13px}.primary-action-line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.primary-action-line em{font-style:normal;color:#667085;font-size:12px}.base-trust-context{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px;margin-bottom:12px}.base-trust-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}.base-trust-head b{color:#344054}.base-trust-context p{margin:0 0 10px;color:#667085;font-size:13px}.context-list{display:flex;flex-direction:column;gap:8px}.context-row{border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:9px 10px}.context-row b{display:block;font-size:12px;color:#667085}.context-row code,.context-row em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.section-label{margin:18px 0 8px;font-weight:900;color:#344054}.empty-guidance{border:1px dashed #d3dae6;border-radius:10px;background:#fbfcff;color:#667085;padding:12px 14px;margin:10px 0}.empty-guidance b{display:block;color:#344054;margin-bottom:3px}.quality-note{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin:12px 0;color:#667085}.quality-note b{color:#344054}.panel-body>h3{font-size:14px;margin:18px 0 8px;color:#344054}.version-scroll-table.change-scroll td:nth-child(5){min-width:220px}.version-scroll-table.change-scroll td:nth-child(3) code{min-width:860px}.version-scroll-table.corner-detail-scroll{max-height:320px}.version-scroll-table.corner-detail-scroll table{min-width:980px}.version-scroll-table.unknown-detail-scroll{max-height:260px}.version-scroll-table.unknown-detail-scroll table{min-width:860px}.detail-fold.review-fold{border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;margin-top:12px}.detail-fold.review-fold summary{color:#344054}.raw-scan-note{border-left:4px solid #a15c00;background:#fff7e8;border-radius:10px;padding:12px 14px;margin:12px 0;color:#664000}.raw-scan-note b{display:block;color:#4f2f00}.side-panel .panel{box-shadow:none}.evidence-actions{display:grid;gap:8px}.evidence-actions .btn{justify-content:flex-start}@media(max-width:1100px){.version-dashboard{grid-template-columns:1fr}.version-side{position:static}.overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.overview-head{display:block}.overview-grid{grid-template-columns:1fr}.version-dashboard{gap:12px}.panel-head{display:block}.panel-actions{margin-top:10px}.version-scroll-table.change-scroll{height:360px}}
 </style>
 """
 
@@ -880,11 +902,12 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
     status = str(model.get("status") or "UNKNOWN")
     meta = ui.compact_meta(
         [
-            ("Base", f"{base_ref} / {base_version}"),
-            ("Target", model.get("target_version") or model.get("version_id") or "-"),
-            ("对比语义", _cn_semantics(model.get("comparison_semantics"))),
-            ("删除语义", _cn_delete_semantics(model.get("delete_semantics"))),
-            ("Markdown 导出", model.get("markdown_export_path") or "-"),
+            ("Base source", f"{base_ref} / {model.get('base_source') or '-'}"),
+            ("Base version", base_version),
+            ("Target version", model.get("target_version") or model.get("version_id") or "-"),
+            ("Comparison semantics", model.get("comparison_semantics") or "-"),
+            ("Delete semantics", model.get("delete_semantics") or "-"),
+            ("Markdown export", model.get("markdown_export_path") or "-"),
         ]
     )
     metadata_note = ""
@@ -900,6 +923,16 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         f"<em>command_count={ui.esc(primary_next_action.get('command_count') or 0)}</em>"
         "</div></div>"
     )
+    trust_context_html = (
+        "<div class='base-trust-context'>"
+        "<div class='base-trust-head'>"
+        "<b>Base trust</b>"
+        f"{ui.badge(model.get('base_trust_status') or 'WARNING', model.get('base_trust_status') or 'WARNING')}"
+        "</div>"
+        f"<p>{ui.esc(model.get('base_trust_note') or '-')}</p>"
+        f"{meta}"
+        "</div>"
+    )
     added_files = _as_int(_summary_metric_value(model, "added_files"))
     removed_files = _as_int(_summary_metric_value(model, "removed_files"))
     changed_files = _as_int(_summary_metric_value(model, "changed_files", model.get("changed_files")))
@@ -908,6 +941,7 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         f"更新详情（vs {base_ref} / {base_version}）",
         "先看本次版本相对 Base 的变化、风险和下一步动作；文件级 Diff 只展示 P0/P1 推荐。",
         primary_action_html
+        + trust_context_html
         + ui.metric_grid(
             [
                 (
@@ -921,7 +955,6 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
                 ("Release note", len(model.get("release_notes", []) or []), "release_note / changelog / update_note", "PASS" if model.get("release_notes") else "INFO"),
             ]
         )
-        + meta
         + "<h3>Diff 指标</h3>"
         + cr._scroll_table(["指标", "数值"], _metric_rows(model), "暂无自动 Diff 结果；下一步运行 lg cmp 或 lg lib-diff。", "metric-scroll")
         + "<h3>变化文件</h3>"
