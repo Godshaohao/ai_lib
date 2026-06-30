@@ -82,6 +82,50 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertNotIn("未生成 File Diff", summary_section)
             self.assertNotIn("未生成 File Diff", metadata_section)
 
+    def test_version_update_detail_model_exposes_headline_confidence_and_primary_action(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+            diff_dir = root / "diff"
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps({"status": "DIFF", "added_files": 1, "changed_files": 6}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            file_diff = json.loads((diff_dir / "file_diff.json").read_text(encoding="utf-8"))
+            file_diff["changed"] = [item for item in file_diff["changed"] if item["path"] != "layout/top.oas"]
+            (diff_dir / "file_diff.json").write_text(json.dumps(file_diff, ensure_ascii=False), encoding="utf-8")
+            version["package_type"] = "FULL_PACKAGE"
+            version["current_effective_ref"] = "base_20260629"
+            version["diff"] = {
+                "base_version": "stale_base",
+                "base_source": "adjacent",
+                "base_diff_dir": str(root / "stale_diff"),
+                "current_effective_diff_dir": str(root / "diff"),
+            }
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            html = render_version_update_detail_panel(model)
+
+            self.assertIn("headline", model)
+            self.assertIn("confidence_note", model)
+            self.assertIn("primary_next_action", model)
+            self.assertEqual(model["base_ref"], "current_effective")
+            self.assertEqual(model["primary_next_action"]["kind"], "file_diff_recommended")
+            self.assertEqual(model["primary_next_action"]["command_count"], 2)
+            self.assertIn("当前版本相对 current_effective", model["headline"])
+            self.assertIn("2 个建议下钻", model["headline"])
+            self.assertIn("5 个已按 Summary/Metadata-only 审查", model["headline"])
+            self.assertIn("Base source=current_effective", model["confidence_note"])
+            self.assertIn("comparison_semantics=full", model["confidence_note"])
+            self.assertIn(model["headline"], html)
+            self.assertIn(model["confidence_note"], html)
+            self.assertIn("Run recommended File Diff", html)
+
     def test_current_effective_wins_over_stale_diff_base(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

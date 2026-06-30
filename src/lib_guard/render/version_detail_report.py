@@ -279,6 +279,43 @@ def _group_file_changes_by_review_mode(file_changes: list[dict[str, Any]]) -> tu
     return recommended, summary_only, metadata_only
 
 
+def _version_update_headline(base_ref: str, changed_files: int, recommended_count: int, reviewed_count: int) -> str:
+    return (
+        f"当前版本相对 {base_ref or 'NEEDS_BASE_CONFIRM'} 有 {changed_files} 个变化文件，"
+        f"{recommended_count} 个建议下钻，{reviewed_count} 个已按 Summary/Metadata-only 审查。"
+    )
+
+
+def _version_update_confidence_note(model: Mapping[str, Any]) -> str:
+    return (
+        f"Base source={model.get('base_ref') or '-'}"
+        f" ref={model.get('base_version') or '-'}"
+        f" source_detail={model.get('base_source') or '-'}"
+        f"; comparison_semantics={model.get('comparison_semantics') or '-'}"
+        f"; delete_semantics={model.get('delete_semantics') or '-'}"
+    )
+
+
+def _primary_next_action(status: str, recommended_count: int, command_count: int) -> dict[str, Any]:
+    if str(status or "").upper() == "NEEDS_BASE_CONFIRM":
+        return {
+            "kind": "base_confirm_required",
+            "label": "Confirm base before review",
+            "command_count": 0,
+        }
+    if recommended_count > 0:
+        return {
+            "kind": "file_diff_recommended",
+            "label": "Run recommended File Diff",
+            "command_count": command_count,
+        }
+    return {
+        "kind": "review_evidence",
+        "label": "Review evidence",
+        "command_count": 0,
+    }
+
+
 def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> dict[str, Any]:
     cr = _cr()
     out_path = Path(out)
@@ -313,6 +350,8 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     recommended_file_diff, summary_only_reviewed, metadata_only_reviewed = _group_file_changes_by_review_mode(file_changes)
     metadata_only = summary_only_reviewed + metadata_only_reviewed
     commands = _file_diff_commands(lib, version, base_version, file_changes)
+    recommended_count = len(recommended_file_diff)
+    reviewed_count = len(summary_only_reviewed) + len(metadata_only_reviewed)
     md_path = out_path / "libraries" / safe_lib / "versions" / safe_ver / "current_lib_diff.md"
     trace_links = {
         "diff_summary": str(diff_dir / "diff_summary.json") if diff_dir else "",
@@ -324,7 +363,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "diff_issues": str(diff_dir / "diff_issues.json") if diff_dir else "",
         "markdown_export": str(md_path),
     }
-    return {
+    model = {
         "schema_version": "version_update_detail.v1",
         "library_id": lib_id,
         "library_name": _library_name(lib),
@@ -361,6 +400,10 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "metadata_only_changes": metadata_only,
         "trace_links": trace_links,
     }
+    model["headline"] = _version_update_headline(base_ref, _as_int(changed_files), recommended_count, reviewed_count)
+    model["confidence_note"] = _version_update_confidence_note(model)
+    model["primary_next_action"] = _primary_next_action(status, recommended_count, len(commands))
+    return model
 
 
 def _metric_rows(model: Mapping[str, Any]) -> list[str]:
@@ -464,7 +507,7 @@ def _cn_delete_semantics(value: Any) -> str:
 def _version_detail_styles() -> str:
     return """
 <style>
-.version-dashboard{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start}.version-main,.version-side{display:flex;flex-direction:column;gap:18px}.version-side{position:sticky;top:18px}.version-overview{border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}.overview-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}.overview-title h2{margin:0 0 4px;font-size:20px}.overview-title p{font-size:13px}.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.overview-cell{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px}.overview-cell b{display:block;font-size:12px;color:#667085}.overview-cell em{display:block;font-style:normal;font-weight:800;color:#172033;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.context-list{display:flex;flex-direction:column;gap:8px}.context-row{border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:9px 10px}.context-row b{display:block;font-size:12px;color:#667085}.context-row code,.context-row em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.section-label{margin:18px 0 8px;font-weight:900;color:#344054}.empty-guidance{border:1px dashed #d3dae6;border-radius:10px;background:#fbfcff;color:#667085;padding:12px 14px;margin:10px 0}.empty-guidance b{display:block;color:#344054;margin-bottom:3px}.quality-note{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin:12px 0;color:#667085}.quality-note b{color:#344054}.panel-body>h3{font-size:14px;margin:18px 0 8px;color:#344054}.version-scroll-table.change-scroll td:nth-child(5){min-width:220px}.version-scroll-table.change-scroll td:nth-child(3) code{min-width:860px}.version-scroll-table.corner-detail-scroll{max-height:320px}.version-scroll-table.corner-detail-scroll table{min-width:980px}.version-scroll-table.unknown-detail-scroll{max-height:260px}.version-scroll-table.unknown-detail-scroll table{min-width:860px}.detail-fold.review-fold{border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;margin-top:12px}.detail-fold.review-fold summary{color:#344054}.raw-scan-note{border-left:4px solid #a15c00;background:#fff7e8;border-radius:10px;padding:12px 14px;margin:12px 0;color:#664000}.raw-scan-note b{display:block;color:#4f2f00}.side-panel .panel{box-shadow:none}.evidence-actions{display:grid;gap:8px}.evidence-actions .btn{justify-content:flex-start}@media(max-width:1100px){.version-dashboard{grid-template-columns:1fr}.version-side{position:static}.overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.overview-head{display:block}.overview-grid{grid-template-columns:1fr}.version-dashboard{gap:12px}.panel-head{display:block}.panel-actions{margin-top:10px}.version-scroll-table.change-scroll{height:360px}}
+.version-dashboard{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start}.version-main,.version-side{display:flex;flex-direction:column;gap:18px}.version-side{position:sticky;top:18px}.version-overview{border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}.overview-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}.overview-title h2{margin:0 0 4px;font-size:20px}.overview-title p{font-size:13px}.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.overview-cell{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px}.overview-cell b{display:block;font-size:12px;color:#667085}.overview-cell em{display:block;font-style:normal;font-weight:800;color:#172033;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.version-update-lead{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin-bottom:12px}.version-update-lead b{display:block;color:#172033;margin-bottom:5px}.version-update-lead p{margin:0 0 10px;color:#667085;font-size:13px}.primary-action-line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.primary-action-line em{font-style:normal;color:#667085;font-size:12px}.context-list{display:flex;flex-direction:column;gap:8px}.context-row{border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:9px 10px}.context-row b{display:block;font-size:12px;color:#667085}.context-row code,.context-row em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.section-label{margin:18px 0 8px;font-weight:900;color:#344054}.empty-guidance{border:1px dashed #d3dae6;border-radius:10px;background:#fbfcff;color:#667085;padding:12px 14px;margin:10px 0}.empty-guidance b{display:block;color:#344054;margin-bottom:3px}.quality-note{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin:12px 0;color:#667085}.quality-note b{color:#344054}.panel-body>h3{font-size:14px;margin:18px 0 8px;color:#344054}.version-scroll-table.change-scroll td:nth-child(5){min-width:220px}.version-scroll-table.change-scroll td:nth-child(3) code{min-width:860px}.version-scroll-table.corner-detail-scroll{max-height:320px}.version-scroll-table.corner-detail-scroll table{min-width:980px}.version-scroll-table.unknown-detail-scroll{max-height:260px}.version-scroll-table.unknown-detail-scroll table{min-width:860px}.detail-fold.review-fold{border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;margin-top:12px}.detail-fold.review-fold summary{color:#344054}.raw-scan-note{border-left:4px solid #a15c00;background:#fff7e8;border-radius:10px;padding:12px 14px;margin:12px 0;color:#664000}.raw-scan-note b{display:block;color:#4f2f00}.side-panel .panel{box-shadow:none}.evidence-actions{display:grid;gap:8px}.evidence-actions .btn{justify-content:flex-start}@media(max-width:1100px){.version-dashboard{grid-template-columns:1fr}.version-side{position:static}.overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.overview-head{display:block}.overview-grid{grid-template-columns:1fr}.version-dashboard{gap:12px}.panel-head{display:block}.panel-actions{margin-top:10px}.version-scroll-table.change-scroll{height:360px}}
 </style>
 """
 
@@ -847,6 +890,16 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
     metadata_note = ""
     if model.get("metadata_only_changes"):
         metadata_note = "<div class='quality-note'><b>metadata-only</b> 变化会展示在表格中，但 DB/GDS/OAS/大 Liberty/SPEF 等不会生成默认文件级 Diff 命令。</div>"
+    primary_next_action = _as_mapping(model.get("primary_next_action"))
+    primary_action_html = (
+        "<div class='version-update-lead'>"
+        f"<b>{ui.esc(model.get('headline') or '-')}</b>"
+        f"<p>{ui.esc(model.get('confidence_note') or '-')}</p>"
+        "<div class='primary-action-line'>"
+        f"{ui.badge(primary_next_action.get('kind') or 'review_evidence', primary_next_action.get('label') or 'Review evidence')}"
+        f"<em>command_count={ui.esc(primary_next_action.get('command_count') or 0)}</em>"
+        "</div></div>"
+    )
     added_files = _as_int(_summary_metric_value(model, "added_files"))
     removed_files = _as_int(_summary_metric_value(model, "removed_files"))
     changed_files = _as_int(_summary_metric_value(model, "changed_files", model.get("changed_files")))
@@ -854,7 +907,8 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
     return ui.panel(
         f"更新详情（vs {base_ref} / {base_version}）",
         "先看本次版本相对 Base 的变化、风险和下一步动作；文件级 Diff 只展示 P0/P1 推荐。",
-        ui.metric_grid(
+        primary_action_html
+        + ui.metric_grid(
             [
                 (
                     "对比策略",
