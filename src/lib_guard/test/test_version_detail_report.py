@@ -82,6 +82,86 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertNotIn("未生成 File Diff", summary_section)
             self.assertNotIn("未生成 File Diff", metadata_section)
 
+    def test_view_type_release_issues_are_visible_in_update_detail_panel(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+            diff_dir = root / "diff"
+            (diff_dir / "view_diff.json").write_text(
+                json.dumps(
+                    {
+                        "summary": {"changed": 1},
+                        "changed": [{"view": "timing", "status": "changed"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "type_diff.json").write_text(
+                json.dumps(
+                    {
+                        "summary": {"changed_types": 1},
+                        "changed": [{"file_type": "liberty", "status": "changed"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "release_readiness_diff.json").write_text(
+                json.dumps(
+                    {
+                        "status": "DIFF",
+                        "regressions": [{"check": "required_view_status", "from": "PASS", "to": "WARNING"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "release_evidence_diff.json").write_text(
+                json.dumps(
+                    {
+                        "status": "DIFF",
+                        "changed": [{"artifact": "release_readiness.json", "reason": "readiness changed"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "diff_issues.json").write_text(
+                json.dumps(
+                    {
+                        "issues": [
+                            {
+                                "severity": "warning",
+                                "category": "view_diff",
+                                "title": "Timing view changed",
+                                "message": "Review timing collateral.",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            html = render_version_update_detail_panel(model)
+
+            self.assertIn("View Changes", html)
+            self.assertIn("Type Changes", html)
+            self.assertIn("Release Readiness Changes", html)
+            self.assertIn("Release Evidence Changes", html)
+            self.assertIn("Diff Issues", html)
+            self.assertIn("Timing view changed", html)
+            self.assertIn("required_view_status", html)
+            self.assertIn("release_readiness.json", html)
+            self.assertLess(html.index("Diff Issues"), html.index("建议动作"))
+
     def test_version_update_detail_model_exposes_headline_confidence_and_primary_action(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -7,6 +7,7 @@ the HTML panel; the HTML renderer never reads Markdown.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -474,6 +475,36 @@ def _release_note_rows(model: Mapping[str, Any]) -> list[str]:
 
 def _recommended_action_rows(model: Mapping[str, Any]) -> list[str]:
     return [f"<tr><td>{ui.esc(action)}</td></tr>" for action in model.get("recommended_actions", []) or []]
+
+
+def _mapping_rows(value: Mapping[str, Any], *, prefix: str = "") -> list[str]:
+    rows: list[str] = []
+    for key, item in value.items():
+        label = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(item, (Mapping, list)):
+            display = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        else:
+            display = item
+        rows.append(f"<tr><td><code>{ui.esc(label)}</code></td><td><code>{ui.esc(display)}</code></td></tr>")
+    return rows
+
+
+def _diff_issue_rows(model: Mapping[str, Any]) -> list[str]:
+    issues = _as_mapping(model.get("diff_issues")).get("issues", [])
+    rows: list[str] = []
+    for item in issues or []:
+        if not isinstance(item, Mapping):
+            continue
+        title = item.get("title") or item.get("message") or "-"
+        message = item.get("message") or "-"
+        rows.append(
+            "<tr>"
+            f"<td>{ui.badge(item.get('severity') or 'INFO')}</td>"
+            f"<td><code>{ui.esc(item.get('category') or '-')}</code></td>"
+            f"<td><b>{ui.esc(title)}</b><br><span class='muted'>{ui.esc(message)}</span></td>"
+            "</tr>"
+        )
+    return rows
 
 
 def _command_rows(model: Mapping[str, Any]) -> list[str]:
@@ -980,6 +1011,43 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
             "暂无 release_note / changelog 摘要",
             "搜索 release note / changelog",
             [(0, "文件")],
+        )
+        + "<h3>View Changes</h3>"
+        + catalog._scroll_table(
+            ["字段", "值"],
+            _mapping_rows(_as_mapping(model.get("view_diff"))),
+            "暂无 view_diff.json 变化证据。",
+            "view-change-scroll",
+        )
+        + "<h3>Type Changes</h3>"
+        + catalog._scroll_table(
+            ["字段", "值"],
+            _mapping_rows(_as_mapping(model.get("type_diff"))),
+            "暂无 type_diff.json 变化证据。",
+            "type-change-scroll",
+        )
+        + "<h3>Release Readiness Changes</h3>"
+        + catalog._scroll_table(
+            ["字段", "值"],
+            _mapping_rows(_as_mapping(model.get("release_readiness_diff"))),
+            "暂无 release_readiness_diff.json 变化证据。",
+            "release-readiness-change-scroll",
+        )
+        + "<h3>Release Evidence Changes</h3>"
+        + catalog._scroll_table(
+            ["字段", "值"],
+            _mapping_rows(_as_mapping(model.get("release_evidence_diff"))),
+            "暂无 release_evidence_diff.json 变化证据。",
+            "release-evidence-change-scroll",
+        )
+        + "<h3>Diff Issues</h3>"
+        + ui.faceted_table(
+            "diff-issue-table",
+            ["Severity", "Category", "Issue"],
+            _diff_issue_rows(model),
+            "暂无 diff_issues.json 问题。",
+            "搜索 issue / category / severity",
+            [(0, "Severity"), (1, "Category")],
         )
         + "<h3>建议动作</h3>"
         + ui.faceted_table(
