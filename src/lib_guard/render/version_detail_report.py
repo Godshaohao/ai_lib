@@ -313,6 +313,18 @@ def _version_update_headline(base_ref: str, changed_files: int, recommended_coun
     )
 
 
+def _reviewed_count_for_headline(summary_only: list[dict[str, Any]], metadata_only: list[dict[str, Any]]) -> int:
+    review_units: set[tuple[str, str]] = set()
+    for item in metadata_only:
+        file_type = str(item.get("file_type") or "").lower()
+        path = str(item.get("path") or "")
+        if file_type in {"gds", "oas", "layout", "milkyway", "ndm"}:
+            review_units.add(("layout", str(Path(path).with_suffix("")) if path else file_type))
+        else:
+            review_units.add((file_type, path))
+    return len(summary_only) + len(review_units)
+
+
 def _version_update_confidence_note(model: Mapping[str, Any]) -> str:
     return (
         f"Base source={model.get('base_ref') or '-'}"
@@ -376,10 +388,20 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         status = summary_status or "SAME"
     release_notes = common.version_release_notes(version.get("raw_path"))
     recommended_file_diff, summary_only_reviewed, metadata_only_reviewed = _group_file_changes_by_review_mode(file_changes)
-    metadata_only = summary_only_reviewed + metadata_only_reviewed
     commands = _file_diff_commands(lib, version, base_version, file_changes)
     recommended_count = len(recommended_file_diff)
-    reviewed_count = len(summary_only_reviewed) + len(metadata_only_reviewed)
+    reviewed_count = _reviewed_count_for_headline(summary_only_reviewed, metadata_only_reviewed)
+    metadata_only_changes = summary_only_reviewed + metadata_only_reviewed
+    blocking_issues = 0
+    for issue in _as_mapping(diff_issues).get("issues", []) or []:
+        if isinstance(issue, Mapping) and str(issue.get("severity") or "").lower() in {"blocker", "blocking", "error"}:
+            blocking_issues += 1
+    lane_counts = {
+        "recommended_file_diff": recommended_count,
+        "summary_only": len(summary_only_reviewed),
+        "metadata_only": len(metadata_only_reviewed),
+        "blocking_issues": blocking_issues,
+    }
     md_path = out_path / "libraries" / safe_lib / "versions" / safe_ver / "current_lib_diff.md"
     trace_links = {
         "diff_summary": str(diff_dir / "diff_summary.json") if diff_dir else "",
@@ -425,10 +447,14 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "recommended_file_diff": recommended_file_diff,
         "summary_only_reviewed": summary_only_reviewed,
         "metadata_only_reviewed": metadata_only_reviewed,
+        "lane_counts": lane_counts,
+        "reviewed_units_for_headline": reviewed_count,
+        "summary_only_changes": summary_only_reviewed,
+        "metadata_only_reviewed_changes": metadata_only_reviewed,
         "release_notes": release_notes,
         "recommended_actions": list(summary.get("recommended_actions", []) or []),
         "file_diff_recommendations": commands,
-        "metadata_only_changes": metadata_only,
+        "metadata_only_changes": metadata_only_changes,
         "trace_links": trace_links,
     }
     model["headline"] = _version_update_headline(base_ref, _as_int(changed_files), recommended_count, reviewed_count)

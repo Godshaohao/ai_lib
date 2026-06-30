@@ -230,6 +230,42 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn(model["confidence_note"], html)
             self.assertIn("Run recommended File Diff", html)
 
+    def test_version_detail_headline_mentions_base_and_lane_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+
+            self.assertEqual(
+                model["lane_counts"],
+                {
+                    "recommended_file_diff": 2,
+                    "summary_only": 3,
+                    "metadata_only": 3,
+                    "blocking_issues": 0,
+                },
+            )
+            self.assertEqual(model["reviewed_units_for_headline"], 5)
+            self.assertEqual(model["summary_only_changes"], model["summary_only_reviewed"])
+            self.assertEqual(model["metadata_only_reviewed_changes"], model["metadata_only_reviewed"])
+            self.assertEqual(
+                [item["path"] for item in model["metadata_only_changes"]],
+                [
+                    "rtl/top.v",
+                    "timing/top.lib",
+                    "parasitics/top.spef",
+                    "db/top.db",
+                    "layout/top.gds",
+                    "layout/top.oas",
+                ],
+            )
+            self.assertIn("当前版本相对 explicit", model["headline"])
+            self.assertIn("2 个建议下钻", model["headline"])
+            self.assertIn("5 个已按 Summary/Metadata-only 审查", model["headline"])
+
     def test_current_effective_wins_over_stale_diff_base(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
