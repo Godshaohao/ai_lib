@@ -369,7 +369,7 @@ def add_diff_parser(subparsers: Any) -> None:
     p.add_argument("--new-version", required=True)
     p.add_argument("--workdir", default="work")
     p.add_argument("--out")
-    p.add_argument("--scan-if-missing", action="store_true", help="Scan missing evidence before comparing when supported")
+    p.add_argument("--scan-if-missing", action="store_true", help="Scan missing or stale evidence before comparing when supported")
     p.set_defaults(func=run_diff_adjacent)
 
     p = sp.add_parser("cumulative", help="Compare a version against its base_version from version index")
@@ -377,7 +377,7 @@ def add_diff_parser(subparsers: Any) -> None:
     p.add_argument("--new-version", required=True)
     p.add_argument("--workdir", default="work")
     p.add_argument("--out")
-    p.add_argument("--scan-if-missing", action="store_true", help="Scan missing evidence before comparing when supported")
+    p.add_argument("--scan-if-missing", action="store_true", help="Scan missing or stale evidence before comparing when supported")
     p.set_defaults(func=run_diff_cumulative)
 
     p = sp.add_parser("render", help="Render a diff_output directory into an HTML report")
@@ -543,7 +543,7 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--html-out")
     p.add_argument("--catalog-html-out")
     p.add_argument("--no-catalog-render", action="store_true")
-    p.add_argument("--scan-if-missing", action="store_true", help="Scan only missing old/new scan evidence before compare")
+    p.add_argument("--scan-if-missing", action="store_true", help="Scan only missing or stale old/new scan evidence before compare")
     p.add_argument("--rescan", action="store_true", help="Force rescan of old and new versions before compare")
     p.add_argument("--scan-mode", default="candidate", choices=["quick", "inventory", "signature", "candidate", "release", "diff", "refresh", "full"])
     p.add_argument("--config-dir", default=PROJECT_CONFIG_DIR)

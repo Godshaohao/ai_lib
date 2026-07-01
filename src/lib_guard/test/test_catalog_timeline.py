@@ -224,6 +224,38 @@ class CatalogTimelineTest(unittest.TestCase):
             forced = scan_catalog(raw, out_dir=out, library_type="ip", force=True)
             self.assertFalse(forced.get("skipped", False))
 
+    def test_catalog_marks_scan_stale_when_version_fingerprint_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            version = raw / "ucie" / "stable_20250608"
+            version.mkdir(parents=True)
+            source = version / "top.v"
+            source.write_text("module top; endmodule\n", encoding="utf-8")
+
+            from lib_guard.catalog.index import scan_catalog, update_catalog_scan_status
+
+            first = scan_catalog(raw, out_dir=out, library_type="ip", collect_evidence=True)["catalog"]
+            version_key = "ip/ucie/stable_20250608"
+            detected = first["libraries"][0]["versions"][0]["detected"]
+            update_catalog_scan_status(
+                out / "catalog.json",
+                version_key=version_key,
+                scan_dir=root / "scan_out" / "ucie" / "stable_20250608",
+                scan_id="scan_1",
+                status="PASS",
+                input_fingerprint=detected["inventory"]["fingerprint"],
+            )
+
+            source.write_text("module top; wire changed; endmodule\n", encoding="utf-8")
+            refreshed = scan_catalog(raw, out_dir=out, library_type="ip", collect_evidence=True, force=True)["catalog"]
+            version_after = refreshed["libraries"][0]["versions"][0]
+
+            self.assertEqual(version_after["scan"]["status"], "STALE_SCAN")
+            self.assertEqual(version_after["scan"]["stale_reason"], "version_fingerprint_changed")
+            self.assertNotEqual(version_after["scan"]["input_fingerprint"], version_after["detected"]["inventory"]["fingerprint"])
+
     def test_catalog_scan_uses_library_map_and_alias_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

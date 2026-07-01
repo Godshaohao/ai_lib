@@ -101,8 +101,7 @@ def _looks_like_version(name: str) -> bool:
         return True
     if lower.startswith(("initial", "stable", "release", "final", "candidate", "daily")):
         return True
-    # fallback: most real version dirs contain at least one digit
-    return bool(re.search(r"\d", text))
+    return False
 
 
 def _iter_dirs(root: Path, max_depth: int) -> Iterable[Path]:
@@ -200,10 +199,32 @@ def discover_library_candidates(
     if status not in {"REVIEW", "OK"}:
         raise ValueError("default_status must be REVIEW or OK")
     candidates: list[LibraryCandidate] = []
-    for path in _iter_dirs(raw, max_depth=max_depth):
-        item = _candidate_from_path(raw, path, default_status=status, min_versions=min_versions)
-        if item:
-            candidates.append(item)
+    stack: list[tuple[Path, int]] = [(raw, 0)]
+    while stack:
+        path, depth = stack.pop()
+        if depth > 0:
+            try:
+                path.resolve().relative_to(raw)
+            except (OSError, ValueError):
+                continue
+            item = _candidate_from_path(raw, path, default_status=status, min_versions=min_versions)
+            if item:
+                candidates.append(item)
+                continue
+        if depth >= max_depth:
+            continue
+        try:
+            children = sorted([p for p in path.iterdir() if p.is_dir()], key=lambda p: p.name.lower(), reverse=True)
+        except OSError:
+            continue
+        for child in children:
+            if child.name.lower() in DEFAULT_IGNORE_DIRS:
+                continue
+            try:
+                child.resolve().relative_to(raw)
+            except (OSError, ValueError):
+                continue
+            stack.append((child, depth + 1))
     candidates.sort(key=lambda x: (x.vendor, x.middle_path, x.display_name, x.root_abs))
     return candidates
 
@@ -285,6 +306,28 @@ def _yaml_quote(value: Any) -> str:
     text = "" if value is None else str(value)
     escaped = text.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
+
+
+def _formal_library_identity(item: Mapping[str, str]) -> tuple[str, str | None]:
+    original_id = str(item.get("library_id") or "").strip()
+    vendor = str(item.get("vendor") or "").strip()
+    display = str(item.get("display_name") or "").strip()
+    middle_path = str(item.get("middle_path") or "").strip()
+    if not vendor:
+        vendor = original_id.split("_")[0] if "_" in original_id else "unknown"
+    if not display:
+        display = original_id.split("_")[-1] if original_id else "unknown"
+    category: str | None = None
+    parts = [part for part in middle_path.replace("\\", "/").split("/") if part]
+    if parts:
+        category = ".".join(_sanitize_id_part(part) for part in parts)
+    elif display.startswith("openroad_"):
+        category = "openroad_platform"
+    formal_parts = [_sanitize_id_part(vendor)]
+    if category:
+        formal_parts.append(category)
+    formal_parts.append(_sanitize_id_part(display))
+    return ".".join(formal_parts), category
 
 
 def _rel_root(raw_root: Path, root_abs: Path) -> str:
@@ -370,22 +413,27 @@ def write_library_catalog(raw_root: str | Path, rows: list[dict[str, str]], out_
     ]
     for item in selected:
         root_abs = Path(item["root_abs"]).resolve()
-        library_id = item["library_id"]
+        original_library_id = item["library_id"]
+        library_id, category = _formal_library_identity(item)
         display = item.get("display_name") or library_id.split("_")[-1]
         vendor = item.get("vendor") or library_id.split("_")[0]
         middle_path = item.get("middle_path") or ""
+        aliases = [display]
+        if original_library_id != library_id:
+            aliases.append(original_library_id)
         lines.extend(
             [
                 f"  {library_id}:",
                 "    enabled: true",
                 f"    library_type: {_yaml_quote(library_type)}",
                 f"    vendor: {_yaml_quote(vendor)}",
+                f"    category: {_yaml_quote(category)}",
                 f"    middle_path: {_yaml_quote(middle_path)}",
                 f"    display_name: {_yaml_quote(display)}",
                 f"    root_abs: {_yaml_quote(root_abs)}",
                 f"    root: {_yaml_quote(_rel_root(raw, root_abs))}",
                 "    aliases:",
-                f"      - {_yaml_quote(display)}",
+                *[f"      - {_yaml_quote(alias)}" for alias in aliases],
                 "",
             ]
         )

@@ -43,6 +43,40 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _input_fingerprint(records: list[dict[str, Any]]) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for record in records:
+        path = str(record.get("path") or record.get("file") or record.get("rel_path") or "")
+        size = record.get("size_bytes")
+        mtime_ns = None
+        abs_path = record.get("abs_path")
+        if abs_path:
+            try:
+                stat = Path(str(abs_path)).stat()
+                mtime_ns = stat.st_mtime_ns
+                size = stat.st_size
+            except OSError:
+                mtime_ns = int(float(record.get("mtime") or 0) * 1_000_000_000) if record.get("mtime") is not None else None
+        elif record.get("mtime") is not None:
+            mtime_ns = int(float(record.get("mtime") or 0) * 1_000_000_000)
+        entries.append(
+            {
+                "path": path,
+                "size_bytes": size,
+                "mtime_ns": mtime_ns,
+                "file_type": str(record.get("file_type") or "unknown"),
+            }
+        )
+    raw = json.dumps(entries, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
+    return {
+        "schema_version": "version_input_fingerprint.v1",
+        "mode": "scan_inventory",
+        "hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "entry_count": len(entries),
+        "truncated": False,
+    }
+
+
 def _record_path(record: Any) -> str:
     return str(_get(record, "path", ""))
 
@@ -766,6 +800,7 @@ class ScanRunner:
         from .inventory import corner_filename_summary
 
         corner_summary = corner_filename_summary(inventory_files)
+        fingerprint = _input_fingerprint(inventory_files)
         meta = {
             "schema_version": context.schema_version,
             "tool": "lib_guard",
@@ -787,6 +822,7 @@ class ScanRunner:
             "base_version": _get(context.config, "base_version", None),
             "version_kind": self._version_kind(inventory_files, context),
             "base_version_source": "CONFIG" if _get(context.config, "base_version", None) else "AUTO_CATALOG_OR_UNSET",
+            "input_fingerprint": fingerprint,
             "hash_policy": self._hash_policy(inventory_files),
             "started_at_ms": context.started_at_ms,
             "finished_at_ms": _now_ms(),
@@ -817,7 +853,7 @@ class ScanRunner:
         return ScanBundle(
             scan_meta=meta,
             manifest=manifest,
-            file_inventory={"schema_version": context.schema_version, "scan_id": context.scan_id, "root_path": str(context.root_path), "files": inventory_files, "corner_filename_summary": corner_summary},
+            file_inventory={"schema_version": context.schema_version, "scan_id": context.scan_id, "root_path": str(context.root_path), "files": inventory_files, "corner_filename_summary": corner_summary, "input_fingerprint": fingerprint},
             parser_task_list=parser_task_list,
             parser_manifest=parser_manifest,
             parser_results=parser_results,

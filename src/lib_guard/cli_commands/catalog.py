@@ -153,6 +153,7 @@ def run_catalog_workflow(args: Namespace) -> int:
         status=scan_result.status,
         scan_html=scan_html.get("index_html"),
         console_html=console_html.get("index_html"),
+        input_fingerprint=(scan_result.bundle.scan_meta.get("input_fingerprint") if getattr(scan_result, "bundle", None) else None),
     )
     catalog_html = refresh_catalog_html(args)
     result = {
@@ -226,6 +227,11 @@ def _has_scan_dir(item: dict[str, Any]) -> bool:
     return bool((item.get("scan", {}) or {}).get("scan_dir"))
 
 
+def _scan_needs_refresh(item: dict[str, Any]) -> bool:
+    scan = item.get("scan", {}) or {}
+    return scan.get("status") in {"NOT_SCANNED", "STALE_SCAN"} or not scan.get("scan_dir")
+
+
 def _ensure_compare_scan_evidence(args: Namespace) -> dict[str, Any]:
     """Optionally scan old/new versions for compare.
 
@@ -241,19 +247,19 @@ def _ensure_compare_scan_evidence(args: Namespace) -> dict[str, Any]:
 
     old_item, new_item, _relation_mode = _resolve_compare_items(args.catalog, args.library, args.new, mode=args.mode, base=getattr(args, "base", None))
     plan = []
-    if rescan or (scan_if_missing and not _has_scan_dir(old_item)):
+    if rescan or (scan_if_missing and _scan_needs_refresh(old_item)):
         plan.append(old_item)
-    if rescan or (scan_if_missing and not _has_scan_dir(new_item)):
+    if rescan or (scan_if_missing and _scan_needs_refresh(new_item)):
         # Avoid double scan if old and new are the same by mistake.
         if new_item.get("version_key") not in {item.get("version_key") for item in plan}:
             plan.append(new_item)
 
     if not scan_if_missing and not rescan:
-        missing = [item.get("version_id") for item in [old_item, new_item] if not _has_scan_dir(item)]
+        missing = [item.get("version_id") for item in [old_item, new_item] if _scan_needs_refresh(item)]
         if missing:
             raise ValueError(
                 "compare requires existing scan evidence for old/new versions. "
-                f"Missing scan_dir for: {', '.join(str(x) for x in missing)}. "
+                f"Missing or stale scan evidence for: {', '.join(str(x) for x in missing)}. "
                 "Run scan explicitly or use --scan-if-missing."
             )
 
@@ -401,8 +407,8 @@ def run_catalog_batch(args: Namespace) -> int:
         if args.stage and item.get("stage") != args.stage:
             skipped.append(_batch_manifest_item(item, "stage_filter_mismatch"))
             continue
-        if args.only_missing and item.get("scan", {}).get("status") != "NOT_SCANNED":
-            skipped.append(_batch_manifest_item(item, "already_scanned"))
+        if args.only_missing and not _scan_needs_refresh(item):
+            skipped.append(_batch_manifest_item(item, "scan_evidence_current"))
             continue
         selected.append(item)
         if args.limit and len(selected) >= args.limit:
@@ -418,7 +424,7 @@ def run_catalog_batch(args: Namespace) -> int:
             "only_missing": bool(args.only_missing),
             "only_ready": False,
             "limit": args.limit,
-            "selected": [_batch_manifest_item(item, "scan.status == NOT_SCANNED" if args.only_missing else "selected") for item in selected],
+            "selected": [_batch_manifest_item(item, "scan.status in {NOT_SCANNED,STALE_SCAN}" if args.only_missing else "selected") for item in selected],
             "skipped": skipped,
         },
     )

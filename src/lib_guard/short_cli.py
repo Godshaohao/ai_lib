@@ -555,7 +555,7 @@ def _build_parser() -> ArgumentParser:
     p = sub.add_parser("scan", help="刷新 catalog 或扫描指定版本")
     p.add_argument("library", nargs="?")
     p.add_argument("version", nargs="?")
-    p.add_argument("--missing", action="store_true", help="只扫描缺少 scan evidence 的版本")
+    p.add_argument("--missing", action="store_true", help="只扫描缺少或已过期 scan evidence 的版本")
     p.add_argument("--all-versions", action="store_true", help="扫描选中 library 的全部版本")
     p.add_argument("--limit", type=int, help="限制批量扫描数量，便于试跑")
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="只扫描某个 catalog stage")
@@ -604,7 +604,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("version")
     p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"], help="Catalog relation used when --base is not provided")
     p.add_argument("--base", help="显式指定 base version；catalog 无法可靠推断时必须传入")
-    p.add_argument("--scan-if-missing", action="store_true", help="compare 前只扫描缺少 evidence 的 old/new 版本")
+    p.add_argument("--scan-if-missing", action="store_true", help="compare 前只扫描缺少或已过期 evidence 的 old/new 版本")
     p.add_argument("--rescan", action="store_true", help="compare 前强制重扫 old/new 版本")
     p.add_argument("--auto-scan", action="store_true", help="已废弃的 --scan-if-missing 兼容别名；不会强制重扫")
     p.add_argument("--refresh-catalog", action="store_true", help="compare 前刷新该 library catalog；默认使用已有 catalog.json")
@@ -876,6 +876,9 @@ def _find_version_in_catalog(cfg: dict[str, str], library: str, version: str) ->
 def _scan_evidence_exists(cfg: dict[str, str], library: str, version: str) -> bool:
     item = _find_version_in_catalog(cfg, library, version)
     if not item:
+        return False
+    scan = item.get("scan") or {}
+    if str(scan.get("status") or "").upper() in {"NOT_SCANNED", "STALE_SCAN"}:
         return False
     scan_dir = ((item.get("scan") or {}).get("scan_dir") or item.get("scan_dir"))
     return bool(scan_dir and Path(str(scan_dir)).exists())

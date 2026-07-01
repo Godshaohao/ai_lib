@@ -65,7 +65,8 @@ $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-mis
 - `refresh`：刷新 Version Review 的日常更新详情，默认先使用 `current_effective`，
   没有当前有效库时再使用 `previous_effective`。
 - `cmp`：手动 structural compare/debug，适合显式指定 base 或 adjacent/cumulative。
-- `--scan-if-missing`：只补缺少的 scan evidence，适合手动对比。
+- `--scan-if-missing`：只补缺少或已过期的 scan evidence，适合手动对比。
+- catalog 会保存每个版本输入文件的轻量指纹；RAW 版本内容变化后，旧 scan 会标记为 `STALE_SCAN`，`--scan-if-missing` 会重新补扫。
 - `--rescan`：强制重扫，适合 parser、policy 或输入数据修正后刷新证据。
 
 Version Review 是正常的单版本详情页；独立 `scan_html` 只作为 debug evidence。

@@ -289,11 +289,25 @@ def _item_looks_like_version(item: Mapping[str, Any]) -> bool:
     return _looks_like_version(str(item.get("version_id") or ""), (item.get("detected", {}) or {}).get("matched_rules", []) or [])
 
 
+def _fingerprint_payload(entries: list[Mapping[str, Any]], *, mode: str, truncated: bool = False) -> dict[str, Any]:
+    digest = hashlib.sha256(
+        json.dumps(entries, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema_version": "version_input_fingerprint.v1",
+        "mode": mode,
+        "hash": digest,
+        "entry_count": len(entries),
+        "truncated": bool(truncated),
+    }
+
+
 def _inventory_evidence(path: Path, policy: Mapping[str, Any], limit: int = 5000) -> dict[str, Any]:
     from lib_guard.scan.file_classifier import FileClassifier
 
     classifier = FileClassifier()
     counts: Counter[str] = Counter()
+    fingerprint_entries: list[dict[str, Any]] = []
     total = 0
     for item in path.rglob("*"):
         if not item.is_file():
@@ -302,6 +316,18 @@ def _inventory_evidence(path: Path, policy: Mapping[str, Any], limit: int = 5000
         rel = item.relative_to(path).as_posix()
         record = classifier.classify({"path": rel, "name": item.name})
         counts[str(record.get("file_type") or "unknown")] += 1
+        try:
+            stat = item.stat()
+            fingerprint_entries.append(
+                {
+                    "path": rel,
+                    "size_bytes": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                    "file_type": str(record.get("file_type") or "unknown"),
+                }
+            )
+        except OSError:
+            fingerprint_entries.append({"path": rel, "stat_error": True})
         if total >= limit:
             break
     markers = []
@@ -315,6 +341,7 @@ def _inventory_evidence(path: Path, policy: Mapping[str, Any], limit: int = 5000
         "file_type_counts": dict(sorted(counts.items())),
         "key_file_count": sum(counts.get(t, 0) for t in ["verilog", "lef", "liberty", "cdl", "db", "gds"]),
         "truncated": total >= limit,
+        "fingerprint": _fingerprint_payload(fingerprint_entries, mode="scan_inventory", truncated=total >= limit),
     } | {"markers": markers}
 
 
@@ -331,12 +358,21 @@ def _inventory_evidence_fast(path: Path, policy: Mapping[str, Any]) -> dict[str,
         marker_path = path / str(marker)
         if marker_path.exists():
             markers.append(str(marker))
+    try:
+        stat = path.stat()
+        fingerprint = _fingerprint_payload(
+            [{"path": ".", "mtime_ns": stat.st_mtime_ns, "size_bytes": None}],
+            mode="fast_root",
+        )
+    except OSError:
+        fingerprint = _fingerprint_payload([{"path": ".", "stat_error": True}], mode="fast_root")
     return {
         "evidence_mode": "fast",
         "file_count": None,
         "file_type_counts": {},
         "key_file_count": 0,
         "truncated": False,
+        "fingerprint": fingerprint,
         "markers": markers,
     }
 
@@ -720,6 +756,28 @@ def _apply_runtime(version: dict[str, Any], runtime_state: Mapping[str, Any]) ->
     for nested in ["scan", "diff", "release"]:
         if isinstance(runtime.get(nested), Mapping):
             item.setdefault(nested, {}).update(runtime[nested])
+    scan = item.get("scan") if isinstance(item.get("scan"), Mapping) else {}
+    current_fingerprint = (((item.get("detected") or {}).get("inventory") or {}).get("fingerprint") or {})
+    scan_fingerprint = scan.get("input_fingerprint") if isinstance(scan, Mapping) else None
+    if (
+        isinstance(scan, Mapping)
+        and scan.get("status") == "SCANNED"
+        and isinstance(scan_fingerprint, Mapping)
+        and isinstance(current_fingerprint, Mapping)
+        and scan_fingerprint.get("mode") == "scan_inventory"
+        and current_fingerprint.get("mode") == "scan_inventory"
+        and not scan_fingerprint.get("truncated")
+        and not current_fingerprint.get("truncated")
+        and scan_fingerprint.get("hash")
+        and current_fingerprint.get("hash")
+        and scan_fingerprint.get("hash") != current_fingerprint.get("hash")
+    ):
+        item["scan"] = {
+            **dict(scan),
+            "status": "STALE_SCAN",
+            "stale_reason": "version_fingerprint_changed",
+            "current_fingerprint": current_fingerprint,
+        }
     return _sync_version_relation_fields(item)
 
 
@@ -860,7 +918,7 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
             "version_count": len(versions),
             "latest_version": versions[-1]["version_id"] if versions else None,
             "stage_counts": stage_counts,
-            "scan_pending": sum(1 for v in versions if v["scan"]["status"] == "NOT_SCANNED"),
+            "scan_pending": sum(1 for v in versions if v["scan"]["status"] in {"NOT_SCANNED", "STALE_SCAN"}),
             "diff_pending": sum(1 for v in versions if v["diff"]["adjacent_status"] == "PENDING"),
             "manual_review": sum(1 for v in versions if v.get("manual_review")),
         },
@@ -933,7 +991,8 @@ def _build_tasks(catalog: Mapping[str, Any]) -> list[dict[str, Any]]:
                 )
                 idx += 1
                 continue
-            if version.get("scan", {}).get("status") == "NOT_SCANNED":
+            if version.get("scan", {}).get("status") in {"NOT_SCANNED", "STALE_SCAN"}:
+                is_stale = version.get("scan", {}).get("status") == "STALE_SCAN"
                 tasks.append(
                     {
                         "task_id": f"task_scan_{idx:04d}",
@@ -942,7 +1001,7 @@ def _build_tasks(catalog: Mapping[str, Any]) -> list[dict[str, Any]]:
                         "library_id": lib.get("library_id"),
                         "version_key": version.get("version_key"),
                         "title": f"扫描 {lib.get('library_name')} {version.get('version_id')}",
-                        "reason": "发现版本但尚未扫描",
+                        "reason": "已有 scan 证据已过期" if is_stale else "发现版本但尚未扫描",
                         "command": _task_command(version, "scan"),
                     }
                 )
@@ -977,14 +1036,18 @@ def _summary(libraries: list[dict[str, Any]], tasks: list[dict[str, Any]]) -> di
             stage = version.get("stage", "unknown")
             stage_counts[stage] = stage_counts.get(stage, 0) + 1
             manual_review_count += 1 if version.get("manual_review") else 0
-            scanned += 1 if version.get("scan", {}).get("status") != "NOT_SCANNED" else 0
+            scanned += 1 if version.get("scan", {}).get("status") == "SCANNED" else 0
             diff_done += 1 if version.get("diff", {}).get("adjacent_status") == "DIFF_DONE" else 0
             release_blocked += 1 if version.get("release", {}).get("check_status") in {"BLOCK", "FAILED"} else 0
     return {
         "library_count": len(libraries),
         "version_count": version_count,
         "stage_counts": stage_counts,
-        "scan_status_counts": {"SCANNED": scanned, "NOT_SCANNED": version_count - scanned},
+        "scan_status_counts": {
+            "SCANNED": scanned,
+            "NOT_SCANNED": sum(1 for lib in libraries for version in lib.get("versions", []) or [] if version.get("scan", {}).get("status") == "NOT_SCANNED"),
+            "STALE_SCAN": sum(1 for lib in libraries for version in lib.get("versions", []) or [] if version.get("scan", {}).get("status") == "STALE_SCAN"),
+        },
         "diff_status_counts": {
             "DIFF_DONE": diff_done,
             "DIFF_PENDING": sum(1 for t in tasks if t.get("task_type", "").startswith("diff")),
@@ -1325,6 +1388,7 @@ def update_catalog_scan_status(
     status: str,
     scan_html: str | Path | None = None,
     console_html: str | Path | None = None,
+    input_fingerprint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     path = Path(catalog_path)
     data = _read_json(path, {}) or {}
@@ -1338,6 +1402,8 @@ def update_catalog_scan_status(
         "scan_html": str(scan_html) if scan_html else None,
         "console_html": str(console_html) if console_html else None,
     }
+    if input_fingerprint:
+        item["scan"]["input_fingerprint"] = dict(input_fingerprint)
     item["updated_by"] = "lib_guard.run"
     item["updated_at"] = _now()
     runtime[version_key] = item

@@ -64,13 +64,88 @@ def _file_key(item: Mapping[str, Any]) -> str:
     return str(item.get("path") or item.get("file") or item.get("rel_path") or "")
 
 
+def _strip_path_fields(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(k): _strip_path_fields(v)
+            for k, v in value.items()
+            if str(k) not in {"source", "abs_path", "file", "path", "root_path", "out_dir"}
+        }
+    if isinstance(value, list):
+        return [_strip_path_fields(item) for item in value]
+    return value
+
+
+def _parser_result_signatures(scan: Path) -> dict[str, str]:
+    manifest = _read_json(scan / "parser_manifest.json", {"files": []}) or {}
+    out: dict[str, str] = {}
+    for item in manifest.get("files", []) or []:
+        path = str(item.get("file") or "")
+        if not path:
+            continue
+        task_signatures: list[dict[str, Any]] = []
+        for task in item.get("parser_tasks", []) or []:
+            rel = task.get("result_path")
+            if not rel:
+                continue
+            result = _read_json(scan / str(rel), {}) or {}
+            task_signatures.append(
+                {
+                    "parser_name": result.get("parser_name") or task.get("parser_name"),
+                    "parser_version": result.get("parser_version") or task.get("parser_version"),
+                    "status": result.get("status") or task.get("result_status") or task.get("status"),
+                    "stats": result.get("stats"),
+                    "data": _strip_path_fields(result.get("data")),
+                    "issues": _strip_path_fields(result.get("issues")),
+                }
+            )
+        if task_signatures:
+            out[path] = "parser:" + _stable_hash(task_signatures)
+    return out
+
+
+def _content_signature(item: Mapping[str, Any]) -> Any:
+    return item.get("hash") or item.get("semantic_signature")
+
+
+def _file_signature(item: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+    return (item.get("file_type"), item.get("size_bytes"), _content_signature(item))
+
+
+def _logical_file_key(path: str) -> str:
+    parts = [part for part in str(path or "").replace("\\", "/").split("/") if part]
+    if len(parts) <= 1:
+        return "/".join(parts)
+    wrapper = parts[0].lower()
+    if (
+        wrapper == "source_package"
+        or wrapper.endswith("_source_package")
+        or wrapper.startswith("upstream_")
+    ):
+        return "/".join(parts[1:])
+    return "/".join(parts)
+
+
+def _unique_logical_index(items: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    logical_to_paths: dict[str, list[str]] = {}
+    for path in items:
+        logical_to_paths.setdefault(_logical_file_key(path), []).append(path)
+    return {logical: paths[0] for logical, paths in logical_to_paths.items() if len(paths) == 1}
+
+
 def _inventory_index(scan: Path) -> dict[str, dict[str, Any]]:
     inventory = _read_json(scan / "file_inventory.json", {"files": []}) or {}
-    return {
-        _file_key(item): dict(item)
-        for item in inventory.get("files", []) or []
-        if _file_key(item)
-    }
+    parser_signatures = _parser_result_signatures(scan)
+    out: dict[str, dict[str, Any]] = {}
+    for item in inventory.get("files", []) or []:
+        key = _file_key(item)
+        if not key:
+            continue
+        row = dict(item)
+        if parser_signatures.get(key):
+            row["semantic_signature"] = parser_signatures[key]
+        out[key] = row
+    return out
 
 
 def _scan_support(scan: Path) -> dict[str, Any]:
@@ -89,11 +164,7 @@ def _scan_support(scan: Path) -> dict[str, Any]:
 def _changed_files(old_items: dict[str, dict[str, Any]], new_items: dict[str, dict[str, Any]]) -> list[str]:
     changed: list[str] = []
     for key in sorted(set(old_items) & set(new_items)):
-        old = old_items[key]
-        new = new_items[key]
-        old_sig = (old.get("file_type"), old.get("size_bytes"), old.get("hash"))
-        new_sig = (new.get("file_type"), new.get("size_bytes"), new.get("hash"))
-        if old_sig != new_sig:
+        if _file_signature(old_items[key]) != _file_signature(new_items[key]):
             changed.append(key)
     return changed
 
@@ -115,17 +186,39 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
     raw_added = set(new_files) - set(old_files)
     raw_removed = set(old_files) - set(new_files)
     changed = _changed_files(old_files, new_files)
+    logical_path_changes: list[dict[str, Any]] = []
+    old_logical = _unique_logical_index(old_files)
+    new_logical = _unique_logical_index(new_files)
+    logical_changed: list[str] = []
+    paired_old: set[str] = set()
+    paired_new: set[str] = set()
+    for logical in sorted(set(old_logical) & set(new_logical)):
+        old_path = old_logical[logical]
+        new_path = new_logical[logical]
+        if old_path == new_path:
+            continue
+        old_item = old_files[old_path]
+        new_item = new_files[new_path]
+        if _file_signature(old_item) == _file_signature(new_item):
+            continue
+        paired_old.add(old_path)
+        paired_new.add(new_path)
+        logical_changed.append(logical)
+        logical_path_changes.append({"logical_path": logical, "old": old_path, "new": new_path})
+        old_files[logical] = {**old_item, "path": logical, "physical_path": old_path, "logical_path": logical, "abs_path": old_item.get("abs_path")}
+        new_files[logical] = {**new_item, "path": logical, "physical_path": new_path, "logical_path": logical, "abs_path": new_item.get("abs_path")}
+    changed = sorted(set(changed) | set(logical_changed))
     metadata_only = []
     for key in changed:
         old = old_files[key]
         new = new_files[key]
-        if old.get("hash") == new.get("hash") and old.get("size_bytes") == new.get("size_bytes"):
+        if _content_signature(old) == _content_signature(new) and old.get("size_bytes") == new.get("size_bytes"):
             metadata_only.append(key)
     moved = _moved_files(old_files, new_files)
     moved_old = {str(item.get("old")) for item in moved if item.get("old")}
     moved_new = {str(item.get("new")) for item in moved if item.get("new")}
-    added = sorted(raw_added - moved_new)
-    removed = sorted(raw_removed - moved_old)
+    added = sorted(raw_added - moved_new - paired_new)
+    removed = sorted(raw_removed - moved_old - paired_old)
     unchanged = sorted((set(old_files) & set(new_files)) - set(changed))
     return {
         "schema_version": "1.0",
@@ -133,6 +226,7 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
         "removed": removed,
         "changed": changed,
         "renamed_or_moved": moved,
+        "logical_path_changes": logical_path_changes,
         "unchanged": unchanged,
         "metadata_only_changed": metadata_only,
         "counts": {
@@ -140,6 +234,7 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
             "removed": len(removed),
             "changed": len(changed),
             "renamed_or_moved": len(moved),
+            "logical_path_changed": len(logical_path_changes),
             "unchanged": len(unchanged),
             "metadata_only_changed": len(metadata_only),
         },

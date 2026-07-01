@@ -60,6 +60,8 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 
 这些人工确认会写入 workspace 或 catalog 状态文件，后续重新生成 HTML 时会继续使用。
 
+`--scan-if-missing` 和 `scan --missing` 只补缺少或已过期的 scan evidence。catalog 会保存版本输入文件指纹；RAW 内容变化后旧证据会显示为 `STALE_SCAN`，不会被当作有效增量缓存。
+
 ## 底层自动化 CLI
 
 短命令会展开到底层 CLI。以下底层命令仍然保留，因为它们是自动化边界：

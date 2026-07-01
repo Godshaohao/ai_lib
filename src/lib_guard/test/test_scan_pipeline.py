@@ -1146,6 +1146,61 @@ class ScanPipelineTest(unittest.TestCase):
             tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
             self.assertEqual(tasks["summary"]["total"], 0)
 
+    def test_diff_treats_wrapper_path_change_with_content_delta_as_logical_change(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_root = Path(td) / "old_raw"
+            new_root = Path(td) / "new_raw"
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            diff_out = Path(td) / "diff"
+            old_root.mkdir()
+            new_root.mkdir()
+            (old_root / "asap7_source_package" / "lef").mkdir(parents=True)
+            (new_root / "upstream_ae9a8ed9" / "lef").mkdir(parents=True)
+            (old_root / "asap7_source_package" / "lef" / "macro.lef").write_text("MACRO M\n  SIZE 1 BY 1 ;\nEND M\n", encoding="utf-8")
+            (new_root / "upstream_ae9a8ed9" / "lef" / "macro.lef").write_text("MACRO M\n  SIZE 2 BY 2 ;\nEND M\n", encoding="utf-8")
+
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+            from lib_guard.scan.scanner import ScanRunner
+
+            base = dict(
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="release",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(SimpleNamespace(**base, root_path=str(old_root), out_dir=str(old_scan), scan_id="OLD")).run()
+            ScanRunner(SimpleNamespace(**base, root_path=str(new_root), out_dir=str(new_scan), scan_id="NEW")).run()
+
+            diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
+
+            file_diff = json.loads((diff_out / "file_diff.json").read_text(encoding="utf-8"))
+            self.assertEqual(file_diff["counts"]["added"], 0)
+            self.assertEqual(file_diff["counts"]["removed"], 0)
+            self.assertEqual(file_diff["counts"]["changed"], 1)
+            self.assertEqual(file_diff["changed"], ["lef/macro.lef"])
+            self.assertEqual(
+                file_diff["logical_path_changes"],
+                [
+                    {
+                        "logical_path": "lef/macro.lef",
+                        "old": "asap7_source_package/lef/macro.lef",
+                        "new": "upstream_ae9a8ed9/lef/macro.lef",
+                    }
+                ],
+            )
+            summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["changed_files"], 1)
+
     def test_diff_render_writes_html_with_pairwise_task_commands(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             old_root = Path(td) / "old_raw"
@@ -1891,6 +1946,58 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertTrue(any("effective build" in cmd and "--effective-id rec_20260624" in cmd for cmd in rendered))
             self.assertTrue(any("effective compare" in cmd and "--compare-id main" in cmd for cmd in rendered))
             self.assertTrue(any("effective release-preview" in cmd for cmd in rendered))
+
+    def test_short_cli_action_auto_scan_refreshes_stale_scan_evidence(self) -> None:
+        from lib_guard.short_cli import build_cli_commands, write_default_config
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            raw.mkdir()
+            write_default_config(workspace, raw_root=raw)
+            actions = workspace / "actions"
+            actions.mkdir()
+            catalog_dir = workspace / "catalog"
+            stale_scan = workspace / "scan_out" / "ucie" / "stable_20260601"
+            stale_scan.mkdir(parents=True)
+            catalog_dir.mkdir()
+            (catalog_dir / "catalog.json").write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_type": "ip",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20260601",
+                                        "version_key": "ip/ucie/stable_20260601",
+                                        "raw_path": str(raw / "ucie" / "stable_20260601"),
+                                        "scan": {
+                                            "scan_dir": str(stale_scan),
+                                            "status": "STALE_SCAN",
+                                            "stale_reason": "version_fingerprint_changed",
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (actions / "ucie.action").write_text(
+                "@effect rec_20260624 stable_20260601\n"
+                "@scan auto\n",
+                encoding="utf-8",
+            )
+
+            commands = build_cli_commands(["action", "ucie"], cwd=workspace)
+            rendered = [" ".join(cmd) for cmd in commands]
+
+            self.assertTrue(any("run --catalog" in cmd and "--version stable_20260601" in cmd for cmd in rendered))
 
     def test_catalog_workflow_does_not_trigger_summary_rebuild(self) -> None:
         import inspect
