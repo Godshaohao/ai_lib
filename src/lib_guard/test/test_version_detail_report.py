@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -671,6 +672,71 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("NEEDS_BASE_CONFIRM", md_text)
             self.assertNotIn("NO_DIFF_SUMMARY", html)
             self.assertNotIn("Comparison Review 是唯一 diff 入口", html)
+
+    def test_version_detail_uses_scan_evidence_for_release_notes_without_raw_rglob(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw" / "ucie" / "stable_20250608"
+            scan_dir = root / "scan"
+            out = root / "html"
+            raw.mkdir(parents=True)
+            scan_dir.mkdir()
+            (scan_dir / "file_inventory.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {
+                                "path": "doc/release_note.txt",
+                                "file_type": "doc",
+                                "role": "release_note",
+                                "doc_type": "release_note",
+                                "is_key_doc": True,
+                            }
+                        ],
+                        "file_type_counts": {"doc": 1},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (scan_dir / "parser_manifest.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+            (scan_dir / "parser_results.json").write_text("{}", encoding="utf-8")
+            summary_dir = scan_dir / "summary"
+            summary_dir.mkdir()
+            (summary_dir / "release_readiness.json").write_text(
+                json.dumps(
+                    {
+                        "doc_summary": {
+                            "release_note_found": True,
+                            "files": [
+                                {
+                                    "path": "doc/release_note.txt",
+                                    "role": "release_note",
+                                    "doc_type": "release_note",
+                                }
+                            ],
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            lib = {"library_id": "ip/ucie", "library_name": "ucie"}
+            version = {
+                "version_id": "stable_20250608",
+                "raw_path": str(raw),
+                "previous_effective_version": "stable_20250601",
+                "scan": {"scan_dir": str(scan_dir)},
+            }
+
+            from lib_guard.render.version_detail_report import render_version_detail_page
+
+            with patch.object(Path, "rglob", side_effect=AssertionError("render must not recursively scan raw")):
+                page = Path(render_version_detail_page(out, lib, version))
+
+            html = page.read_text(encoding="utf-8")
+            self.assertIn("doc/release_note.txt", html)
+            self.assertNotIn(str(raw / "doc" / "release_note.txt"), html)
 
 
 if __name__ == "__main__":

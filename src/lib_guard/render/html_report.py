@@ -103,68 +103,23 @@ def _type_group(file_type: str) -> str:
 def _type_meaning(file_type: str) -> str:
     key = str(file_type or "unknown").lower()
     return {
-        "lef": "物理抽象视图。变更后通常建议打开 File Diff。",
-        "liberty": "时序库视图。变更后通常建议打开 File Diff。",
-        "lib": "时序库视图。变更后通常建议打开 File Diff。",
-        "verilog": "接口 / 结构视图。变更后建议检查 module / port / instance。",
-        "cdl": "电路网表视图。变更后建议检查 subckt / pin / instance。",
-        "sdc": "约束视图。变更后建议检查 clock / exception / constraint。",
-        "upf": "电源意图视图。变更后建议检查 power domain / supply / isolation。",
-        "cpf": "电源意图视图。变更后建议检查 power domain / power mode。",
-        "spef": "寄生参数视图。默认偏 metadata / 结构级检查。",
-        "db": "二进制工具库。默认只做 metadata 检查。",
-        "gds": "版图二进制。默认只做 metadata 检查。",
-        "oas": "版图二进制。默认只做 metadata 检查。",
+        "lef": "物理抽象视图。默认抽取 macro、pin、layer、OBS 和几何摘要。",
+        "liberty": "时序库视图。普通 scan 默认只计数和识别文件名 corner，不深读内容。",
+        "lib": "时序库视图。普通 scan 默认只计数和识别文件名 corner，不深读内容。",
+        "verilog": "接口 / 结构视图。普通 scan 默认归入摘要级证据，不运行深解析。",
+        "cdl": "电路网表视图。默认抽取 subckt、pin 和 instance 结构摘要。",
+        "sdc": "约束视图。默认抽取 clock、group、uncertainty 等摘要。",
+        "upf": "电源意图视图。默认抽取 power domain、supply、isolation 等摘要。",
+        "cpf": "电源意图视图。默认抽取 domain 和 power mode 等摘要。",
+        "spef": "寄生参数视图。普通 scan 默认只计数和识别文件名 corner，不深读内容。",
+        "db": "二进制工具库。普通 scan 只记录 metadata，不打开二进制内容。",
+        "gds": "版图二进制。普通 scan 只记录 metadata，不打开版图内容。",
+        "oas": "版图二进制。普通 scan 只记录 metadata，不打开版图内容。",
         "release_note": "发布说明，属于 release evidence。",
         "waiver": "waiver 证据，属于 release evidence。",
         "readme": "使用说明，属于 release evidence。",
         "unknown": "未识别文件类型。需要更新规则或人工确认可忽略。",
     }.get(key, "项目自定义或辅助文件类型。")
-
-
-def _type_group(file_type: str) -> str:
-    key = str(file_type or "unknown").lower()
-    if key in IMPLEMENTATION_TYPES:
-        return "Implementation"
-    if key in ABSTRACT_TYPES:
-        return "Abstract"
-    if key in TIMING_TYPES:
-        return "Timing"
-    if key in CONSTRAINT_TYPES:
-        return "Constraint"
-    if key in POWER_TYPES:
-        return "Power"
-    if key in LAYOUT_TYPES:
-        return "Layout"
-    if key in DOC_TYPES:
-        return "Release Evidence"
-    if key in {"binary", "archive"}:
-        return "Binary"
-    if key == "unknown":
-        return "Unknown"
-    return "Other"
-
-
-def _type_meaning(file_type: str) -> str:
-    key = str(file_type or "unknown").lower()
-    return {
-        "lef": "Parsed by default. Summarizes macro, pin, layer, OBS, and geometry hints.",
-        "liberty": "Count-only by default. Corner hints come from file names; content parsing is opt-in.",
-        "lib": "Count-only by default. Corner hints come from file names; content parsing is opt-in.",
-        "verilog": "Count-only by default in normal review. Use opt-in parser or File Diff for focused RTL/interface checks.",
-        "cdl": "Parsed by default. Summarizes subckt, pin, and instance structure.",
-        "sdc": "Parsed by default. Summarizes clocks, groups, uncertainty, and load-like constraints.",
-        "upf": "Parsed by default. Summarizes power domains, supplies, isolation, and related commands.",
-        "cpf": "Parsed by default. Summarizes power intent commands and domains.",
-        "spef": "Count-only by default. No content parsing unless explicitly requested.",
-        "db": "Count-only by default. Binary content is not opened during normal scan.",
-        "gds": "Count-only by default. Layout content is not opened during normal scan.",
-        "oas": "Count-only by default. Layout content is not opened during normal scan.",
-        "release_note": "Release evidence.",
-        "waiver": "Waiver evidence; parsed when a supported waiver file is present.",
-        "readme": "Usage or release evidence.",
-        "unknown": "Unrecognized file type. Confirm whether to ignore it or map it in file rules.",
-    }.get(key, "Project-specific or auxiliary file type.")
 
 
 def _type_counts(inventory: Mapping[str, Any], parser_manifest: Mapping[str, Any], dashboard: Mapping[str, Any]) -> dict[str, int]:
@@ -439,59 +394,22 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     count_only = review.get("count_only") or {}
     corner = review.get("corner_summary") or {}
     parser = review.get("parser_summary") or {}
-    body = (
+    body += (
         ui.panel(
-            "Version Detail",
-            "Scan is the primary detail page for a raw version: count files, classify views, extract filename corners, and summarize lightweight parser results.",
-            ui.metric_grid([
-                ("Package", review.get("package_type"), "delivery type", "PASS" if review.get("package_type") != "UNKNOWN" else "WARNING"),
-                ("Total files", review.get("total_files"), "inventory count", "PASS"),
-                ("Count-only", count_only.get("total_files", 0), ".lib / .db / .spef / layout", "INFO" if count_only.get("total_files") else "PASS"),
-                ("Corner files", corner.get("total_corner_files", 0), "filename PVT hints", "PASS" if corner.get("total_corner_files") else "INFO"),
-                ("Parser tasks", parser.get("parser_tasks", 0), "lightweight summaries", parser.get("quality_status") or "PASS"),
-                ("Attention", len(attention), review["headline"], review["decision"]),
-            ])
-            + ui.compact_meta([
-                ("Library", review.get("library")),
-                ("Version", review.get("version")),
-                ("Raw Root", meta.get("root_path") or meta.get("root")),
-                ("Scan Dir", scan),
-            ]),
-        )
-        + ui.panel(
             "Count-only + Corner Summary",
-            "Heavy timing, parasitic, and binary views are counted and classified by path/name. Normal scan does not read their content.",
+            "大体量时序、寄生和二进制视图只按路径/文件名计数和归类；普通 scan 不读取它们的内容。",
             ui.metric_grid([
                 ("Count-only files", count_only.get("total_files", 0), ", ".join(f"{k}:{v}" for k, v in (count_only.get("file_type_counts") or {}).items()) or "none", "INFO" if count_only.get("total_files") else "PASS"),
                 ("Process corners", len(corner.get("process_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("process_counts") or {}).items()) or "none", "PASS" if corner.get("process_counts") else "INFO"),
                 ("Voltage corners", len(corner.get("voltage_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("voltage_counts") or {}).items()) or "none", "PASS" if corner.get("voltage_counts") else "INFO"),
                 ("Temperature corners", len(corner.get("temperature_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("temperature_counts") or {}).items()) or "none", "PASS" if corner.get("temperature_counts") else "INFO"),
             ])
-            + ui.table(["file_type", "Process", "Voltage", "Temp", "Path"], _corner_rows(corner), "No filename corner hints found"),
+            + ui.table(["file_type", "Process", "Voltage", "Temp", "Path"], _corner_rows(corner), "没有文件名 corner 线索"),
         )
         + ui.panel(
             "Parser Summary",
-            "Lightweight text and structure parsers still run by default and provide the main structured summary for this version.",
-            ui.table(["file_type", "Status", "Tasks", "Parsed", "Empty", "Failed"], _parser_summary_rows(parser), "No parser tasks were run"),
-        )
-        + ui.panel(
-            "View Coverage",
-            "Shows which delivery views are present and whether they are parsed or count-only in the default scan profile.",
-            ui.table(["View", "Status", "Count", "Domain", "Meaning"], _scan_view_rows(counts), "No view information"),
-        )
-        + ui.panel("Attention", "Only items that affect review or the next diff step are surfaced here.", ui.attention_items(attention))
-        + ui.collapsible_panel(
-            "Evidence",
-            "Raw JSON and full file inventory are kept as trace evidence, folded by default.",
-            ui.trace_link_list([
-                ("scan_review.json", _file_href(out / "scan_review.json"), "Review model used by this page"),
-                ("scan_meta.json", _file_href(scan / "scan_meta.json"), "Version and raw root context"),
-                ("file_inventory.json", _file_href(scan / "file_inventory.json"), "Full file list with filename corner hints"),
-                ("parser_manifest.json", _file_href(scan / "parser_manifest.json"), "Parser task manifest"),
-                ("parser_quality.json", _file_href(scan / "summary" / "parser_quality.json"), "Parser status summary"),
-            ])
-            + ui.filterable_table("file-type-table", ["Domain", "file_type", "Count", "Meaning"], _file_type_rows(counts), "No file types", "Filter file_type / domain"),
-            open=False,
+            "默认运行的轻量 parser 只提供结构摘要，作为版本审查证据。",
+            ui.table(["file_type", "Status", "Tasks", "Parsed", "Empty", "Failed"], _parser_summary_rows(parser), "没有 parser task"),
         )
     )
     html_text = ui.review_page_shell(

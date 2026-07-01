@@ -205,8 +205,12 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("Count-only", html_text)
             self.assertIn("Corner Summary", html_text)
             self.assertIn("Parser Summary", html_text)
+            self.assertIn("Scan 结论", html_text)
+            self.assertIn("核心视图", html_text)
+            self.assertNotIn("Version Detail", html_text)
+            self.assertNotIn("delivery type", html_text)
             self.assertNotIn("Metadata only", html_text)
-            self.assertNotIn("metadata-only", html_text)
+            self.assertIn("metadata-only", html_text)
 
     def test_scan_classifies_gzip_files_and_writes_typed_parser_results(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1581,11 +1585,24 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("8", lib_scan_cmds[1])
 
             version_scan_cmds = build_cli_commands(["scan", "ucie", "stable_20250608"], cwd=workspace)
-            self.assertEqual(version_scan_cmds[1][:5], ["run", "--catalog", str(catalog), "--library", "ucie"])
-            self.assertIn("--version", version_scan_cmds[1])
-            self.assertIn("stable_20250608", version_scan_cmds[1])
-            self.assertIn("--parse-jobs", version_scan_cmds[1])
-            self.assertIn("8", version_scan_cmds[1])
+            self.assertEqual(len(version_scan_cmds), 1)
+            self.assertEqual(version_scan_cmds[0][:5], ["run", "--catalog", str(catalog), "--library", "ucie"])
+            self.assertIn("--version", version_scan_cmds[0])
+            self.assertIn("stable_20250608", version_scan_cmds[0])
+            self.assertIn("--parse-jobs", version_scan_cmds[0])
+            self.assertIn("8", version_scan_cmds[0])
+
+            undiscovered_scan_cmds = build_cli_commands(["scan", "ucie", "future_20250615"], cwd=workspace)
+            self.assertEqual(len(undiscovered_scan_cmds), 2)
+            self.assertEqual(undiscovered_scan_cmds[0][:2], ["catalog", "scan"])
+            self.assertEqual(undiscovered_scan_cmds[1][0], "run")
+            self.assertIn("future_20250615", undiscovered_scan_cmds[1])
+
+            evidence_scan_cmds = build_cli_commands(["scan", "ucie", "stable_20250608", "--with-evidence"], cwd=workspace)
+            self.assertEqual(len(evidence_scan_cmds), 2)
+            self.assertEqual(evidence_scan_cmds[0][:2], ["catalog", "scan"])
+            self.assertIn("--with-evidence", evidence_scan_cmds[0])
+            self.assertEqual(evidence_scan_cmds[1][0], "run")
 
             scan_cmd = build_cli_command(["scan", "ucie", "stable_20250608"], cwd=workspace)
             self.assertEqual(scan_cmd, version_scan_cmds[-1])

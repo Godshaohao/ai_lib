@@ -467,7 +467,7 @@ def run_catalog_batch(args: Namespace) -> int:
         "run_dir": str(run_dir),
         "selection_manifest": str(selection_manifest),
         "selected": len(selected),
-        "skipped_existing": sum(1 for item in skipped if item.get("reason") == "already_scanned"),
+        "skipped_existing": sum(1 for item in skipped if item.get("reason") in {"already_scanned", "scan_evidence_current"}),
         "skipped_stage": sum(1 for item in skipped if item.get("reason") == "stage_filter_mismatch"),
         "selected_versions": [item.get("version_id") for item in selected],
         "results": results,

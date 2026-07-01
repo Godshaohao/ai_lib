@@ -1086,7 +1086,11 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
     if args.short_command == "scan":
         with_evidence = bool(getattr(args, "with_evidence", False))
         if args.library and args.version:
-            return [_catalog_scan_command(cfg, args.library, with_evidence=with_evidence), _scan_run_command(cfg, args.library, args.version)]
+            commands: list[list[str]] = []
+            if with_evidence or not _find_version_in_catalog(cfg, args.library, args.version):
+                commands.append(_catalog_scan_command(cfg, args.library, with_evidence=with_evidence))
+            commands.append(_scan_run_command(cfg, args.library, args.version))
+            return commands
         if args.library:
             has_batch_intent = bool(
                 getattr(args, "missing", False)

@@ -221,22 +221,10 @@ def relative_display_path(path: Any, *, base: Any = None, tail_parts: int = 4) -
 
 
 def version_release_notes(raw_path: Any, *, limit: int = 3) -> list[dict[str, str]]:
-    root = Path(str(raw_path or ""))
-    if not root.exists() or not root.is_dir():
-        return []
-    patterns = ["release_note", "release-notes", "releasenote", "changelog", "change_log", "update_note"]
-    found: list[dict[str, str]] = []
-    for path in root.rglob("*"):
-        if len(found) >= limit:
-            break
-        if not path.is_file():
-            continue
-        lower = path.name.lower()
-        if not any(pattern in lower for pattern in patterns):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        found.append({"path": str(path), "summary": _clip_text(text)})
-    return found
+    """Deprecated render helper.
+
+    Catalog/Version Detail rendering must not recursively scan raw libraries.
+    Release-note evidence should come from scan artifacts such as
+    file_inventory.json or release_readiness.json.
+    """
+    return []

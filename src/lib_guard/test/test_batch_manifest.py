@@ -106,6 +106,47 @@ class BatchPlanOnlyCliTest(unittest.TestCase):
             self.assertFalse((run_dir / "progress.json").exists())
             self.assertFalse((work / "scan_out").exists())
 
+    def test_run_batch_only_missing_reports_existing_scan_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            work = Path(td) / "work"
+            version = raw / "ucie" / "stable_20250608"
+            version.mkdir(parents=True)
+            (version / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+
+            from lib_guard.cli import main
+
+            catalog_dir = work / "catalog"
+            self.assertEqual(main(["catalog", "scan", "--root", str(raw), "--out", str(catalog_dir), "--library-type", "ip"]), 0)
+            catalog_path = catalog_dir / "catalog.json"
+            scan_dir = work / "scan_out" / "existing"
+            scan_dir.mkdir(parents=True)
+            data = json.loads(catalog_path.read_text(encoding="utf-8"))
+            data["libraries"][0]["versions"][0]["scan"] = {"status": "PASS", "scan_dir": str(scan_dir)}
+            catalog_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            self.assertEqual(
+                main(
+                    [
+                        "run-batch",
+                        "--catalog",
+                        str(catalog_path),
+                        "--library",
+                        "ucie",
+                        "--workdir",
+                        str(work),
+                        "--only-missing",
+                        "--batch-run-id",
+                        "scan_skip",
+                    ]
+                ),
+                0,
+            )
+
+            result = json.loads((work / "batch_runs" / "scan_skip" / "result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["selected"], 0)
+            self.assertEqual(result["skipped_existing"], 1)
+
     def test_compare_batch_plan_only_writes_compare_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             raw = Path(td) / "raw"

@@ -30,6 +30,17 @@ UPDATE_STATUS_COPY = {
     "CHANGED": "已完成比较，有变化。",
     "SAME": "已完成比较，无变化。",
 }
+RELEASE_NOTE_EVIDENCE_TOKENS = {
+    "release_note",
+    "release note",
+    "release-notes",
+    "releasenote",
+    "changelog",
+    "change_log",
+    "change log",
+    "update_note",
+    "update note",
+}
 
 
 def _version_id(version: Mapping[str, Any]) -> str:
@@ -122,6 +133,68 @@ def _iter_file_changes(file_diff: Mapping[str, Any], *, raw_path: Any = None) ->
                 }
             )
     return changes
+
+
+def _is_release_note_evidence(item: Mapping[str, Any]) -> bool:
+    text = " ".join(
+        str(item.get(key) or "")
+        for key in ["path", "relpath", "file", "name", "role", "doc_type", "file_type"]
+    ).lower()
+    return any(token in text for token in RELEASE_NOTE_EVIDENCE_TOKENS)
+
+
+def _release_note_path(item: Mapping[str, Any]) -> str:
+    return str(item.get("path") or item.get("relpath") or item.get("file") or item.get("name") or "-")
+
+
+def _release_note_summary(item: Mapping[str, Any]) -> str:
+    for key in ["summary", "description", "title", "message"]:
+        value = item.get(key)
+        if value:
+            return str(value)
+    role = item.get("doc_type") or item.get("role") or "release evidence"
+    return f"scan evidence: {role}"
+
+
+def _add_release_note(notes: list[dict[str, str]], seen: set[str], item: Mapping[str, Any], *, limit: int) -> None:
+    if len(notes) >= limit or not _is_release_note_evidence(item):
+        return
+    path = _release_note_path(item)
+    if path in seen:
+        return
+    seen.add(path)
+    notes.append({"path": path, "summary": _release_note_summary(item)})
+
+
+def _release_notes_from_existing_evidence(version: Mapping[str, Any], *, limit: int = 3) -> list[dict[str, str]]:
+    notes: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    explicit_notes = version.get("release_notes") or []
+    if isinstance(explicit_notes, list):
+        for raw in explicit_notes:
+            item = raw if isinstance(raw, Mapping) else {"path": str(raw), "summary": "catalog release evidence"}
+            _add_release_note(notes, seen, item, limit=limit)
+
+    scan_dir = catalog._version_scan_dir(version)
+    if scan_dir and len(notes) < limit:
+        release_readiness = read_json(scan_dir / "summary" / "release_readiness.json", default={}) or {}
+        doc_summary = _as_mapping(release_readiness.get("doc_summary"))
+        for item in doc_summary.get("files", []) or []:
+            if isinstance(item, Mapping):
+                _add_release_note(notes, seen, item, limit=limit)
+                if len(notes) >= limit:
+                    break
+
+    if scan_dir and len(notes) < limit:
+        inventory = catalog._scan_inventory(scan_dir)
+        for item in inventory.get("files", []) or []:
+            if isinstance(item, Mapping):
+                _add_release_note(notes, seen, item, limit=limit)
+                if len(notes) >= limit:
+                    break
+
+    return notes
 
 
 def _select_base(version: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -386,7 +459,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         status = "CHANGED"
     else:
         status = summary_status or "SAME"
-    release_notes = common.version_release_notes(version.get("raw_path"))
+    release_notes = _release_notes_from_existing_evidence(version)
     recommended_file_diff, summary_only_reviewed, metadata_only_reviewed = _group_file_changes_by_review_mode(file_changes)
     commands = _file_diff_commands(lib, version, base_version, file_changes)
     recommended_count = len(recommended_file_diff)

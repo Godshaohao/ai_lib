@@ -651,6 +651,7 @@ class CatalogTimelineTest(unittest.TestCase):
                             {"path": "sdc/ucie.sdc", "file_type": "sdc", "corner": None},
                             {"path": "upf/ucie.upf", "file_type": "upf", "corner": None},
                             {"path": "waiver/lint.waiver", "file_type": "waiver", "corner": None},
+                            {"path": "doc/release_note.txt", "file_type": "doc", "role": "release_note", "doc_type": "release_note", "is_key_doc": True, "corner": None},
                         ],
                         "corner_filename_summary": {
                             "total_corner_files": 2,
@@ -772,6 +773,25 @@ class CatalogTimelineTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (scan_dir / "summary" / "parser_quality.json").write_text(json.dumps({"status": "PASS", "parsers": []}), encoding="utf-8")
+            (scan_dir / "summary" / "release_readiness.json").write_text(
+                json.dumps(
+                    {
+                        "doc_summary": {
+                            "release_note_found": True,
+                            "files": [
+                                {
+                                    "path": "doc/release_note.txt",
+                                    "role": "release_note",
+                                    "doc_type": "release_note",
+                                    "summary": "Fixed lane reset timing and updated UPF isolation coverage.",
+                                }
+                            ],
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
             (raw / "ucie" / "stable_20250608").mkdir(parents=True)
             (raw / "ucie" / "stable_20250608" / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
             (raw / "ucie" / "stable_20250608" / "doc").mkdir()
