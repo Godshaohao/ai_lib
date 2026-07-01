@@ -14,6 +14,7 @@ reports/
 manual_preview/
 logs/
 lib_guard.yml
+project_bundles/
 
 # Local OpenROAD technology fixtures are large and should stay out of normal
 # GitHub pushes. Keep tests/fixtures/raw/library_map.yml versioned.
