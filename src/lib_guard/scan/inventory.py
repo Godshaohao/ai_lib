@@ -150,7 +150,7 @@ class FileWalker:
                 except OSError:
                     continue
                 yield {
-                    "path": str(abs_path.resolve().relative_to(root)),
+                    "path": abs_path.resolve().relative_to(root).as_posix(),
                     "abs_path": str(abs_path.resolve()),
                     "name": name,
                     "extension": abs_path.suffix.lower(),

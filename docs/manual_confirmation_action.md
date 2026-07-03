@@ -114,6 +114,13 @@ $PROJ/scripts/lg.csh action <LIBRARY>
 
 默认策略是保守的：已有输出时跳过，避免误覆盖人工审查证据。
 
+Action 语法只保留上表动词。`@ALL redo` 会在 action plan 中标记
+`force_all_redo: true`，并提示所有既有输出都可能被重新生成。
+
+以下 workflow 风格动词不是 Action 语法的一部分，也不会被支持：
+`@if`、`@depends`、`@retry`、`@group`、`@include`、`@owner`、
+`@approve`、`@loop`、`@notify`。
+
 ## 自动化与人工边界
 
 自动化会做：

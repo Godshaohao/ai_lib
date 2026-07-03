@@ -23,10 +23,7 @@ def read_json(path: str | Path, default: Any = None) -> Any:
     p = Path(path)
     if not p.exists() or not p.is_file():
         return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def write_json(path: str | Path, data: Mapping[str, Any]) -> Path:
@@ -36,6 +33,66 @@ def write_json(path: str | Path, data: Mapping[str, Any]) -> Path:
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, p)
     return p
+
+
+def normalize_effective_ref(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("raw:") or text.startswith("effective:"):
+        return text
+    return f"raw:{text}"
+
+
+def _legacy_ref_value(lib: Mapping[str, Any]) -> tuple[str, str]:
+    summary = lib.get("summary", {}) if isinstance(lib.get("summary"), Mapping) else {}
+    for key in ["latest_effective_ref", "current_effective_ref"]:
+        value = str(summary.get(key) or "")
+        if value:
+            return value, "effective" if "effective" in key else "raw"
+    for key in ["current_effective", "current_effective_version"]:
+        value = str(summary.get(key) or lib.get(key) or "")
+        if value and value.lower() not in {"true", "false"}:
+            return value, "effective"
+    for key in ["latest_effective_ref", "current_effective_ref"]:
+        value = str(lib.get(key) or "")
+        if value:
+            return value, "effective"
+    for key in ["current_version", "approved_version", "latest_version"]:
+        value = str(summary.get(key) or lib.get(key) or "")
+        if value:
+            return value, "raw"
+    return "", "raw"
+
+
+def latest_effective_ref_for_library(lib: Mapping[str, Any]) -> str:
+    value, default_kind = _legacy_ref_value(lib)
+    if not value:
+        return ""
+    if value.startswith("raw:") or value.startswith("effective:"):
+        return value
+    return f"{default_kind}:{value}"
+
+
+def write_latest_effective_ref(catalog: Mapping[str, Any], library_id: str, ref: str) -> dict[str, Any]:
+    updated = dict(catalog)
+    libraries = []
+    matched = False
+    for lib in catalog.get("libraries", []) or []:
+        if not isinstance(lib, Mapping):
+            libraries.append(lib)
+            continue
+        row = dict(lib)
+        if library_id in {str(row.get("library_id") or ""), str(row.get("library_name") or "")}:
+            summary = dict(row.get("summary", {}) or {})
+            summary["latest_effective_ref"] = normalize_effective_ref(ref)
+            row["summary"] = summary
+            matched = True
+        libraries.append(row)
+    if not matched:
+        raise ValueError(f"library not found: {library_id}")
+    updated["libraries"] = libraries
+    return updated
 
 
 def rel_href(base: str | Path, path: Any) -> str:

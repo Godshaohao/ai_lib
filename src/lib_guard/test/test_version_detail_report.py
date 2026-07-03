@@ -48,6 +48,22 @@ def _write_version_detail_lane_fixture(root: Path) -> tuple[dict[str, str], dict
 
 
 class VersionDetailReportTest(unittest.TestCase):
+    def test_review_model_rules_are_available_outside_renderer(self) -> None:
+        from lib_guard.review.model_rules import (
+            classify_review_lane,
+            comparison_semantics_for_package,
+            resolve_review_base,
+        )
+
+        base = resolve_review_base({"version_id": "patch", "current_effective_ref": "effective_current"})
+        lane = classify_review_lane("db")
+        semantics = comparison_semantics_for_package("PARTIAL_UPDATE")
+
+        self.assertEqual(base["base_ref"], "current_effective")
+        self.assertEqual(base["base_version"], "effective_current")
+        self.assertEqual(lane["lane"], "Metadata-only")
+        self.assertEqual(semantics["comparison_scope"], "incremental")
+
     def test_version_detail_groups_file_diff_evidence_by_review_lane(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

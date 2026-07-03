@@ -9,12 +9,9 @@ def read_json(path: str | Path | None, default: Any = None) -> Any:
     if not path:
         return default
     p = Path(path)
-    try:
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+    if not p.exists():
         return default
-    return default
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def write_json(path: str | Path, data: Any) -> None:

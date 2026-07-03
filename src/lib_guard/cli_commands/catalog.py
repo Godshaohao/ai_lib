@@ -585,6 +585,7 @@ def run_catalog_compare_batch(args: Namespace) -> int:
 
 def run_catalog_release_check(args: Namespace) -> int:
     from lib_guard.catalog.index import find_catalog_version, update_catalog_release_status
+    from lib_guard.release.explain import explain_release_check
     from lib_guard.release.checker import check_release_scan
     from lib_guard.review.release_result import release_result_from_check, write_release_result
 
@@ -605,6 +606,9 @@ def run_catalog_release_check(args: Namespace) -> int:
         review_gate_path=review_gate_path,
         review_gate=review_gate if not review_gate_path else None,
     )
+    if getattr(args, "explain", False):
+        print_json(explain_release_check(result))
+        return 0
     result_path = Path(scan_dir) / "release" / "release_check.json"
     release_result_path = Path(scan_dir) / "release" / "release_result.json"
     write_release_result(release_result_path, release_result_from_check(result))
@@ -636,6 +640,9 @@ def run_catalog_release_link(args: Namespace) -> int:
         apply=bool(args.apply),
         mode=getattr(args, "link_mode", None) or "symlink",
         overwrite=getattr(args, "overwrite", False),
+        force=bool(getattr(args, "force", False)),
+        force_reason=getattr(args, "force_reason", None),
+        force_by=getattr(args, "force_by", None),
     )
     result_path = Path(scan_dir) / "release" / "release_link_result.json"
     release_result_path = result_path.parent / "release_result.json"
@@ -712,6 +719,11 @@ def run_catalog_release_batch(args: Namespace) -> int:
         apply=bool(args.apply),
         mode=getattr(args, "link_mode", None) or "symlink",
         overwrite=bool(args.overwrite),
+        force=bool(getattr(args, "force", False)),
+        force_reason=getattr(args, "force_reason", None),
+        force_by=getattr(args, "force_by", None),
+        verify_skipped=bool(getattr(args, "no_verify", False)),
+        verify_skip_reason="no_verify requested" if getattr(args, "no_verify", False) else "",
     )
     verify_result = None
     if bool(args.apply) and not getattr(args, "no_verify", False):

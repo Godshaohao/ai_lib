@@ -124,7 +124,18 @@ Action 文件是人工编排入口，不是废弃功能。详见
 
 ```csh
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
 ```
 
 Release 使用 manifest-driven file-level symlink/copy 规划。默认不会因为存在
 File Diff recommendation 就阻塞 `current`，除非 release policy 明确要求。
+
+`--explain` 只输出 release check 的阻塞解释，不执行 link/apply。强制发布入口仍然
+保留，但必须显式写明原因：
+
+```csh
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --force --force-reason "owner accepted metadata-only change" --force-by <USER>
+```
+
+底层 `release-batch` 会把 force 决策写入 `release_override.json`，用于审计这次
+绕过了哪些 gate/check 证据。

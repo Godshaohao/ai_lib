@@ -83,6 +83,29 @@ class ShortCliRefreshTest(unittest.TestCase):
         self.assertNotIn("--base", command)
         self.assertNotIn("raw_adjacent_wrong", command)
 
+    def test_refresh_reads_canonical_latest_effective_raw_ref(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._workspace(Path(td))
+            catalog = workspace / "catalog" / "catalog.json"
+            data = json.loads(catalog.read_text(encoding="utf-8"))
+            lib = data["libraries"][0]
+            lib["summary"] = {"latest_effective_ref": "raw:patch_20260628"}
+            lib["versions"].append(
+                {
+                    "version_id": "future_20260701",
+                    "version_key": "ip/ucie/future_20260701",
+                    "raw_path": str(workspace / "raw" / "ucie" / "future_20260701"),
+                }
+            )
+            catalog.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+            commands = build_cli_commands(["refresh", "ucie"], cwd=workspace)
+
+        self.assertEqual(commands[0][commands[0].index("--new") + 1], "patch_20260628")
+        self.assertEqual(commands[0][commands[0].index("--base") + 1], "effective_20260620")
+
     def test_cmp_keeps_manual_adjacent_default(self) -> None:
         from lib_guard.short_cli import build_cli_commands
 

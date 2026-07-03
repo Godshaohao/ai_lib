@@ -1205,6 +1205,22 @@ class ScanPipelineTest(unittest.TestCase):
             summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["changed_files"], 1)
 
+    def test_diff_rejects_malformed_inventory_json(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            (old_scan / "scan_meta.json").write_text("{}", encoding="utf-8")
+            (new_scan / "scan_meta.json").write_text("{}", encoding="utf-8")
+            (old_scan / "file_inventory.json").write_text("{bad json", encoding="utf-8")
+            (new_scan / "file_inventory.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            with self.assertRaises(json.JSONDecodeError):
+                diff_scan_outputs(old_scan, new_scan, out_path=Path(td) / "diff")
+
     def test_diff_render_writes_html_with_pairwise_task_commands(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             old_root = Path(td) / "old_raw"
@@ -1299,6 +1315,20 @@ class ScanPipelineTest(unittest.TestCase):
             html = (out / "index.html").read_text(encoding="utf-8")
             self.assertIn("单文件深度对比报告", html)
             self.assertIn("专家复核提示", html)
+
+    def test_file_diff_does_not_hide_parser_registry_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_file = Path(td) / "old.lef"
+            new_file = Path(td) / "new.lef"
+            out = Path(td) / "pair"
+            old_file.write_text("MACRO M\nEND M\n", encoding="utf-8")
+            new_file.write_text("MACRO M\nEND M\n", encoding="utf-8")
+
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            with patch("lib_guard.scan.parser_registry.ParserRegistry.default", side_effect=RuntimeError("registry broken")):
+                with self.assertRaises(RuntimeError):
+                    diff_pairwise_files("lef", old_file, new_file, out)
 
     def test_file_diff_semantic_formats_are_structured(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1947,7 +1977,8 @@ class ScanPipelineTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (actions / "ucie.action").write_text(
+            action_path = actions / "ucie.action"
+            action_path.write_text(
                 "@ALL redo\n"
                 "@effect rec_20260624 stable_20260601\n"
                 "@scan auto\n"
@@ -1963,6 +1994,13 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertTrue(any("effective build" in cmd and "--effective-id rec_20260624" in cmd for cmd in rendered))
             self.assertTrue(any("effective compare" in cmd and "--compare-id main" in cmd for cmd in rendered))
             self.assertTrue(any("effective release-preview" in cmd for cmd in rendered))
+
+            from lib_guard.short_cli import _parse_review_actions
+
+            plan = _parse_review_actions(action_path)["action_plan"]
+            self.assertTrue(plan["force_all_redo"])
+            self.assertEqual(plan["source"], "@ALL redo")
+            self.assertEqual(plan["warning"], "All existing outputs may be regenerated.")
 
     def test_short_cli_action_auto_scan_refreshes_stale_scan_evidence(self) -> None:
         from lib_guard.short_cli import build_cli_commands, write_default_config

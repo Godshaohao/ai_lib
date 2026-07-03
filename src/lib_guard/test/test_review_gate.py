@@ -7,6 +7,12 @@ from pathlib import Path
 
 
 class ReviewGateTest(unittest.TestCase):
+    def assertGateItemsExplainTheRule(self, items: list[dict]) -> None:
+        for item in items:
+            for key in ["rule_id", "rule_source", "why", "next_action"]:
+                self.assertIn(key, item)
+                self.assertTrue(item[key])
+
     def test_pairwise_pending_is_attention_not_current_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -54,6 +60,7 @@ class ReviewGateTest(unittest.TestCase):
             self.assertEqual(gate["status"], "ATTENTION")
             self.assertEqual(gate["blocking_open"], 0)
             self.assertEqual(gate["attention_items"][0]["id"], "pairwise.recommended:stable")
+            self.assertGateItemsExplainTheRule(gate["attention_items"])
             tasks = build_review_tasks(state)["tasks"]
             pairwise = [task for task in tasks if task["task_type"] == "PAIRWISE_DIFF"]
             self.assertEqual(pairwise[0]["priority"], "P2")
@@ -105,6 +112,7 @@ class ReviewGateTest(unittest.TestCase):
             gate = state["libraries"][0]["versions"][0]["review_gate"]
             self.assertEqual(gate["status"], "REVIEW_REQUIRED")
             self.assertEqual(gate["blocking_open"], 1)
+            self.assertGateItemsExplainTheRule(gate["blocking_items"])
 
             write_review_override(
                 gate["override_file"],

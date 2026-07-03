@@ -247,6 +247,10 @@ def _gate_item(
     source: str = "",
     fatal: bool = False,
     file: str | None = None,
+    rule_id: str = "",
+    rule_source: str = "review_gate.v1",
+    why: str = "",
+    next_action: str = "",
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "id": item_id,
@@ -256,6 +260,10 @@ def _gate_item(
         "message": message,
         "blocking": severity.lower() in {"blocker", "error"},
         "fatal": fatal,
+        "rule_id": rule_id or item_id.split(":", 1)[0],
+        "rule_source": rule_source or "review_gate.v1",
+        "why": why or message,
+        "next_action": next_action or "Review the evidence and record an accept or waive decision when needed.",
     }
     if source:
         result["source"] = source
@@ -286,6 +294,9 @@ def _metadata_gate_items(diff_dir: str, *, limit: int = 20) -> list[dict[str, An
                 message="Binary/metadata-only view changed; human acceptance is required for current.",
                 source=str(diff / "metadata_review_tasks.json"),
                 file=path,
+                rule_id="metadata_only.changed.blocks_current",
+                why="DB/GDS/OAS are metadata-only in default scan; semantic safety cannot be proven automatically.",
+                next_action="Owner accept/waive or release with --force and audit reason.",
             )
         )
     if items:
@@ -308,6 +319,9 @@ def _metadata_gate_items(diff_dir: str, *, limit: int = 20) -> list[dict[str, An
                 message=str(issue.get("message") or "Human acceptance is required for current."),
                 source=str(diff / "diff_issues.json"),
                 file=path,
+                rule_id="metadata_only.changed.blocks_current",
+                why="Metadata-only changes cannot be proven semantically safe from the default evidence.",
+                next_action="Owner accept/waive or release with --force and audit reason.",
             )
         )
     return items
@@ -376,28 +390,31 @@ def build_review_gate_for_version(
     pairwise_status = str(version.get("pairwise_status") or "")
     pairwise_summary = version.get("pairwise_summary") or {}
     if pairwise_status in {"PAIRWISE_PENDING", "PAIRWISE_PARTIAL"}:
-        attention_items.append(
-            {
-                "id": f"pairwise.recommended:{version_id}",
-                "severity": "attention",
-                "category": "file_diff",
-                "title": "Focused File Diff recommended",
-                "message": "Selected Diff recommends pairwise File Diff for focused review; this does not block current by default.",
-                "blocking": False,
-                "pending": int((pairwise_summary or {}).get("pending", 0) or 0),
-                "total": int((pairwise_summary or {}).get("total", 0) or 0),
-            }
+        item = _gate_item(
+            f"pairwise.recommended:{version_id}",
+            severity="attention",
+            category="file_diff",
+            title="Focused File Diff recommended",
+            message="Selected Diff recommends pairwise File Diff for focused review; this does not block current by default.",
+            rule_id="pairwise.recommended.attention",
+            why="Focused file diff is useful evidence but not mandatory for current by default.",
+            next_action="Run lg fd for recommended P0/P1 files when needed.",
         )
+        item["pending"] = int((pairwise_summary or {}).get("pending", 0) or 0)
+        item["total"] = int((pairwise_summary or {}).get("total", 0) or 0)
+        attention_items.append(item)
     elif pairwise_status == "PAIRWISE_FAILED":
         attention_items.append(
-            {
-                "id": f"pairwise.failed:{version_id}",
-                "severity": "warning",
-                "category": "file_diff",
-                "title": "Focused File Diff failed",
-                "message": "A recommended File Diff run failed; rerun it if this evidence is needed.",
-                "blocking": False,
-            }
+            _gate_item(
+                f"pairwise.failed:{version_id}",
+                severity="warning",
+                category="file_diff",
+                title="Focused File Diff failed",
+                message="A recommended File Diff run failed; rerun it if this evidence is needed.",
+                rule_id="pairwise.failed.attention",
+                why="The focused file diff evidence could not be produced.",
+                next_action="Rerun lg fd if this evidence is needed for the review.",
+            )
         )
 
     status = "REVIEW_REQUIRED" if blocking_items else "ATTENTION" if attention_items else "READY"

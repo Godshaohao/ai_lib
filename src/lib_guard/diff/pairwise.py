@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Mapping
+import json
 
 from lib_guard.project_config import DEFAULT_FILE_DIFF_TYPES
 
@@ -54,12 +55,9 @@ def _quote(value: str | Path) -> str:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        import json
-
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    if not path.exists():
         return {}
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _csh_token(value: Any) -> str:

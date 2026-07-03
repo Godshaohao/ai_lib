@@ -256,17 +256,6 @@ def _record(path: Path, file_type: str) -> dict[str, Any]:
     return {"path": name, "abs_path": str(path.resolve()), "name": name, "extension": suffix, "combined_extension": combined, "compression": "gzip" if suffix == ".gz" else None, "file_type": file_type, "is_key_file": True}
 
 
-def _fallback_parse(file_type: str, path: Path, status: str = "PASS") -> dict[str, Any]:
-    lines = _read_text(path)
-    data = {
-        "line_count": len(lines),
-        "non_empty_count": sum(1 for x in lines if x.strip()),
-        "head": lines[:20],
-        "sha256_text": hashlib.sha256("\n".join(lines).encode("utf-8", errors="replace")).hexdigest(),
-    }
-    return {"schema_version": "1.0", "result_type": "parser_result", "parser_name": "FallbackTextParser", "file": str(path), "file_type": file_type, "status": status, "data": data, "issues": []}
-
-
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:
@@ -306,16 +295,14 @@ def _unsupported_metadata_parse(file_type: str, path: Path) -> dict[str, Any]:
 
 
 def _parse_file(file_type: str, path: Path) -> dict[str, Any]:
-    try:
-        from lib_guard.scan.parser_registry import ParserRegistry
-        registry = ParserRegistry.default(None)
-        context = SimpleNamespace(root_path=str(path.parent), schema_version="1.0", scan_mode="file-diff")
-        record = _record(path, file_type)
-        for parser in registry.all():
-            if parser.can_parse(record, context):
-                return parser.parse(record, context)
-    except Exception as exc:
-        return _fallback_parse(file_type, path, status="PASS") | {"issues": [{"severity": "warning", "category": "parser_fallback", "message": f"使用 fallback parser: {type(exc).__name__}"}]}
+    from lib_guard.scan.parser_registry import ParserRegistry
+
+    registry = ParserRegistry.default(None)
+    context = SimpleNamespace(root_path=str(path.parent), schema_version="1.0", scan_mode="file-diff")
+    record = _record(path, file_type)
+    for parser in registry.all():
+        if parser.can_parse(record, context):
+            return parser.parse(record, context)
     return _unsupported_metadata_parse(file_type, path)
 
 

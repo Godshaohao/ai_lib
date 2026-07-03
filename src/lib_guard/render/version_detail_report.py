@@ -13,14 +13,17 @@ from typing import Any, Mapping
 
 from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
 from lib_guard.review.io import read_json
+from lib_guard.review.model_rules import (
+    classify_review_lane,
+    comparison_semantics_for_package,
+    resolve_review_base,
+)
 from lib_guard.render.catalog_workspace_report import catalog_browser_styles
 from lib_guard.render import catalog_render_common as common
 from lib_guard.render import catalog_report as catalog
 from lib_guard.render import product_theme as ui
 
 
-P0_REVIEW_TYPES = {"lef", "cdl", "spice", "sp"}
-P1_REVIEW_TYPES = {"sdc", "upf", "cpf", "waiver", "ibis", "pwl", "snp", "touchstone", "cpm"}
 STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
 FALLBACK_BASE_REFS = {"adjacent_fallback", "recorded_base", "recorded_base_fallback", "unknown"}
 UPDATE_STATUS_COPY = {
@@ -81,19 +84,6 @@ def _infer_file_type(path: str, file_type: Any = None) -> str:
     }.get(suffix, suffix or "-")
 
 
-def _review_lane(file_type: str) -> tuple[str, str]:
-    key = str(file_type or "").lower()
-    if key in SUMMARY_ONLY_TYPES:
-        return "Summary-only", "摘要级审查；默认不生成文件级 Diff 命令"
-    if key in BINARY_METADATA_ONLY_TYPES:
-        return "Metadata-only", "metadata-only 审查；默认不生成文件级 Diff 命令"
-    if key in P0_REVIEW_TYPES:
-        return "P0", "建议优先做文件级 Diff"
-    if key in P1_REVIEW_TYPES:
-        return "P1", "建议定向审查"
-    return "Review", "按需人工检查"
-
-
 def _cn_change_kind(value: Any) -> str:
     text = str(value or "").lower()
     if text == "added":
@@ -122,7 +112,8 @@ def _iter_file_changes(file_diff: Mapping[str, Any], *, raw_path: Any = None) ->
             else:
                 path = common.relative_display_path(item, base=raw_path)
                 file_type = _infer_file_type(path)
-            lane, hint = _review_lane(file_type)
+            lane_rule = classify_review_lane(file_type)
+            lane, hint = lane_rule["lane"], lane_rule["hint"]
             changes.append(
                 {
                     "change": kind,
@@ -197,40 +188,6 @@ def _release_notes_from_existing_evidence(version: Mapping[str, Any], *, limit: 
     return notes
 
 
-def _select_base(version: Mapping[str, Any]) -> tuple[str, str, str]:
-    diff = _as_mapping(version.get("diff"))
-    lineage = _as_mapping(version.get("lineage"))
-    explicit = (
-        version.get("explicit_base_version")
-        or diff.get("explicit_base_version")
-        or lineage.get("explicit_base_version")
-    )
-    if explicit:
-        return "explicit", str(explicit), "catalog_recorded_base"
-    for key in ["current_effective", "current_effective_ref", "latest_effective_ref"]:
-        value = version.get(key) or diff.get(key) or lineage.get(key)
-        if value and not isinstance(value, bool):
-            return "current_effective", str(value), key
-    previous = version.get("previous_effective_version") or version.get("parent_version") or lineage.get("parent_candidate")
-    if previous:
-        return "previous_effective", str(previous), "previous_effective_version"
-    diff_base = diff.get("base_version")
-    diff_base_source = str(diff.get("base_source") or diff.get("base_version_source") or "").lower()
-    diff_kind = str(diff.get("kind") or diff.get("diff_kind") or "").lower()
-    if diff_base and (diff_base_source in {"explicit", "current_effective"} or diff_kind == "current_library_diff"):
-        base_ref = "current_effective" if diff_base_source == "current_effective" or diff_kind == "current_library_diff" else "explicit"
-        return base_ref, str(diff_base), f"diff.base_version:{diff_base_source or diff_kind}"
-    full_base = common.base_full_version(version)
-    if full_base:
-        return "base_full", str(full_base), "base_full_version"
-    adjacent = diff.get("adjacent_old_version")
-    if adjacent:
-        return "adjacent_fallback", str(adjacent), "adjacent_old_version"
-    if diff_base:
-        return "recorded_base", str(diff_base), "diff.base_version:fallback"
-    return "NEEDS_BASE_CONFIRM", "", "missing_base"
-
-
 def _base_trust_status(base_ref: str) -> str:
     if base_ref == "NEEDS_BASE_CONFIRM":
         return "BLOCKING"
@@ -292,14 +249,6 @@ def _select_diff_dir(version: Mapping[str, Any], *, base_ref: str, base_version:
             if path:
                 return path
     return None
-
-
-def _comparison_semantics(version: Mapping[str, Any]) -> tuple[str, str, str]:
-    package = common.package_type(version)
-    node_type = common.node_package_type(version)
-    if package in {"PARTIAL_UPDATE", "PARTIAL", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"} or node_type in {"partial", "hotfix", "doc"}:
-        return "incremental", "incremental compare", "out_of_scope_missing"
-    return "full", "full compare", "real_delete"
 
 
 def _summary_metrics(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -434,8 +383,14 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     version_id = _version_id(version)
     safe_lib = common.safe(lib_id)
     safe_ver = common.safe(version_id)
-    base_ref, base_version, base_source = _select_base(version)
-    comparison_semantics, compare_strategy, delete_semantics = _comparison_semantics(version)
+    base_rule = resolve_review_base(version, lib)
+    base_ref = base_rule["base_ref"]
+    base_version = base_rule["base_version"]
+    base_source = base_rule["base_source"]
+    comparison_rule = comparison_semantics_for_package(common.package_type(version), common.node_package_type(version))
+    comparison_semantics = comparison_rule["comparison_scope"]
+    compare_strategy = comparison_rule["compare_strategy"]
+    delete_semantics = comparison_rule["delete_semantics"]
     diff_dir = _select_diff_dir(version, base_ref=base_ref, base_version=base_version)
     summary = dict(common.version_diff_summary(diff_dir))
     file_diff = dict(common.version_file_diff(diff_dir))

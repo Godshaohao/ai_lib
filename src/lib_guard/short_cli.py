@@ -194,7 +194,14 @@ def _review_action_path(cfg: dict[str, str], library: str) -> Path:
 
 
 def _parse_review_actions(path: Path) -> dict[str, Any]:
-    actions: dict[str, Any] = {"redo_all": False, "effects": [], "scans": [], "diffs": [], "releases": []}
+    actions: dict[str, Any] = {
+        "redo_all": False,
+        "effects": [],
+        "scans": [],
+        "diffs": [],
+        "releases": [],
+        "action_plan": {"force_all_redo": False, "source": "", "warning": ""},
+    }
     for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw.split("#", 1)[0].strip()
         if not line:
@@ -205,6 +212,11 @@ def _parse_review_actions(path: Path) -> dict[str, Any]:
         if verb == "@ALL":
             if args == ["redo"]:
                 actions["redo_all"] = True
+                actions["action_plan"] = {
+                    "force_all_redo": True,
+                    "source": "@ALL redo",
+                    "warning": "All existing outputs may be regenerated.",
+                }
                 continue
             raise ValueError(f"{path}:{lineno}: @ALL only supports 'redo'")
         if verb == "@effect":
@@ -280,9 +292,12 @@ def _latest_refresh_version(library: dict[str, Any]) -> dict[str, Any] | None:
         return current_raw[-1]
     by_id = {str(item.get("version_id") or ""): item for item in versions}
     summary = library.get("summary", {}) or {}
-    for key in ["latest_effective_ref", "latest_version", "current_version"]:
-        value = str(summary.get(key) or "")
-        if value in by_id:
+    latest_ref = _version_ref((summary or {}).get("latest_effective_ref"))
+    if latest_ref and latest_ref in by_id:
+        return by_id[latest_ref]
+    for key in ["latest_version", "current_version"]:
+        value = _version_ref(summary.get(key))
+        if value and value in by_id:
             return by_id[value]
     return versions[-1]
 
@@ -291,6 +306,8 @@ def _version_ref(value: Any, target_version: str = "") -> str | None:
     if not value or isinstance(value, bool):
         return None
     text = str(value)
+    if text.startswith("raw:") or text.startswith("effective:"):
+        text = text.split(":", 1)[1]
     if target_version and text == target_version:
         return None
     return text
@@ -635,10 +652,12 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--link-mode", default="symlink", choices=["copy", "symlink"])
     p.add_argument("--check-only", action="store_true", help="Only run release-check for this catalog version")
     p.add_argument("--check-first", action="store_true", help="Run release-check before release-batch")
+    p.add_argument("--explain", action="store_true", help="Print release-check explanation JSON without applying release")
     p.add_argument("--only-checked", action="store_true", help="Release only if prior/latest release-check is PASS/PASS_WITH_WARNING")
     p.add_argument("--only-ready", action="store_true", help="Skip manual-review or blocked versions")
     p.add_argument("--force", action="store_true")
     p.add_argument("--force-reason")
+    p.add_argument("--force-by")
     p.add_argument("--no-verify", action="store_true")
     p.add_argument("--no-render", action="store_true")
 
@@ -1189,6 +1208,9 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             "--alias",
             args.alias,
         ]
+        if args.explain:
+            check_cmd.append("--explain")
+            return [check_cmd]
         if args.check_only:
             return [check_cmd]
         if args.check_first:
@@ -1222,6 +1244,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             command.append("--force")
         if args.force_reason:
             command.extend(["--force-reason", args.force_reason])
+        if args.force_by:
+            command.extend(["--force-by", args.force_by])
         if args.no_verify:
             command.append("--no-verify")
         if args.no_render:

@@ -34,10 +34,7 @@ def read_json(path: str | Path, default: Any = None) -> Any:
     p = Path(path)
     if not p.exists():
         return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def write_json(path: str | Path, data: Any) -> None:
@@ -974,43 +971,3 @@ def render_diff_html(diff_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     atomic_write_text(out / "index.html", html_text)
     atomic_write_text(out / "diff_report.html", html_text)
     return {"status": "PASS", "index_html": str(out / "index.html"), "diff_report_html": str(out / "diff_report.html"), "comparison_review": str(out / "comparison_review.json")}
-
-
-def render_diff_timeline_html(diff_index: str | Path | Mapping[str, Any], out_dir: str | Path) -> dict[str, Any]:
-    from lib_guard.render import product_theme as ui
-
-    data = read_json(diff_index, {}) if not isinstance(diff_index, Mapping) else dict(diff_index)
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    comparisons = list(data.get("comparisons", []) or [])
-    rows = []
-    for item in comparisons:
-        rows.append(
-            "<tr>"
-            f"<td><code>{ui.esc(item.get('mode') or '-')}</code></td>"
-            f"<td>{ui.esc(item.get('old_version') or '-')} → {ui.esc(item.get('new_version') or '-')}</td>"
-            f"<td>{ui.badge(item.get('comparison_quality') or item.get('status') or item.get('review_level') or 'UNKNOWN')}</td>"
-            f"<td>{ui.esc(item.get('recommended_total', 0))} / 已生成 {ui.esc(item.get('result_generated', 0))}</td>"
-            f"<td>{ui.esc(item.get('candidate_total', 0))}</td>"
-            f"<td>{ui.badge(item.get('release_impact') or 'RELEASE_CHECK_REQUIRED')}</td>"
-            f"<td>{ui.button('打开 Selected Diff', item.get('diff_html') or item.get('href') or '', 'primary', disabled=not bool(item.get('diff_html') or item.get('href')))}</td>"
-            "</tr>"
-        )
-    body = (
-        ui.panel("Diff Timeline", "一个 library 的多版本、多 comparison 入口。只看关系，不展开单次 diff 明细。", ui.comparison_filter_bar() + ui.timeline(comparisons))
-        + ui.panel("Comparison 列表", "可按 mode、Comparison 质量和重点建议进入 Selected Diff Review。", ui.filterable_table("comparison-table", ["Mode", "Comparison", "Comparison", "重点建议", "候选", "Release", "入口"], rows, "暂无 comparison", "筛选版本 / mode / status"))
-        + ui.collapsible_panel("证据", "diff_index.json", ui.trace_link_list([("diff_index.json", _file_href(diff_index if not isinstance(diff_index, Mapping) else out / "diff_index.json"), "库级 diff 关系索引")]), open=False)
-    )
-    if isinstance(diff_index, Mapping):
-        write_json(out / "diff_index.json", data)
-    html_text = ui.review_page_shell(
-        f"{data.get('display_name') or data.get('library_id') or 'Library'} / Diff Timeline",
-        "DIFF TIMELINE",
-        "库级版本对比关系。单次变化请进入 Selected Diff Review，文件变化请进入 File Diff。",
-        body,
-        decision="COMPARE_READY" if comparisons else "COMPARE_PENDING",
-        nav="<a href='#'>Catalog</a><a class='active' href='#'>Diff Timeline</a><a href='#'>Selected Diff</a>",
-        meta=ui.compact_meta([("Library", data.get("library_id") or "-"), ("Versions", len(data.get("versions", []) or [])), ("Comparisons", len(comparisons))]),
-    )
-    atomic_write_text(out / "index.html", html_text)
-    return {"status": "PASS", "index_html": str(out / "index.html")}

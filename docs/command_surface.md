@@ -46,6 +46,7 @@ $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-mis
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> --base <BASE_VERSION> --type <FILE_TYPE>
 $PROJ/scripts/lg.csh rv-check <LIBRARY> <VERSION> --gate current
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
 ```
 
 ## 不是全自动
@@ -57,6 +58,7 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 - 版本 stage、base、package type、update scope 是否可信。
 - Review Gate 中的 blocking item 是否 accept 或 waive。
 - action 文件中需要批量执行哪些 scan/diff/effective/release 动作。
+- force release 是否有明确 owner reason；`--force` 必须同时提供 `--force-reason`。
 
 这些人工确认会写入 workspace 或 catalog 状态文件，后续重新生成 HTML 时会继续使用。
 
@@ -75,6 +77,10 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 | `review` | Review Gate 引擎 |
 | `release` / `release-batch` / `package` / `effective` / `version` | release/package/effective-version 自动化 |
 | `console` | 兼容旧 review console 的 JSON/HTML 导出 |
+
+`release-batch --force --force-reason ...` 会保留强制发布入口，并写入
+`release_override.json` 审计文件。`rel --explain` 只解释 release check 阻塞原因，
+不执行 link/apply。
 
 已移出当前命令面：
 

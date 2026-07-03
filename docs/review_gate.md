@@ -33,6 +33,17 @@ $PROJ/scripts/lg.csh rv-waive  <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> 
 `lg.csh action` 是 action 文件执行入口；Review Gate 的人工决策只使用
 `rv-*` 命令。
 
+每个 `blocking_items` 和 `attention_items` 条目都会带解释字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `rule_id` | 触发该条目的稳定规则名 |
+| `rule_source` | 规则来源，默认 `review_gate.v1` |
+| `why` | 为什么这个证据需要处理 |
+| `next_action` | reviewer 下一步可执行动作 |
+
+这些字段只解释 gate 判断，不新增审批流、owner 分配或状态机。
+
 Release policy 默认规则：
 
 - `current` 要求 `review_gate.blocking_open == 0`。

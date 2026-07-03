@@ -281,9 +281,7 @@ class ScanRunner:
 
     def _hash_records(self, records: list[Any], context: ScanContext) -> None:
         for record in records:
-            decision = self.services.policy.hash_decision(record, context) if hasattr(self.services.policy, "hash_decision") else None
-            if decision is None:
-                decision = {"policy": "legacy", "should_hash": self.services.policy.should_hash(record, context), "hash_status": "CALCULATED", "reason": "legacy"}
+            decision = self.services.policy.hash_decision(record, context)
             _set(record, "hash_policy", decision.get("policy"))
             _set(record, "hash_reason", decision.get("reason"))
             if not decision.get("should_hash"):

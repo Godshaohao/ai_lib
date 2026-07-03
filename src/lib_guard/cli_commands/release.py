@@ -53,6 +53,8 @@ def run_release_link(args: Namespace) -> int:
             overwrite=getattr(args, "overwrite", False),
             release_root=getattr(args, "release_root", None),
             alias=getattr(args, "alias", None),
+            force=bool(getattr(args, "force", False)),
+            force_reason=getattr(args, "force_reason", None),
         )
         print_json(result)
         return 0 if result.get("status") not in {"FAILED"} else 2

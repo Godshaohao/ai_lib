@@ -35,12 +35,9 @@ def _utc_now() -> str:
 
 
 def _read_json(path: Path, default: Any) -> Any:
-    try:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {"read_error": str(exc), "path": str(path)}
-    return default
+    if not path.exists():
+        return default
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _write_json(path: Path, data: Any) -> None:

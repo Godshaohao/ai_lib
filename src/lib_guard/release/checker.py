@@ -15,12 +15,9 @@ LEVEL_ORDER = {"L0": 0, "L1": 1, "L2": 2}
 
 
 def _load_json(path: Path, default: Any) -> Any:
-    try:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    if not path.exists():
         return default
-    return default
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -146,12 +143,9 @@ class ReleaseChecker:
         }
         out.mkdir(parents=True, exist_ok=True)
         _write_json(out / "release_check.json", result)
-        try:
-            from lib_guard.review.release_result import release_result_from_check
+        from lib_guard.review.release_result import release_result_from_check
 
-            _write_json(out / "release_result.json", release_result_from_check(result))
-        except Exception:
-            pass
+        _write_json(out / "release_result.json", release_result_from_check(result))
         return result
 
     def _load_review_gate(

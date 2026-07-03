@@ -15,6 +15,8 @@ Catalog -> Version Review -> Release
   parser summary、count/corner summary、readiness，以及相对当前有效库的更新证据。
 - Release 使用 manifest 驱动的文件级 symlink，只有 scan/diff/review gate 证据满足
   条件后才进入 link/verify。
+- Force release 入口保留，但必须提供 `--force-reason`，并写入
+  `release_override.json` 审计绕过的 gate/check 证据。
 - Library Workspace 是高级账本，用来查看单库 timeline、effective 组合和历史报告。
 - Comparison Review 是手动 compare / debug 入口，不是普通用户查看更新详情的唯一入口。
 - File Diff 只用于推荐下钻的关键文件，不是全量完成度 scoreboard。
@@ -56,6 +58,7 @@ $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> --base <BASE_VERSION> --t
 $PROJ/scripts/lg.csh rv-check <LIBRARY> <VERSION> --gate current
 $PROJ/scripts/lg.csh rv-accept <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
 ```
 
 `refresh` 用于刷新 Version Review 的更新详情，默认选择 `current_effective` 或
@@ -70,6 +73,8 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 `cmp` 是手动 compare/debug 工具，适合显式指定 base、调试 adjacent/cumulative，
 或生成独立 Comparison Review。`fd` 是手动 file drill-down，只用于 reviewer 或 owner
 确认需要逐文件查看的重点文件。
+
+`rel --explain` 只解释 release check 为什么 blocked，不执行 link/apply。
 
 File Diff lane 的含义是审查方式，不是漏跑检查。`summary-only` 表示大型逻辑视图已经
 通过 summary/count/corner 等证据审查；`metadata-only` 表示二进制、layout 或 database

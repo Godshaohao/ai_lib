@@ -19,12 +19,9 @@ from .bundle import iter_release_files, load_release_manifest, manifest_run_dir,
 
 
 def _load_json(path: Path, default: Any) -> Any:
-    try:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    if not path.exists():
         return default
-    return default
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -230,6 +227,64 @@ def _release_existing_files(release_dir: Path) -> list[Path]:
     return sorted([item for item in release_dir.rglob("*") if item.is_file() or item.is_symlink()], key=lambda p: p.as_posix().lower())
 
 
+def _force_gate_summary(review_gate_path: str | Path | None, release_check_path: str | Path | None) -> Any:
+    def _safe_load_mapping(path: str | Path | None) -> dict[str, Any]:
+        if not path:
+            return {}
+        try:
+            loaded = _load_json(Path(path), {})
+        except Exception:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _safe_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    review_gate = _safe_load_mapping(review_gate_path)
+    release_check = _safe_load_mapping(release_check_path)
+    blocking_items = review_gate.get("blocking_items", []) if isinstance(review_gate.get("blocking_items", []), list) else []
+    blocking_open = review_gate.get("blocking_open") if "blocking_open" in review_gate else len(blocking_items)
+    block_reasons = release_check.get("block_reasons", [])
+    if not isinstance(block_reasons, list):
+        block_reasons = []
+    return {
+        "review_gate_status": review_gate.get("status") or "NOT_PROVIDED",
+        "release_check_status": release_check.get("release_check_status") or release_check.get("status") or "NOT_PROVIDED",
+        "blocking_open": _safe_int(blocking_open),
+        "block_reasons": block_reasons,
+    }
+
+
+def _force_selected_versions(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    selected = []
+    for item in manifest.get("libraries", []) or []:
+        selected.append(
+            {
+                "library_type": item.get("library_type"),
+                "library_name": item.get("library_name"),
+                "version_id": item.get("version_id"),
+                "version_key": item.get("version_key"),
+                "source_path": item.get("source_path"),
+            }
+        )
+    for item in manifest.get("files", []) or []:
+        selected.append(
+            {
+                "library_type": item.get("library_type"),
+                "library_name": item.get("library_name"),
+                "version_id": item.get("version_id"),
+                "version_key": item.get("version_key"),
+                "snapshot_id": item.get("snapshot_id") or manifest.get("snapshot_id"),
+                "source_path": item.get("source_path"),
+                "target_relpath": item.get("target_relpath") or item.get("relative_path"),
+            }
+        )
+    return selected
+
+
 def link_release_from_manifest(
     manifest_path: str | Path,
     *,
@@ -239,6 +294,13 @@ def link_release_from_manifest(
     release_root: str | Path | None = None,
     alias: str | None = None,
     out_dir: str | Path | None = None,
+    force: bool = False,
+    force_reason: str | None = None,
+    force_by: str | None = None,
+    review_gate_path: str | Path | None = None,
+    release_check_path: str | Path | None = None,
+    verify_skipped: bool = False,
+    verify_skip_reason: str = "",
 ) -> dict[str, Any]:
     """Link a human-approved release manifest into the release area.
 
@@ -246,9 +308,15 @@ def link_release_from_manifest(
     filesystem actions and records evidence.
     """
 
+    if force and not force_reason:
+        raise ValueError("force release requires --force-reason")
+    if force:
+        force_by = force_by or os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
+
     manifest = load_release_manifest(manifest_path, release_root=release_root, alias=alias)
     run_dir = manifest_run_dir(manifest_path, out_dir)
     dry_run = not bool(apply)
+    override_path = run_dir / "release_override.json" if force else None
     created: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     removed: list[dict[str, Any]] = []
@@ -303,7 +371,34 @@ def link_release_from_manifest(
             removed.append({"relative_path": existing.relative_to(release_dir).as_posix(), "path": str(existing), "status": "REMOVED"})
             _remove_path(existing)
 
-    status = "DRY_RUN" if dry_run else ("FAILED" if failed else "APPLIED")
+    if force and dry_run:
+        status = "FORCE_DRY_RUN"
+    elif force and failed:
+        status = "FORCE_FAILED"
+    elif force:
+        status = "FORCED_APPLIED"
+    else:
+        status = "DRY_RUN" if dry_run else ("FAILED" if failed else "APPLIED")
+    if force and override_path:
+        _write_json(
+            override_path,
+            {
+                "schema_version": "release_override.v1",
+                "force": True,
+                "force_reason": force_reason or "",
+                "force_by": force_by or "",
+                "force_at": utc_now(),
+                "apply": bool(apply),
+                "dry_run": dry_run,
+                "release_id": manifest.get("release_id"),
+                "alias": manifest.get("alias"),
+                "manifest_path": str(Path(manifest_path)),
+                "review_gate_path": str(review_gate_path or ""),
+                "release_check_path": str(release_check_path or ""),
+                "bypassed_gate_summary": _force_gate_summary(review_gate_path, release_check_path),
+                "selected_versions": _force_selected_versions(manifest),
+            },
+        )
     result = {
         "schema_version": "1.0",
         "release_id": manifest.get("release_id"),
@@ -316,6 +411,12 @@ def link_release_from_manifest(
         "apply": bool(apply),
         "mode": mode,
         "overwrite": overwrite,
+        "force": bool(force),
+        "force_reason": force_reason or "",
+        "force_by": force_by if force else "",
+        "override_path": str(override_path) if override_path else "",
+        "verify_skipped": bool(verify_skipped),
+        "verify_skip_reason": verify_skip_reason,
         "created_at": utc_now(),
         "planned_files": planned,
         "created_links": created,
@@ -329,10 +430,7 @@ def link_release_from_manifest(
         },
     }
     _write_json(run_dir / "release_link_result.json", result)
-    try:
-        from lib_guard.review.release_result import release_result_from_link
+    from lib_guard.review.release_result import release_result_from_link
 
-        _write_json(run_dir / "release_result.json", release_result_from_link(result))
-    except Exception:
-        pass
+    _write_json(run_dir / "release_result.json", release_result_from_link(result))
     return result

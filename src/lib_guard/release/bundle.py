@@ -50,10 +50,7 @@ def read_json(path: str | Path, default: Any = None) -> Any:
     p = Path(path)
     if not p.exists():
         return default
-    try:
-        return json.loads(p.read_text(encoding="utf-8-sig"))
-    except Exception:
-        return default
+    return json.loads(p.read_text(encoding="utf-8-sig"))
 
 
 def write_json(path: str | Path, data: Any) -> None:

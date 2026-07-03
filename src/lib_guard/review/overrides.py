@@ -20,10 +20,7 @@ def read_review_overrides(path: str | Path | None) -> dict[str, Any]:
     p = Path(path)
     if not p.exists():
         return {"schema_version": "review_overrides.v1", "items": {}}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {"schema_version": "review_overrides.v1", "items": {}}
+    data = json.loads(p.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         return {"schema_version": "review_overrides.v1", "items": {}}
     data.setdefault("schema_version", "review_overrides.v1")

@@ -487,6 +487,7 @@ def add_catalog_parser(subparsers: Any) -> None:
     p.add_argument("--diff")
     p.add_argument("--diff-mode", choices=["adjacent", "cumulative"])
     p.add_argument("--review-gate")
+    p.add_argument("--explain", action="store_true", help="Print release-check explanation JSON without applying release.")
     p.set_defaults(func=run_catalog_release_check)
 
     p = sp.add_parser("release-link", help="Run release link dry-run/apply from a catalog version")
@@ -501,6 +502,7 @@ def add_catalog_parser(subparsers: Any) -> None:
     p.add_argument("--link-mode", default="symlink", choices=["symlink", "copy"])
     p.add_argument("--force", action="store_true")
     p.add_argument("--force-reason")
+    p.add_argument("--force-by", help="User name for force release audit. Defaults to USER/USERNAME.")
     p.add_argument("--diff")
     p.add_argument("--diff-mode", choices=["adjacent", "cumulative"])
     p.set_defaults(func=run_catalog_release_link)
@@ -617,6 +619,7 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--link-mode", default="symlink", choices=["symlink", "copy"])
     p.add_argument("--force", action="store_true")
     p.add_argument("--force-reason")
+    p.add_argument("--force-by", help="User name for force release audit. Defaults to USER/USERNAME.")
     p.add_argument("--diff")
     p.add_argument("--diff-mode", choices=["adjacent", "cumulative"])
     p.add_argument("--only-checked", action="store_true", help="Only select versions with PASS/PASS_WITH_WARNING release-check status.")

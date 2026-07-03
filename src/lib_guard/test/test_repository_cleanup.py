@@ -253,6 +253,34 @@ class RepositoryCleanupTest(unittest.TestCase):
                 hits = _catalog_report_private_helper_hits(ast.parse(text), rel)
                 self.assertFalse(hits, "common helpers were reimported from catalog_report:\n" + "\n".join(hits))
 
+    def test_version_detail_does_not_keep_review_rule_helpers_after_model_split(self) -> None:
+        path = ROOT / "src" / "lib_guard" / "render" / "version_detail_report.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        forbidden = {"_review_lane", "_select_base", "_comparison_semantics"}
+        hits = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name in forbidden]
+        self.assertFalse(hits, "version_detail_report still defines review model rules:\n" + "\n".join(hits))
+
+    def test_obsolete_unreferenced_modules_are_removed(self) -> None:
+        obsolete = [
+            ROOT / "src" / "lib_guard" / "diff" / "object_diff.py",
+            ROOT / "src" / "lib_guard" / "review" / "diff_index.py",
+            ROOT / "src" / "lib_guard" / "release" / "report.py",
+            ROOT / "src" / "lib_guard" / "review" / "status.py",
+        ]
+        hits = [path.relative_to(ROOT).as_posix() for path in obsolete if path.exists()]
+        self.assertFalse(hits, "obsolete unreferenced modules still exist:\n" + "\n".join(hits))
+
+    def test_legacy_diff_timeline_entry_points_are_removed(self) -> None:
+        review_init = (ROOT / "src" / "lib_guard" / "review" / "__init__.py").read_text(encoding="utf-8")
+        html_report = (ROOT / "src" / "lib_guard" / "render" / "html_report.py").read_text(encoding="utf-8")
+        forbidden = [
+            "build_diff_index_from_catalog",
+            "write_diff_index_from_catalog",
+            "render_diff_timeline_html",
+        ]
+        hits = [token for token in forbidden if token in review_init or token in html_report]
+        self.assertFalse(hits, "legacy diff timeline entry points still exist:\n" + "\n".join(hits))
+
     def test_catalog_report_private_helper_guard_catches_alias_and_direct_imports(self) -> None:
         source = """
 from lib_guard.render import catalog_report as catalog
