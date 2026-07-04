@@ -15,7 +15,8 @@ Status: current
 | 命令 | 作用 |
 | --- | --- |
 | `init` | 创建 workspace 级 `lib_guard.yml` |
-| `library discover` / `library apply` | 发现候选库并应用人工确认后的 library map |
+| `library add` | 已知库根时直接加入人工确认 registry |
+| `library discover` / `library accept` / `library apply` | 发现候选库、合并人工确认、生成正式 library map |
 | `cat` | 刷新 catalog JSON 和 catalog HTML |
 | `override` | 人工确认或修正版本 stage/base/package 关系 |
 | `scan` | 为一个版本或一批版本生成 Version Review evidence |
@@ -31,9 +32,14 @@ Status: current
 
 ```csh
 $PROJ/scripts/lg.csh init $WORK --raw-root $RAW --library-type ip
+$PROJ/scripts/lg.csh library add <LIBRARY> --root <LIBRARY_ROOT>
 $PROJ/scripts/lg.csh library discover
-# 人工审查并编辑 $WORK/config/library.list
+# 人工审查候选快照；只把确认 OK 的候选合并进 registry
+gvim $WORK/config/library_candidates/latest.tsv
+$PROJ/scripts/lg.csh library accept
 $PROJ/scripts/lg.csh library apply
+$PROJ/scripts/lg.csh library list
+$PROJ/scripts/lg.csh library list <LIBRARY> --versions
 $PROJ/scripts/lg.csh cat --with-evidence
 
 # 如 catalog 自动推断的 stage/base/package 关系不可靠，先人工确认
@@ -49,12 +55,26 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
 ```
 
+`scan` 只有一种用户态动作：扫描当前版本并生成 evidence。不要再选择
+`candidate`、`signature`、`release`、`full` 等多个 scan mode。需要调深度时使用
+策略参数：
+
+```csh
+$PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --parse-file-types lef,cdl
+$PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --parse-exclude-file-types verilog,liberty,spef
+$PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --hash-policy full
+```
+
+默认策略适合日常 Version Review：小型关键文本 view 会进入 parser evidence，
+大型逻辑、Liberty、SPEF、DB、GDS/OAS 等只做 summary 或 metadata evidence。
+
 ## 不是全自动
 
 当前流程不是全自动发布。自动化负责发现、扫描、对比、生成页面和建议；
 人工负责确认以下内容：
 
-- `library.list` 中哪些候选库应该进入正式 library map。
+- `$WORK/config/library_registry.tsv` 中哪些库根应该进入正式 library map。
+- `$WORK/config/library_candidates/latest.tsv` 中哪些候选可以 accept。
 - 版本 stage、base、package type、update scope 是否可信。
 - Review Gate 中的 blocking item 是否 accept 或 waive。
 - action 文件中需要批量执行哪些 scan/diff/effective/release 动作。
@@ -76,23 +96,10 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
 | `file-diff` | 单文件两两 diff 引擎 |
 | `review` | Review Gate 引擎 |
 | `release` / `release-batch` / `package` / `effective` / `version` | release/package/effective-version 自动化 |
-| `console` | 兼容旧 review console 的 JSON/HTML 导出 |
 
 `release-batch --force --force-reason ...` 会保留强制发布入口，并写入
 `release_override.json` 审计文件。`rel --explain` 只解释 release check 阻塞原因，
 不执行 link/apply。
-
-已移出当前命令面：
-
-| 旧入口 | 替代方式 |
-| --- | --- |
-| `lg.csh filediff` | `lg.csh fd` |
-| `lg.csh refresh-diff` | `lg.csh refresh` |
-| `lg.csh lib` | `lg.csh library` |
-| `lg.csh act` / `lg.csh review` | `lg.csh action` |
-| `lg.csh compare` | `lg.csh cmp` |
-| `lg.csh rf` | `lg.csh refresh` |
-| `python -m lib_guard.cli update file/type` | 修复 parser/policy 后运行 `lg.csh scan <LIBRARY> <VERSION> --rescan` |
 
 ## 配置归属
 
@@ -107,7 +114,8 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
 workspace 本地文件：
 
 - `$WORK/lib_guard.yml`
-- `$WORK/config/library.list`
+- `$WORK/config/library_candidates/latest.tsv`
+- `$WORK/config/library_registry.tsv`
 - `$WORK/config/library_catalog.yml`
 - `$WORK/config/library_versions.tsv`
 - `$WORK/actions/<library>.action`

@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class LibraryRegistryTest(unittest.TestCase):
-    def test_discover_prunes_at_library_roots_and_ignores_digit_only_names(self) -> None:
+    def test_discover_uses_sibling_cohorts_and_suppresses_parent_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             raw = Path(td) / "raw"
             asap7 = raw / "vendor_A" / "openroad_asap7"
@@ -17,26 +17,70 @@ class LibraryRegistryTest(unittest.TestCase):
             sky130ram = raw / "vendor_C" / "openroad_sky130ram"
             for version in ["20260624_asap7", "20260627_asap7"]:
                 (asap7 / version / "asap7_source_package").mkdir(parents=True)
+                (asap7 / version / "asap7_source_package" / "tech.lef").write_text("MACRO A\n", encoding="utf-8")
             for version in ["20260612_gf180", "20260623_gf180_update"]:
                 (gf180 / version / "gf180_source_package" / "gds" / "gf180mcu_6LM_1TM_9K").mkdir(parents=True)
+                (gf180 / version / "gf180_source_package" / "gds" / "gf180mcu_6LM_1TM_9K" / "top.gds").write_text("gds\n", encoding="utf-8")
             for version in ["20260619_sky130ram", "20260626_sky130ram_update"]:
                 (sky130ram / version / "sky130ram_source_package" / "sky130_sram_1rw1r_128x256_8").mkdir(parents=True)
+                (sky130ram / version / "sky130ram_source_package" / "sky130_sram_1rw1r_128x256_8" / "macro.lib").write_text("library(x){}\n", encoding="utf-8")
 
             from lib_guard.library_registry import discover_library_candidates
 
             candidates = discover_library_candidates(raw, default_status="OK")
-            ids = [item.library_id for item in candidates]
+            active_ids = [item.library_id for item in candidates if item.status == "REVIEW"]
+            ignored = {item.library_id: item.reason for item in candidates if item.status == "IGNORE"}
 
             self.assertEqual(
-                ids,
+                active_ids,
                 [
                     "vendor_A_openroad_asap7",
                     "vendor_A_openroad_gf180",
                     "vendor_C_openroad_sky130ram",
                 ],
             )
-            self.assertNotIn("vendor_A", ids)
-            self.assertFalse(any("source_package" in item for item in ids))
+            self.assertEqual({item.status for item in candidates if item.library_id in active_ids}, {"REVIEW"})
+            self.assertIn("vendor_A", ignored)
+            self.assertIn("suppressed_by_child", ignored["vendor_A"])
+            self.assertFalse(any("source_package" in item for item in active_ids))
+
+    def test_discover_accepts_arbitrary_instance_names_when_cohort_has_view_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "vendor_X" / "custom_ip"
+            for instance in ["R1P0", "revA", "drop_7", "golden"]:
+                view_dir = root / instance / "payload" / "lef"
+                view_dir.mkdir(parents=True)
+                (view_dir / f"{instance}.lef").write_text("MACRO X\n", encoding="utf-8")
+            (root / "latest_clean" / "docs").mkdir(parents=True)
+
+            from lib_guard.library_registry import discover_library_candidates
+
+            candidates = discover_library_candidates(raw)
+            active = [item for item in candidates if item.status == "REVIEW"]
+
+            self.assertEqual([item.library_id for item in active], ["vendor_X_custom_ip"])
+            self.assertEqual(active[0].version_count, 4)
+            self.assertIn("cohort_core_views", active[0].reason)
+            self.assertIn("R1P0", active[0].example_versions)
+
+    def test_discover_does_not_promote_view_or_source_package_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "vendor_Y" / "macro"
+            for instance in ["BETA_3", "2024Q4"]:
+                (root / instance / "source_package" / "lef").mkdir(parents=True)
+                (root / instance / "source_package" / "lef" / "macro.lef").write_text("MACRO Y\n", encoding="utf-8")
+                (root / instance / "source_package" / "lib").mkdir(parents=True)
+                (root / instance / "source_package" / "lib" / "macro.lib").write_text("library(y){}\n", encoding="utf-8")
+
+            from lib_guard.library_registry import discover_library_candidates
+
+            candidates = discover_library_candidates(raw)
+            active_ids = [item.library_id for item in candidates if item.status == "REVIEW"]
+
+            self.assertEqual(active_ids, ["vendor_Y_macro"])
+            self.assertFalse(any(part in item for item in active_ids for part in ["source_package", "_lef", "_lib"]))
 
     def test_apply_writes_dotted_formal_ids_and_underscore_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -78,6 +122,152 @@ class LibraryRegistryTest(unittest.TestCase):
             self.assertEqual(ids, ["vendor_A.openroad_platform.openroad_asap7", "vendor_C.openroad_platform.openroad_sky130ram"])
             self.assertIn("vendor_A_openroad_asap7", aliases["vendor_A.openroad_platform.openroad_asap7"])
             self.assertIn("openroad_asap7", aliases["vendor_A.openroad_platform.openroad_asap7"])
+
+    def test_apply_rejects_overlapping_ok_library_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            parent = raw / "vendor_A"
+            child = parent / "openroad_asap7"
+            for version in ["20260624_asap7", "20260627_asap7"]:
+                (child / version).mkdir(parents=True)
+            out = Path(td) / "library_catalog.yml"
+            rows = [
+                {
+                    "status": "OK",
+                    "library_id": "vendor_A",
+                    "root_abs": str(parent),
+                    "display_name": "vendor_A",
+                    "vendor": "vendor_A",
+                    "middle_path": "",
+                },
+                {
+                    "status": "OK",
+                    "library_id": "vendor_A.openroad_platform.openroad_asap7",
+                    "root_abs": str(child),
+                    "display_name": "openroad_asap7",
+                    "vendor": "vendor_A",
+                    "middle_path": "openroad_platform",
+                },
+            ]
+
+            from lib_guard.library_registry import write_library_catalog
+
+            result = write_library_catalog(raw, rows, out, library_type="ip")
+
+            self.assertEqual(result["status"], "FAILED")
+            self.assertTrue(any("overlap" in error for error in result["errors"]))
+            self.assertFalse(out.exists())
+
+    def test_apply_rejects_source_package_as_formal_library_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            package_root = raw / "vendor_A" / "openroad_asap7" / "20260627_asap7" / "asap7_source_package"
+            package_root.mkdir(parents=True)
+            out = Path(td) / "library_catalog.yml"
+            rows = [
+                {
+                    "status": "OK",
+                    "library_id": "vendor_A.openroad_platform.asap7_source_package",
+                    "root_abs": str(package_root),
+                    "display_name": "asap7_source_package",
+                    "vendor": "vendor_A",
+                    "middle_path": "openroad_platform",
+                }
+            ]
+
+            from lib_guard.library_registry import write_library_catalog
+
+            result = write_library_catalog(raw, rows, out, library_type="ip")
+
+            self.assertEqual(result["status"], "FAILED")
+            self.assertTrue(any("not a library root" in error for error in result["errors"]))
+            self.assertFalse(out.exists())
+
+    def test_library_add_writes_stable_registry_without_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "vendor_A" / "openroad_asap7"
+            root.mkdir(parents=True)
+            registry = Path(td) / "config" / "library_registry.tsv"
+            catalog = Path(td) / "config" / "library_catalog.yml"
+
+            from lib_guard.library_registry import add_library_to_registry, apply_list_to_catalog
+            from lib_guard.discovery import load_library_map
+
+            result = add_library_to_registry(
+                raw,
+                registry_path=registry,
+                library_id="vendor_A.openroad_platform.openroad_asap7",
+                root_abs=root,
+                display_name="openroad_asap7",
+                vendor="vendor_A",
+                middle_path="",
+            )
+            self.assertEqual(result["status"], "PASS")
+            text = registry.read_text(encoding="utf-8")
+            self.assertIn("vendor_A.openroad_platform.openroad_asap7", text)
+
+            apply_result = apply_list_to_catalog(raw, list_path=registry, out_path=catalog, library_type="ip")
+            refs = load_library_map(raw, {"library_map": str(catalog)}, catalog)
+            self.assertEqual(apply_result["selected"], 1)
+            self.assertEqual([ref.library_id for ref in refs], ["vendor_A.openroad_platform.openroad_asap7"])
+
+    def test_library_accept_merges_only_approved_candidates_into_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            good = raw / "vendor_A" / "openroad_asap7"
+            review = raw / "vendor_A" / "openroad_gf180"
+            ignored = raw / "vendor_A"
+            for path in [good, review, ignored]:
+                path.mkdir(parents=True, exist_ok=True)
+            candidates = Path(td) / "candidates.tsv"
+            registry = Path(td) / "library_registry.tsv"
+            candidates.write_text(
+                "\n".join(
+                    [
+                        "status\tlibrary_id\troot_abs\tdisplay_name\tvendor\tmiddle_path",
+                        f"OK\tvendor_A_openroad_asap7\t{good}\topenroad_asap7\tvendor_A\t",
+                        f"REVIEW\tvendor_A_openroad_gf180\t{review}\topenroad_gf180\tvendor_A\t",
+                        f"IGNORE\tvendor_A\t{ignored}\tvendor_A\tvendor_A\t",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            from lib_guard.library_registry import accept_candidates_to_registry, read_library_list
+
+            result = accept_candidates_to_registry(raw, candidates_path=candidates, registry_path=registry)
+            rows = read_library_list(registry)
+
+            self.assertEqual(result["accepted"], 1)
+            self.assertEqual([row["library_id"] for row in rows], ["vendor_A_openroad_asap7"])
+            self.assertEqual(rows[0]["status"], "OK")
+
+    def test_discover_writes_candidate_snapshot_without_touching_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "vendor_X" / "custom_ip"
+            for version in ["R1", "R2"]:
+                view = root / version / "lef"
+                view.mkdir(parents=True)
+                (view / "macro.lef").write_text("MACRO X\n", encoding="utf-8")
+            registry = Path(td) / "config" / "library_registry.tsv"
+            registry.parent.mkdir()
+            registry.write_text(
+                "status\tlibrary_id\troot_abs\tdisplay_name\tvendor\tmiddle_path\n"
+                f"OK\tvendor_old.ip\t{raw}\told\tvendor_old\t\n",
+                encoding="utf-8",
+            )
+            candidates = Path(td) / "config" / "library_candidates" / "latest.tsv"
+
+            from lib_guard.library_registry import discover_to_files
+
+            discover_to_files(raw, list_out=candidates)
+
+            self.assertTrue(candidates.exists())
+            self.assertIn("vendor_X_custom_ip", candidates.read_text(encoding="utf-8"))
+            self.assertIn("vendor_old.ip", registry.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ DEFAULT_REQUIRED_TYPES = {
 @dataclass
 class ReleasePolicy:
     allowed_scan_status: list[str] = field(default_factory=lambda: ["PASS", "PASS_WITH_WARNING"])
-    allowed_scan_modes: list[str] = field(default_factory=lambda: ["candidate", "release", "signature", "full"])
+    allowed_scan_modes: list[str] = field(default_factory=lambda: ["scan", "candidate", "release", "signature", "full"])
     required_file_types: dict[str, list[str]] = field(default_factory=lambda: dict(DEFAULT_REQUIRED_TYPES))
     require_doc_types: list[str] = field(default_factory=lambda: ["readme", "release_note"])
     block_on_error_issue: bool = True

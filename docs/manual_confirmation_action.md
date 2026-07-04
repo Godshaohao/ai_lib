@@ -9,7 +9,7 @@ release evidence 和 HTML 页面，但以下判断必须由人确认。
 
 | 阶段 | 人工确认内容 | 命令/文件 |
 | --- | --- | --- |
-| Library Map | 哪些候选目录是真正的库，vendor/category/library 如何归属 | `lg.csh library discover` 后编辑 `$WORK/config/library.list` |
+| Library Map | 哪些候选目录是真正的库，vendor/category/library 如何归属 | `lg.csh library add` 或 `lg.csh library discover` 后确认 `$WORK/config/library_candidates/latest.tsv`，再合并到 `$WORK/config/library_registry.tsv` |
 | 版本关系 | stage、base、package type、update scope、是否 current effective | `lg.csh override` |
 | Review Gate | blocking item 是否 accept/waive | `lg.csh rv-accept` / `lg.csh rv-waive` |
 | Action 编排 | 哪些版本需要 scan、哪些 effective 组合需要构建、哪些 diff/release 要跑 | `$WORK/actions/<library>.action` |
@@ -17,12 +17,22 @@ release evidence 和 HTML 页面，但以下判断必须由人确认。
 ## Library Map 确认
 
 ```csh
-$PROJ/scripts/lg.csh library discover
-gvim $WORK/config/library.list
+$PROJ/scripts/lg.csh library add vendor_A.openroad_platform.openroad_asap7 --root /path/to/vendor_A/openroad_asap7
 $PROJ/scripts/lg.csh library apply
 ```
 
-`library discover` 只负责发现候选项；`library apply` 只应用人确认后的列表。
+不知道库根时：
+
+```csh
+$PROJ/scripts/lg.csh library discover
+gvim $WORK/config/library_candidates/latest.tsv
+$PROJ/scripts/lg.csh library accept
+$PROJ/scripts/lg.csh library apply
+```
+
+`library discover` 只负责发现候选项，不覆盖人工确认 registry；`library accept`
+只合并候选 TSV 中标为 OK/ENABLE 的行；`library apply` 只从
+`$WORK/config/library_registry.tsv` 生成正式 `library_catalog.yml`。
 
 ## 版本关系 Override
 

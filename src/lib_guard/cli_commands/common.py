@@ -44,4 +44,6 @@ def refresh_catalog_html(args: Namespace) -> dict[str, Any] | None:
     from lib_guard.catalog.index import render_catalog_html
 
     out = getattr(args, "catalog_html_out", None) or default_catalog_html_out(args.catalog, getattr(args, "workdir", None))
-    return render_catalog_html(args.catalog, out)
+    library_filter = getattr(args, "library", None)
+    version_filter = getattr(args, "version", None) or getattr(args, "new", None)
+    return render_catalog_html(args.catalog, out, library_filter=library_filter, version_filter=version_filter)

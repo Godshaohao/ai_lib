@@ -20,7 +20,9 @@ Status: current
 - Read: `docs/review_gate.md`，确认 gate 检查和 accept/waive 命令。
 - Input: `tests/fixtures/raw`，本次演练 raw root。
 - Create: `work/manual_flow_rehearsal/lib_guard.yml`，本次演练 workspace 配置。
-- Create/Edit: `work/manual_flow_rehearsal/config/library.list`，人工确认后的 library map。
+- Create/Edit: `work/manual_flow_rehearsal/config/library_candidates/latest.tsv`，本次 discover 候选快照。
+- Create/Edit: `work/manual_flow_rehearsal/config/library_registry.tsv`，人工确认后的稳定 library registry。
+- Create: `work/manual_flow_rehearsal/config/library_catalog.yml`，由 registry 生成的正式 library map。
 - Create: `work/manual_flow_rehearsal/catalog/catalog.json`，catalog 数据源。
 - Create: `work/manual_flow_rehearsal/catalog/html/index.html`，catalog 首页。
 - Create: `work/manual_flow_rehearsal/catalog/html/libraries/.../versions/.../index.html`，版本详情页。
@@ -110,7 +112,8 @@ library_type: ip
 ### Task 2: 演练 Library Map 人工确认
 
 **Files:**
-- Create/Edit: `work/manual_flow_rehearsal/config/library.list`
+- Create/Edit: `work/manual_flow_rehearsal/config/library_candidates/latest.tsv`
+- Create/Edit: `work/manual_flow_rehearsal/config/library_registry.tsv`
 - Create: `work/manual_flow_rehearsal/config/library_catalog.yml`
 
 - [ ] **Step 1: 发现候选库**
@@ -124,15 +127,15 @@ $PROJ/scripts/lg.csh library discover
 Expected:
 
 ```text
-$WORK/config/library.list 已生成，包含 vendor_A/vendor_B/vendor_C 下的候选库。
+$WORK/config/library_candidates/latest.tsv 已生成，包含 vendor_A/vendor_B/vendor_C 下的候选库。
 ```
 
-- [ ] **Step 2: 人工审查并编辑 library.list**
+- [ ] **Step 2: 人工审查候选快照**
 
 Run:
 
 ```csh
-gvim $WORK/config/library.list
+gvim $WORK/config/library_candidates/latest.tsv
 ```
 
 Manual edit rules:
@@ -148,10 +151,24 @@ Manual edit rules:
 Expected:
 
 ```text
-library.list 中只剩需要演练的真实库为 OK，其余聚合/嵌套误识别项为 IGNORE。
+候选快照中需要演练的真实库标为 OK，其余聚合/嵌套误识别项为 IGNORE 或保持 REVIEW。
 ```
 
-- [ ] **Step 3: 应用人工确认后的 library map**
+- [ ] **Step 3: 合并人工确认到稳定 registry**
+
+Run:
+
+```csh
+$PROJ/scripts/lg.csh library accept
+```
+
+Expected:
+
+```text
+$WORK/config/library_registry.tsv 已更新，只包含人工确认 OK 的库根。
+```
+
+- [ ] **Step 4: 应用人工确认后的 library map**
 
 Run:
 
@@ -165,7 +182,7 @@ Expected:
 $WORK/config/library_catalog.yml 已生成。
 ```
 
-- [ ] **Step 4: 刷新 catalog 并生成首页**
+- [ ] **Step 5: 刷新 catalog 并生成首页**
 
 Run:
 
@@ -191,7 +208,7 @@ python3 -c "import json; d=json.load(open('catalog/catalog.json')); [print(x['li
 Expected:
 
 ```text
-如果没有编辑 library.list 过滤库，会看到 9 个 OpenROAD fixture 库：
+如果 registry 接受了全部真实 OpenROAD fixture 库，会看到 9 个库：
 vendor_A.openroad_platform.openroad_asap7
 vendor_A.openroad_platform.openroad_gf180
 vendor_A.openroad_platform.openroad_nangate45
@@ -202,7 +219,7 @@ vendor_C.openroad_platform.openroad_sky130hs
 vendor_C.openroad_platform.openroad_sky130io
 vendor_C.openroad_platform.openroad_sky130ram
 
-如果你在 library.list 里只保留 ASAP7 和 SKY130RAM 为 OK，则只应看到：
+如果你在候选快照里只把 ASAP7 和 SKY130RAM 标为 OK 并执行 `library accept`，则只应看到：
 vendor_A.openroad_platform.openroad_asap7
 vendor_C.openroad_platform.openroad_sky130ram
 ```

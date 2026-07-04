@@ -40,7 +40,7 @@ def _find_version(rows: list[Mapping[str, Any]], version_id: str) -> dict[str, A
 
 def _file_record(package: Mapping[str, Any], source_root: Path, file_path: Path, *, source_kind: str) -> dict[str, Any] | None:
     from lib_guard.release.bundle import release_relative_path
-    from lib_guard.scan.file_classifier import FileClassifier
+    from lib_guard.scan.inventory import FileClassifier
 
     rel = file_path.relative_to(source_root).as_posix()
     classified = FileClassifier().classify({"path": rel, "name": file_path.name})

@@ -217,21 +217,39 @@ def _load_json_if_exists(path: Path) -> dict[str, Any]:
 
 def _library_match_keys(lib: Mapping[str, Any]) -> set[str]:
     values = {
+        str(lib.get("formal_library_id") or ""),
+        str(lib.get("typed_library_id") or ""),
         str(lib.get("library_id") or ""),
         str(lib.get("library_name") or ""),
         str(lib.get("display_name") or ""),
+        str(lib.get("report_slug") or ""),
     }
     values.update(str(v) for v in lib.get("aliases", []) or [] if v)
     values.update(v.rsplit("/", 1)[-1] for v in list(values) if v)
     return {v for v in values if v}
 
 
-def _effective_search_roots(out: Path) -> list[Path]:
-    roots = []
-    for root in [out / "libraries", out / "effective", out.parent / "effective", out.parent.parent / "effective"]:
-        if root not in roots and root.exists():
-            roots.append(root)
-    return roots
+def _effective_manifest_candidates(out: Path, lib: Mapping[str, Any]) -> list[Path]:
+    safe_libs = {_safe(key) for key in _library_match_keys(lib)}
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for safe_lib in sorted(safe_libs):
+        bases = [
+            out / "libraries" / safe_lib / "effective",
+            out / "effective" / safe_lib,
+            out / safe_lib / "effective",
+            out.parent / "effective" / safe_lib,
+            out.parent.parent / "effective" / safe_lib,
+        ]
+        for base in bases:
+            if not base.exists():
+                continue
+            for path in [base / "effective_manifest.json", *base.glob("*/effective_manifest.json")]:
+                if path in seen:
+                    continue
+                seen.add(path)
+                candidates.append(path)
+    return candidates
 
 
 def _discover_effective_reports(out: Path, libraries: list[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -242,8 +260,8 @@ def _discover_effective_reports(out: Path, libraries: list[Mapping[str, Any]]) -
         for key in _library_match_keys(lib):
             key_lookup[key] = canonical
     seen: set[Path] = set()
-    for root in _effective_search_roots(out):
-        for manifest_path in root.rglob("effective_manifest.json"):
+    for lib in libraries:
+        for manifest_path in _effective_manifest_candidates(out, lib):
             if manifest_path in seen:
                 continue
             seen.add(manifest_path)
@@ -751,7 +769,8 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
     latest_effective_item = _latest_effective_item(effective_items)
     changed = sum(1 for v in versions if "changed" in _version_tags(v))
     version_rows = "".join(_version_row(lib, v, latest) for v in reversed(versions))
-    library_label = lib.get("display_name") or lib.get("library_name") or lib.get("library_id")
+    user_library_id = lib.get("formal_library_id") or lib.get("library_name") or lib.get("library_id")
+    library_label = lib.get("display_name") or user_library_id
     empty_versions = "<div class='catalog-empty'>暂无 version</div>"
     version_list_html = version_rows or empty_versions
     actions = ui.action_strip([
@@ -765,8 +784,8 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
         f"<section class='library-card' data-overall='{ui.esc(status)}' data-vendor='{ui.esc(vendor)}' data-stages='{ui.esc(','.join(stages))}' data-tags='{ui.esc(','.join(sorted(tags)))}'>"
         "<div class='library-main'>"
         f"<div class='library-name-row'><div class='library-title long-token' title='{ui.esc(library_label)}'>{ui.esc(library_label)}</div></div>"
-        f"<div class='library-path-row'><span class='muted'>Library</span><code title='{ui.esc(lib.get('library_id'))}'>{ui.esc(lib.get('library_id') or '-')}</code></div>"
-        f"<div class='library-path-row'><span class='muted'>Path</span><code title='{ui.esc(middle)}'>{ui.esc(middle)}</code></div>"
+        f"<div class='library-path-row'><span class='muted'>库名</span><code title='{ui.esc(user_library_id)}'>{ui.esc(user_library_id or '-')}</code></div>"
+        f"<div class='library-path-row'><span class='muted'>路径</span><code title='{ui.esc(middle)}'>{ui.esc(middle)}</code></div>"
         f"<div><span class='muted'>Vendor</span><br><b>{ui.esc(vendor)}</b></div>"
         f"<div><span class='muted'>完整基线</span><br><b title='{ui.esc(latest_full)}'>{ui.esc(latest_full)}</b></div>"
         f"<div><span class='muted'>当前有效</span><br><b title='{ui.esc(effective_label)}'>{ui.esc(effective_label)}</b></div>"
@@ -799,7 +818,7 @@ def _summary_metrics(state: Mapping[str, Any], tasks: Mapping[str, Any]) -> list
         ("库", len(libs), "可查询的 library", "PASS"),
         ("版本", len(versions), "可查询的版本", "PASS"),
         ("有更新", changed, "进入库工作台查看更新文件", "WARNING" if changed else "PASS"),
-        ("重点文件", recommended, "版本更新详情下钻建议", "WARNING" if recommended else "PASS"),
+        ("重点文件", recommended, "版本详情证据确认项", "WARNING" if recommended else "PASS"),
         ("待补证据", evidence_pending, "库管理者补 scan / diff", "WARNING" if evidence_pending else "PASS"),
         ("管理任务", actionable_tasks, "见 manager_tasks.json", "INFO" if actionable_tasks else "PASS"),
     ]
@@ -836,57 +855,9 @@ def _version_diff_dir(version: Mapping[str, Any]) -> Path | None:
     return path if path.exists() else None
 
 
-def _version_compare_target(version: Mapping[str, Any]) -> str:
-    diff = version.get("diff") or {}
-    values = [
-        version.get("previous_effective_version"),
-        version.get("parent_version"),
-        diff.get("adjacent_old_version") if isinstance(diff, Mapping) else None,
-        version.get("base_full_version"),
-        version.get("base_version"),
-    ]
-    return next((str(value) for value in values if value), "previous_effective")
-
-
-def _version_compare_strategy(version: Mapping[str, Any]) -> tuple[str, str]:
-    pkg = _package_type(version)
-    node_type = _node_package_type(version)
-    if pkg in {"PARTIAL_UPDATE", "PARTIAL", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"} or node_type in {"partial", "hotfix", "doc"}:
-        return "incremental compare", "Current delivery is not a complete replacement; missing files are not treated as deletes."
-    return "full compare", "Current delivery is treated as a complete version compared with the previous effective baseline."
-
-
-def _version_diff_summary(diff_dir: Path | None) -> Mapping[str, Any]:
-    return common.version_diff_summary(diff_dir)
-
-
-def _version_file_diff(diff_dir: Path | None) -> Mapping[str, Any]:
-    return common.version_file_diff(diff_dir)
-
-
-def _version_diff_json(diff_dir: Path | None, name: str) -> Mapping[str, Any]:
-    return common.version_diff_json(diff_dir, name)
-
-
 def _clip_text(text: str, limit: int = 900) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     return text[: limit - 1] + "..." if len(text) > limit else text
-
-
-def _version_release_notes(raw_path: Any, *, limit: int = 3) -> list[dict[str, str]]:
-    return common.version_release_notes(raw_path, limit=limit)
-
-
-def _scan_inventory(scan_dir: Path | None) -> Mapping[str, Any]:
-    return read_json(scan_dir / "file_inventory.json", default={}) if scan_dir else {}
-
-
-def _scan_parser_manifest(scan_dir: Path | None) -> Mapping[str, Any]:
-    return read_json(scan_dir / "parser_manifest.json", default={}) if scan_dir else {}
-
-
-def _scan_parser_results(scan_dir: Path | None) -> Mapping[str, Any]:
-    return read_json(scan_dir / "parser_results.json", default={}) if scan_dir else {}
 
 
 def _version_file_type_counts(inventory: Mapping[str, Any]) -> dict[str, int]:
@@ -1290,22 +1261,19 @@ def _parser_detail_items(data: Mapping[str, Any], *, source: Any = None, file_ty
 def _parser_detail_html(data: Mapping[str, Any]) -> str:
     rows = []
     file_type = str(data.get("file_type") or "")
-    for category, name, source, meaning, detail in _parser_detail_items(data, source=data.get("file"), file_type=file_type, limit=10):
-        detail_html = "<span class='muted'>-</span>" if str(detail) == "-" else ui.esc(detail)
+    for category, name, source, _meaning, _detail in _parser_detail_items(data, source=data.get("file"), file_type=file_type, limit=10):
         rows.append(
             "<tr>"
             f"<td><code>{ui.esc(category)}</code></td>"
             f"<td>{ui.esc(name)}</td>"
             f"<td><code>{ui.esc(source)}</code></td>"
-            f"<td>{ui.esc(meaning)}</td>"
-            f"<td>{detail_html}</td>"
             "</tr>"
         )
     if not rows:
         return "<details class='detail-fold'><summary>Parser Details</summary><div class='muted-box'>No extracted detail examples</div></details>"
     return (
         "<details class='detail-fold parser-detail'><summary>Parser Details</summary>"
-        + ui.table(["对象类型", "代表对象", "来源文件", "审查含义", "Detail"], rows, "No extracted detail examples")
+        + ui.table(["对象类型", "代表对象", "来源文件"], rows, "No extracted detail examples")
         + "</details>"
     )
 
@@ -1384,7 +1352,9 @@ def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_re
             )
             status = str(task.get("result_status") or task.get("status") or result.get("status") or "UNKNOWN").upper()
             group["parser_names"].add(str(parser_name))
-            group["files"].append(str(result.get("file") or file_entry.get("file") or "-"))
+            source_file = str(result.get("file") or file_entry.get("file") or "-")
+            if source_file not in group["files"]:
+                group["files"].append(source_file)
             group["status_counts"][status] = group["status_counts"].get(status, 0) + 1
             _merge_parser_metrics(group["metrics"], file_type, data)
             group["details"].extend(_parser_detail_items(data, source=result.get("file") or file_entry.get("file"), file_type=file_type, limit=10))
@@ -1416,25 +1386,22 @@ def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_re
                 break
         insight_html = "<div class='effective-tags parser-insights'>" + "".join(insight_rows) + "</div>" if insight_rows else ""
         detail_rows = []
-        detail_groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+        detail_groups: dict[tuple[str, str], dict[str, Any]] = {}
         for category, name, source, meaning, detail in group["details"]:
-            token = (category, name, meaning, detail)
+            token = (category, name)
             detail_group = detail_groups.setdefault(token, {"sources": []})
             if source not in detail_group["sources"]:
                 detail_group["sources"].append(source)
-        for (category, name, meaning, detail), detail_group in detail_groups.items():
+        for (category, name), detail_group in detail_groups.items():
             sources = detail_group["sources"]
             source_html = f"<code>{ui.esc(sources[0] if sources else '-')}</code>"
             if len(sources) > 1:
                 source_html += f"<br><span class='muted'>另有 {ui.esc(len(sources) - 1)} 个来源</span>"
-            detail_html = "<span class='muted'>-</span>" if str(detail) == "-" else ui.esc(detail)
             detail_rows.append(
                 "<tr>"
                 f"<td><code>{ui.esc(category)}</code></td>"
                 f"<td>{ui.esc(name)}</td>"
                 f"<td>{source_html}</td>"
-                f"<td>{ui.esc(meaning)}</td>"
-                f"<td>{detail_html}</td>"
                 "</tr>"
             )
             if len(detail_rows) >= 12:
@@ -1449,7 +1416,7 @@ def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_re
             )
         detail_html = (
             "<details class='detail-fold parser-detail'><summary>Parser Details / 代表对象</summary>"
-            + ui.table(["对象类型", "代表对象", "来源文件", "审查含义", "Detail"], detail_rows, "No extracted objects")
+            + ui.table(["对象类型", "代表对象", "来源文件"], detail_rows, "No extracted objects")
             + "</details>"
         )
         files_html = (
@@ -1541,57 +1508,6 @@ def _raw_relpath(raw_path: Any) -> str:
     return Path(*parts).as_posix() if parts else "-"
 
 
-def _file_change_entries(file_diff: Mapping[str, Any], *, raw_path: Any = None) -> list[tuple[str, str, str]]:
-    entries: list[tuple[str, str, str]] = []
-    for kind in ["added", "removed", "changed"]:
-        value = file_diff.get(kind)
-        if isinstance(value, Mapping):
-            iterable = [{"path": k, **(v if isinstance(v, Mapping) else {})} for k, v in value.items()]
-        elif isinstance(value, list):
-            iterable = value
-        else:
-            iterable = []
-        for item in iterable:
-            if isinstance(item, Mapping):
-                path = _relative_display_path(item.get("path") or item.get("relpath") or item.get("file") or "-", base=raw_path)
-                entries.append((kind, str(item.get("file_type") or item.get("type") or "-"), path))
-            else:
-                entries.append((kind, "-", _relative_display_path(item, base=raw_path)))
-    return entries
-
-
-def _file_change_rows(file_diff: Mapping[str, Any], *, raw_path: Any = None) -> list[str]:
-    rows = []
-    for kind, file_type, path in _file_change_entries(file_diff, raw_path=raw_path):
-        rows.append(
-            "<tr>"
-            f"<td>{ui.badge(kind.upper(), kind)}</td>"
-            f"<td><code>{ui.esc(file_type)}</code></td>"
-            f"<td><code>{ui.esc(path)}</code></td>"
-            "</tr>"
-        )
-    return rows
-
-
-def _release_note_rows(notes: list[dict[str, str]], *, raw_path: Any = None) -> list[str]:
-    rows = []
-    for item in notes:
-        rows.append(
-            "<tr>"
-            f"<td><code>{ui.esc(_relative_display_path(item.get('path') or '-', base=raw_path))}</code></td>"
-            f"<td>{ui.esc(item.get('summary') or '-')}</td>"
-            "</tr>"
-        )
-    return rows
-
-
-def _recommended_action_rows(summary: Mapping[str, Any]) -> list[str]:
-    rows = []
-    for action in summary.get("recommended_actions", []) or []:
-        rows.append(f"<tr><td>{ui.esc(action)}</td></tr>")
-    return rows
-
-
 def _diff_view_rows(view_diff: Mapping[str, Any]) -> list[str]:
     rows: list[str] = []
     for item in view_diff.get("views", []) or []:
@@ -1666,7 +1582,7 @@ def _diff_readiness_rows(readiness_diff: Mapping[str, Any]) -> list[str]:
 
 
 def _diff_issue_rows(diff_dir: Path | None, *, limit: int = 20) -> list[str]:
-    issues = _version_diff_json(diff_dir, "diff_issues.json").get("issues") if diff_dir else []
+    issues = common.version_diff_json(diff_dir, "diff_issues.json").get("issues") if diff_dir else []
     rows: list[str] = []
     for item in list(issues or [])[:limit]:
         if not isinstance(item, Mapping):
@@ -1686,10 +1602,10 @@ def _version_diff_evidence_panel(version: Mapping[str, Any]) -> str:
     diff_dir = _version_diff_dir(version)
     if not diff_dir:
         return ui.panel("Diff Evidence", "Run compare to populate version-level diff evidence.", ui.muted("No diff directory is registered for this version."))
-    view_diff = _version_diff_json(diff_dir, "view_diff.json")
-    type_diff = _version_diff_json(diff_dir, "type_diff.json")
-    readiness_diff = _version_diff_json(diff_dir, "release_readiness_diff.json")
-    summary = _version_diff_summary(diff_dir)
+    view_diff = common.version_diff_json(diff_dir, "view_diff.json")
+    type_diff = common.version_diff_json(diff_dir, "type_diff.json")
+    readiness_diff = common.version_diff_json(diff_dir, "release_readiness_diff.json")
+    summary = common.version_diff_summary(diff_dir)
     return ui.panel(
         "Diff Evidence",
         "Concrete comparison evidence embedded from the standalone comparison JSON. Open the full diff page only when you need the complete evidence trail.",
@@ -1749,49 +1665,6 @@ def _absolute_path_box(label: str, path: Any) -> str:
         except Exception:
             text = str(p)
     return f"<div class='absolute-path-box'><b>{ui.esc(label)}</b><code>{ui.esc(text)}</code></div>"
-
-
-def _version_update_detail_panel(version: Mapping[str, Any]) -> str:
-    from lib_guard.render.version_detail_report import build_version_update_detail_model, render_version_update_detail_panel
-
-    model = build_version_update_detail_model(Path("."), {}, version)
-    return render_version_update_detail_panel(model)
-
-
-def _review_gate_rows(items: list[Mapping[str, Any]], *, limit: int = 5) -> list[str]:
-    rows: list[str] = []
-    for item in list(items or [])[:limit]:
-        rows.append(
-            "<tr>"
-            f"<td><code>{ui.esc(item.get('id') or '-')}</code></td>"
-            f"<td>{ui.badge(str(item.get('severity') or 'INFO').upper())}</td>"
-            f"<td>{ui.esc(item.get('title') or item.get('category') or '-')}</td>"
-            f"<td>{ui.esc(item.get('message') or '-')}</td>"
-            "</tr>"
-        )
-    return rows
-
-
-def _review_gate_panel(version: Mapping[str, Any]) -> str:
-    gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
-    status = str((gate or {}).get("status") or "NOT_BUILT")
-    blocking_items = list((gate or {}).get("blocking_items", []) or [])
-    attention_items = list((gate or {}).get("attention_items", []) or [])
-    accepted_items = list((gate or {}).get("accepted_items", []) or [])
-    waived_items = list((gate or {}).get("waived_items", []) or [])
-    return ui.panel(
-        "Review Gate",
-        "Lightweight release-risk gate. File Diff recommendations are attention items; metadata-only, catalog trust, and release-fatal risks require owner acceptance or a fix.",
-        ui.metric_grid([
-            ("Status", status, str((gate or {}).get("gate") or "current"), status),
-            ("Blocking Open", len(blocking_items), "requires fix/accept/waive", "BLOCK" if blocking_items else "PASS"),
-            ("Attention", len(attention_items), "recommended evidence, not current blocker", "WARNING" if attention_items else "PASS"),
-            ("Accepted / Waived", f"{len(accepted_items)} / {len(waived_items)}", "recorded decisions", "INFO"),
-        ])
-        + _scroll_table(["Item", "Severity", "Title", "Message"], _review_gate_rows(blocking_items), "No open blocking items", "review-gate-blocking-scroll")
-        + ui.collapsible_panel("Attention Items", "Recommendations and focused evidence. These do not block current by default.", _scroll_table(["Item", "Severity", "Title", "Message"], _review_gate_rows(attention_items), "No attention items", "review-gate-attention-scroll"), open=False)
-        + ui.collapsible_panel("Trace", "Review gate files consumed by release-check.", ui.trace_link_list([("review_gate.json", _href((gate or {}).get("gate_file")), "Version gate status"), ("review_overrides.json", _href((gate or {}).get("override_file")), "Owner accept/waive decisions")]), open=False),
-    )
 
 
 def _render_version_page(out: Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> str:
@@ -1878,7 +1751,62 @@ def _write_report_index(
     return str(path)
 
 
-def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render_library_pages: bool = True, max_attention_items: int = 10, max_report_rows: int = 16) -> dict[str, Any]:
+def _selector_aliases(value: Any) -> set[str]:
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    aliases = {text, _safe(text)}
+    aliases.add(text.replace("/", "."))
+    aliases.add(text.replace("/", "_"))
+    aliases.add(text.replace(".", "_"))
+    if "/" in text:
+        tail = text.split("/", 1)[1]
+        aliases.update({tail, tail.replace("/", "."), tail.replace("/", "_"), _safe(tail)})
+    return {alias for alias in aliases if alias}
+
+
+def _library_selector_aliases(lib: Mapping[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("library_id", "library_name", "display_name"):
+        aliases.update(_selector_aliases(lib.get(key)))
+    for alias in lib.get("aliases", []) or []:
+        aliases.update(_selector_aliases(alias))
+    return aliases
+
+
+def _version_selector_aliases(version: Mapping[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("version_id", "version", "name"):
+        aliases.update(_selector_aliases(version.get(key)))
+    aliases.update(_selector_aliases(version.get("version_key")))
+    return aliases
+
+
+def _selector_values(selector: Any) -> list[str]:
+    if not selector:
+        return []
+    if isinstance(selector, (list, tuple, set)):
+        return [str(item).strip() for item in selector if str(item).strip()]
+    return [str(selector).strip()]
+
+
+def _matches_selector(aliases: set[str], selector: Any) -> bool:
+    values = _selector_values(selector)
+    if not values:
+        return True
+    return any(value in aliases for value in values)
+
+
+def render_catalog_html(
+    catalog_json: str | Path,
+    out_dir: str | Path,
+    *,
+    render_library_pages: bool = True,
+    max_attention_items: int = 10,
+    max_report_rows: int = 16,
+    library_filter: str | None = None,
+    version_filter: str | None = None,
+) -> dict[str, Any]:
     from lib_guard.render.catalog_workspace_report import render_catalog_index_page, render_library_workspace_page
     from lib_guard.render.version_detail_report import render_version_detail_page
 
@@ -1892,16 +1820,24 @@ def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render
     libraries_for_reports = list(state.get("libraries", []) or [])
     effective_by_lib = _discover_effective_reports(out, libraries_for_reports)
     compare_by_lib = discover_compare_reports(out, libraries_for_reports) if discover_compare_reports is not None else {}
+    rendered_libraries = 0
+    rendered_versions = 0
     if render_library_pages:
         for lib in state.get("libraries", []) or []:
+            if not _matches_selector(_library_selector_aliases(lib), library_filter):
+                continue
             for version in lib.get("versions", []) or []:
+                if not _matches_selector(_version_selector_aliases(version), version_filter):
+                    continue
                 links = version.setdefault("links", {})
                 links["version_review_html"] = render_version_detail_page(out, lib, version)
+                rendered_versions += 1
                 gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
                 if gate.get("gate_file"):
                     write_json(gate["gate_file"], gate)
-            lib_id = str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "")
+            lib_id = str(lib.get("typed_library_id") or lib.get("library_id") or lib.get("formal_library_id") or lib.get("library_name") or "")
             lib["library_home_html"] = render_library_workspace_page(out, lib, _effective_items_for_lib(effective_by_lib, lib), list(compare_by_lib.get(lib_id, []) or []))
+            rendered_libraries += 1
     report_index = _write_report_index(out, state, effective_by_lib, compare_by_lib)
     for stale_name in ("review_state.json", "review_tasks.json"):
         stale_path = out / stale_name
@@ -1922,4 +1858,14 @@ def render_catalog_html(catalog_json: str | Path, out_dir: str | Path, *, render
     )
     index = out / "index.html"
     _write_text(index, html)
-    return {"status": "PASS", "index_html": str(index), "catalog_state": str(out / "catalog_state.json"), "manager_tasks": str(out / "manager_tasks.json"), "report_index": report_index}
+    return {
+        "status": "PASS",
+        "index_html": str(index),
+        "catalog_state": str(out / "catalog_state.json"),
+        "manager_tasks": str(out / "manager_tasks.json"),
+        "report_index": report_index,
+        "rendered_libraries": rendered_libraries,
+        "rendered_versions": rendered_versions,
+        "library_filter": library_filter,
+        "version_filter": version_filter,
+    }

@@ -220,13 +220,13 @@ def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: lis
                 ("需绑定", need_bind, "base_full / previous_effective", "WARNING" if need_bind else "PASS"),
             ])
             + ui.compact_meta([
-                ("Library", lib_id),
+                ("库名", lib.get("formal_library_id") or lib.get("library_name") or lib_id),
                 ("Vendor", lib.get("vendor") or "-"),
-                ("Path", lib.get("middle_path") or lib.get("library_root") or "-"),
+                ("路径", lib.get("middle_path") or lib.get("library_root") or "-"),
             ]),
         )
         + ui.panel(
-            "Library Version Timeline",
+            "版本时间线",
             "raw、effective 和 release 相关节点按 event_time 混排；node_kind/package_type 区分来源和包类型，latest_effective_ref 指向当前真正可使用的节点。",
             ui.filterable_table(
                 f"timeline-{safe}",
@@ -256,12 +256,12 @@ def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: lis
         + ui.collapsible_panel("命令示例", "命令集中放置，不挤占版本表。", _command_examples(), open=False)
     )
     html = ui.review_page_shell(
-        f"{lib.get('display_name') or lib_id} / Library Workspace",
-        "LIBRARY WORKSPACE",
+        f"{lib.get('display_name') or lib_id} / 库工作台",
+        "库工作台",
         "Catalog 的下钻主页：先看当前有效组合，再核对版本账本和证据链。",
         body,
         decision=lib.get("overall_status") or "REVIEW",
-        nav="<a href='../../index.html'>Catalog</a><a class='active' href='#'>Library Workspace</a>",
+        nav="<a href='../../index.html'>库目录</a><a class='active' href='#'>库工作台</a>",
         meta=ui.compact_meta([("版本节点", len(timeline)), ("latest_effective_ref", latest_effective_ref or "-"), ("待扫描", not_scanned), ("待对比", diff_pending)]),
     )
     _write_text(html_path, html)
@@ -337,7 +337,8 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
     latest_effective_item = catalog._latest_effective_item(effective_items)
     changed = sum(1 for v in versions if "changed" in catalog._version_tags(v))
     version_rows = "".join(_version_row(lib, v, latest) for v in reversed(versions))
-    library_label = lib.get("display_name") or lib.get("library_name") or lib.get("library_id")
+    user_library_id = lib.get("formal_library_id") or lib.get("library_name") or lib.get("library_id")
+    library_label = lib.get("display_name") or user_library_id
     empty_versions = "<div class='catalog-empty'>暂无 version</div>"
     version_list_html = version_rows or empty_versions
     actions = ui.action_strip([
@@ -351,8 +352,8 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
         f"<section class='library-card' data-overall='{ui.esc(status)}' data-vendor='{ui.esc(vendor)}' data-stages='{ui.esc(','.join(stages))}' data-tags='{ui.esc(','.join(sorted(tags)))}'>"
         "<div class='library-main'>"
         f"<div class='library-name-row'><div class='library-title long-token' title='{ui.esc(library_label)}'>{ui.esc(library_label)}</div></div>"
-        f"<div class='library-path-row'><span class='muted'>Library</span><code title='{ui.esc(lib.get('library_id'))}'>{ui.esc(lib.get('library_id') or '-')}</code></div>"
-        f"<div class='library-path-row'><span class='muted'>Path</span><code title='{ui.esc(middle)}'>{ui.esc(middle)}</code></div>"
+        f"<div class='library-path-row'><span class='muted'>库名</span><code title='{ui.esc(user_library_id)}'>{ui.esc(user_library_id or '-')}</code></div>"
+        f"<div class='library-path-row'><span class='muted'>路径</span><code title='{ui.esc(middle)}'>{ui.esc(middle)}</code></div>"
         f"<div><span class='muted'>Vendor</span><br><b>{ui.esc(vendor)}</b></div>"
         f"<div><span class='muted'>完整基线</span><br><b title='{ui.esc(latest_full)}'>{ui.esc(latest_full)}</b></div>"
         f"<div><span class='muted'>当前有效</span><br><b title='{ui.esc(effective_label)}'>{ui.esc(effective_label)}</b></div>"
@@ -474,23 +475,23 @@ def render_catalog_index_page(
     body = (
         _catalog_browser_styles()
         + ui.panel(
-            "Catalog 总览",
-            "面向 IP 使用者：先搜索库，再进入库工作台查看更新文件和可执行脚本。库管理者证据放在下方折叠区。",
+            "库目录总览",
+            "面向 IP 使用者：先搜索库，再进入库工作台查看更新文件、影响面和证据入口。库管理者证据放在下方折叠区。",
             ui.metric_grid(catalog._summary_metrics(state, tasks))
-            + "<p class='catalog-note'>主流程是获取库更新信息、更新文件和执行脚本；管理补证据不作为普通使用者的首要任务。</p>",
+            + "<p class='catalog-note'>主流程是获取库更新信息、更新文件和证据入口；管理补证据不作为普通使用者的首要任务。</p>",
         )
         + "<div class='catalog-layout'>"
         + f"<div class='catalog-filter-panel'>{_catalog_filter_panel(state)}</div>"
-        + f"<div>{ui.panel('Library Browser', '中文紧凑摘要：只显示库身份、当前有效组合和进入库工作台；scan/diff/effective/release preview 由库工作台串联。', _library_browser(out_path, state, effective_by_lib))}</div>"
+        + f"<div>{ui.panel('库浏览器', '只显示库身份、当前有效组合和进入库工作台；scan/diff/effective/release preview 由库工作台串联。', _library_browser(out_path, state, effective_by_lib))}</div>"
         + "</div>"
         + ui.collapsible_panel(
-            "管理建议 / Suggested Commands",
+            "管理建议",
             "manager_tasks.json 是有效的管理者任务列表，用于补 scan、diff 或关系确认；普通 IP 使用者通常不需要处理。",
-            ui.filterable_table("catalog-task-table", ["优先级", "类型", "Library / Version", "原因", "执行"], _task_rows(tasks), "暂无建议", "筛选 task / reason"),
+            ui.filterable_table("catalog-task-table", ["优先级", "类型", "库 / 版本", "原因", "执行"], _task_rows(tasks), "暂无建议", "筛选 task / reason"),
             open=False,
         )
         + ui.collapsible_panel(
-            "Trace Evidence",
+            "证据索引",
             "Catalog 原始证据和统一报告索引。manager_tasks.json 的定位是管理者任务证据。",
             ui.trace_link_list(
                 [
@@ -505,11 +506,11 @@ def render_catalog_index_page(
         + ui.collapsible_panel("命令示例", "所有常用命令集中折叠在最下面。Browser 行内只保留状态和入口，不再放待生成命令。", _command_examples(), open=False)
     )
     return ui.review_page_shell(
-        "Library Catalog",
-        "CATALOG",
+        "库目录",
+        "库目录",
         "库版本变化导航入口。Catalog 是地图，不是命令控制台。",
         body,
         decision="REVIEW" if tasks.get("tasks") else "PASS",
-        nav="<a class='active' href='#'>Catalog</a><a href='#'>Library Workspace</a><a href='#'>Scan Evidence</a><a href='#'>Release Evidence</a>",
-        meta=ui.compact_meta([("Libraries", len(state.get("libraries", []) or [])), ("Tasks", len(tasks.get("tasks", []) or []))]),
+        nav="<a class='active' href='#'>库目录</a><a href='#'>库工作台</a><a href='#'>Scan 证据</a><a href='#'>Release 证据</a>",
+        meta=ui.compact_meta([("库", len(state.get("libraries", []) or [])), ("任务", len(tasks.get("tasks", []) or []))]),
     )

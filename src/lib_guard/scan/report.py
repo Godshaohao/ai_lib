@@ -33,27 +33,6 @@ class ScanReportWriter:
         self._write_json(out / "integrity.json", bundle.integrity)
         self._write_json(out / "scan_issues.json", bundle.issues)
         self._write_json(out / "summary" / "parser_quality.json", bundle.parser_quality)
-        try:
-            from lib_guard.summary.readiness import build_release_readiness
-
-            self._write_json(out / "summary" / "release_readiness.json", build_release_readiness(out))
-        except Exception as exc:
-            self._write_json(
-                out / "summary" / "release_readiness.json",
-                {
-                    "schema_version": "1.0",
-                    "bundle_status": "FAILED",
-                    "release_level_candidate": "L0",
-                    "validation_depth": "inventory",
-                    "blocking_items": [{"severity": "blocker", "category": "release_readiness", "title": "Readiness build failed", "message": str(exc)}],
-                    "manual_review_items": [],
-                    "warning_items": [],
-                    "allowed_aliases": ["stage"],
-                    "blocked_aliases": ["current", "approved"],
-                    "limitations": ["Release readiness generation failed"],
-                },
-            )
-
         self._write_json(out / "signatures" / "signatures.json", bundle.signatures)
         self._write_json(out / "logs" / "parser_errors.json", bundle.logs.get("parser_errors", []))
         self._write_json(out / "logs" / "cache_events.json", bundle.logs.get("cache_events", []))

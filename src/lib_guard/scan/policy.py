@@ -10,7 +10,7 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
 
 
 class ScanPolicy:
-    DEFAULT_PARSE_MODES = {"candidate", "release", "diff", "refresh", "full"}
+    DEFAULT_PARSE_MODES = {"scan", "candidate", "release", "diff", "refresh", "full"}
     DEFAULT_COUNT_ONLY_PARSE_TYPES = {"liberty", "db", "spef", "verilog", "systemverilog"}
     SMART_SKIP_EXTENSIONS = {
         ".lef",
@@ -61,7 +61,7 @@ class ScanPolicy:
         return self.hash_decision(record, context)["should_hash"]
 
     def hash_decision(self, record: Any, context: Any) -> dict[str, Any]:
-        mode = str(_get(context, "scan_mode", "inventory"))
+        mode = str(_get(context, "scan_mode", "scan"))
         if mode in {"quick", "inventory"}:
             return {"policy": "none", "should_hash": False, "hash_status": "NOT_REQUIRED", "reason": "scan_mode"}
         policy = str(_get(self.config, "hash_policy", _get(self.config, "hash", "smart")) or "smart").lower()
@@ -90,7 +90,7 @@ class ScanPolicy:
         }
 
     def should_parse(self, record: Any, context: Any) -> bool:
-        mode = str(_get(context, "scan_mode", "inventory"))
+        mode = str(_get(context, "scan_mode", "scan"))
         if mode in {"quick", "inventory", "signature"}:
             return False
         configured_types = _get(self.config, "parse_file_types", None)

@@ -430,7 +430,7 @@ def link_release_from_manifest(
         },
     }
     _write_json(run_dir / "release_link_result.json", result)
-    from lib_guard.review.release_result import release_result_from_link
+    from lib_guard.release.result import release_result_from_link
 
     _write_json(run_dir / "release_result.json", release_result_from_link(result))
     return result

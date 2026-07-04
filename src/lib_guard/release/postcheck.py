@@ -24,7 +24,7 @@ def _issue(severity: str, category: str, library_name: str | None, message: str)
 
 
 def _file_type_counts(path: Path, limit: int = 200000) -> dict[str, int]:
-    from lib_guard.scan.file_classifier import FileClassifier
+    from lib_guard.scan.inventory import FileClassifier
 
     classifier = FileClassifier()
     counts: Counter[str] = Counter()

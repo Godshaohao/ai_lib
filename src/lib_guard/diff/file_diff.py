@@ -295,7 +295,7 @@ def _unsupported_metadata_parse(file_type: str, path: Path) -> dict[str, Any]:
 
 
 def _parse_file(file_type: str, path: Path) -> dict[str, Any]:
-    from lib_guard.scan.parser_registry import ParserRegistry
+    from lib_guard.scan.parser_engine import ParserRegistry
 
     registry = ParserRegistry.default(None)
     context = SimpleNamespace(root_path=str(path.parent), schema_version="1.0", scan_mode="file-diff")

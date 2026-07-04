@@ -30,7 +30,7 @@ Forbidden expansions: No database, no approval workflow, no workflow engine, no 
 - Modify `src/lib_guard/cli.py`: expose `--force-by` and `--explain` only on existing release commands.
 - Modify `src/lib_guard/cli_commands/catalog.py`: pass force metadata to manifest linker; record verify skip; call explain helper for release-check.
 - Modify `src/lib_guard/short_cli.py`: expand `rel --force-by` and `rel --explain`; freeze action output audit for `@ALL redo`.
-- Modify `src/lib_guard/review/release_result.py`: include force metadata and verify skip fields in unified release result.
+- Modify `src/lib_guard/release/result.py`: include force metadata and verify skip fields in unified release result.
 - Create `src/lib_guard/release/explain.py`: pure JSON summarizer for release-check/link failure reasons.
 - Modify `src/lib_guard/effective/pointer.py`: add canonical latest effective ref helper functions.
 - Modify `src/lib_guard/render/catalog_report.py`, `src/lib_guard/render/catalog_workspace_report.py`, `src/lib_guard/render/version_detail_report.py`, `src/lib_guard/review/state.py`, `src/lib_guard/effective/cli.py`: read latest effective refs through helpers and avoid new ad hoc fallback logic.
@@ -44,7 +44,7 @@ Forbidden expansions: No database, no approval workflow, no workflow engine, no 
 
 **Files:**
 - Modify: `src/lib_guard/release/linker.py`
-- Modify: `src/lib_guard/review/release_result.py`
+- Modify: `src/lib_guard/release/result.py`
 - Test: `src/lib_guard/test/test_release_force_manifest.py`
 
 - [ ] **Step 1: Write failing force manifest tests**
@@ -481,7 +481,7 @@ Document:
 Run:
 
 ```bash
-python -m py_compile src/lib_guard/short_cli.py src/lib_guard/cli.py src/lib_guard/cli_commands/catalog.py src/lib_guard/release/linker.py src/lib_guard/review/release_result.py
+python -m py_compile src/lib_guard/short_cli.py src/lib_guard/cli.py src/lib_guard/cli_commands/catalog.py src/lib_guard/release/linker.py src/lib_guard/release/result.py
 python -m unittest discover -s src/lib_guard/test -p "test*.py"
 python -m lib_guard.cli --help
 python -m lib_guard.short_cli --help

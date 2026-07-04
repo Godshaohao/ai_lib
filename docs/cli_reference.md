@@ -7,7 +7,8 @@ Status: current
 | 命令 | 作用 |
 | --- | --- |
 | `init` | 创建 workspace 配置 |
-| `library discover` / `library apply` | 发现并应用人工确认后的 library map |
+| `library add` | 已知库根时直接加入人工确认 registry |
+| `library discover` / `library accept` / `library apply` | 发现候选库、合并人工确认、生成正式 library map |
 | `cat` | 刷新 catalog 和 catalog HTML |
 | `override` | 人工确认版本 stage/base/package 关系 |
 | `scan` | 扫描一个版本或一批版本 |
@@ -28,17 +29,21 @@ Status: current
 | `fd` | `file-diff` |
 | `rel` | `release` |
 
-已经不推荐的旧别名包括：`filediff`、`refresh-diff`、`lib`、`act`、`review`、
-`compare`、`rf`。
-
 ## 常用示例
 
 ```csh
+lg.csh library add vendor_A.openroad_platform.openroad_asap7 --root /path/to/vendor_A/openroad_asap7
 lg.csh library discover
+gvim $WORK/config/library_candidates/latest.tsv
+lg.csh library accept
 lg.csh library apply
+lg.csh library list
+lg.csh library list vendor_A.openroad_platform.openroad_asap7 --versions
 lg.csh cat --with-evidence
 lg.csh override ucie stable_20250608 --stage stable --base stable_20250601
 lg.csh scan ucie stable_20250608
+lg.csh scan ucie stable_20250608 --parse-file-types lef,cdl
+lg.csh scan ucie stable_20250608 --hash-policy full
 lg.csh refresh ucie
 lg.csh cmp ucie stable_20250608 --base stable_20250601 --scan-if-missing
 lg.csh fd ucie stable_20250608 lef/ucie.lef --base stable_20250601 --type lef
@@ -49,6 +54,21 @@ lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
 ```
 
 ## `refresh` 和 `cmp` 的边界
+
+## `scan` 的边界
+
+`scan` 只有一种用户态动作：生成当前版本的 scan evidence。扫描深度由策略参数控制，
+不是由多个 mode 控制。
+
+| 策略参数 | 作用 |
+| --- | --- |
+| `--parse-file-types lef,cdl` | 只让指定类型进入 parser 任务 |
+| `--parse-exclude-file-types verilog,liberty,spef` | 从 parser 任务里排除指定类型 |
+| `--hash-policy smart` | 默认策略，小文件 hash，大型 EDA 文件按 metadata 处理 |
+| `--hash-policy full` | 专家/调试场景，强制计算内容 hash |
+| `--parse-jobs 8` | parser 并行度 |
+
+新命令保持 `scan` 这一种用户态动作，用策略参数表达扫描深度。
 
 `refresh` 是版本详情页更新证据的日常入口。默认行为是：
 
@@ -103,6 +123,16 @@ lg.csh fd ucie patch_20260630 db/ucie.db --type db --force-large
 - 默认 workspace 路径和项目 policy 文件名集中在 `src/lib_guard/project_config.py`。
 - 项目 policy 在 `configs/`。
 - workspace review/action 文件在 `$WORK/config/` 和 `$WORK/actions/`。
+- scan 策略可以写在 `lib_guard.yml`，短命令会自动传给底层 scan：
+
+```yaml
+hash_policy: smart
+parse_file_types: lef,cdl
+parse_exclude_file_types: verilog,liberty,spef
+parse_jobs: 8
+```
+
+`mode: scan` 只保留为兼容字段；日常不要通过 mode 区分扫描深度。
 
 ## Help 命令
 

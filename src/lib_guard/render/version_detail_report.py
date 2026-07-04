@@ -8,8 +8,9 @@ the HTML panel; the HTML renderer never reads Markdown.
 from __future__ import annotations
 
 import json
+from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
 from lib_guard.review.io import read_json
@@ -51,7 +52,11 @@ def _version_id(version: Mapping[str, Any]) -> str:
 
 
 def _library_id(lib: Mapping[str, Any]) -> str:
-    return str(lib.get("library_id") or lib.get("display_name") or lib.get("library_name") or "library")
+    return str(lib.get("formal_library_id") or lib.get("library_name") or lib.get("library_id") or lib.get("display_name") or "library")
+
+
+def _library_report_slug(lib: Mapping[str, Any]) -> str:
+    return str(lib.get("report_slug") or common.safe(lib.get("typed_library_id") or lib.get("library_id") or _library_id(lib)))
 
 
 def _library_name(lib: Mapping[str, Any]) -> str:
@@ -72,9 +77,34 @@ def _as_int(value: Any) -> int:
 
 def _infer_file_type(path: str, file_type: Any = None) -> str:
     explicit = str(file_type or "").strip().lower()
-    if explicit and explicit != "-":
+    if explicit and explicit not in {"-", "gz"}:
         return explicit
-    suffix = Path(path).suffix.lower().lstrip(".")
+    name = Path(str(path or "")).name.lower()
+    if name.endswith((".lef", ".lef.gz", ".tlef", ".tlef.gz")):
+        return "lef"
+    if name.endswith((".lib", ".lib.gz")):
+        return "liberty"
+    if name.endswith((".v", ".v.gz", ".sv", ".sv.gz", ".vg", ".vg.gz", ".vp", ".vp.gz", ".vh", ".vh.gz", ".svh", ".svh.gz")):
+        return "systemverilog" if name.endswith((".sv", ".sv.gz", ".svh", ".svh.gz")) else "verilog"
+    if name.endswith((".cdl", ".cdl.gz", ".sp", ".sp.gz", ".spi", ".spi.gz", ".spice", ".spice.gz")):
+        return "cdl"
+    if name.endswith((".sdc", ".sdc.gz")):
+        return "sdc"
+    if name.endswith((".upf", ".upf.gz")):
+        return "upf"
+    if name.endswith((".cpf", ".cpf.gz")):
+        return "cpf"
+    if name.endswith((".sdf", ".sdf.gz")):
+        return "sdf"
+    if name.endswith((".spef", ".spef.gz")):
+        return "spef"
+    if name.endswith((".db", ".db.gz", ".ndm", ".ndm.gz")):
+        return "db"
+    if name.endswith((".gds", ".gds.gz", ".gdsii", ".gdsii.gz")):
+        return "gds"
+    if name.endswith((".oas", ".oas.gz", ".oasis", ".oasis.gz")):
+        return "oas"
+    suffix = Path(name).suffix.lower().lstrip(".")
     return {
         "v": "verilog",
         "sv": "systemverilog",
@@ -82,6 +112,32 @@ def _infer_file_type(path: str, file_type: Any = None) -> str:
         "spi": "cdl",
         "lib": "liberty",
     }.get(suffix, suffix or "-")
+
+
+def _file_identity(path: str, item: Mapping[str, Any], file_type: str) -> dict[str, Any]:
+    name = Path(str(path or "")).name
+    suffixes = [suffix.lower() for suffix in Path(name).suffixes]
+    if len(suffixes) >= 2 and suffixes[-1] in {".gz", ".bz2", ".xz", ".zip"}:
+        suffix = "".join(suffixes[-2:])
+    else:
+        suffix = suffixes[-1] if suffixes else ""
+    size = item.get("size", item.get("bytes"))
+    sha256 = item.get("sha256") or item.get("content_hash") or item.get("hash") or item.get("checksum") or ""
+    parser_signature = item.get("parser_signature") or item.get("signature") or ""
+    key_parts = [
+        str(file_type or "-").lower(),
+        name,
+        str(size or ""),
+        str(parser_signature or sha256 or ""),
+    ]
+    return {
+        "basename": name,
+        "suffix": suffix,
+        "size": size,
+        "sha256": sha256,
+        "parser_signature": parser_signature,
+        "match_key": ":".join(key_parts),
+    }
 
 
 def _cn_change_kind(value: Any) -> str:
@@ -114,11 +170,14 @@ def _iter_file_changes(file_diff: Mapping[str, Any], *, raw_path: Any = None) ->
                 file_type = _infer_file_type(path)
             lane_rule = classify_review_lane(file_type)
             lane, hint = lane_rule["lane"], lane_rule["hint"]
+            if kind in {"added", "removed"} and lane in {"P0", "P1"}:
+                hint = "先按 basename/hash/parser signature 匹配 old/new；匹配成功再进入文件证据确认，否则标记为真实新增/删除"
             changes.append(
                 {
                     "change": kind,
                     "file_type": file_type,
                     "path": path,
+                    "identity": _file_identity(path, item if isinstance(item, Mapping) else {}, file_type),
                     "review_lane": lane,
                     "hint": hint,
                 }
@@ -167,7 +226,7 @@ def _release_notes_from_existing_evidence(version: Mapping[str, Any], *, limit: 
             item = raw if isinstance(raw, Mapping) else {"path": str(raw), "summary": "catalog release evidence"}
             _add_release_note(notes, seen, item, limit=limit)
 
-    scan_dir = catalog._version_scan_dir(version)
+    scan_dir = _version_scan_dir(version)
     if scan_dir and len(notes) < limit:
         release_readiness = read_json(scan_dir / "summary" / "release_readiness.json", default={}) or {}
         doc_summary = _as_mapping(release_readiness.get("doc_summary"))
@@ -178,7 +237,7 @@ def _release_notes_from_existing_evidence(version: Mapping[str, Any], *, limit: 
                     break
 
     if scan_dir and len(notes) < limit:
-        inventory = catalog._scan_inventory(scan_dir)
+        inventory = _scan_inventory(scan_dir)
         for item in inventory.get("files", []) or []:
             if isinstance(item, Mapping):
                 _add_release_note(notes, seen, item, limit=limit)
@@ -216,6 +275,107 @@ def _path_if_exists(value: Any) -> Path | None:
         return None
     path = Path(str(value))
     return path if path.exists() else None
+
+
+def _version_scan_dir(version: Mapping[str, Any]) -> Path | None:
+    scan = version.get("scan") or {}
+    value = scan.get("scan_dir") if isinstance(scan, Mapping) else None
+    if not value:
+        value = version.get("scan_dir")
+    return _path_if_exists(value)
+
+
+def _scan_inventory(scan_dir: Path | None) -> Mapping[str, Any]:
+    return read_json(scan_dir / "file_inventory.json", default={}) if scan_dir else {}
+
+
+def _scan_parser_manifest(scan_dir: Path | None) -> Mapping[str, Any]:
+    return read_json(scan_dir / "parser_manifest.json", default={}) if scan_dir else {}
+
+
+def _scan_parser_results(scan_dir: Path | None) -> Mapping[str, Any]:
+    return read_json(scan_dir / "parser_results.json", default={}) if scan_dir else {}
+
+
+def _build_scan_evidence_model(version: Mapping[str, Any]) -> dict[str, Any]:
+    scan_dir = _version_scan_dir(version)
+    scan_meta = read_json(scan_dir / "scan_meta.json", default={}) if scan_dir else {}
+    inventory = _scan_inventory(scan_dir)
+    parser_manifest = _scan_parser_manifest(scan_dir)
+    parser_results = _scan_parser_results(scan_dir)
+    release_readiness = read_json(scan_dir / "summary" / "release_readiness.json", default={}) if scan_dir else {}
+    counts = _as_mapping(inventory.get("file_type_counts"))
+    parser_task_count = sum(
+        1
+        for file_entry in (parser_manifest.get("files", []) or [])
+        for task in (file_entry.get("parser_tasks", []) or [])
+        if task.get("parser_name")
+    )
+    file_total = sum(_as_int(v) for v in counts.values())
+    scan = _as_mapping(version.get("scan"))
+    return {
+        "context": {
+            "scan_dir": str(scan_dir or ""),
+            "scan_id": scan_meta.get("scan_id") or scan.get("scan_id") or "",
+            "scan_status": version.get("scan_status") or scan.get("status") or "",
+            "library_id": scan_meta.get("library_id") or scan_meta.get("library_name") or "",
+            "version": scan_meta.get("release_version") or scan_meta.get("version") or "",
+            "raw_path": scan_meta.get("root_path") or version.get("raw_path") or "",
+            "input_fingerprint": scan_meta.get("input_fingerprint") or scan_meta.get("content_fingerprint") or "",
+            "tool_version": scan_meta.get("tool_version") or "",
+        },
+        "inventory": inventory,
+        "parser_manifest": parser_manifest,
+        "parser_results": parser_results,
+        "release_readiness": release_readiness,
+        "counts": counts,
+        "corner_summary": inventory.get("corner_filename_summary") or {},
+        "parser_task_count": parser_task_count,
+        "file_total": file_total,
+        "unknown_count": _as_int(counts.get("unknown")),
+        "required_view_status": release_readiness.get("required_view_status") or release_readiness.get("bundle_status"),
+    }
+
+
+def _comparison_context(
+    *,
+    diff_dir: Path | None,
+    diff_meta: Mapping[str, Any],
+    base_ref: str,
+    base_version: str,
+    base_source: str,
+    status: str,
+) -> dict[str, Any]:
+    relation = _as_mapping(diff_meta.get("version_relation"))
+    return {
+        "base_ref": base_ref,
+        "base_version": base_version,
+        "base_source": base_source,
+        "relation_kind": relation.get("kind") or relation.get("diff_mode") or diff_meta.get("diff_type") or "",
+        "diff_dir": str(diff_dir or ""),
+        "diff_status": status,
+        "old_scan": diff_meta.get("old_scan") or "",
+        "new_scan": diff_meta.get("new_scan") or "",
+        "old_scan_id": diff_meta.get("old_scan_id") or "",
+        "new_scan_id": diff_meta.get("new_scan_id") or "",
+    }
+
+
+def _scan_compatibility(scan_context: Mapping[str, Any], comparison_context: Mapping[str, Any]) -> dict[str, Any]:
+    current_scan_dir = str(scan_context.get("scan_dir") or "")
+    diff_new_scan = str(comparison_context.get("new_scan") or "")
+    has_scan = bool(current_scan_dir)
+    has_diff = bool(comparison_context.get("diff_dir"))
+    new_scan_matches = not (has_scan and diff_new_scan) or Path(diff_new_scan) == Path(current_scan_dir)
+    status = "PASS" if has_scan and (not has_diff or new_scan_matches) else "WARNING"
+    if not has_scan:
+        status = "MISSING_SCAN"
+    return {
+        "status": status,
+        "current_scan_dir": current_scan_dir,
+        "diff_new_scan": diff_new_scan,
+        "new_scan_matches_current": new_scan_matches,
+    }
 
 
 def _select_diff_dir(version: Mapping[str, Any], *, base_ref: str, base_version: str) -> Path | None:
@@ -283,29 +443,157 @@ def _summary_metrics(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _file_diff_commands(lib: Mapping[str, Any], version: Mapping[str, Any], base_version: str, changes: list[dict[str, Any]]) -> list[dict[str, str]]:
-    library = _library_name(lib)
-    version_id = _version_id(version)
-    commands: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for item in changes:
-        lane = str(item.get("review_lane") or "")
-        if lane not in {"P0", "P1"}:
+    del lib, version, base_version, changes
+    return []
+
+
+def _path_items(value: Any, key: str = "path") -> list[str]:
+    if isinstance(value, Mapping):
+        return [str(item.get(key) or path) if isinstance(item, Mapping) else str(path) for path, item in value.items()]
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            if isinstance(item, Mapping):
+                out.append(str(item.get(key) or item.get("path") or item.get("relpath") or ""))
+            else:
+                out.append(str(item))
+        return [item for item in out if item]
+    return []
+
+
+def _dominant_root(paths: Iterable[str]) -> str:
+    roots: Counter[str] = Counter()
+    for path in paths:
+        text = str(path or "").strip("/")
+        if "/" not in text:
             continue
-        if str(item.get("file_type") or "").lower() not in DEFAULT_FILE_DIFF_TYPES:
-            continue
-        path = str(item.get("path") or "")
-        if not path or path in seen:
-            continue
-        seen.add(path)
-        base = f" --base {base_version}" if base_version else ""
-        commands.append(
-            {
-                "lane": lane,
-                "path": path,
-                "command": f"$PROJ/scripts/lg.csh fd {library} {version_id} {path}{base}",
-            }
+        root = text.split("/", 1)[0]
+        if root and root not in {".", ".."}:
+            roots[root] += 1
+    return roots.most_common(1)[0][0] if roots else "-"
+
+
+def _path_restructure_summary(file_diff: Mapping[str, Any], summary: Mapping[str, Any]) -> dict[str, Any]:
+    counts = _as_mapping(file_diff.get("counts"))
+    migrations = [item for item in file_diff.get("package_root_migrations", []) or [] if isinstance(item, Mapping)]
+    moved_items = file_diff.get("renamed_or_moved", []) or []
+    moved_count = _as_int(summary.get("renamed_or_moved", counts.get("renamed_or_moved", len(moved_items))))
+    added = _as_int(summary.get("added_files", counts.get("added")))
+    removed = _as_int(summary.get("removed_files", counts.get("removed")))
+    changed = _as_int(summary.get("changed_files", counts.get("changed")))
+    primary_migration = migrations[0] if migrations else {}
+    moved_old = _path_items(moved_items, "old")
+    moved_new = _path_items(moved_items, "new")
+    old_root = str(primary_migration.get("old_root") or _dominant_root(moved_old or _path_items(file_diff.get("removed"))))
+    new_root = str(primary_migration.get("new_root") or _dominant_root(moved_new or _path_items(file_diff.get("added"))))
+    matched = _as_int(
+        summary.get(
+            "package_root_migration_matched_files",
+            counts.get("package_root_migration_matched_files", primary_migration.get("matched_logical_paths")),
         )
-    return commands
+    )
+    suspected = bool(migrations or (moved_count and changed == 0 and (added or removed) and (old_root != "-" or new_root != "-")))
+    return {
+        "suspected": suspected,
+        "old_root": old_root,
+        "new_root": new_root,
+        "renamed_or_moved": moved_count,
+        "package_root_migrations": _as_int(summary.get("package_root_migrations", counts.get("package_root_migrations", len(migrations)))),
+        "package_root_migration_matched_files": matched,
+        "old_root_file_count": _as_int(primary_migration.get("old_root_file_count")),
+        "new_root_file_count": _as_int(primary_migration.get("new_root_file_count")),
+        "raw_added_under_new_root": _as_int(primary_migration.get("raw_added_under_new_root")),
+        "raw_removed_under_old_root": _as_int(primary_migration.get("raw_removed_under_old_root")),
+        "added_files": added,
+        "removed_files": removed,
+        "changed_files": changed,
+    }
+
+
+def _change_paths_for_match(value: Any, *, raw_path: Any = None) -> list[str]:
+    if isinstance(value, Mapping):
+        iterable = [{"path": key, **(item if isinstance(item, Mapping) else {})} for key, item in value.items()]
+    elif isinstance(value, list):
+        iterable = value
+    else:
+        iterable = []
+    paths: list[str] = []
+    for item in iterable:
+        if isinstance(item, Mapping):
+            path = common.relative_display_path(item.get("path") or item.get("relpath") or item.get("file") or "-", base=raw_path)
+        else:
+            path = common.relative_display_path(item, base=raw_path)
+        if path and path != "-":
+            paths.append(path)
+    return paths
+
+
+def _path_match_evidence(file_diff: Mapping[str, Any], *, raw_path: Any = None) -> dict[str, dict[str, str]]:
+    evidence: dict[str, dict[str, str]] = {}
+    for item in file_diff.get("renamed_or_moved", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        old_path = common.relative_display_path(item.get("old") or item.get("base") or "-", base=raw_path)
+        new_path = common.relative_display_path(item.get("new") or item.get("target") or "-", base=raw_path)
+        if old_path == "-" or new_path == "-":
+            continue
+        reason = str(item.get("reason") or item.get("match_reason") or "renamed_or_moved")
+        row_evidence = {
+            "match_status": "matched_move",
+            "base_candidate": old_path,
+            "target_candidate": new_path,
+            "match_reason": reason,
+        }
+        evidence[old_path] = dict(row_evidence)
+        evidence[new_path] = dict(row_evidence)
+
+    added_by_name: dict[str, list[str]] = defaultdict(list)
+    removed_by_name: dict[str, list[str]] = defaultdict(list)
+    for path in _change_paths_for_match(file_diff.get("added"), raw_path=raw_path):
+        added_by_name[Path(path).name].append(path)
+    for path in _change_paths_for_match(file_diff.get("removed"), raw_path=raw_path):
+        removed_by_name[Path(path).name].append(path)
+    for basename in sorted(set(added_by_name) & set(removed_by_name)):
+        added_paths = sorted(added_by_name[basename])
+        removed_paths = sorted(removed_by_name[basename])
+        if len(added_paths) != 1 or len(removed_paths) != 1:
+            continue
+        added_path = added_paths[0]
+        removed_path = removed_paths[0]
+        if added_path in evidence or removed_path in evidence:
+            continue
+        row_evidence = {
+            "match_status": "candidate_match",
+            "base_candidate": removed_path,
+            "target_candidate": added_path,
+            "match_reason": "same basename candidate",
+        }
+        evidence[added_path] = dict(row_evidence)
+        evidence[removed_path] = dict(row_evidence)
+    return evidence
+
+
+def _default_path_match_evidence(change: str, path: str) -> dict[str, str]:
+    if change == "changed":
+        return {
+            "match_status": "not_applicable",
+            "base_candidate": path or "-",
+            "target_candidate": path or "-",
+            "match_reason": "same path changed",
+        }
+    if change == "removed":
+        return {
+            "match_status": "unmatched",
+            "base_candidate": path or "-",
+            "target_candidate": "-",
+            "match_reason": "no deterministic match",
+        }
+    return {
+        "match_status": "unmatched",
+        "base_candidate": "-",
+        "target_candidate": path or "-",
+        "match_reason": "no deterministic match",
+    }
 
 
 def _group_file_changes_by_review_mode(file_changes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -328,10 +616,10 @@ def _group_file_changes_by_review_mode(file_changes: list[dict[str, Any]]) -> tu
     return recommended, summary_only, metadata_only
 
 
-def _version_update_headline(base_ref: str, changed_files: int, recommended_count: int, reviewed_count: int) -> str:
+def _version_update_headline(base_ref: str, added_files: int, removed_files: int, changed_files: int, recommended_count: int, reviewed_count: int) -> str:
     return (
-        f"当前版本相对 {base_ref or 'NEEDS_BASE_CONFIRM'} 有 {changed_files} 个变化文件，"
-        f"{recommended_count} 个建议下钻，{reviewed_count} 个已按 Summary/Metadata-only 审查。"
+        f"当前版本相对 {base_ref or 'NEEDS_BASE_CONFIRM'}：修改文件 {changed_files} 个，新增 {added_files} 个，删除 {removed_files} 个；"
+        f"其中 {recommended_count} 个需要优先下钻，{reviewed_count} 个按 Summary/Metadata-only 处理。"
     )
 
 
@@ -358,6 +646,7 @@ def _version_update_confidence_note(model: Mapping[str, Any]) -> str:
 
 
 def _primary_next_action(status: str, recommended_count: int, command_count: int) -> dict[str, Any]:
+    del command_count
     if str(status or "").upper() == "NEEDS_BASE_CONFIRM":
         return {
             "kind": "base_confirm_required",
@@ -367,8 +656,8 @@ def _primary_next_action(status: str, recommended_count: int, command_count: int
     if recommended_count > 0:
         return {
             "kind": "file_diff_recommended",
-            "label": "Run recommended File Diff",
-            "command_count": command_count,
+            "label": "Review focused file evidence",
+            "command_count": 0,
         }
     return {
         "kind": "review_evidence",
@@ -377,11 +666,55 @@ def _primary_next_action(status: str, recommended_count: int, command_count: int
     }
 
 
+def _normalize_recommended_action(action: Any) -> str:
+    text = str(action or "").strip()
+    lowered = text.lower()
+    if "手动两两" in text or "两两对比" in text or "pairwise" in lowered:
+        return "确认重点文件证据，并把确认结果作为 release evidence 归档。"
+    return text
+
+
+def _usage_decision_result(
+    *,
+    status: Any,
+    base_trust_status: Any,
+    lane_counts: Mapping[str, Any],
+    release_notes: list[Any],
+    review_gate: Mapping[str, Any] | None = None,
+) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    status_key = str(status or "").upper()
+    base_key = str(base_trust_status or "").upper()
+    gate = review_gate if isinstance(review_gate, Mapping) else {}
+    gate_status = str(gate.get("status") or "").upper()
+    blocking = len(gate.get("blocking_items", []) or [])
+
+    if status_key in {"NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"} or base_key in {"BLOCK", "BLOCKING", "BLOCKED"}:
+        reasons.append("base_not_confirmed")
+        return "BLOCKED", reasons
+    if status_key in {"CHANGED", "DIFF", "REVIEW", "DIFF_REVIEW"}:
+        reasons.append("diff_changed")
+    if status_key in {"NO_DIFF_SUMMARY", "DIFF_NOT_RUN"}:
+        reasons.append("diff_incomplete")
+    if blocking:
+        reasons.append("review_gate_blocking")
+        return "BLOCKED", reasons
+    if gate_status in {"REVIEW_REQUIRED", "NEEDS_REVIEW", "ATTENTION"}:
+        reasons.append("review_gate_attention")
+    if _as_int(lane_counts.get("recommended_file_diff")):
+        reasons.append("recommended_file_diff")
+    if not release_notes:
+        reasons.append("release_note_missing")
+    if reasons:
+        return "USAGE_REVIEW_REQUIRED", reasons
+    return "READY", []
+
+
 def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> dict[str, Any]:
     out_path = Path(out)
     lib_id = _library_id(lib)
     version_id = _version_id(version)
-    safe_lib = common.safe(lib_id)
+    safe_lib = _library_report_slug(lib)
     safe_ver = common.safe(version_id)
     base_rule = resolve_review_base(version, lib)
     base_ref = base_rule["base_ref"]
@@ -392,6 +725,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     compare_strategy = comparison_rule["compare_strategy"]
     delete_semantics = comparison_rule["delete_semantics"]
     diff_dir = _select_diff_dir(version, base_ref=base_ref, base_version=base_version)
+    diff_meta = dict(common.version_diff_json(diff_dir, "diff_meta.json"))
     summary = dict(common.version_diff_summary(diff_dir))
     file_diff = dict(common.version_file_diff(diff_dir))
     view_diff = dict(common.version_diff_json(diff_dir, "view_diff.json"))
@@ -400,9 +734,17 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     release_evidence_diff = dict(common.version_diff_json(diff_dir, "release_evidence_diff.json"))
     diff_issues = dict(common.version_diff_json(diff_dir, "diff_issues.json"))
     file_changes = _iter_file_changes(file_diff, raw_path=version.get("raw_path"))
+    path_match_evidence = _path_match_evidence(file_diff, raw_path=version.get("raw_path"))
+    for item in file_changes:
+        path = str(item.get("path") or "")
+        change = str(item.get("change") or "")
+        item.update(path_match_evidence.get(path) or _default_path_match_evidence(change, path))
+    added_files = _as_int(summary.get("added_files", _as_mapping(file_diff.get("counts")).get("added")))
+    removed_files = _as_int(summary.get("removed_files", _as_mapping(file_diff.get("counts")).get("removed")))
     changed_files = summary.get("changed_files")
     if changed_files is None:
         changed_files = len(file_changes)
+    path_restructure = _path_restructure_summary(file_diff, summary)
     summary_status = str(summary.get("status") or "").upper()
     if base_ref == "NEEDS_BASE_CONFIRM":
         status = "NEEDS_BASE_CONFIRM"
@@ -414,6 +756,17 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         status = "CHANGED"
     else:
         status = summary_status or "SAME"
+    scan_evidence = _build_scan_evidence_model(version)
+    comparison_context = _comparison_context(
+        diff_dir=diff_dir,
+        diff_meta=diff_meta,
+        base_ref=base_ref,
+        base_version=base_version,
+        base_source=base_source,
+        status=status,
+    )
+    scan_context = _as_mapping(scan_evidence.get("context"))
+    scan_compatibility = _scan_compatibility(scan_context, comparison_context)
     release_notes = _release_notes_from_existing_evidence(version)
     recommended_file_diff, summary_only_reviewed, metadata_only_reviewed = _group_file_changes_by_review_mode(file_changes)
     commands = _file_diff_commands(lib, version, base_version, file_changes)
@@ -430,6 +783,13 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "metadata_only": len(metadata_only_reviewed),
         "blocking_issues": blocking_issues,
     }
+    usage_decision, usage_reasons = _usage_decision_result(
+        status=status,
+        base_trust_status=_base_trust_status(base_ref),
+        lane_counts=lane_counts,
+        release_notes=release_notes,
+        review_gate=version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {},
+    )
     md_path = out_path / "libraries" / safe_lib / "versions" / safe_ver / "current_lib_diff.md"
     trace_links = {
         "diff_summary": str(diff_dir / "diff_summary.json") if diff_dir else "",
@@ -444,6 +804,9 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     model = {
         "schema_version": "version_update_detail.v1",
         "library_id": lib_id,
+        "formal_library_id": lib_id,
+        "typed_library_id": lib.get("typed_library_id") or lib.get("library_id"),
+        "report_slug": safe_lib,
         "library_name": _library_name(lib),
         "version_id": version_id,
         "target_version": version_id,
@@ -452,6 +815,8 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "base_source": base_source,
         "base_trust_status": _base_trust_status(base_ref),
         "base_trust_note": _base_trust_note(base_ref),
+        "usage_decision": usage_decision,
+        "usage_decision_reasons": usage_reasons,
         "package_type": common.package_type(version),
         "compare_strategy": compare_strategy,
         "comparison_semantics": comparison_semantics,
@@ -462,6 +827,11 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "diff_summary_path": str(diff_dir / "diff_summary.json") if diff_dir else "",
         "file_diff_path": str(diff_dir / "file_diff.json") if diff_dir else "",
         "markdown_export_path": str(md_path),
+        "scan_context": scan_context,
+        "comparison_context": comparison_context,
+        "scan_compatibility": scan_compatibility,
+        "scan_evidence": scan_evidence,
+        "diff_meta": diff_meta,
         "diff_summary": summary,
         "view_diff": view_diff,
         "type_diff": type_diff,
@@ -469,6 +839,9 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "release_evidence_diff": release_evidence_diff,
         "diff_issues": diff_issues,
         "file_diff": file_diff,
+        "path_match_evidence": path_match_evidence,
+        "added_files": added_files,
+        "removed_files": removed_files,
         "changed_files": _as_int(changed_files),
         "summary_metrics": _summary_metrics(summary),
         "file_changes": file_changes,
@@ -480,12 +853,13 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "summary_only_changes": summary_only_reviewed,
         "metadata_only_reviewed_changes": metadata_only_reviewed,
         "release_notes": release_notes,
-        "recommended_actions": list(summary.get("recommended_actions", []) or []),
+        "recommended_actions": [_normalize_recommended_action(action) for action in (summary.get("recommended_actions", []) or []) if str(action).strip()],
         "file_diff_recommendations": commands,
         "metadata_only_changes": metadata_only_changes,
+        "path_restructure": path_restructure,
         "trace_links": trace_links,
     }
-    model["headline"] = _version_update_headline(base_ref, _as_int(changed_files), recommended_count, reviewed_count)
+    model["headline"] = _version_update_headline(base_ref, added_files, removed_files, _as_int(changed_files), recommended_count, reviewed_count)
     model["confidence_note"] = _version_update_confidence_note(model)
     model["primary_next_action"] = _primary_next_action(status, recommended_count, len(commands))
     return model
@@ -518,6 +892,9 @@ def _file_change_rows_for(items: Any) -> list[str]:
             f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
             f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
             f"<td>{ui.badge(item.get('review_lane') or 'Review', item.get('review_lane') or 'Review')}</td>"
+            f"<td><code>{ui.esc(item.get('match_status') or '-')}</code></td>"
+            f"<td><code>{ui.esc(item.get('base_candidate') or '-')}</code></td>"
+            f"<td><code>{ui.esc(item.get('target_candidate') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('hint') or '-')}</td>"
             "</tr>"
         )
@@ -526,34 +903,6 @@ def _file_change_rows_for(items: Any) -> list[str]:
 
 def _file_change_rows(model: Mapping[str, Any]) -> list[str]:
     return _file_change_rows_for(model.get("file_changes", []))
-
-
-def _command_for_path(model: Mapping[str, Any], path: str) -> str:
-    target = str(path or "")
-    for item in model.get("file_diff_recommendations", []) or []:
-        if not isinstance(item, Mapping):
-            continue
-        if str(item.get("path") or "") == target:
-            return str(item.get("command") or "")
-    return ""
-
-
-def _recommended_file_diff_rows(model: Mapping[str, Any]) -> list[str]:
-    rows: list[str] = []
-    for item in model.get("recommended_file_diff", []) or []:
-        if not isinstance(item, Mapping):
-            continue
-        path = str(item.get("path") or "-")
-        rows.append(
-            "<tr>"
-            f"<td>{ui.badge(item.get('review_lane') or 'Review')}</td>"
-            f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
-            f"<td><code>{ui.esc(path)}</code></td>"
-            f"<td>{ui.esc(item.get('reason') or item.get('hint') or '-')}</td>"
-            f"<td>{ui.command_chip(_command_for_path(model, path), label='复制')}</td>"
-            "</tr>"
-        )
-    return rows
 
 
 def _summary_only_rows(model: Mapping[str, Any]) -> list[str]:
@@ -586,6 +935,25 @@ def _metadata_only_rows(model: Mapping[str, Any]) -> list[str]:
             "</tr>"
         )
     return rows
+
+
+def _focus_file_change_rows(model: Mapping[str, Any]) -> list[str]:
+    focus = [
+        item
+        for item in model.get("file_changes", []) or []
+        if isinstance(item, Mapping) and str(item.get("review_lane") or "") in {"P0", "P1", "Review"}
+    ]
+    if not focus:
+        focus = [item for item in model.get("file_changes", []) or [] if isinstance(item, Mapping)]
+    return _file_change_rows_for(focus[:120])
+
+
+def _lane_count(model: Mapping[str, Any], key: str) -> int:
+    return _as_int(_as_mapping(model.get("lane_counts")).get(key))
+
+
+def _summary_value(model: Mapping[str, Any], key: str) -> int:
+    return _as_int(_summary_metric_value(model, key))
 
 
 def _release_note_rows(model: Mapping[str, Any]) -> list[str]:
@@ -636,21 +1004,6 @@ def _diff_issue_rows(model: Mapping[str, Any]) -> list[str]:
     return rows
 
 
-def _command_rows(model: Mapping[str, Any]) -> list[str]:
-    rows: list[str] = []
-    for item in model.get("file_diff_recommendations", []) or []:
-        if not isinstance(item, Mapping):
-            continue
-        rows.append(
-            "<tr>"
-            f"<td>{ui.badge(item.get('lane') or 'Review')}</td>"
-            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
-            f"<td>{ui.command_chip(item.get('command'), label='复制')}</td>"
-            "</tr>"
-        )
-    return rows
-
-
 def _cn_compare_strategy(value: Any) -> str:
     text = str(value or "")
     if text == "incremental compare":
@@ -681,7 +1034,7 @@ def _cn_delete_semantics(value: Any) -> str:
 def _version_detail_styles() -> str:
     return """
 <style>
-.version-dashboard{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start}.version-main,.version-side{display:flex;flex-direction:column;gap:18px}.version-side{position:sticky;top:18px}.version-overview{border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}.overview-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}.overview-title h2{margin:0 0 4px;font-size:20px}.overview-title p{font-size:13px}.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.overview-cell{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px}.overview-cell b{display:block;font-size:12px;color:#667085}.overview-cell em{display:block;font-style:normal;font-weight:800;color:#172033;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.version-update-lead{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin-bottom:12px}.version-update-lead b{display:block;color:#172033;margin-bottom:5px}.version-update-lead p{margin:0 0 10px;color:#667085;font-size:13px}.primary-action-line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.primary-action-line em{font-style:normal;color:#667085;font-size:12px}.base-trust-context{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px;margin-bottom:12px}.base-trust-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}.base-trust-head b{color:#344054}.base-trust-context p{margin:0 0 10px;color:#667085;font-size:13px}.context-list{display:flex;flex-direction:column;gap:8px}.context-row{border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:9px 10px}.context-row b{display:block;font-size:12px;color:#667085}.context-row code,.context-row em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.section-label{margin:18px 0 8px;font-weight:900;color:#344054}.empty-guidance{border:1px dashed #d3dae6;border-radius:10px;background:#fbfcff;color:#667085;padding:12px 14px;margin:10px 0}.empty-guidance b{display:block;color:#344054;margin-bottom:3px}.quality-note{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin:12px 0;color:#667085}.quality-note b{color:#344054}.panel-body>h3{font-size:14px;margin:18px 0 8px;color:#344054}.version-scroll-table.change-scroll td:nth-child(5){min-width:220px}.version-scroll-table.change-scroll td:nth-child(3) code{min-width:860px}.version-scroll-table.corner-detail-scroll{max-height:320px}.version-scroll-table.corner-detail-scroll table{min-width:980px}.version-scroll-table.unknown-detail-scroll{max-height:260px}.version-scroll-table.unknown-detail-scroll table{min-width:860px}.detail-fold.review-fold{border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;margin-top:12px}.detail-fold.review-fold summary{color:#344054}.raw-scan-note{border-left:4px solid #a15c00;background:#fff7e8;border-radius:10px;padding:12px 14px;margin:12px 0;color:#664000}.raw-scan-note b{display:block;color:#4f2f00}.side-panel .panel{box-shadow:none}.evidence-actions{display:grid;gap:8px}.evidence-actions .btn{justify-content:flex-start}@media(max-width:1100px){.version-dashboard{grid-template-columns:1fr}.version-side{position:static}.overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.overview-head{display:block}.overview-grid{grid-template-columns:1fr}.version-dashboard{gap:12px}.panel-head{display:block}.panel-actions{margin-top:10px}.version-scroll-table.change-scroll{height:360px}}
+.version-dashboard{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:start}.version-main,.version-side{display:flex;flex-direction:column;gap:18px}.version-side{position:sticky;top:18px}.version-overview{border:1px solid #d8dee8;border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}.overview-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}.overview-title h2{margin:0 0 4px;font-size:20px}.overview-title p{font-size:13px}.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.overview-cell{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px}.overview-cell b{display:block;font-size:12px;color:#667085}.overview-cell em{display:block;font-style:normal;font-weight:800;color:#172033;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.overview-context{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:12px 14px;margin-top:12px}.overview-context h3{margin:0 0 8px;font-size:13px;color:#344054}.overview-context-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.overview-context-item b{display:block;font-size:11px;color:#667085}.overview-context-item code,.overview-context-item em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.overview-context-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.judgment-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:14px}.judgment-item{border:1px solid #d8dee8;border-left-width:4px;border-radius:10px;background:#fff;padding:10px 12px;min-height:82px}.judgment-item b{display:block;font-size:11px;text-transform:uppercase;color:#667085;margin-bottom:6px}.judgment-item strong{display:block;color:#172033;font-size:15px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.judgment-item span{display:block;color:#667085;font-size:12px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.judgment-ok{border-left-color:#067647}.judgment-warn{border-left-color:#b54708}.judgment-bad{border-left-color:#b42318}.judgment-neutral{border-left-color:#98a2b3}.change-brief{display:grid;grid-template-columns:1.2fr 1fr;gap:10px;margin:12px 0}.change-brief-block{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px}.change-brief-block b{display:block;color:#344054;margin-bottom:5px}.change-brief-block p{margin:0;color:#667085;font-size:13px}.change-brief-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.change-brief-tags code{background:#f2f4f7;border:1px solid #e4e7ec;border-radius:6px;padding:2px 6px}.version-update-lead{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin-bottom:12px}.version-update-lead b{display:block;color:#172033;margin-bottom:5px}.version-update-lead p{margin:0;color:#667085;font-size:13px}.base-trust-context{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px;margin-bottom:12px}.base-trust-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}.base-trust-head b{color:#344054}.base-trust-context p{margin:0 0 10px;color:#667085;font-size:13px}.context-list{display:flex;flex-direction:column;gap:8px}.context-row{border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:9px 10px}.context-row b{display:block;font-size:12px;color:#667085}.context-row code,.context-row em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.section-label{margin:18px 0 8px;font-weight:900;color:#344054}.empty-guidance{border:1px dashed #d3dae6;border-radius:10px;background:#fbfcff;color:#667085;padding:12px 14px;margin:10px 0}.quality-note{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin:12px 0;color:#667085}.quality-note b{color:#344054}.panel-body>h3{font-size:14px;margin:18px 0 8px;color:#344054}.version-scroll-table.focus-change-scroll,.version-scroll-table.change-scroll{height:420px;max-height:420px;overflow:scroll}.version-scroll-table.change-scroll td:nth-child(5),.version-scroll-table.focus-change-scroll td:nth-child(5){min-width:220px}.version-scroll-table.change-scroll table,.version-scroll-table.focus-change-scroll table{min-width:1780px}.version-scroll-table.change-scroll td:nth-child(3) code,.version-scroll-table.focus-change-scroll td:nth-child(3) code,.version-scroll-table.summary-only-scroll td:nth-child(2) code,.version-scroll-table.metadata-only-scroll td:nth-child(2) code{min-width:640px}.version-scroll-table.summary-only-scroll table,.version-scroll-table.metadata-only-scroll table{min-width:980px}.version-scroll-table.corner-detail-scroll{max-height:320px}.version-scroll-table.corner-detail-scroll table{min-width:980px}.version-scroll-table.unknown-detail-scroll{max-height:260px}.version-scroll-table.unknown-detail-scroll table{min-width:860px}.detail-fold.review-fold{border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;margin-top:12px}.detail-fold.review-fold summary{color:#344054}.raw-scan-note{border-left:4px solid #b85c00;background:#fff7e8;border-radius:10px;padding:12px 14px;margin:12px 0;color:#664000}.raw-scan-note b{display:block;color:#4f2f00}.side-panel .panel{box-shadow:none}.evidence-actions{display:grid;gap:8px}.evidence-actions .btn{justify-content:flex-start}.evidence-detail-stack{display:flex;flex-direction:column;gap:14px}.evidence-detail-stack details{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px 12px}.evidence-detail-stack summary{font-weight:800;color:#344054;cursor:pointer}@media(max-width:1100px){.version-dashboard{grid-template-columns:1fr}.version-side{position:static}.overview-grid,.overview-context-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-context{grid-template-columns:1fr}.overview-context-actions{justify-content:flex-start}.judgment-strip{grid-template-columns:1fr 1fr}.change-brief{grid-template-columns:1fr}}@media(max-width:640px){.overview-head{display:block}.overview-grid,.overview-context-grid,.judgment-strip{grid-template-columns:1fr}.version-dashboard{gap:12px}.panel-head{display:block}.panel-actions{margin-top:10px}.version-scroll-table.change-scroll,.version-scroll-table.focus-change-scroll{height:360px}}
 </style>
 """
 
@@ -699,41 +1052,183 @@ def _raw_scan_scope_note(model: Mapping[str, Any], *, parser_task_count: int, co
     )
 
 
-def _version_overview_panel(
-    lib_id: str,
-    version_id: str,
-    version: Mapping[str, Any],
-    model: Mapping[str, Any],
-    *,
-    relation: str,
-    parser_task_count: int,
-    count_only_total: int,
-    file_total: int,
-) -> str:
-    decision = model.get("status") or version.get("overall_status") or "REVIEW"
-    review_text = "可审查"
-    if str(decision).upper() in {"NEEDS_BASE_CONFIRM", "DIFF_NOT_RUN", "SCAN_BLOCKED", "DIFF_BLOCKED"}:
-        review_text = "需补证据"
-    elif str(decision).upper() in {"CHANGED", "DIFF", "REVIEW"}:
-        review_text = "有变化，需审查"
+def _judgment_class(status: Any) -> str:
+    key = str(status or "").upper()
+    if key in {"PASS", "OK", "READY", "SAME"}:
+        return "ok"
+    if key in {"FAIL", "FAILED", "ERROR", "BLOCK", "BLOCKING", "BLOCKED", "NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"}:
+        return "bad"
+    if key in {"WARNING", "WARN", "REVIEW", "CHANGED", "DIFF", "DIFF_REVIEW", "DIFF_NOT_RUN", "NO_DIFF_SUMMARY", "MISSING"}:
+        return "warn"
+    return "neutral"
+
+
+def _judgment_strip(items: list[tuple[str, Any, str, Any]]) -> str:
+    return "<div class='judgment-strip'>" + "".join(
+        "<div class='judgment-item judgment-{cls}'>"
+        "<b>{label}</b>"
+        "<strong title='{value}'>{value}</strong>"
+        "<span title='{detail}'>{detail}</span>"
+        "</div>".format(
+            cls=_judgment_class(status),
+            label=ui.esc(label),
+            value=ui.esc(value),
+            detail=ui.esc(detail),
+        )
+        for label, value, detail, status in items
+    ) + "</div>"
+
+
+def _top_file_type_text(model: Mapping[str, Any], *, limit: int = 4) -> str:
+    counts: Counter[str] = Counter()
+    for item in model.get("file_changes", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        counts[str(item.get("file_type") or "-").lower()] += 1
+    if not counts:
+        return "无文件变化"
+    return ", ".join(f"{name}:{count}" for name, count in counts.most_common(limit))
+
+
+def _top_file_type_tags(model: Mapping[str, Any], *, limit: int = 5) -> str:
+    counts: Counter[str] = Counter()
+    for item in model.get("file_changes", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        counts[str(item.get("file_type") or "-").lower()] += 1
+    if not counts:
+        return "<span class='muted'>无文件类型变化</span>"
+    return "".join(f"<code>{ui.esc(name)}:{ui.esc(count)}</code>" for name, count in counts.most_common(limit))
+
+
+def _evidence_judgment(model: Mapping[str, Any]) -> tuple[str, str, str]:
+    summary_only = _lane_count(model, "summary_only")
+    metadata_only = _lane_count(model, "metadata_only")
+    release_notes = len(model.get("release_notes", []) or [])
+    if metadata_only or summary_only:
+        label = "混合证据"
+        status = "WARNING"
+    else:
+        label = "内容级证据"
+        status = "PASS"
+    detail = f"summary-only {summary_only} / metadata-only {metadata_only} / RN {release_notes}"
+    return label, detail, status
+
+
+def _usage_decision(model: Mapping[str, Any], version: Mapping[str, Any]) -> str:
+    if model.get("usage_decision"):
+        return str(model.get("usage_decision"))
+    status = str(model.get("status") or "").upper()
+    base_status = str(model.get("base_trust_status") or "").upper()
+    gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
+    gate_status = str((gate or {}).get("status") or "").upper()
+    blocking = len((gate or {}).get("blocking_items", []) or [])
+    if status in {"NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"} or base_status in {"BLOCK", "BLOCKING", "BLOCKED"}:
+        return "BLOCKED"
+    if (
+        status in {"CHANGED", "DIFF", "REVIEW", "DIFF_REVIEW", "NO_DIFF_SUMMARY", "DIFF_NOT_RUN"}
+        or gate_status in {"REVIEW_REQUIRED", "NEEDS_REVIEW", "ATTENTION"}
+        or blocking
+        or _lane_count(model, "recommended_file_diff")
+        or not model.get("release_notes")
+    ):
+        return "USAGE_REVIEW_REQUIRED"
+    return "READY"
+
+
+def _management_gate_user_impact(version: Mapping[str, Any]) -> tuple[str, str, str]:
+    gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
+    status = str((gate or {}).get("status") or "NOT_BUILT").upper()
+    blocking = len((gate or {}).get("blocking_items", []) or [])
+    attention = len((gate or {}).get("attention_items", []) or [])
+    if blocking:
+        return "影响使用", f"{blocking} 个管理阻塞项", "BLOCKED"
+    if status in {"REVIEW_REQUIRED", "NEEDS_REVIEW", "ATTENTION"} or attention:
+        return "需管理确认", f"{attention} 个关注项", "WARNING"
+    if status in {"READY", "PASS", "OK"}:
+        return "不影响使用", "管理门禁已关闭", "PASS"
+    return "未建立", "无管理门禁证据", "INFO"
+
+
+def _change_brief_html(model: Mapping[str, Any], *, added_files: int, removed_files: int, changed_files: int, status: str) -> str:
+    p0p1_count = _lane_count(model, "recommended_file_diff")
+    summary_only = _lane_count(model, "summary_only")
+    metadata_only = _lane_count(model, "metadata_only")
+    blocking = _lane_count(model, "blocking_issues")
+    risk_label = "有高优先级变化" if p0p1_count else "无 P0/P1 变化"
+    risk_status = "WARNING" if p0p1_count or blocking else status
     return (
-        "<section class='version-overview'>"
-        "<div class='overview-head'>"
-        f"<div class='overview-title'><h2>版本审查总览</h2><p>先确认状态、Base/Target 和证据状态，再进入变化文件和 Parser 细节。</p></div>{ui.badge(decision, review_text)}</div>"
-        "<div class='overview-grid'>"
-        f"<div class='overview-cell'><b>库</b><em title='{ui.esc(lib_id)}'>{ui.esc(lib_id)}</em></div>"
-        f"<div class='overview-cell'><b>版本</b><em title='{ui.esc(version_id)}'>{ui.esc(version_id)}</em></div>"
-        f"<div class='overview-cell'><b>Base → Target</b><em title='{ui.esc(model.get('base_version') or '-')}'>{ui.esc(model.get('base_ref') or '-')} → 当前版本</em></div>"
-        f"<div class='overview-cell'><b>证据</b><em>{ui.esc(file_total)} 文件 / {ui.esc(parser_task_count)} Parser / {ui.esc(count_only_total)} 大文件</em></div>"
-        f"<div class='overview-cell'><b>Scan</b><em>{ui.esc(ui.status_label(version.get('scan_status')))}</em></div>"
-        f"<div class='overview-cell'><b>Diff</b><em>{ui.esc(ui.status_label(version.get('diff_status') or model.get('status')))}</em></div>"
-        f"<div class='overview-cell'><b>关系</b><em>{ui.esc(common.relation_label(relation))}</em></div>"
-        f"<div class='overview-cell'><b>包类型</b><em>{ui.esc(model.get('package_type') or '-')}</em></div>"
-        "</div></section>"
+        "<div class='change-brief'>"
+        "<div class='change-brief-block'>"
+        f"<b>变化风险 {ui.badge(risk_status, risk_label)}</b>"
+        f"<p>新增 {ui.esc(added_files)} / 删除 {ui.esc(removed_files)} / 修改 {ui.esc(changed_files)}；P0/P1={ui.esc(p0p1_count)}，阻塞问题={ui.esc(blocking)}。</p>"
+        f"<div class='change-brief-tags'>{_top_file_type_tags(model)}</div>"
+        "</div>"
+        "<div class='change-brief-block'>"
+        f"<b>证据分层 {ui.badge('WARNING' if summary_only or metadata_only else 'PASS', '混合证据' if summary_only or metadata_only else '内容级')}</b>"
+        f"<p>摘要级 {ui.esc(summary_only)}，metadata-only {ui.esc(metadata_only)}。这些不是失败，但不能假装成全文级 Diff。</p>"
+        "</div>"
+        "</div>"
     )
 
 
-def _version_context_panel(
+def _path_restructure_html(model: Mapping[str, Any]) -> str:
+    item = _as_mapping(model.get("path_restructure"))
+    if not item.get("suspected"):
+        return ""
+    old_root = item.get("old_root") or "-"
+    new_root = item.get("new_root") or "-"
+    moved = _as_int(item.get("renamed_or_moved"))
+    matched = _as_int(item.get("package_root_migration_matched_files"))
+    old_root_count = _as_int(item.get("old_root_file_count"))
+    new_root_count = _as_int(item.get("new_root_file_count"))
+    changed = _as_int(item.get("changed_files"))
+    if matched:
+        detail = (
+            f"逻辑路径匹配 {ui.esc(matched)}；old 包内 {ui.esc(old_root_count)} 个文件，"
+            f"new 包内 {ui.esc(new_root_count)} 个文件；文件级 moved/renamed {ui.esc(moved)}，"
+            f"真实 modified {ui.esc(changed)}。"
+        )
+    else:
+        detail = f"文件级 moved/renamed {ui.esc(moved)}，真实 modified {ui.esc(changed)}。"
+    return (
+        "<div class='quality-note path-restructure-note'>"
+        f"<b>疑似重打包 / 目录迁移</b> old root: <code>{ui.esc(old_root)}</code>，"
+        f"new root: <code>{ui.esc(new_root)}</code>；{detail}"
+        "需要确认路径变化是否影响脚本引用、flow config、release manifest。"
+        "</div>"
+    )
+
+
+def _review_task_summary_html(model: Mapping[str, Any]) -> str:
+    p0p1 = _lane_count(model, "recommended_file_diff")
+    review_count = sum(
+        1
+        for item in model.get("file_changes", []) or []
+        if isinstance(item, Mapping) and item.get("review_lane") == "Review"
+    )
+    reviewed = _lane_count(model, "summary_only") + _lane_count(model, "metadata_only")
+    moved = _as_int(_as_mapping(model.get("path_restructure")).get("renamed_or_moved"))
+    unknown = sum(
+        1
+        for item in model.get("file_changes", []) or []
+        if isinstance(item, Mapping) and str(item.get("file_type") or "").lower() == "unknown"
+    )
+    has_release_note = bool(model.get("release_notes"))
+    release_note_status = "缺失" if not has_release_note else "已发现"
+    migration_review_count = _as_int(_as_mapping(model.get("path_restructure")).get("package_root_migration_matched_files")) or moved
+    tasks = [
+        ("路径迁移等价性", migration_review_count, "确认 root 变化是否只是重打包", "WARNING" if migration_review_count else "PASS"),
+        ("P0/P1", p0p1, "必须确认", "WARNING" if p0p1 else "PASS"),
+        ("Review", review_count, "按需确认", "WARNING" if review_count else "PASS"),
+        ("Summary/Metadata", reviewed, "默认归档", "INFO" if reviewed else "PASS"),
+        ("Release note", release_note_status, "release note / changelog 证据", "PASS" if has_release_note else "WARNING"),
+        ("Unknown 文件", unknown, "待分类文件", "WARNING" if unknown else "PASS"),
+    ]
+    return ui.metric_grid(tasks)
+
+
+def _version_context_band(
     out_path: Path,
     safe_lib: str,
     lib_id: str,
@@ -746,33 +1241,99 @@ def _version_context_panel(
         ("库", lib_id),
         ("版本", version_id),
         ("Base", f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"),
-        ("对比语义", _cn_semantics(model.get("comparison_semantics"))),
-        ("删除语义", _cn_delete_semantics(model.get("delete_semantics"))),
-        ("scan_id", (version.get("scan") or {}).get("scan_id") or version.get("scan_id") or "-"),
-        ("Raw Relpath", catalog._raw_relpath(version.get("raw_path"))),
+        ("包类型", model.get("package_type") or version.get("package_type") or "-"),
+        ("对比口径", _cn_semantics(model.get("comparison_semantics"))),
+        ("缺失文件口径", _cn_delete_semantics(model.get("delete_semantics"))),
+        ("交付相对路径", catalog._raw_relpath(version.get("raw_path"))),
     ]
-    body = "<div class='context-list'>" + "".join(
-        f"<div class='context-row'><b>{ui.esc(label)}</b><em>{ui.esc(value)}</em></div>" for label, value in rows
-    ) + "</div>"
-    body += catalog._absolute_path_box("绝对 Raw 路径", version.get("raw_path"))
-    body += ui.action_strip([
-        ui.button("库工作台", common.href(out_path / "libraries" / safe_lib / "index.html"), "primary", target="_blank"),
-        ui.button("Scan 目录", common.href(scan_dir), "secondary", disabled=not bool(scan_dir), target="_blank"),
-    ])
-    return ui.panel("版本上下文", "固定查看当前版本的来源、Base 和证据入口。", body)
+    items = "".join(
+        f"<div class='overview-context-item'><b>{ui.esc(label)}</b><em>{ui.esc(value)}</em></div>" for label, value in rows
+    )
+    actions = (
+        "<div class='overview-context-actions'>"
+        + ui.button("库工作台", common.href(out_path / "libraries" / safe_lib / "index.html"), "primary", target="_blank")
+        + ui.button("Scan 目录", common.href(scan_dir), "secondary", disabled=not bool(scan_dir), target="_blank")
+        + "</div>"
+    )
+    return (
+        "<div class='overview-context'>"
+        "<div><h3>版本坐标</h3>"
+        f"<div class='overview-context-grid'>{items}</div></div>"
+        f"{actions}</div>"
+    )
+
+
+def _version_overview_panel(
+    out_path: Path,
+    safe_lib: str,
+    lib_id: str,
+    version_id: str,
+    version: Mapping[str, Any],
+    model: Mapping[str, Any],
+    *,
+    scan_dir: Path | None,
+    relation: str,
+    parser_task_count: int,
+    count_only_total: int,
+    file_total: int,
+    unknown_count: int,
+    required_view_status: Any,
+) -> str:
+    decision = _usage_decision(model, version)
+    review_text = ui.status_label(decision)
+    file_change_total = (
+        _summary_value(model, "added_files")
+        + _summary_value(model, "removed_files")
+        + _summary_value(model, "changed_files")
+    )
+    p0p1_count = _lane_count(model, "recommended_file_diff")
+    base_status = model.get("base_trust_status") or "WARNING"
+    delivery_status = required_view_status or "UNKNOWN"
+    release_note_found = bool(model.get("release_notes"))
+    usable_label = "可使用"
+    if str(decision).upper() in {"BLOCKED", "NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"}:
+        usable_label = "不可直接使用"
+    elif str(decision).upper() in {"USAGE_REVIEW_REQUIRED", "CHANGED", "DIFF", "REVIEW", "DIFF_REVIEW", "WARNING"}:
+        usable_label = "需确认后使用"
+    judgment = _judgment_strip(
+        [
+            ("可用性", usable_label, ui.status_label(decision), decision),
+            ("Base", "已确认" if str(base_status).upper() == "PASS" else "待确认", f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}", base_status),
+            ("必需 View 覆盖", ui.status_label(delivery_status), "覆盖满足不等于全文 Parser 通过", delivery_status),
+            ("变化影响", f"P0/P1 {p0p1_count}", f"{file_change_total} 个变化；{_top_file_type_text(model, limit=2)}", "WARNING" if p0p1_count else "PASS"),
+            ("Release note", "已发现" if release_note_found else "缺失", "release note / changelog 证据", "PASS" if release_note_found else "WARNING"),
+            ("待确认", str(unknown_count), "unknown / 分类待确认" if unknown_count else "无 unknown", "WARNING" if unknown_count else "PASS"),
+        ]
+    )
+    return (
+        "<section class='version-overview'>"
+        "<div class='overview-head'>"
+        f"<div class='overview-title'><h2>IP 版本使用事实</h2><p>先看能不能用、影响哪些 view、哪些变化必须确认；管理证据收在右侧和折叠区。</p></div>{ui.badge(decision, review_text)}</div>"
+        "<div class='overview-grid'>"
+        f"<div class='overview-cell'><b>库</b><em title='{ui.esc(lib_id)}'>{ui.esc(lib_id)}</em></div>"
+        f"<div class='overview-cell'><b>版本</b><em title='{ui.esc(version_id)}'>{ui.esc(version_id)}</em></div>"
+        f"<div class='overview-cell'><b>Base → Target</b><em title='{ui.esc(model.get('base_version') or '-')}'>{ui.esc(model.get('base_ref') or '-')} → 当前版本</em></div>"
+        f"<div class='overview-cell'><b>包类型</b><em>{ui.esc(model.get('package_type') or '-')}</em></div>"
+        f"</div>{_version_context_band(out_path, safe_lib, lib_id, version_id, version, model, scan_dir)}{judgment}</section>"
+    )
 
 
 def _review_gate_summary_panel(version: Mapping[str, Any]) -> str:
     gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
-    status = str((gate or {}).get("status") or "NOT_BUILT")
+    impact, detail, status = _management_gate_user_impact(version)
     blocking = len((gate or {}).get("blocking_items", []) or [])
     attention = len((gate or {}).get("attention_items", []) or [])
-    body = ui.metric_grid([
-        ("门禁状态", ui.status_label(status), "review gate", status),
-        ("阻塞项", blocking, "需要修复 / 接受 / 豁免", "BLOCK" if blocking else "PASS"),
-        ("关注项", attention, "建议补充证据", "WARNING" if attention else "PASS"),
-    ])
-    return ui.panel("审查门禁", "用于确认当前版本是否还有必须处理的发布风险。", body)
+    return ui.panel(
+        "管理门禁",
+        "面向 release owner 的 gate 状态；这里明确它是否影响当前版本使用判断。",
+        ui.metric_grid(
+            [
+                ("使用影响", impact, detail, status),
+                ("管理阻塞", blocking, "需要 release owner 关闭 / 接受 / 豁免", "BLOCKED" if blocking else "PASS"),
+                ("管理关注", attention, "建议补充证据", "WARNING" if attention else "PASS"),
+            ]
+        ),
+    )
 
 
 def _scope_for_file_type(file_type: str) -> str:
@@ -954,16 +1515,18 @@ def _view_coverage_panel(
     manual_count = int(counts.get("flow_config", 0) or 0) + int(counts.get("tech_config", 0) or 0)
     rows = _view_coverage_rows(inventory, parser_manifest, readiness, counts)
     status = readiness.get("required_view_status") or readiness.get("bundle_status") or ("PASS" if rows else "UNKNOWN")
-    return ui.panel(
-        "交付 View 覆盖",
-        "按真实交付视图检查 scope、必需/可选关系、Parser 状态和需要人工确认的文件类型。",
-        ui.metric_grid([
+    coverage_judgment = _judgment_strip(
+        [
             ("完整性判断", ui.status_label(status), f"release_level={readiness.get('release_level_candidate') or '-'}", status),
-            ("必需 View", len(required), ", ".join(sorted(required)) or "未配置", "PASS" if required else "WARNING"),
-            ("可选 View", len(optional), ", ".join(sorted(optional)[:6]) + (" ..." if len(optional) > 6 else "") if optional else "未配置", "INFO"),
-            ("未知文件", unknown_count, "需要补分类或人工确认", "WARNING" if unknown_count else "PASS"),
-            ("流程/技术配置", manual_count, "flow_config / tech_config", "WARNING" if manual_count else "INFO"),
-        ])
+            ("必需 View", "已配置" if required else "未配置", ", ".join(sorted(required)) or "未配置", "PASS" if required else "WARNING"),
+            ("未知文件", str(unknown_count), "需要补分类或人工确认" if unknown_count else "无 unknown", "WARNING" if unknown_count else "PASS"),
+            ("人工审查", str(manual_count), "flow_config / tech_config", "WARNING" if manual_count else "PASS"),
+        ]
+    )
+    return ui.panel(
+        "必需 View 覆盖",
+        "按 IP 使用需要检查 LEF、Liberty、Verilog、GDS、SPEF、DB、SDC、UPF 等 view 是否齐全。",
+        coverage_judgment
         + catalog._scroll_table(
             ["View / Scope", "要求", "文件数", "状态", "Parser", "校验级别", "代表路径 / 说明"],
             rows,
@@ -987,15 +1550,10 @@ def _count_only_panel(counts: Mapping[str, int], corner_summary: Mapping[str, An
         + catalog._scroll_table(["文件类型", "工艺", "电压", "温度", "路径"], corner_rows, "当前 Raw Scan 没有识别到 PVT Corner 文件名", "corner-detail-scroll")
         + "</details>"
     )
-    return ui.panel(
-        "大文件与 PVT Corner",
-        "GDS/SPEF/Liberty/DB/OAS/Verilog 默认按大文件/多文件策略处理：统计数量、识别文件名 PVT，不在常规版本审查中读取完整内容。",
-        ui.metric_grid([
-            ("大文件计数", count_only_total, ", ".join(f"{k}:{counts[k]}" for k in sorted(catalog.VERSION_COUNT_ONLY_TYPES) if counts.get(k)) or "无", "INFO" if count_only_total else "PASS"),
-            ("工艺角", len((corner_summary or {}).get("process_counts") or {}), ", ".join(f"{k}:{v}" for k, v in ((corner_summary or {}).get("process_counts") or {}).items()) or "无", "PASS" if (corner_summary or {}).get("process_counts") else "INFO"),
-            ("电压角", len((corner_summary or {}).get("voltage_counts") or {}), ", ".join(f"{k}:{v}" for k, v in ((corner_summary or {}).get("voltage_counts") or {}).items()) or "无", "PASS" if (corner_summary or {}).get("voltage_counts") else "INFO"),
-            ("温度角", len((corner_summary or {}).get("temperature_counts") or {}), ", ".join(f"{k}:{v}" for k, v in ((corner_summary or {}).get("temperature_counts") or {}).items()) or "无", "PASS" if (corner_summary or {}).get("temperature_counts") else "INFO"),
-        ])
+    return ui.collapsible_panel(
+        "大文件与 Corner 线索",
+        "Liberty、SPEF、DB、GDS、Verilog 等大/多文件默认用数量、路径、hash 和 PVT 文件名线索辅助判断。",
+        "<div class='quality-note'><b>默认策略</b> GDS/Liberty/SPEF/DB/OAS/Verilog 等大文件默认只看数量、路径、hash 和文件名 corner 线索。</div>"
         + empty
         + ui.faceted_table(
             "count-only-files",
@@ -1006,6 +1564,7 @@ def _count_only_panel(counts: Mapping[str, int], corner_summary: Mapping[str, An
             [(0, "文件类型"), (2, "默认处理")],
         )
         + corner_detail,
+        open=False,
     )
 
 
@@ -1014,9 +1573,9 @@ def _parser_panel(parser_manifest: Mapping[str, Any], parser_results: Mapping[st
     empty = ""
     if not rows:
         empty = "<div class='empty-guidance'><b>当前 Scan 没有生成可展示的 Parser 结果</b>常见原因：本次 raw 包只包含文档/脚本，或相关文件类型没有 parser 任务。</div>"
-    return ui.panel(
-        "Parser 覆盖汇总",
-        "按文件类型聚合 Parser 结果。先看覆盖和对象数量，需要时再展开代表性对象。",
+    return ui.collapsible_panel(
+        "Parser 证据",
+        "按文件类型聚合 Parser 结果；代表对象和来源文件作为追溯证据折叠展示。",
         empty
         + ui.faceted_table(
             "parser-aggregate",
@@ -1029,117 +1588,77 @@ def _parser_panel(parser_manifest: Mapping[str, Any], parser_results: Mapping[st
     )
 
 
-def _quality_panel(parser_task_count: int, count_only_total: int, file_total: int, corner_summary: Mapping[str, Any], model: Mapping[str, Any]) -> str:
+def _quality_panel(
+    parser_task_count: int,
+    count_only_total: int,
+    file_total: int,
+    corner_summary: Mapping[str, Any],
+    model: Mapping[str, Any],
+    version: Mapping[str, Any],
+    scan_dir: Path | None,
+) -> str:
+    evidence_label, evidence_detail, evidence_status = _evidence_judgment(model)
+    scan_status = "PASS" if file_total else "WARNING"
+    parser_status = "PASS" if parser_task_count else "WARNING"
+    diff_status = model.get("status") or "UNKNOWN"
+    rn_count = len(model.get("release_notes", []) or [])
+    scan_id = (version.get("scan") or {}).get("scan_id") or version.get("scan_id") or "-"
+    evidence_rows = [
+        ("scan_id", scan_id),
+        ("Scan 目录", scan_dir or "-"),
+        ("绝对 Raw 路径", version.get("raw_path") or "-"),
+    ]
+    evidence_context = "<div class='context-list'>" + "".join(
+        f"<div class='context-row'><b>{ui.esc(label)}</b><em>{ui.esc(value)}</em></div>" for label, value in evidence_rows
+    ) + "</div>"
     return ui.panel(
-        "证据质量",
-        "判断本页数据是否足够支撑后续 Diff 和人工审查。",
-        ui.metric_grid([
-            ("文件清单", file_total, "Raw Scan inventory", "PASS" if file_total else "WARNING"),
-            ("Parser 覆盖", parser_task_count, "LEF / RTL / CDL / SDC / UPF", "PASS" if parser_task_count else "WARNING"),
-            ("大文件计数", count_only_total, ".lib / .db / .spef / layout", "INFO" if count_only_total else "PASS"),
-            ("PVT Corner", (corner_summary or {}).get("total_corner_files", 0), "filename PVT hints", "PASS" if (corner_summary or {}).get("total_corner_files") else "INFO"),
-            ("Diff 状态", ui.status_label(model.get("status")), "当前版本更新详情", model.get("status")),
-        ])
-    )
-
-
-def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
-    base_version = model.get("base_version") or "-"
-    base_ref = model.get("base_ref") or "NEEDS_BASE_CONFIRM"
-    diff_hint = model.get("diff_summary_path") or "请运行 lg lib-diff / lg cmp 生成 diff_summary.json"
-    empty_next = "暂无文件级 diff 明细。请先运行 lg cmp 或 lg lib-diff 生成当前库对比结果。"
-    status = str(model.get("status") or "UNKNOWN")
-    meta = ui.compact_meta(
-        [
-            ("Base source", f"{base_ref} / {model.get('base_source') or '-'}"),
-            ("Base version", base_version),
-            ("Target version", model.get("target_version") or model.get("version_id") or "-"),
-            ("Comparison semantics", model.get("comparison_semantics") or "-"),
-            ("Delete semantics", model.get("delete_semantics") or "-"),
-            ("Markdown export", model.get("markdown_export_path") or "-"),
-        ]
-    )
-    metadata_note = ""
-    if model.get("metadata_only_changes"):
-        metadata_note = "<div class='quality-note'><b>metadata-only</b> 变化会展示在表格中，但 DB/GDS/OAS/大 Liberty/SPEF 等不会生成默认文件级 Diff 命令。</div>"
-    primary_next_action = _as_mapping(model.get("primary_next_action"))
-    primary_action_html = (
-        "<div class='version-update-lead'>"
-        f"<b>{ui.esc(model.get('headline') or '-')}</b>"
-        f"<p>{ui.esc(model.get('confidence_note') or '-')}</p>"
-        "<div class='primary-action-line'>"
-        f"{ui.badge(primary_next_action.get('kind') or 'review_evidence', primary_next_action.get('label') or 'Review evidence')}"
-        f"<em>command_count={ui.esc(primary_next_action.get('command_count') or 0)}</em>"
-        "</div></div>"
-    )
-    trust_context_html = (
-        "<div class='base-trust-context'>"
-        "<div class='base-trust-head'>"
-        "<b>Base trust</b>"
-        f"{ui.badge(model.get('base_trust_status') or 'WARNING', model.get('base_trust_status') or 'WARNING')}"
-        "</div>"
-        f"<p>{ui.esc(model.get('base_trust_note') or '-')}</p>"
-        f"{meta}"
-        "</div>"
-    )
-    status_message = ui.esc(model.get("status_message") or _update_status_message(status))
-    status_message_html = (
-        "<div class='quality-note'>"
-        f"<b>{ui.esc(status)}</b> {status_message}"
-        "</div>"
-    )
-    added_files = _as_int(_summary_metric_value(model, "added_files"))
-    removed_files = _as_int(_summary_metric_value(model, "removed_files"))
-    changed_files = _as_int(_summary_metric_value(model, "changed_files", model.get("changed_files")))
-    file_change_total = added_files + removed_files + changed_files
-    return ui.panel(
-        f"更新详情（vs {base_ref} / {base_version}）",
-        "先看本次版本相对 Base 的变化、风险和下一步动作；文件级 Diff 只展示 P0/P1 推荐。",
-        primary_action_html
-        + trust_context_html
-        + status_message_html
-        + ui.metric_grid(
+        "证据入口",
+        "追溯 scan、parser、diff 和原始路径；这些是证据，不作为主屏使用结论。",
+        _judgment_strip(
             [
-                (
-                    "对比策略",
-                    _cn_compare_strategy(model.get("compare_strategy")),
-                    _cn_delete_semantics(model.get("delete_semantics")),
-                    "WARNING" if model.get("comparison_semantics") == "incremental" else "PASS",
-                ),
-                ("Diff 摘要", ui.status_label(status), diff_hint, status),
-                ("文件变化", file_change_total, f"+{added_files} / -{removed_files} / ~{changed_files}", "WARNING" if file_change_total else "INFO"),
-                ("Release note", len(model.get("release_notes", []) or []), "release_note / changelog / update_note", "PASS" if model.get("release_notes") else "INFO"),
+                ("Raw Scan", "有清单" if file_total else "缺清单", f"{file_total} files", scan_status),
+                ("Parser", "有内容级 Parser" if parser_task_count else "无 Parser", f"{parser_task_count} tasks", parser_status),
+                ("Diff", ui.status_label(diff_status), "当前版本更新详情", diff_status),
+                ("Release note", "已发现" if rn_count else "缺失", f"{rn_count} 个 release note", "PASS" if rn_count else "WARNING"),
+                ("证据分层", evidence_label, evidence_detail, evidence_status),
             ]
         )
-        + "<h3>Diff 指标</h3>"
+        + evidence_context,
+    )
+
+
+def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
+    empty_next = "暂无文件级 diff 明细。请先运行 lg cmp 或 lg lib-diff 生成当前库对比结果。"
+    body = (
+        "<div class='evidence-detail-stack'>"
+        "<details><summary>完整 Diff 指标</summary>"
         + catalog._scroll_table(["指标", "数值"], _metric_rows(model), "暂无自动 Diff 结果；下一步运行 lg cmp 或 lg lib-diff。", "metric-scroll")
-        + "<h3>变化文件</h3>"
-        + metadata_note
-        + catalog._scroll_table(["变化", "类型", "路径", "审查级别", "建议"], _file_change_rows(model), empty_next, "change-scroll")
-        + "<h3>Recommended File Diff</h3>"
-        + "<div class='quality-note'>建议对这些 P0/P1 变化运行 File Diff 后再完成最终审查。</div>"
+        + "</details>"
+        "<details><summary>完整变化文件</summary>"
         + catalog._scroll_table(
-            ["Priority", "file_type", "path", "reason", "command"],
-            _recommended_file_diff_rows(model),
-            "暂无 P0/P1 文件级 Diff 建议。",
+            ["变化", "类型", "路径", "审查级别", "匹配状态", "Base 候选", "Target 文件", "建议"],
+            _file_change_rows(model),
+            empty_next,
             "change-scroll",
         )
+        + "</details>"
+        "<details><summary>Summary-only / Metadata-only 明细</summary>"
         + "<h3>Summary-only Reviewed</h3>"
-        + "<div class='quality-note'>已完成摘要级审查；默认无需展开全文。</div>"
         + catalog._scroll_table(
             ["file_type", "path", "summary evidence", "reason"],
             _summary_only_rows(model),
             "暂无 summary-only 审查项。",
-            "change-scroll",
+            "summary-only-scroll",
         )
         + "<h3>Metadata-only Reviewed</h3>"
-        + "<div class='quality-note'>已完成 metadata-only 审查；二进制/版图文件默认只使用 hash/size/path/count 证据。</div>"
         + catalog._scroll_table(
             ["file_type", "path", "metadata evidence", "reason"],
             _metadata_only_rows(model),
             "暂无 metadata-only 审查项。",
-            "change-scroll",
+            "metadata-only-scroll",
         )
+        + "</details>"
+        "<details><summary>Release note 与结构变化证据</summary>"
         + "<h3>Release note</h3>"
         + ui.faceted_table(
             "release-note-table",
@@ -1177,6 +1696,8 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
             "暂无 release_evidence_diff.json 变化证据。",
             "release-evidence-change-scroll",
         )
+        + "</details>"
+        "<details><summary>Diff Issues / 建议动作</summary>"
         + "<h3>Diff Issues</h3>"
         + ui.faceted_table(
             "diff-issue-table",
@@ -1194,14 +1715,72 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
             "暂无建议动作",
             "搜索建议动作",
         )
-        + "<h3>文件级 Diff 命令</h3>"
-        + ui.faceted_table(
-            "file-diff-command-table",
-            ["级别", "路径", "命令"],
-            _command_rows(model),
-            "暂无 P0/P1 文件级 Diff 建议；metadata-only 文件不会生成默认 fd 命令。",
-            "搜索级别 / 路径 / 命令",
-            [(0, "级别")],
+        + "</details>"
+        "</div>"
+    )
+    return ui.collapsible_panel(
+        "审计证据",
+        "完整指标、完整变化清单、summary/metadata-only 明细、release 证据和 diff issues 默认折叠，供 release owner 追溯。",
+        body,
+        open=False,
+    )
+
+
+def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
+    base_version = model.get("base_version") or "-"
+    base_ref = model.get("base_ref") or "NEEDS_BASE_CONFIRM"
+    status = str(model.get("status") or "UNKNOWN")
+    meta = ui.compact_meta(
+        [
+            ("Base 来源", f"{base_ref} / {model.get('base_source') or '-'}"),
+            ("Base 版本", base_version),
+            ("Target 版本", model.get("target_version") or model.get("version_id") or "-"),
+            ("对比语义", _cn_semantics(model.get("comparison_semantics"))),
+            ("删除语义", _cn_delete_semantics(model.get("delete_semantics"))),
+        ]
+    )
+    fact_summary_html = (
+        "<div class='version-update-lead'>"
+        f"<b>{ui.esc(model.get('headline') or '-')}</b>"
+        f"<p>{ui.esc(model.get('confidence_note') or '-')}</p>"
+        "</div>"
+    )
+    trust_context_html = (
+        "<div class='base-trust-context'>"
+        "<div class='base-trust-head'>"
+        "<b>对比口径</b>"
+        f"{ui.badge(model.get('base_trust_status') or 'WARNING', model.get('base_trust_status') or 'WARNING')}"
+        "</div>"
+        f"<p>{ui.esc(model.get('base_trust_note') or '-')}</p>"
+        f"{meta}"
+        "</div>"
+    )
+    status_message = ui.esc(model.get("status_message") or _update_status_message(status))
+    status_message_html = (
+        "<div class='quality-note'>"
+        f"<b>{ui.esc(status)}</b> {status_message}"
+        "</div>"
+    )
+    added_files = _as_int(_summary_metric_value(model, "added_files"))
+    removed_files = _as_int(_summary_metric_value(model, "removed_files"))
+    changed_files = _as_int(_summary_metric_value(model, "changed_files", model.get("changed_files")))
+    return ui.panel(
+        f"使用影响（vs {base_ref} / {base_version}）",
+        "展示本次版本相对 Base 会影响哪些文件、view 和人工确认点；完整审计证据放在后续折叠区。",
+        fact_summary_html
+        + trust_context_html
+        + status_message_html
+        + _change_brief_html(model, added_files=added_files, removed_files=removed_files, changed_files=changed_files, status=status)
+        + _path_restructure_html(model)
+        + "<h3>任务清单</h3>"
+        + _review_task_summary_html(model)
+        + "<h3>重点变化文件</h3>"
+        + "<div class='quality-note'><b>显示范围</b> 仅显示 P0/P1/Review 重点变化，最多 120 行；完整变化文件在下方折叠证据中查看。P0/P1 与 Review 会同时进入本表，所以行数可能大于 P0/P1 数。</div>"
+        + catalog._scroll_table(
+            ["变化", "类型", "路径", "审查级别", "匹配状态", "Base 候选", "Target 文件", "建议"],
+            _focus_file_change_rows(model),
+            "暂无重点变化文件；可展开完整变化文件查看。",
+            "focus-change-scroll",
         ),
     )
 
@@ -1210,6 +1789,9 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
     path = Path(out_md)
     path.parent.mkdir(parents=True, exist_ok=True)
     primary_next_action = _as_mapping(model.get("primary_next_action"))
+    comparison_context = _as_mapping(model.get("comparison_context"))
+    scan_context = _as_mapping(model.get("scan_context"))
+    scan_compatibility = _as_mapping(model.get("scan_compatibility"))
     lines = [
         "---",
         "schema_version: version_update_detail.v1",
@@ -1221,6 +1803,8 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
         f"comparison_semantics: {model.get('comparison_semantics') or '-'}",
         f"delete_semantics: {model.get('delete_semantics') or '-'}",
         f"status: {model.get('status') or '-'}",
+        f"usage_decision: {model.get('usage_decision') or '-'}",
+        "usage_decision_reasons: " + ", ".join(str(item) for item in model.get("usage_decision_reasons", []) or []),
         f"changed_files: {_as_int(model.get('changed_files'))}",
         f"recommended_file_diff: {len(model.get('recommended_file_diff', []) or [])}",
         f"summary_only_reviewed: {len(model.get('summary_only_reviewed', []) or [])}",
@@ -1241,12 +1825,19 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
         f"- base_trust_status: {model.get('base_trust_status') or '-'}",
         f"- base_trust_note: {model.get('base_trust_note') or '-'}",
         f"- status_message: {model.get('status_message') or _update_status_message(model.get('status'))}",
+        f"- usage_decision: {model.get('usage_decision') or '-'}",
+        "- usage_decision_reasons: " + ", ".join(str(item) for item in model.get("usage_decision_reasons", []) or []),
         "",
         "## Compare Context",
         "",
         f"- strategy: {model.get('compare_strategy') or '-'}",
         f"- base: {model.get('base_ref') or '-'} / {model.get('base_version') or '-'}",
         f"- target: {model.get('target_version') or model.get('version_id') or '-'}",
+        f"- diff_dir: {comparison_context.get('diff_dir') or '-'}",
+        f"- old_scan_id: {comparison_context.get('old_scan_id') or '-'}",
+        f"- new_scan_id: {comparison_context.get('new_scan_id') or '-'}",
+        f"- scan_compatibility: {scan_compatibility.get('status') or '-'}",
+        f"- target_scan_id: {scan_context.get('scan_id') or '-'}",
         "",
         "## Summary Metrics",
         "",
@@ -1258,7 +1849,7 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
     for item in model.get("file_changes", []) or []:
         if isinstance(item, Mapping):
             lines.append(f"- [{item.get('review_lane')}] {item.get('change')} {item.get('file_type')} {item.get('path')}")
-    lines.extend(["", "## Recommended File Diff", ""])
+    lines.extend(["", "## Focused File Review", ""])
     for item in model.get("recommended_file_diff", []) or []:
         if isinstance(item, Mapping):
             lines.append(f"- [{item.get('review_lane')}] {item.get('change')} {item.get('file_type')} {item.get('path')}")
@@ -1290,10 +1881,6 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
     for item in (_as_mapping(model.get("diff_issues"))).get("issues", []) or []:
         if isinstance(item, Mapping):
             lines.append(f"- {item.get('severity', '-')}: {item.get('category', '-')} - {item.get('title') or item.get('message') or '-'}")
-    lines.extend(["", "## File Diff Commands", ""])
-    for item in model.get("file_diff_recommendations", []) or []:
-        if isinstance(item, Mapping):
-            lines.append(f"- {item.get('lane')} `{item.get('command')}`")
     lines.extend(["", "## Recommended Actions", ""])
     for action in model.get("recommended_actions", []) or []:
         lines.append(f"- {action}")
@@ -1310,51 +1897,47 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
     out_path = Path(out)
     lib_id = _library_id(lib)
     version_id = _version_id(version)
-    safe_lib = common.safe(lib_id)
+    safe_lib = _library_report_slug(lib)
     safe_ver = common.safe(version_id)
     page = out_path / "libraries" / safe_lib / "versions" / safe_ver / "index.html"
     tags = catalog._version_tags(version)
     relation = common.relation_status(version)
-    rail = ui.status_rail(
-        [
-            ("Catalog", "DISCOVERED", "Version is registered in the catalog"),
-            ("Scan", version.get("scan_status") or "NOT_SCANNED", "Single-version scan evidence"),
-            ("Relation", relation, common.relation_label(relation)),
-            ("Compare", version.get("diff_status") or "COMPARE_PENDING", "Current-library update detail"),
-            ("File Review", common.file_review_status(version), common.file_review_text(version)),
-        ]
-    )
     model = build_version_update_detail_model(out_path, lib, version)
     md_path = page.parent / "current_lib_diff.md"
     model["markdown_export_path"] = str(md_path)
     if export_markdown:
         export_current_lib_diff_markdown(model, md_path)
-    scan_dir = catalog._version_scan_dir(version)
-    inventory = catalog._scan_inventory(scan_dir)
-    parser_manifest = catalog._scan_parser_manifest(scan_dir)
-    parser_results = catalog._scan_parser_results(scan_dir)
-    release_readiness = read_json(scan_dir / "summary" / "release_readiness.json", default={}) if scan_dir else {}
+    scan_evidence = _as_mapping(model.get("scan_evidence"))
+    scan_context = _as_mapping(model.get("scan_context"))
+    scan_dir_text = str(scan_context.get("scan_dir") or "")
+    scan_dir = Path(scan_dir_text) if scan_dir_text else None
+    inventory = _as_mapping(scan_evidence.get("inventory"))
+    parser_manifest = _as_mapping(scan_evidence.get("parser_manifest"))
+    parser_results = _as_mapping(scan_evidence.get("parser_results"))
+    release_readiness = _as_mapping(scan_evidence.get("release_readiness"))
     counts = catalog._version_file_type_counts(inventory)
     count_only_total = sum(int(counts.get(item, 0) or 0) for item in catalog.VERSION_COUNT_ONLY_TYPES)
-    parser_task_count = sum(
-        1
-        for file_entry in (parser_manifest.get("files", []) or [])
-        for task in (file_entry.get("parser_tasks", []) or [])
-        if task.get("parser_name")
-    )
-    corner_summary = inventory.get("corner_filename_summary") or {}
-    file_total = sum(int(v or 0) for v in counts.values())
+    parser_task_count = _as_int(scan_evidence.get("parser_task_count"))
+    corner_summary = scan_evidence.get("corner_summary") or inventory.get("corner_filename_summary") or {}
+    file_total = _as_int(scan_evidence.get("file_total")) or sum(int(v or 0) for v in counts.values())
+    unknown_count = _as_int(scan_evidence.get("unknown_count")) or int(counts.get("unknown", 0) or 0)
+    required_view_status = scan_evidence.get("required_view_status") or release_readiness.get("required_view_status") or release_readiness.get("bundle_status")
     body = (
         _version_detail_styles()
         + _version_overview_panel(
+            out_path,
+            safe_lib,
             lib_id,
             version_id,
             version,
             model,
+            scan_dir=scan_dir,
             relation=relation,
             parser_task_count=parser_task_count,
             count_only_total=count_only_total,
             file_total=file_total,
+            unknown_count=unknown_count,
+            required_view_status=required_view_status,
         )
         + "<div class='version-dashboard'><main class='version-main'>"
         + render_version_update_detail_panel(model)
@@ -1362,22 +1945,10 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
         + _view_coverage_panel(inventory, parser_manifest, release_readiness, counts)
         + _count_only_panel(counts, corner_summary, count_only_total)
         + _parser_panel(parser_manifest, parser_results)
+        + _audit_evidence_panel(model)
         + "</main><aside class='version-side'>"
-        + _version_context_panel(out_path, safe_lib, lib_id, version_id, version, model, scan_dir)
-        + _quality_panel(parser_task_count, count_only_total, file_total, corner_summary, model)
+        + _quality_panel(parser_task_count, count_only_total, file_total, corner_summary, model, version, scan_dir)
         + _review_gate_summary_panel(version)
-        + ui.panel(
-            "对比前检查",
-            "确认 Scan、Base 和 Diff 状态是否足够支撑当前审查。",
-            ui.metric_grid(
-                [
-                    ("Parser 视图", parser_task_count, "LEF / RTL / CDL / SDC / UPF", "PASS" if parser_task_count else "WARNING"),
-                    ("大文件计数", count_only_total, "常规审查不读取完整内容", "INFO" if count_only_total else "PASS"),
-                    ("Diff 状态", ui.status_label(version.get("diff_status") or model.get("status")), "当前版本更新详情", version.get("diff_status") or model.get("status")),
-                    ("文件审查", common.file_review_text(version), "优先查看 P0/P1 文件级 Diff", common.file_review_status(version)),
-                ]
-            ),
-        )
         + "</aside></div>"
         + ui.collapsible_panel(
             "原始证据",
@@ -1394,21 +1965,26 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
             open=False,
         )
     )
+    usage_decision = _usage_decision(model, version)
+    gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
+    gate_status = (gate or {}).get("status") or "NOT_BUILT"
     rail = ui.status_rail(
         [
-            ("目录", "DISCOVERED", "版本已进入 catalog"),
+            ("使用建议", usage_decision, "统一主状态"),
             ("Scan", version.get("scan_status") or "NOT_SCANNED", "单版本扫描证据"),
-            ("关系", relation, common.relation_label(relation)),
-            ("Diff", version.get("diff_status") or model.get("status") or "COMPARE_PENDING", "当前版本对比状态"),
-            ("文件审查", common.file_review_status(version), common.file_review_text(version)),
+            ("Base", model.get("base_trust_status") or "WARNING", f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"),
+            ("必需 View", required_view_status or "UNKNOWN", "覆盖满足不等于全文 Parser"),
+            ("Diff", model.get("status") or "COMPARE_PENDING", "当前版本对比状态"),
+            ("Gate", gate_status, "管理门禁状态"),
+            ("Release Note", "FOUND" if model.get("release_notes") else "MISSING", "release note / changelog"),
         ]
     )
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / {version_id}",
         "版本审查",
-        "先看更新结论、证据状态和下一步动作，再展开 Parser 与原始证据。",
+        "面向 IP 使用者展示可用性、Base 关系、使用影响、必需 View 覆盖和证据入口。",
         catalog_browser_styles() + body,
-        decision=version.get("overall_status") or ("REVIEW" if tags - {"clear"} else "PASS"),
+        decision=usage_decision,
         rail=rail,
         nav="<a href='../../../index.html'>目录</a><a class='active' href='#'>版本详情</a><a href='../index.html'>库工作台</a>",
         meta=ui.compact_meta([("库", lib_id), ("版本", version_id), ("标签", ", ".join(sorted(tags)))]),

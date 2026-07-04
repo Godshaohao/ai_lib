@@ -113,6 +113,9 @@ class PairwisePolicyTest(unittest.TestCase):
         task_types = [item["file_type"] for item in tasks["tasks"]]
         self.assertEqual(set(task_types), expected_task_types)
         self.assertEqual(len(task_types), len(expected_task_types))
+        for item in tasks["tasks"]:
+            self.assertNotIn("command", item)
+            self.assertNotIn("low_level_command", item)
         for file_type in set(changed_types) - expected_task_types:
             self.assertNotIn(file_type, task_types)
 
@@ -166,6 +169,25 @@ class PairwisePolicyTest(unittest.TestCase):
 
         self.assertEqual(DETAIL_SUMMARY_TYPES, SUMMARY_ONLY_TYPES)
         self.assertEqual(DETAIL_BINARY_TYPES, BINARY_METADATA_ONLY_TYPES)
+
+    def test_comparison_review_reuses_default_file_diff_types(self) -> None:
+        from lib_guard.project_config import DEFAULT_FILE_DIFF_TYPES
+        from lib_guard.render.html_report import FILE_DIFF_TYPES
+
+        self.assertEqual(FILE_DIFF_TYPES, DEFAULT_FILE_DIFF_TYPES)
+        self.assertNotIn("verilog", FILE_DIFF_TYPES)
+        self.assertNotIn("liberty", FILE_DIFF_TYPES)
+        self.assertNotIn("spef", FILE_DIFF_TYPES)
+        self.assertNotIn("db", FILE_DIFF_TYPES)
+
+    def test_comparison_review_reuses_summary_and_binary_lanes(self) -> None:
+        from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, SUMMARY_ONLY_TYPES
+        from lib_guard.render.html_report import BINARY_METADATA_TYPES, COUNT_ONLY_TYPES
+
+        self.assertEqual(BINARY_METADATA_TYPES, BINARY_METADATA_ONLY_TYPES)
+        self.assertEqual(COUNT_ONLY_TYPES, SUMMARY_ONLY_TYPES | BINARY_METADATA_ONLY_TYPES)
+        self.assertIn("systemverilog", COUNT_ONLY_TYPES)
+        self.assertIn("ndm", BINARY_METADATA_TYPES)
 
     def test_fd_summary_only_without_force_large_fails_with_clear_message(self) -> None:
         from lib_guard.short_cli import build_cli_commands
@@ -279,9 +301,11 @@ class PairwisePolicyTest(unittest.TestCase):
                 output_root=Path(td) / "pairwise",
             )
 
-        commands = "\n".join(item["command"] for item in tasks["tasks"])
-        self.assertNotIn("--force-large", commands)
-        self.assertNotIn("--manual-large-file-opt-in", commands)
+        task_text = json.dumps(tasks["tasks"], ensure_ascii=False)
+        self.assertNotIn("--force-large", task_text)
+        self.assertNotIn("--manual-large-file-opt-in", task_text)
+        for item in tasks["tasks"]:
+            self.assertNotIn("command", item)
 
     def test_short_cli_dry_run_force_large_prints_executable_lower_cli_command(self) -> None:
         from lib_guard.cli import build_parser

@@ -437,7 +437,11 @@ def build_review_gate_for_version(
 def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None = None) -> dict[str, Any]:
     libraries = []
     for lib in catalog.get("libraries", []) or []:
-        lib_name = str(lib.get("library_name") or lib.get("library_id") or "unknown")
+        formal_library_id = str(lib.get("formal_library_id") or lib.get("library_name") or lib.get("library_id") or "unknown")
+        typed_library_id = str(lib.get("typed_library_id") or lib.get("library_id") or formal_library_id)
+        report_slug = str(lib.get("report_slug") or _safe_name(typed_library_id))
+        display_name = str(lib.get("display_name") or formal_library_id)
+        lib_name = formal_library_id
         versions = []
         for version in _versions(lib):
             version_id = str(version.get("version_id") or version.get("version_key") or "unknown")
@@ -451,6 +455,10 @@ def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None
             item: dict[str, Any] = {
                 "version_id": version_id,
                 "version_key": version.get("version_key"),
+                "version_uid": version.get("version_uid") or version.get("version_key"),
+                "formal_library_id": formal_library_id,
+                "typed_library_id": typed_library_id,
+                "report_slug": report_slug,
                 "stage": version.get("stage") or "unknown",
                 "raw_path": version.get("raw_path"),
                 "base_version": version.get("base_version") or lineage.get("base_candidate") or lineage.get("base"),
@@ -472,8 +480,8 @@ def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None
                 "risk_level": overall_status,
                 "overall_status": overall_status,
                 "library_name": lib_name,
-                "display_name": lib_name,
-                "library_id": lib.get("library_id"),
+                "display_name": display_name,
+                "library_id": typed_library_id,
                 "links": _version_links(out_dir, lib_name, version_id, version),
                 "pairwise_tasks": pairwise_tasks,
                 "release_result": _release_result(version),
@@ -494,7 +502,11 @@ def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None
         libraries.append(
             {
                 "library_id": lib.get("library_id"),
-                "display_name": lib_name,
+                "typed_library_id": typed_library_id,
+                "formal_library_id": formal_library_id,
+                "library_name": formal_library_id,
+                "display_name": display_name,
+                "report_slug": report_slug,
                 "vendor": lib.get("vendor") or "",
                 "category": lib.get("category") or lib.get("library_type") or "",
                 "middle_path": lib.get("middle_path") or "",

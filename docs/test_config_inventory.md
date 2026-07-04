@@ -49,15 +49,18 @@ release_root: <workspace>/release_area
 versions: <workspace>/config/library_versions.tsv
 actions_dir: <workspace>/actions
 library_type: ip
-mode: candidate
+mode: scan
 parse_jobs: 8
+hash_policy: smart
+parse_file_types: lef,cdl
+parse_exclude_file_types: verilog,liberty,spef
 ```
 
 `config_dir`, `library_list`, `library_catalog`, and `library_versions` are also
 supported. When `config_dir` is customized, the derived workspace files follow
 that directory unless explicitly overridden.
 
-`mode` is still present because the scan runner expects it. The default is `candidate` so Version Review has parser-backed evidence without asking normal users to choose a scan profile. Compatibility/debug values still exist: `quick` / `inventory` skip parser work, `signature` builds signature-style evidence without parser content, and `release` / `diff` / `refresh` / `full` are parser-enabled deeper modes.
+`mode` 仍然保留在 workspace 配置里，目的是让旧脚本和历史 scan evidence 能被识别；当前用户态只使用 `scan`。扫描深度不再通过多个 mode 选择，而是通过策略字段控制，例如 `hash_policy`、`parse_file_types`、`parse_exclude_file_types`、`parse_jobs`。短命令会读取这些字段并传给底层 `run` / `run-batch` / compare 预扫描。历史兼容值只用于读取旧产物或内部测试，不作为推荐命令面。
 
 Version Review reads parser evidence from:
 
@@ -122,7 +125,7 @@ Notes:
 - `manager_tasks.json` is a manager-facing task list for missing scan/diff/relation evidence. It is valid, but not part of the normal IP-user update-consumption path.
 - Version Review may show `Parser Summary`, `Diff Summary`, and `Count-only + Corner Summary`; those are page evidence summaries generated from scan and diff artifacts.
 - `manual_preview/**` is only a local generated browser preview. It is ignored by git and can be regenerated from the test catalog.
-- The old `update file/type` path and its legacy summary policy are removed from the active command surface. Rerun scan with `--rescan` when parser or summary evidence must be rebuilt.
+- Parser or summary evidence must be rebuilt through `lg.csh scan <LIBRARY> <VERSION> --rescan`.
 
 ## Current Local Preview
 

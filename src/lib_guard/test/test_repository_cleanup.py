@@ -27,6 +27,10 @@ FORBIDDEN_CATALOG_REPORT_COMMON_HELPERS = {
     "_version_diff_summary",
     "_version_file_diff",
     "_version_diff_json",
+    "_version_scan_dir",
+    "_scan_inventory",
+    "_scan_parser_manifest",
+    "_scan_parser_results",
     "_relative_display_path",
     "_version_release_notes",
 }
@@ -109,11 +113,77 @@ class RepositoryCleanupTest(unittest.TestCase):
                     hits.append(f"{rel}: summary_policy.json")
         self.assertFalse(hits, "stale workflow copy found:\n" + "\n".join(hits))
 
+    def test_current_docs_do_not_teach_removed_command_aliases(self) -> None:
+        patterns = [
+            re.compile(r"\bfilediff\b"),
+            re.compile(r"\brefresh-diff\b"),
+            re.compile(r"`lg\.csh\s+lib`"),
+            re.compile(r"`lg\.csh\s+act`"),
+            re.compile(r"`lg\.csh\s+review`"),
+            re.compile(r"`lg\.csh\s+compare`"),
+            re.compile(r"`lg\.csh\s+rf`"),
+            re.compile(r"`python -m lib_guard\.cli console`"),
+            re.compile(r"`python -m lib_guard\.cli update file/type`"),
+        ]
+        roots = [ROOT / "README.md", ROOT / "docs", ROOT / "scripts"]
+        hits: list[str] = []
+        for root in roots:
+            paths = [root] if root.is_file() else list(root.rglob("*"))
+            for path in paths:
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(ROOT).as_posix()
+                if rel.startswith("docs/archive/"):
+                    continue
+                if path.suffix.lower() not in {".md", ".csh", ".ps1", ".cmd"}:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                for pattern in patterns:
+                    if pattern.search(text):
+                        hits.append(f"{rel}: {pattern.pattern}")
+        self.assertFalse(hits, "current docs still teach removed command aliases:\n" + "\n".join(hits))
+
+    def test_stable_user_docs_do_not_carry_deprecation_tables(self) -> None:
+        patterns = [
+            re.compile(r"已经不推荐"),
+            re.compile(r"已移出当前命令面"),
+            re.compile(r"旧入口"),
+            re.compile(r"废弃"),
+            re.compile(r"\bold `update file/type`"),
+            re.compile(r"legacy summary policy"),
+        ]
+        paths = [
+            ROOT / "README.md",
+            ROOT / "docs" / "cli_reference.md",
+            ROOT / "docs" / "command_surface.md",
+            ROOT / "docs" / "user_guide.md",
+            ROOT / "docs" / "data_contract.md",
+            ROOT / "docs" / "manual_confirmation_action.md",
+            ROOT / "docs" / "review_gate.md",
+            ROOT / "docs" / "test_config_inventory.md",
+        ]
+        hits: list[str] = []
+        for path in paths:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            rel = path.relative_to(ROOT).as_posix()
+            for pattern in patterns:
+                if pattern.search(text):
+                    hits.append(f"{rel}: {pattern.pattern}")
+        self.assertFalse(hits, "stable user docs still carry deprecation tables/copy:\n" + "\n".join(hits))
+
+    def test_repository_has_no_editor_swap_files(self) -> None:
+        swap_files = sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in ROOT.rglob("*.swp")
+            if ".git" not in path.parts
+        )
+        self.assertFalse(swap_files, "editor swap files should not be committed or kept:\n" + "\n".join(swap_files))
+
     def test_readme_documents_normal_version_review_path(self) -> None:
         text = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Catalog -> Version Review -> Release", text)
+        self.assertIn("库目录 -> 版本审查 -> Release", text)
         self.assertNotIn("Catalog -> Library Workspace -> Version Review -> Comparison Review -> File Diff -> Release", text)
-        self.assertIn("Library Workspace", text)
+        self.assertIn("库工作台", text)
         self.assertIn("高级", text)
         self.assertIn("Comparison Review", text)
         self.assertIn("手动", text)
@@ -269,6 +339,76 @@ class RepositoryCleanupTest(unittest.TestCase):
         ]
         hits = [path.relative_to(ROOT).as_posix() for path in obsolete if path.exists()]
         self.assertFalse(hits, "obsolete unreferenced modules still exist:\n" + "\n".join(hits))
+
+    def test_one_line_compatibility_wrapper_modules_are_removed(self) -> None:
+        obsolete = [
+            ROOT / "src" / "lib_guard" / "scan" / "file_classifier.py",
+            ROOT / "src" / "lib_guard" / "scan" / "file_walker.py",
+            ROOT / "src" / "lib_guard" / "scan" / "hashing.py",
+            ROOT / "src" / "lib_guard" / "scan" / "parser_executor.py",
+            ROOT / "src" / "lib_guard" / "scan" / "parser_registry.py",
+            ROOT / "src" / "lib_guard" / "scan" / "selector.py",
+            ROOT / "src" / "lib_guard" / "release" / "readiness.py",
+            ROOT / "src" / "lib_guard" / "render" / "diff_report.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "cdl_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "cpf_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "lef_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "liberty_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "macro_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "package_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "port_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "sdc_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "spef_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "upf_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "verilog_summary.py",
+            ROOT / "src" / "lib_guard" / "summary" / "builders" / "waiver_summary.py",
+        ]
+        hits = [path.relative_to(ROOT).as_posix() for path in obsolete if path.exists()]
+        self.assertFalse(hits, "one-line compatibility wrapper modules still exist:\n" + "\n".join(hits))
+
+    def test_legacy_console_control_model_is_removed(self) -> None:
+        obsolete = [
+            ROOT / "src" / "lib_guard" / "cli_commands" / "console.py",
+            ROOT / "src" / "lib_guard" / "render" / "control_console.py",
+            ROOT / "src" / "lib_guard" / "render" / "control_data.py",
+            ROOT / "src" / "lib_guard" / "test" / "test_review_console.py",
+        ]
+        hits = [path.relative_to(ROOT).as_posix() for path in obsolete if path.exists()]
+        self.assertFalse(hits, "legacy console control-model files still exist:\n" + "\n".join(hits))
+
+        cli_text = (ROOT / "src" / "lib_guard" / "cli.py").read_text(encoding="utf-8")
+        forbidden = [
+            "add_console_parser",
+            "run_console_build",
+            "run_console_config",
+            "run_console_review",
+            "lib_guard.cli_commands.console",
+        ]
+        hits = [token for token in forbidden if token in cli_text]
+        self.assertFalse(hits, "legacy console CLI entry points still exist:\n" + "\n".join(hits))
+
+    def test_release_result_model_belongs_to_release_package(self) -> None:
+        self.assertFalse((ROOT / "src" / "lib_guard" / "review" / "release_result.py").exists())
+        self.assertTrue((ROOT / "src" / "lib_guard" / "release" / "result.py").exists())
+
+        hits: list[str] = []
+        for path in (ROOT / "src" / "lib_guard").rglob("*.py"):
+            rel = path.relative_to(ROOT).as_posix()
+            if "/test/" in rel:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if "lib_guard.review.release_result" in text:
+                hits.append(rel)
+        self.assertFalse(hits, "release result model is still imported from review:\n" + "\n".join(hits))
+
+    def test_product_theme_has_no_dead_compatibility_wrappers(self) -> None:
+        path = ROOT / "src" / "lib_guard" / "render" / "product_theme.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        functions = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+        forbidden = {"metric", "action_bar"}
+        hits = sorted(forbidden.intersection(functions))
+        self.assertFalse(hits, "dead product_theme compatibility wrappers still exist:\n" + "\n".join(hits))
+        self.assertEqual(1, functions.count("faceted_table"), "product_theme must define faceted_table once")
 
     def test_legacy_diff_timeline_entry_points_are_removed(self) -> None:
         review_init = (ROOT / "src" / "lib_guard" / "review" / "__init__.py").read_text(encoding="utf-8")

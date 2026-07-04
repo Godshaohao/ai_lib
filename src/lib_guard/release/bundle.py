@@ -131,7 +131,7 @@ def target_for_library(manifest: Mapping[str, Any], library: Mapping[str, Any]) 
 
 
 def _classify_file_type(source_root: Path, file_path: Path) -> str:
-    from lib_guard.scan.file_classifier import FileClassifier
+    from lib_guard.scan.inventory import FileClassifier
 
     rel = file_path.relative_to(source_root).as_posix()
     record = FileClassifier().classify({"path": rel, "name": file_path.name})

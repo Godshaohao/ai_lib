@@ -143,7 +143,7 @@ class ReleaseChecker:
         }
         out.mkdir(parents=True, exist_ok=True)
         _write_json(out / "release_check.json", result)
-        from lib_guard.review.release_result import release_result_from_check
+        from lib_guard.release.result import release_result_from_check
 
         _write_json(out / "release_result.json", release_result_from_check(result))
         return result

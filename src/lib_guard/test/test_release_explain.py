@@ -125,7 +125,7 @@ class ReleaseExplainTest(unittest.TestCase):
             patch("lib_guard.catalog.index.find_catalog_version", return_value={"version_key": "ip/ucie/stable_20250608", "scan": {"scan_dir": "scan"}}),
             patch("lib_guard.cli_commands.catalog._review_gate_for_catalog_version", return_value=(None, {})),
             patch("lib_guard.release.checker.check_release_scan", return_value=check_result),
-            patch("lib_guard.review.release_result.write_release_result") as write_result,
+            patch("lib_guard.release.result.write_release_result") as write_result,
             patch("lib_guard.catalog.index.update_catalog_release_status") as update_status,
         ):
             with redirect_stdout(StringIO()):

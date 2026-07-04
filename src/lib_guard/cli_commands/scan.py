@@ -15,6 +15,18 @@ from .common import auto_scan_id, default_cache_dir, default_state_dir, print_js
 LOGGER = logging.getLogger("lib_guard")
 
 
+def split_strategy_list(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        items = value.replace(";", ",").replace(" ", ",").split(",")
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        items = [value]
+    return [str(item).strip().lower() for item in items if str(item).strip()]
+
+
 def library_id_from_args(args: Namespace) -> str:
     if getattr(args, "library_id", None):
         return args.library_id
@@ -69,6 +81,9 @@ def build_scan_config(args: Namespace) -> SimpleNamespace:
         parse_jobs=args.parse_jobs,
         skip_cache=args.skip_cache,
         no_cache=args.no_cache,
+        hash_policy=getattr(args, "hash_policy", None),
+        parse_file_types=split_strategy_list(getattr(args, "parse_file_types", None)),
+        parse_exclude_file_types=split_strategy_list(getattr(args, "parse_exclude_file_types", None)),
         tool_version="0.5.0",
         schema_version="1.0",
         package_type=getattr(args, "package_type", None),
@@ -168,4 +183,3 @@ def run_scan_status(args: Namespace) -> int:
     scan_dir = resolve_scan_dir(scan=args.scan, latest=args.latest, library_id=args.library_id, mode=args.mode, workdir=args.workdir)
     print_json(build_scan_status(scan_dir))
     return 0
-

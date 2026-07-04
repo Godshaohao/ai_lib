@@ -1,16 +1,119 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
+from argparse import Namespace
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class CatalogTimelineTest(unittest.TestCase):
+    def test_catalog_list_outputs_only_actionable_user_names(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = root / "catalog.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/vendor_A.openroad_platform.openroad_asap7",
+                                "library_name": "vendor_A.openroad_platform.openroad_asap7",
+                                "formal_library_id": "vendor_A.openroad_platform.openroad_asap7",
+                                "typed_library_id": "ip/vendor_A.openroad_platform.openroad_asap7",
+                                "report_slug": "ip_vendor_A.openroad_platform.openroad_asap7",
+                                "display_name": "openroad_asap7",
+                                "summary": {"version_count": 2},
+                                "versions": [
+                                    {
+                                        "version_id": "20260624_asap7",
+                                        "version_uid": "ip/vendor_A.openroad_platform.openroad_asap7/20260624_asap7",
+                                        "stage": "dated",
+                                        "raw_path": "/raw/asap7/20260624_asap7",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.cli_commands.catalog import run_catalog_list
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = run_catalog_list(Namespace(catalog=str(catalog), library=None, versions=False))
+            self.assertEqual(rc, 0)
+            rows = json.loads(out.getvalue())["rows"]
+            self.assertEqual(rows[0]["库名"], "vendor_A.openroad_platform.openroad_asap7")
+            self.assertEqual(rows[0]["显示名"], "openroad_asap7")
+            self.assertNotIn("正式库名", rows[0])
+            self.assertNotIn("类型库名", rows[0])
+            self.assertNotIn("页面目录", rows[0])
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = run_catalog_list(
+                    Namespace(
+                        catalog=str(catalog),
+                        library="vendor_A.openroad_platform.openroad_asap7",
+                        versions=True,
+                    )
+                )
+            self.assertEqual(rc, 0)
+            version_rows = json.loads(out.getvalue())["rows"]
+            self.assertEqual(version_rows[0]["库名"], "vendor_A.openroad_platform.openroad_asap7")
+            self.assertEqual(version_rows[0]["版本名"], "20260624_asap7")
+            self.assertNotIn("版本UID", version_rows[0])
+            self.assertNotIn("类型库名", version_rows[0])
+
+    def test_ambiguous_library_error_points_to_formal_library_name(self) -> None:
+        catalog = {
+            "libraries": [
+                {
+                    "library_id": "ip/vendor_A.openroad_platform.openroad_asap7",
+                    "library_name": "vendor_A.openroad_platform.openroad_asap7",
+                    "formal_library_id": "vendor_A.openroad_platform.openroad_asap7",
+                    "typed_library_id": "ip/vendor_A.openroad_platform.openroad_asap7",
+                    "aliases": ["asap7"],
+                    "versions": [{"version_id": "20260627_asap7"}],
+                },
+                {
+                    "library_id": "ip/vendor_B.openroad_platform.openroad_asap7",
+                    "library_name": "vendor_B.openroad_platform.openroad_asap7",
+                    "formal_library_id": "vendor_B.openroad_platform.openroad_asap7",
+                    "typed_library_id": "ip/vendor_B.openroad_platform.openroad_asap7",
+                    "aliases": ["asap7"],
+                    "versions": [{"version_id": "20260627_asap7"}],
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as td:
+            catalog_path = Path(td) / "catalog.json"
+            catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+
+            from lib_guard.catalog.index import find_catalog_version
+            from lib_guard.short_cli import _find_library
+
+            for call in [
+                lambda: find_catalog_version(catalog_path, "asap7", "20260627_asap7"),
+                lambda: _find_library(catalog, "asap7"),
+            ]:
+                with self.assertRaises(ValueError) as ctx:
+                    call()
+                message = str(ctx.exception)
+                self.assertIn("formal library name", message)
+                self.assertNotIn("full library_id", message)
+
     def test_catalog_split_public_apis_exist(self) -> None:
         from lib_guard.render.catalog_report import render_catalog_html
         from lib_guard.render.catalog_workspace_report import (
@@ -304,11 +407,18 @@ class CatalogTimelineTest(unittest.TestCase):
             from lib_guard.catalog.index import find_catalog_version, scan_catalog
 
             result = scan_catalog(raw, out_dir=out, library_type="ip", policy_path=policy)
+            with mock.patch.object(Path, "rglob", side_effect=AssertionError("library_map catalog scan must not recurse when pattern_fallback is false")):
+                map_only_result = scan_catalog(raw, out_dir=root / "catalog_map_only", library_type="ip", policy_path=policy)
+            self.assertEqual(map_only_result["catalog"]["summary"]["library_count"], 1)
+
             catalog = result["catalog"]
             self.assertEqual(catalog["summary"]["library_count"], 1)
             lib = catalog["libraries"][0]
             self.assertEqual(lib["library_id"], "ip/vendorA.analog_ip.UVIP")
             self.assertEqual(lib["library_name"], "vendorA.analog_ip.UVIP")
+            self.assertEqual(lib["formal_library_id"], "vendorA.analog_ip.UVIP")
+            self.assertEqual(lib["typed_library_id"], "ip/vendorA.analog_ip.UVIP")
+            self.assertEqual(lib["report_slug"], "ip_vendorA.analog_ip.UVIP")
             self.assertEqual(lib["display_name"], "UVIP")
             self.assertEqual(lib["aliases"], ["ucie"])
             self.assertEqual(lib["vendor"], "vendorA")
@@ -316,6 +426,10 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual(Path(lib["library_root"]), library_root)
 
             version = {v["version_id"]: v for v in lib["versions"]}["stable_20250608"]
+            self.assertEqual(version["formal_library_id"], "vendorA.analog_ip.UVIP")
+            self.assertEqual(version["typed_library_id"], "ip/vendorA.analog_ip.UVIP")
+            self.assertEqual(version["version_uid"], "ip/vendorA.analog_ip.UVIP/stable_20250608")
+            self.assertEqual(version["version_key"], version["version_uid"])
             self.assertEqual(Path(version["raw_path"]), library_root / "stable_20250608")
             self.assertEqual(Path(version["library_root"]), library_root)
             self.assertEqual(version["detected"]["discovery_source"], "library_map")
@@ -324,6 +438,178 @@ class CatalogTimelineTest(unittest.TestCase):
             resolved = find_catalog_version(out / "catalog.json", "ucie", "stable_20250608")
             self.assertEqual(resolved["library_name"], "vendorA.analog_ip.UVIP")
             self.assertEqual(resolved["version_key"], "ip/vendorA.analog_ip.UVIP/stable_20250608")
+
+            relative_map = Path(os.path.relpath(library_map, Path.cwd()))
+            direct_result = scan_catalog(raw, out_dir=root / "catalog_direct_map", library_type="ip", policy_path=relative_map)
+            direct_lib = direct_result["catalog"]["libraries"][0]
+            self.assertEqual(direct_lib["library_name"], "vendorA.analog_ip.UVIP")
+            self.assertEqual([v["version_id"] for v in direct_lib["versions"]], ["initial_20250601", "stable_20250608"])
+
+    def test_library_map_ignores_parent_dirs_that_do_not_contain_version_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            asap7 = raw / "vendor_A" / "openroad_asap7"
+            sky130 = raw / "vendor_A" / "openroad_sky130"
+            for library_root in [asap7, sky130]:
+                for rel in ["20260624_base", "20260627_update"]:
+                    version = library_root / rel
+                    version.mkdir(parents=True)
+                    (version / "rtl").mkdir()
+                    (version / "rtl" / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+
+            library_map = root / "library_map.yml"
+            library_map.write_text(
+                "\n".join(
+                    [
+                        "libraries:",
+                        "  vendor_A:",
+                        "    root: raw/vendor_A",
+                        "    display_name: vendor_A",
+                        "    library_type: ip",
+                        "  vendor_A.openroad_platform.openroad_asap7:",
+                        "    root: raw/vendor_A/openroad_asap7",
+                        "    display_name: OpenROAD ASAP7",
+                        "    vendor: vendor_A",
+                        "    category: openroad_platform",
+                        "    library_type: ip",
+                        "  vendor_A.openroad_platform.openroad_sky130:",
+                        "    root: raw/vendor_A/openroad_sky130",
+                        "    display_name: OpenROAD sky130",
+                        "    vendor: vendor_A",
+                        "    category: openroad_platform",
+                        "    library_type: ip",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            policy = root / "catalog_policy.json"
+            policy.write_text(
+                json.dumps(
+                    {
+                        "library_type": "ip",
+                        "discovery": {"library_map": str(library_map), "pattern_fallback": False},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import scan_catalog
+
+            result = scan_catalog(raw, out_dir=out, library_type="ip", policy_path=policy)
+            libraries = {lib["library_name"]: lib for lib in result["catalog"]["libraries"]}
+            self.assertNotIn("vendor_A", libraries)
+            self.assertEqual(set(libraries), {"vendor_A.openroad_platform.openroad_asap7", "vendor_A.openroad_platform.openroad_sky130"})
+            self.assertEqual(sorted(v["version_id"] for v in libraries["vendor_A.openroad_platform.openroad_asap7"]["versions"]), ["20260624_base", "20260627_update"])
+
+    def test_library_map_keeps_arbitrary_confirmed_version_names(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            library_root = raw / "vendor_X" / "custom_ip"
+            for version in ["R1P0", "revA", "BETA_3", "23.09", "golden"]:
+                view_dir = library_root / version / "views" / "lef"
+                view_dir.mkdir(parents=True)
+                (view_dir / "macro.lef").write_text("MACRO X\n", encoding="utf-8")
+            for noise in ["source_package", "upstream_ae9a8ed9", "lef", "gds"]:
+                (library_root / noise).mkdir(parents=True)
+
+            library_map = root / "library_map.yml"
+            library_map.write_text(
+                "\n".join(
+                    [
+                        "libraries:",
+                        "  vendor_X.custom_ip:",
+                        "    root: raw/vendor_X/custom_ip",
+                        "    display_name: custom_ip",
+                        "    vendor: vendor_X",
+                        "    library_type: ip",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            policy = root / "catalog_policy.json"
+            policy.write_text(
+                json.dumps(
+                    {
+                        "library_type": "ip",
+                        "discovery": {"library_map": str(library_map), "pattern_fallback": False},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import scan_catalog
+
+            result = scan_catalog(raw, out_dir=out, library_type="ip", policy_path=policy)
+            versions = [v["version_id"] for v in result["catalog"]["libraries"][0]["versions"]]
+
+            self.assertEqual(set(versions), {"23.09", "BETA_3", "R1P0", "golden", "revA"})
+            self.assertNotIn("source_package", versions)
+            self.assertNotIn("upstream_ae9a8ed9", versions)
+
+    def test_library_map_ignores_nested_view_and_source_package_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            library_root = raw / "vendor_A" / "openroad_gf180"
+            nested_gds = library_root / "20260612_gf180" / "gf180_source_package" / "gds"
+            for version in ["20260612_gf180", "20260623_gf180_update"]:
+                view_dir = library_root / version / "gf180_source_package" / "lef"
+                view_dir.mkdir(parents=True)
+                (view_dir / "tech.lef").write_text("MACRO G\n", encoding="utf-8")
+            for tech in ["7t", "9t"]:
+                (nested_gds / tech).mkdir(parents=True)
+
+            library_map = root / "library_map.yml"
+            library_map.write_text(
+                "\n".join(
+                    [
+                        "libraries:",
+                        "  vendor_A.openroad_platform.openroad_gf180:",
+                        "    root: raw/vendor_A/openroad_gf180",
+                        "    display_name: openroad_gf180",
+                        "    vendor: vendor_A",
+                        "    library_type: ip",
+                        "  vendor_A.openroad_gf180.20260612_gf180.gf180_source_package.gds:",
+                        "    root: raw/vendor_A/openroad_gf180/20260612_gf180/gf180_source_package/gds",
+                        "    display_name: gds",
+                        "    vendor: vendor_A",
+                        "    library_type: ip",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            policy = root / "catalog_policy.json"
+            policy.write_text(
+                json.dumps(
+                    {
+                        "library_type": "ip",
+                        "discovery": {"library_map": str(library_map), "pattern_fallback": False},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import scan_catalog
+
+            result = scan_catalog(raw, out_dir=out, library_type="ip", policy_path=policy)
+            libraries = {lib["library_name"]: lib for lib in result["catalog"]["libraries"]}
+
+            self.assertEqual(set(libraries), {"vendor_A.openroad_platform.openroad_gf180"})
+            self.assertEqual(
+                [v["version_id"] for v in libraries["vendor_A.openroad_platform.openroad_gf180"]["versions"]],
+                ["20260612_gf180", "20260623_gf180_update"],
+            )
 
     def test_catalog_scan_resolves_library_map_from_raw_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -441,15 +727,17 @@ class CatalogTimelineTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "PASS")
             html = (out / "html" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Library Catalog", html)
-            self.assertIn("Library Browser", html)
+            self.assertIn("库目录", html)
+            self.assertIn("库浏览器", html)
             self.assertNotIn("<aside", html)
             self.assertNotIn("class='sidebar'", html)
             self.assertIn("class='library-name-row'", html)
             self.assertIn("class='library-path-row'", html)
-            self.assertIn("Catalog 总览", html)
-            self.assertIn("Suggested Commands", html)
-            self.assertIn("Trace Evidence", html)
+            self.assertIn("库目录总览", html)
+            self.assertIn("管理建议", html)
+            self.assertIn("证据索引", html)
+            self.assertIn("库名", html)
+            self.assertNotIn("类型库名", html)
             self.assertIn("面向 IP 使用者", html)
             self.assertIn("manager_tasks.json", html)
             self.assertIn("catalog_state.json", html)
@@ -467,10 +755,157 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertFalse((out / "html" / "libraries" / "ip_ucie" / "diff_index.json").exists())
             self.assertTrue((out / "html" / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").exists())
             library_html = (out / "html" / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Library Workspace", library_html)
+            self.assertIn("库工作台", library_html)
             self.assertIn("Compare 索引", library_html)
             self.assertNotIn("diff_timeline.html", html + library_html)
             self.assertNotIn("done / total", library_html)
+
+    def test_catalog_render_can_refresh_one_version_detail_page(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            for path in [
+                raw / "vendor_A" / "asap7_20260624",
+                raw / "vendor_A" / "asap7_20260627",
+                raw / "vendor_C" / "sky130ram_20260626",
+            ]:
+                path.mkdir(parents=True)
+                (path / "README.txt").write_text(path.name + "\n", encoding="utf-8")
+            catalog_path = root / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "catalog.v1",
+                        "summary": {"library_count": 2, "version_count": 3},
+                        "recommended_tasks": [],
+                        "libraries": [
+                            {
+                                "library_type": "ip",
+                                "library_id": "ip/vendor_A.openroad_platform.openroad_asap7",
+                                "library_name": "vendor_A.openroad_platform.openroad_asap7",
+                                "display_name": "vendor_A.openroad_platform.openroad_asap7",
+                                "versions": [
+                                    {
+                                        "version_id": "20260624_asap7",
+                                        "version_key": "ip/vendor_A.openroad_platform.openroad_asap7/20260624_asap7",
+                                        "raw_path": str(raw / "vendor_A" / "asap7_20260624"),
+                                        "stage": "stable",
+                                    },
+                                    {
+                                        "version_id": "20260627_asap7",
+                                        "version_key": "ip/vendor_A.openroad_platform.openroad_asap7/20260627_asap7",
+                                        "raw_path": str(raw / "vendor_A" / "asap7_20260627"),
+                                        "stage": "stable",
+                                    },
+                                ],
+                            },
+                            {
+                                "library_type": "ip",
+                                "library_id": "ip/vendor_C.openroad_platform.openroad_sky130ram",
+                                "library_name": "vendor_C.openroad_platform.openroad_sky130ram",
+                                "display_name": "vendor_C.openroad_platform.openroad_sky130ram",
+                                "versions": [
+                                    {
+                                        "version_id": "20260626_sky130ram_update",
+                                        "version_key": "ip/vendor_C.openroad_platform.openroad_sky130ram/20260626_sky130ram_update",
+                                        "raw_path": str(raw / "vendor_C" / "sky130ram_20260626"),
+                                        "stage": "stable",
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import render_catalog_html
+
+            result = render_catalog_html(
+                catalog_path,
+                root / "html",
+                library_filter="vendor_A.openroad_platform.openroad_asap7",
+                version_filter="20260627_asap7",
+            )
+
+            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["rendered_libraries"], 1)
+            self.assertEqual(result["rendered_versions"], 1)
+            self.assertTrue((root / "html" / "libraries" / "ip_vendor_A.openroad_platform.openroad_asap7" / "versions" / "20260627_asap7" / "index.html").exists())
+            self.assertFalse((root / "html" / "libraries" / "ip_vendor_A.openroad_platform.openroad_asap7" / "versions" / "20260624_asap7" / "index.html").exists())
+            self.assertFalse((root / "html" / "libraries" / "ip_vendor_C.openroad_platform.openroad_sky130ram" / "versions" / "20260626_sky130ram_update" / "index.html").exists())
+
+            list_result = render_catalog_html(
+                catalog_path,
+                root / "html_list_selector",
+                library_filter="vendor_A.openroad_platform.openroad_asap7",
+                version_filter=["20260627_asap7"],
+            )
+            self.assertEqual(list_result["rendered_versions"], 1)
+
+    def test_catalog_render_discovers_effective_reports_without_recursive_rglob(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw" / "ucie" / "stable_20250608"
+            raw.mkdir(parents=True)
+            (raw / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            catalog_path = root / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "catalog.v1",
+                        "summary": {"library_count": 1, "version_count": 1},
+                        "recommended_tasks": [],
+                        "libraries": [
+                            {
+                                "library_type": "ip",
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "display_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/ucie/stable_20250608",
+                                        "raw_path": str(raw),
+                                        "stage": "stable",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            html_dir = root / "html"
+            effective_dir = html_dir / "libraries" / "ip_ucie" / "effective" / "E1_20260624"
+            effective_dir.mkdir(parents=True)
+            (effective_dir / "effective_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "effective_manifest.v2",
+                        "library_id": "ip/ucie",
+                        "library_name": "ucie",
+                        "effective_id": "E1_20260624",
+                        "base_full_version": "stable_20250608",
+                        "accepted_updates": ["stable_20250608"],
+                        "summary": {"file_count": 1, "component_count": 1},
+                        "components": [{"version_id": "stable_20250608"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import render_catalog_html
+
+            with mock.patch.object(Path, "rglob", side_effect=AssertionError("catalog render must not recursively discover effective reports")):
+                result = render_catalog_html(catalog_path, html_dir)
+
+            self.assertEqual(result["status"], "PASS")
+            library_html = (html_dir / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("E1_20260624", library_html)
 
     def test_cli_catalog_scan_render_and_override(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -535,8 +970,8 @@ class CatalogTimelineTest(unittest.TestCase):
                             version,
                             "--workdir",
                             str(work),
-                            "--mode",
-                            "signature",
+                            "--parse-file-types",
+                            "verilog",
                             "--parse-jobs",
                             "1",
                         ]
@@ -625,14 +1060,12 @@ class CatalogTimelineTest(unittest.TestCase):
             out = Path(td) / "catalog"
             scan_dir = Path(td) / "work" / "scan"
             scan_html = Path(td) / "work" / "scan_html" / "index.html"
-            console_html = Path(td) / "work" / "console" / "index.html"
             diff_dir = Path(td) / "work" / "diff"
             diff_html = Path(td) / "work" / "diff_html" / "index.html"
             release_json = Path(td) / "work" / "scan" / "release" / "release_check.json"
-            for p in [scan_dir, scan_html.parent, console_html.parent, diff_dir, diff_html.parent, release_json.parent]:
+            for p in [scan_dir, scan_html.parent, diff_dir, diff_html.parent, release_json.parent]:
                 p.mkdir(parents=True, exist_ok=True)
             scan_html.write_text("<html>scan</html>", encoding="utf-8")
-            console_html.write_text("<html>console</html>", encoding="utf-8")
             diff_html.write_text("<html>diff</html>", encoding="utf-8")
             release_json.write_text("{}", encoding="utf-8")
             (scan_dir / "summary").mkdir(parents=True, exist_ok=True)
@@ -874,7 +1307,6 @@ class CatalogTimelineTest(unittest.TestCase):
                 scan_id="scan_1",
                 status="PASS",
                 scan_html=scan_html,
-                console_html=console_html,
             )
             update_catalog_diff_status(
                 catalog_path,
@@ -897,7 +1329,7 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual(catalog.get("manual_overrides", {}).get("ip/ucie/stable_20250608", {}).get("package_type"), "PARTIAL_UPDATE")
             state = catalog["runtime_state"]["ip/ucie/stable_20250608"]
             self.assertEqual(state["scan"]["scan_html"], str(scan_html))
-            self.assertEqual(state["scan"]["console_html"], str(console_html))
+            self.assertNotIn("console_html", state["scan"])
             self.assertEqual(state["diff"]["adjacent_diff_html"], str(diff_html))
             self.assertEqual(state["release"]["check_status"], "PASS")
             version = catalog["libraries"][0]["versions"][0]
@@ -908,7 +1340,6 @@ class CatalogTimelineTest(unittest.TestCase):
             html_out = out / "html"
             html = (html_out / "index.html").read_text(encoding="utf-8")
             self.assertIn("report_index.json", html)
-            self.assertNotIn(str(console_html), html)
             self.assertIn("Release", html)
             self.assertTrue((html_out / "index.html").exists())
             self.assertTrue((html_out / "libraries" / "ip_ucie" / "index.html").exists())
@@ -920,42 +1351,57 @@ class CatalogTimelineTest(unittest.TestCase):
             report_blob = json.dumps(report_index, ensure_ascii=False)
             self.assertIn(Path(os.path.relpath(scan_html, html_out)).as_posix(), report_blob)
             self.assertIn(Path(os.path.relpath(diff_html, html_out)).as_posix(), report_blob)
+
             catalog_state = json.loads((out / "html" / "catalog_state.json").read_text(encoding="utf-8"))
             review_version = catalog_state["libraries"][0]["versions"][0]
             self.assertEqual(review_version["scan_status"], "SCAN_PASS")
             self.assertEqual(review_version["diff_status"], "DIFF_REVIEW")
             self.assertEqual(review_version["release_status"], "RELEASE_READY")
             library_html = (html_out / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Library Version Timeline", library_html)
+            self.assertIn("版本时间线", library_html)
             self.assertIn("latest_effective_ref", library_html)
             self.assertIn("Compare 索引", library_html)
             version_html = (html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("版本审查总览", version_html)
-            self.assertIn("版本上下文", version_html)
+            self.assertIn("IP 版本使用事实", version_html)
+            self.assertIn("版本坐标", version_html)
+            self.assertNotIn("版本上下文", version_html)
+            self.assertNotIn("版本事实审查", version_html)
             self.assertIn("绝对 Raw 路径", version_html)
             self.assertIn(str(raw / "ucie" / "stable_20250608"), version_html)
-            self.assertLess(version_html.find("版本审查总览"), version_html.find("更新详情"))
+            self.assertLess(version_html.find("<h2>IP 版本使用事实"), version_html.find("<h2>使用影响"))
             self.assertNotIn(f"<b>Raw Path</b><em>{raw / 'ucie' / 'stable_20250608'}</em>", version_html)
-            self.assertIn("大文件与 PVT Corner", version_html)
-            self.assertIn("Parser 覆盖汇总", version_html)
-            self.assertIn("对比前检查", version_html)
+            self.assertIn("必需 View 覆盖", version_html)
+            self.assertIn("大文件与 Corner 线索", version_html)
+            self.assertIn("Parser 证据", version_html)
+            self.assertNotIn("对比前检查", version_html)
             self.assertIn("原始证据", version_html)
-            self.assertLess(version_html.find("更新详情"), version_html.find("证据质量"))
-            self.assertIn("更新详情（vs previous_effective / initial_20250601）", version_html)
-            self.assertIn("增量对比 (incremental compare)", version_html)
+            self.assertLess(version_html.find("<h2>使用影响"), version_html.find("<h2>证据入口"))
+            self.assertIn("使用影响（vs previous_effective / initial_20250601）", version_html)
+            self.assertIn("对比口径", version_html)
+            self.assertIn("增量", version_html)
             self.assertIn("缺失文件不视为删除", version_html)
-            self.assertIn("Markdown 导出", version_html)
+            self.assertIn("管理门禁", version_html)
+            self.assertIn("审计证据", version_html)
+            self.assertIn("Release note", version_html)
+            self.assertIn("Unknown 文件", version_html)
+            self.assertNotIn("Unknown / RN", version_html)
+            self.assertIn("原始 JSON、Scan 目录和 Markdown 导出默认折叠", version_html)
             self.assertIn("Fixed lane reset timing", version_html)
-            self.assertIn("Release note</div><div class='metric-value'>1", version_html)
+            self.assertIn("Release note", version_html)
+            self.assertIn("已发现", version_html)
+            self.assertIn("显示范围", version_html)
+            self.assertIn("仅显示 P0/P1/Review 重点变化", version_html)
             self.assertIn("version-scroll-table metric-scroll", version_html)
+            self.assertIn("version-scroll-table focus-change-scroll", version_html)
             self.assertIn("version-scroll-table change-scroll", version_html)
             self.assertIn("faceted-table-tools", version_html)
             self.assertIn("id='tbl-change-scroll'", version_html)
+            self.assertIn("id='tbl-focus-change-scroll'", version_html)
             self.assertIn("data-filter-columns='0:变化|1:类型|3:审查级别'", version_html)
             self.assertIn("id='parser-aggregate'", version_html)
             self.assertIn("applyTableFilters", version_html)
             self.assertIn("height:420px", version_html)
-            self.assertIn("min-width:1800px", version_html)
+            self.assertIn("min-width:1780px", version_html)
             self.assertIn("removed_files", version_html)
             self.assertIn("parser_regressions", version_html)
             self.assertIn("changed_files", version_html)
@@ -1020,6 +1466,36 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn("done/total", version_html)
             self.assertNotIn("pairwise_html", version_html)
             self.assertNotIn("release_html", version_html)
+
+    def test_catalog_rebuild_drops_legacy_console_html_from_runtime_state(self) -> None:
+        from lib_guard.catalog.index import scan_catalog
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw" / "ucie" / "stable_20250608"
+            raw.mkdir(parents=True)
+            (raw / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            out = root / "work" / "catalog"
+            result = scan_catalog(raw.parent, out_dir=out, library_type="ip")
+            catalog_path = Path(result["catalog_path"])
+            data = json.loads(catalog_path.read_text(encoding="utf-8"))
+            version_key = "ip/ucie/stable_20250608"
+            data.setdefault("runtime_state", {})[version_key] = {
+                "scan": {
+                    "status": "SCANNED",
+                    "scan_dir": str(root / "scan"),
+                    "scan_id": "old",
+                    "last_scan_at": "2026-01-01T00:00:00Z",
+                    "scan_html": str(root / "scan_html" / "index.html"),
+                    "console_html": str(root / "console" / "index.html"),
+                }
+            }
+            catalog_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            rebuilt = scan_catalog(raw.parent, out_dir=out, library_type="ip", force=False)
+            rebuilt_data = json.loads(Path(rebuilt["catalog_path"]).read_text(encoding="utf-8"))
+            self.assertNotIn("console_html", rebuilt_data["runtime_state"][version_key]["scan"])
+            self.assertNotIn("console_html", rebuilt_data["libraries"][0]["versions"][0]["scan"])
 
     def test_version_detail_shows_delivery_view_coverage_and_parser_meaning(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1208,7 +1684,7 @@ class CatalogTimelineTest(unittest.TestCase):
             page = Path(render_version_detail_page(out, lib, version))
             html = page.read_text(encoding="utf-8")
 
-            self.assertIn("交付 View 覆盖", html)
+            self.assertIn("必需 View 覆盖", html)
             self.assertIn("完整性判断", html)
             self.assertIn("必需", html)
             self.assertIn("可选", html)
@@ -1222,8 +1698,8 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn(".foo", html)
             self.assertIn("misc/unclassified.foo", html)
             self.assertIn("LICENSE_BUILD_RUN_SCRIPTS", html)
-            self.assertIn("大文件与 PVT Corner", html)
-            self.assertIn("GDS/SPEF/Liberty/DB", html)
+            self.assertIn("大文件与 Corner 线索", html)
+            self.assertIn("Liberty、SPEF、DB、GDS、Verilog", html)
             self.assertIn("PVT Corner 明细", html)
             self.assertIn("corner-detail-scroll", html)
             self.assertIn("id='count-only-files'", html)
@@ -1233,19 +1709,15 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn("重文件", html)
             self.assertIn("代表对象", html)
             self.assertIn("来源文件", html)
-            self.assertIn("审查含义", html)
-            self.assertIn("macro_stub", html)
-            self.assertIn("clock_gate", html)
-            self.assertIn("yosys_cell_model", html)
-            self.assertNotIn("tech_cell", html)
+            self.assertNotIn("审查含义", html)
+            self.assertNotIn("<th>Detail</th>", html)
             self.assertIn("另有 1 个来源", html)
-            self.assertIn("module declaration", html)
             self.assertEqual(html.count("<td>_tech_fa</td>"), 1)
             self.assertIn("fakeram7_128x64", html)
             self.assertIn("yoSys/cells_adders_L.v", html)
             self.assertNotIn("<td>LVTN</td><td><code>lef/tech.lef</code></td><td>routing_layer</td><td>LVTN</td>", html)
-            self.assertIn("<td>LVTN</td><td><code>lef/tech.lef</code></td><td>tech_layer</td><td><span class='muted'>-</span></td>", html)
-            self.assertIn("type=ROUTING, direction=HORIZONTAL, width=0.02", html)
+            self.assertIn("<td>LVTN</td><td><code>lef/tech.lef</code></td>", html)
+            self.assertNotIn("type=ROUTING, direction=HORIZONTAL, width=0.02", html)
             self.assertLess(html.index("<td>M1</td>"), html.index("<td>LVTN</td>"))
 
     def test_version_detail_empty_raw_scan_explains_partial_update_context(self) -> None:
@@ -1315,7 +1787,7 @@ class CatalogTimelineTest(unittest.TestCase):
             page = Path(render_version_detail_page(out, lib, version))
             html = page.read_text(encoding="utf-8")
 
-            self.assertIn("版本审查总览", html)
+            self.assertIn("IP 版本使用事实", html)
             self.assertIn("当前版本是增量包", html)
             self.assertIn("本页 Raw Scan 只统计本次交付内容", html)
             self.assertIn("继承文件请查看 effective 或 base 视图", html)
@@ -1485,8 +1957,8 @@ class CatalogTimelineTest(unittest.TestCase):
                         "ucie",
                         "--workdir",
                         str(work),
-                        "--mode",
-                        "signature",
+                        "--parse-file-types",
+                        "verilog",
                         "--only-missing",
                         "--limit",
                         "2",
@@ -1573,7 +2045,7 @@ class CatalogTimelineTest(unittest.TestCase):
             data = json.loads(catalog.read_text(encoding="utf-8"))
             runtime = data["runtime_state"]["ip/ucie/stable_20250608"]
             self.assertTrue(runtime["scan"]["scan_html"].endswith("index.html"))
-            self.assertTrue(runtime["scan"]["console_html"].endswith("index.html"))
+            self.assertNotIn("console_html", runtime["scan"])
             self.assertTrue(runtime["diff"]["adjacent_diff_html"].endswith("index.html"))
             self.assertEqual(runtime["release"]["check_status"], "PASS")
             self.assertEqual(runtime["release"]["link_status"], "DRY_RUN")

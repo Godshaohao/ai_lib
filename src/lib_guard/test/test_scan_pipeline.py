@@ -1038,12 +1038,9 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertFalse((diff_out / "parser_result_diff" / "lef_diff.json").exists())
             tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
             self.assertEqual(len(tasks["tasks"]), 1)
-            commands = "\n".join(task["command"] for task in tasks["tasks"])
-            self.assertIn("$PROJ/scripts/lg.csh fd demo v1", commands)
-            self.assertIn("lef", commands)
-            self.assertNotIn("--type verilog", commands)
-            self.assertNotIn("--type liberty", commands)
-            self.assertNotIn("python -m lib_guard.cli file-diff", commands)
+            self.assertEqual(tasks["tasks"][0]["file_type"], "lef")
+            self.assertNotIn("command", tasks["tasks"][0])
+            self.assertNotIn("low_level_command", tasks["tasks"][0])
             status = json.loads((diff_out / "pairwise_diff_task_status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["summary"]["pending"], len(tasks["tasks"]))
             issues = json.loads((diff_out / "diff_issues.json").read_text(encoding="utf-8"))
@@ -1095,11 +1092,13 @@ class ScanPipelineTest(unittest.TestCase):
 
             tasks = build_pairwise_diff_tasks(old_scan, new_scan, file_diff, output_root=Path(td) / "pairwise")
             task_types = {item["file_type"] for item in tasks["tasks"]}
-            commands = "\n".join(item["command"] for item in tasks["tasks"])
 
             self.assertEqual(task_types, {"lef"})
+            for item in tasks["tasks"]:
+                self.assertNotIn("command", item)
+                self.assertNotIn("low_level_command", item)
             for file_type in ["verilog", "systemverilog", "liberty", "spef", "db", "gds", "oas"]:
-                self.assertNotIn(f"--type {file_type}", commands)
+                self.assertNotIn(file_type, task_types)
 
     def test_diff_treats_same_hash_path_prefix_change_as_move_not_added_removed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1205,6 +1204,82 @@ class ScanPipelineTest(unittest.TestCase):
             summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["changed_files"], 1)
 
+    def test_diff_reports_package_root_migration_from_logical_path_pairs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            diff_out = Path(td) / "diff"
+            for scan, version, root, files in [
+                (
+                    old_scan,
+                    "base",
+                    "asap7_source_package",
+                    [
+                        ("asap7_source_package/lef/a.lef", "lef", "same-digest", 100),
+                        ("asap7_source_package/lef/b.lef", "lef", "same-digest", 100),
+                    ],
+                ),
+                (
+                    new_scan,
+                    "target",
+                    "upstream_ae9a8ed9",
+                    [
+                        ("upstream_ae9a8ed9/lef/a.lef", "lef", "same-digest", 100),
+                        ("upstream_ae9a8ed9/lef/b.lef", "lef", "same-digest", 100),
+                        ("upstream_ae9a8ed9/lib/c.lib", "liberty", "new-digest", 200),
+                    ],
+                ),
+            ]:
+                scan.mkdir()
+                (scan / "summary").mkdir()
+                (scan / "signatures").mkdir()
+                (scan / "parser_results").mkdir()
+                (scan / "scan_meta.json").write_text(
+                    json.dumps({"library_type": "ip", "library_name": "demo", "release_version": version, "scan_id": version}),
+                    encoding="utf-8",
+                )
+                (scan / "manifest.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+                (scan / "parser_manifest.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+                (scan / "scan_issues.json").write_text(json.dumps({"issues": []}), encoding="utf-8")
+                (scan / "summary" / "parser_quality.json").write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+                (scan / "summary" / "release_readiness.json").write_text(json.dumps({"components": []}), encoding="utf-8")
+                (scan / "signatures" / "signatures.json").write_text(json.dumps({}), encoding="utf-8")
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "root_path": root,
+                            "files": [
+                                {"path": path, "file_type": file_type, "hash": digest, "size_bytes": size}
+                                for path, file_type, digest, size in files
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
+
+            file_diff = json.loads((diff_out / "file_diff.json").read_text(encoding="utf-8"))
+            self.assertEqual(file_diff["counts"]["added"], 1)
+            self.assertEqual(file_diff["counts"]["removed"], 0)
+            self.assertEqual(file_diff["counts"]["renamed_or_moved"], 2)
+            self.assertEqual(file_diff["counts"]["package_root_migrations"], 1)
+            self.assertEqual(file_diff["counts"]["package_root_migration_matched_files"], 2)
+            migration = file_diff["package_root_migrations"][0]
+            self.assertEqual(migration["old_root"], "asap7_source_package")
+            self.assertEqual(migration["new_root"], "upstream_ae9a8ed9")
+            self.assertEqual(migration["matched_logical_paths"], 2)
+            self.assertEqual(migration["old_root_file_count"], 2)
+            self.assertEqual(migration["new_root_file_count"], 3)
+            self.assertEqual(file_diff["added"], ["upstream_ae9a8ed9/lib/c.lib"])
+            self.assertEqual(file_diff["removed"], [])
+
+            summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["package_root_migrations"], 1)
+            self.assertEqual(summary["package_root_migration_matched_files"], 2)
+
     def test_diff_rejects_malformed_inventory_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             old_scan = Path(td) / "old_scan"
@@ -1276,10 +1351,10 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("结构概览", html)
             self.assertIn("View 全量状态", html)
             self.assertIn("File Type 全量变化", html)
-            self.assertIn("重点 File Diff 建议", html)
-            self.assertIn("$PROJ/scripts/lg.csh fd", html)
+            self.assertIn("重点文件确认项", html)
+            self.assertNotIn("$PROJ/scripts/lg.csh fd", html)
             self.assertNotIn("python -m lib_guard.cli file-diff", html)
-            self.assertIn("复制", html)
+            self.assertNotIn("<th>命令</th>", html)
             self.assertIn("打开 File Diff", html)
             self.assertIn("DONE", html)
             self.assertNotIn("done / total", html)
@@ -1326,7 +1401,7 @@ class ScanPipelineTest(unittest.TestCase):
 
             from lib_guard.diff.file_diff import diff_pairwise_files
 
-            with patch("lib_guard.scan.parser_registry.ParserRegistry.default", side_effect=RuntimeError("registry broken")):
+            with patch("lib_guard.scan.parser_engine.ParserRegistry.default", side_effect=RuntimeError("registry broken")):
                 with self.assertRaises(RuntimeError):
                     diff_pairwise_files("lef", old_file, new_file, out)
 
@@ -1581,6 +1656,53 @@ class ScanPipelineTest(unittest.TestCase):
 
             write_default_config(workspace, raw_root=raw)
 
+            library_discover_cmds = build_cli_commands(["library", "discover"], cwd=workspace)
+            self.assertEqual(library_discover_cmds[0][0:2], ["library", "discover"])
+            self.assertIn(str(workspace / "config" / "library_candidates" / "latest.tsv"), library_discover_cmds[0])
+            self.assertNotIn(str(workspace / "config" / "library.list"), library_discover_cmds[0])
+
+            library_apply_cmds = build_cli_commands(["library", "apply"], cwd=workspace)
+            self.assertEqual(library_apply_cmds[0][0:2], ["library", "apply"])
+            self.assertIn(str(workspace / "config" / "library_registry.tsv"), library_apply_cmds[0])
+            self.assertIn(str(workspace / "config" / "library_catalog.yml"), library_apply_cmds[0])
+
+            library_add_cmds = build_cli_commands(
+                [
+                    "library",
+                    "add",
+                    "vendor_A.openroad_platform.openroad_asap7",
+                    "--root",
+                    str(raw / "vendor_A" / "openroad_asap7"),
+                    "--vendor",
+                    "vendor_A",
+                    "--display-name",
+                    "openroad_asap7",
+                ],
+                cwd=workspace,
+            )
+            self.assertEqual(library_add_cmds[0][0:2], ["library", "add"])
+            self.assertIn("--registry", library_add_cmds[0])
+            self.assertIn(str(workspace / "config" / "library_registry.tsv"), library_add_cmds[0])
+
+            library_accept_cmds = build_cli_commands(["library", "accept"], cwd=workspace)
+            self.assertEqual(library_accept_cmds[0][0:2], ["library", "accept"])
+            self.assertIn(str(workspace / "config" / "library_candidates" / "latest.tsv"), library_accept_cmds[0])
+            self.assertIn(str(workspace / "config" / "library_registry.tsv"), library_accept_cmds[0])
+
+            library_list_cmds = build_cli_commands(["library", "list"], cwd=workspace)
+            self.assertEqual(library_list_cmds[0][0:2], ["catalog", "list"])
+            self.assertIn("--catalog", library_list_cmds[0])
+            self.assertIn(str(workspace / "catalog" / "catalog.json"), library_list_cmds[0])
+
+            library_list_versions_cmds = build_cli_commands(
+                ["library", "list", "vendor_A.openroad_platform.openroad_asap7", "--versions"],
+                cwd=workspace,
+            )
+            self.assertEqual(library_list_versions_cmds[0][0:2], ["catalog", "list"])
+            self.assertIn("--library", library_list_versions_cmds[0])
+            self.assertIn("vendor_A.openroad_platform.openroad_asap7", library_list_versions_cmds[0])
+            self.assertIn("--versions", library_list_versions_cmds[0])
+
             catalog_cmds = build_cli_commands(["catalog"], cwd=workspace)
             self.assertEqual(len(catalog_cmds), 1)
             self.assertEqual(catalog_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
@@ -1590,6 +1712,16 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(catalog_lib_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
             self.assertIn("--library", catalog_lib_cmds[0])
             self.assertIn("ucie", catalog_lib_cmds[0])
+
+            catalog_version_cmds = build_cli_commands(["cat", "ucie", "stable_20250608"], cwd=workspace)
+            self.assertEqual(len(catalog_version_cmds), 1)
+            self.assertEqual(catalog_version_cmds[0][:4], ["catalog", "render", "--catalog", str(workspace / "catalog" / "catalog.json")])
+            self.assertIn("--library", catalog_version_cmds[0])
+            self.assertIn("ucie", catalog_version_cmds[0])
+            self.assertIn("--version", catalog_version_cmds[0])
+            self.assertIn("stable_20250608", catalog_version_cmds[0])
+            self.assertNotIn("--root", catalog_version_cmds[0])
+            self.assertNotIn("--with-evidence", catalog_version_cmds[0])
 
             all_scan_cmds = build_cli_commands(["scan"], cwd=workspace)
             self.assertEqual(len(all_scan_cmds), 1)
@@ -1671,8 +1803,8 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertNotIn("wrong_adjacent", refresh_latest_cmds[0])
             self.assertNotIn("--mode", refresh_latest_cmds[0])
             self.assertIn("--scan-if-missing", refresh_latest_cmds[0])
-            self.assertIn("--scan-mode", refresh_latest_cmds[0])
-            self.assertIn("candidate", refresh_latest_cmds[0])
+            self.assertNotIn("--scan-mode", refresh_latest_cmds[0])
+            self.assertIn("--parse-jobs", refresh_latest_cmds[0])
 
             refresh_all_cmds = build_cli_commands(["refresh", "--all"], cwd=workspace)
             self.assertEqual(len(refresh_all_cmds), 2)
@@ -2064,7 +2196,7 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertNotIn("rebuilt_summaries", source)
         self.assertNotIn("developer_artifacts", source)
 
-    def test_default_scan_modes_generate_version_review_parser_evidence(self) -> None:
+    def test_scan_cli_exposes_one_scan_mode_and_strategy_controls_depth(self) -> None:
         from lib_guard.cli import build_parser
 
         parser = build_parser()
@@ -2076,12 +2208,15 @@ class ScanPipelineTest(unittest.TestCase):
         render = parser.parse_args(["render", "--latest", "--library-id", "ip/ucie/stable_20250608"])
         status = parser.parse_args(["scan-status", "--latest", "--library-id", "ip/ucie/stable_20250608"])
 
-        self.assertEqual(direct.mode, "candidate")
-        self.assertEqual(run.mode, "candidate")
-        self.assertEqual(batch.mode, "candidate")
-        self.assertEqual(compare.scan_mode, "candidate")
-        self.assertEqual(render.mode, "candidate")
-        self.assertEqual(status.mode, "candidate")
+        self.assertEqual(direct.mode, "scan")
+        self.assertEqual(run.mode, "scan")
+        self.assertEqual(batch.mode, "scan")
+        self.assertEqual(compare.scan_mode, "scan")
+        self.assertEqual(render.mode, "scan")
+        self.assertEqual(status.mode, "scan")
+
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["scan", "--root", "raw", "--profile", "ip", "--name", "ucie", "--version", "stable_20250608", "--mode", "candidate"])
 
     def test_short_cli_init_defaults_to_version_review_scan_mode(self) -> None:
         from lib_guard.short_cli import write_default_config
@@ -2089,7 +2224,162 @@ class ScanPipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             config = write_default_config(Path(td), raw_root=Path(td) / "raw")
 
-            self.assertIn("mode: candidate", config.read_text(encoding="utf-8"))
+            self.assertIn("mode: scan", config.read_text(encoding="utf-8"))
+
+    def test_short_cli_uses_scan_strategy_config_without_mode_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {"version_id": "initial_20250601", "version_key": "ip/ucie/initial_20250601", "raw_path": str(raw / "ucie" / "initial_20250601")},
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/ucie/stable_20250608",
+                                        "raw_path": str(raw / "ucie" / "stable_20250608"),
+                                        "previous_effective_version": "initial_20250601",
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.short_cli import build_cli_commands, write_default_config
+
+            config = write_default_config(workspace, raw_root=raw)
+            config.write_text(
+                config.read_text(encoding="utf-8")
+                + "hash_policy: full\n"
+                + "parse_file_types: lef,cdl\n"
+                + "parse_exclude_file_types: verilog,liberty\n",
+                encoding="utf-8",
+            )
+
+            scan_cmd = build_cli_commands(["scan", "ucie", "stable_20250608"], cwd=workspace)[0]
+            refresh_cmd = build_cli_commands(["refresh", "ucie"], cwd=workspace)[0]
+            batch_cmd = build_cli_commands(["scan", "ucie", "--missing"], cwd=workspace)[1]
+
+            for command in [scan_cmd, refresh_cmd, batch_cmd]:
+                self.assertNotIn("--mode", command)
+                self.assertNotIn("--scan-mode", command)
+                self.assertIn("--hash-policy", command)
+                self.assertIn("full", command)
+                self.assertIn("--parse-file-types", command)
+                self.assertIn("lef,cdl", command)
+                self.assertIn("--parse-exclude-file-types", command)
+                self.assertIn("verilog,liberty", command)
+
+    def test_short_cli_config_paths_follow_project_config_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+
+            from lib_guard.project_config import workspace_defaults
+            from lib_guard.short_cli import _load_config, write_default_config
+
+            config = write_default_config(workspace, raw_root=raw)
+            cfg = _load_config(workspace, str(config))
+            defaults = workspace_defaults(workspace, raw_root=raw)
+
+            for key in ["catalog", "catalog_html", "library_registry", "library_candidates", "library_catalog", "library_versions", "actions_dir"]:
+                self.assertEqual(cfg[key], defaults[key])
+
+    def test_scan_writer_keeps_release_readiness_as_derived_output(self) -> None:
+        import inspect
+
+        from lib_guard.scan.report import ScanReportWriter
+        from lib_guard.scan.scanner import ScanRunner
+
+        writer_source = inspect.getsource(ScanReportWriter.write_bundle)
+        self.assertNotIn("build_release_readiness", writer_source)
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
+
+            ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="stable_20250608",
+                    scan_mode="scan",
+                    scan_id="DERIVED",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=True,
+                    no_progress=True,
+                    progress_interval=1,
+                    parse_jobs=1,
+                )
+            ).run()
+            self.assertTrue((out / "summary" / "release_readiness.json").exists())
+
+    def test_scan_writes_parser_manifest_once_after_parse_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan"
+            root.mkdir()
+            (root / "a.v").write_text("module a; endmodule\n", encoding="utf-8")
+            (root / "b.v").write_text("module b; endmodule\n", encoding="utf-8")
+
+            from lib_guard.scan.scanner import ScanRunner
+
+            original = ScanRunner._write_incremental_json
+            counts: dict[str, int] = {}
+
+            def counting_write(self: object, path: str | Path, data: object) -> None:
+                name = Path(path).name
+                counts[name] = counts.get(name, 0) + 1
+                return original(self, path, data)
+
+            with patch.object(ScanRunner, "_write_incremental_json", counting_write):
+                ScanRunner(
+                    SimpleNamespace(
+                        root_path=str(root),
+                        out_dir=str(out),
+                        library_type="ip",
+                        library_name="demo",
+                        version="stable_20250608",
+                        scan_mode="scan",
+                        scan_id="MANIFEST_ONCE",
+                        state_dir=str(Path(td) / "state"),
+                        cache_dir=str(Path(td) / "cache"),
+                        skip_cache=True,
+                        no_cache=True,
+                        no_progress=True,
+                        progress_interval=1,
+                        parse_jobs=1,
+                        parse_file_types=["verilog"],
+                    )
+                ).run()
+
+            self.assertEqual(counts.get("parser_manifest.json"), 1)
+
+    def test_parser_task_planning_does_not_probe_parser_cache(self) -> None:
+        import inspect
+
+        from lib_guard.scan.scanner import ScanRunner
+
+        source = inspect.getsource(ScanRunner._build_parser_task_list)
+        self.assertNotIn("get_parser_result", source)
 
     def test_scan_signature_uses_smart_hash_policy_for_heavy_eda_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2172,8 +2462,8 @@ class ScanPipelineTest(unittest.TestCase):
             tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
             self.assertEqual(tasks["summary"]["by_type"]["lef"], 1)
             self.assertEqual(tasks["tasks"][0]["pairing_confidence"], "unique_file_type")
-            self.assertIn("$PROJ/scripts/lg.csh fd", tasks["tasks"][0]["command"])
-            self.assertNotIn("python -m lib_guard.cli file-diff", tasks["tasks"][0]["command"])
+            self.assertNotIn("command", tasks["tasks"][0])
+            self.assertNotIn("low_level_command", tasks["tasks"][0])
 
     def test_legacy_extractor_paths_are_removed(self) -> None:
         import importlib

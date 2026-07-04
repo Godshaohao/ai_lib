@@ -9,6 +9,7 @@ from typing import Any
 import json
 
 from .common import auto_scan_id, default_cache_dir, default_state_dir, print_json, refresh_catalog_html
+from .scan import split_strategy_list
 
 
 def run_catalog_scan(args: Namespace) -> int:
@@ -31,13 +32,23 @@ def run_catalog_scan(args: Namespace) -> int:
     )
     if args.render:
         html_out = args.html_out or str(Path(args.out) / "html")
-        result["html"] = render_catalog_html(Path(args.out) / "catalog.json", html_out)
+        result["html"] = render_catalog_html(
+            Path(args.out) / "catalog.json",
+            html_out,
+            library_filter=getattr(args, "library", None),
+            version_filter=getattr(args, "render_version", None),
+        )
     print_json({k: v for k, v in result.items() if k != "catalog"})
     return 0 if result.get("status") == "PASS" else 2
 
 
 def _library_match_names(lib: dict[str, Any]) -> set[str]:
-    names = {str(lib.get("library_name") or ""), str(lib.get("display_name") or ""), str(lib.get("library_id") or "")}
+    names = {
+        str(lib.get("formal_library_id") or ""),
+        str(lib.get("typed_library_id") or ""),
+        str(lib.get("library_name") or ""),
+        str(lib.get("library_id") or ""),
+    }
     names.update(str(a) for a in lib.get("aliases", []) or [] if str(a))
     return {name for name in names if name}
 
@@ -52,16 +63,27 @@ def run_catalog_list(args: Namespace) -> int:
             for version in lib.get("versions", []) or []:
                 rows.append(
                     {
-                        "library_id": lib.get("library_id"),
-                        "version_id": version.get("version_id"),
-                        "stage": version.get("stage"),
-                        "raw_path": version.get("raw_path"),
-                        "manual_review": version.get("manual_review"),
-                        "recommended_action": version.get("recommended_action"),
+                        "库名": lib.get("formal_library_id") or lib.get("library_name"),
+                        "版本名": version.get("version_id"),
+                        "阶段": version.get("stage"),
+                        "原始路径": version.get("raw_path"),
+                        "需确认": version.get("manual_review"),
+                        "建议动作": version.get("recommended_action"),
                     }
                 )
         else:
-            rows.append({"library_id": lib.get("library_id"), "library_name": lib.get("library_name"), **(lib.get("summary") or {})})
+            summary = lib.get("summary") or {}
+            rows.append(
+                {
+                    "库名": lib.get("formal_library_id") or lib.get("library_name"),
+                    "显示名": lib.get("display_name"),
+                    "版本数": summary.get("version_count"),
+                    "最新版本": summary.get("latest_version"),
+                    "待扫描": summary.get("scan_pending"),
+                    "待对比": summary.get("diff_pending"),
+                    "需确认": summary.get("manual_review"),
+                }
+            )
     print_json({"status": "PASS", "rows": rows})
     return 0
 
@@ -69,7 +91,12 @@ def run_catalog_list(args: Namespace) -> int:
 def run_catalog_render(args: Namespace) -> int:
     from lib_guard.catalog.index import render_catalog_html
 
-    result = render_catalog_html(args.catalog, args.out)
+    result = render_catalog_html(
+        args.catalog,
+        args.out,
+        library_filter=getattr(args, "library", None),
+        version_filter=getattr(args, "version", None),
+    )
     print_json(result)
     return 0 if result.get("status") == "PASS" else 2
 
@@ -103,7 +130,6 @@ def run_catalog_override(args: Namespace) -> int:
 
 def run_catalog_workflow(args: Namespace) -> int:
     from lib_guard.catalog.index import find_catalog_version, update_catalog_scan_status
-    from lib_guard.render.control_console import render_console
     from lib_guard.render.html_report import render_scan_html
     from lib_guard.scan.scanner import ScanRunner
 
@@ -134,6 +160,9 @@ def run_catalog_workflow(args: Namespace) -> int:
         parse_jobs=args.parse_jobs,
         skip_cache=args.skip_cache,
         no_cache=args.no_cache,
+        hash_policy=getattr(args, "hash_policy", None),
+        parse_file_types=split_strategy_list(getattr(args, "parse_file_types", None)),
+        parse_exclude_file_types=split_strategy_list(getattr(args, "parse_exclude_file_types", None)),
         tool_version="0.5.0",
         schema_version="1.0",
         package_type=item.get("package_type"),
@@ -144,7 +173,6 @@ def run_catalog_workflow(args: Namespace) -> int:
     )
     scan_result = ScanRunner(cfg).run()
     scan_html = render_scan_html(scan_result.out_dir, args.html_out or str(Path(args.workdir) / "reports" / item["library_name"] / item["version_id"] / "scan_html"))
-    console_html = render_console(scan_result.out_dir, args.console_out or str(Path(args.workdir) / "reports" / item["library_name"] / item["version_id"] / "console"), workdir=args.workdir, config_dir=args.config_dir)
     update_catalog_scan_status(
         args.catalog,
         version_key=item["version_key"],
@@ -152,7 +180,6 @@ def run_catalog_workflow(args: Namespace) -> int:
         scan_id=scan_result.scan_id,
         status=scan_result.status,
         scan_html=scan_html.get("index_html"),
-        console_html=console_html.get("index_html"),
         input_fingerprint=(scan_result.bundle.scan_meta.get("input_fingerprint") if getattr(scan_result, "bundle", None) else None),
     )
     catalog_html = refresh_catalog_html(args)
@@ -163,7 +190,6 @@ def run_catalog_workflow(args: Namespace) -> int:
         "version": item["version_id"],
         "scan_dir": scan_result.out_dir,
         "scan_html": scan_html,
-        "console_html": console_html,
     }
     if catalog_html:
         result["catalog_html"] = catalog_html
@@ -182,11 +208,10 @@ def _compare_scan_child(args: Namespace, library: str, version: str) -> Namespac
         catalog=args.catalog,
         library=library,
         version=version,
-        mode=getattr(args, "scan_mode", "candidate"),
+        mode=getattr(args, "scan_mode", "scan"),
         workdir=getattr(args, "workdir", "work"),
         out=None,
         html_out=None,
-        console_out=None,
         catalog_html_out=getattr(args, "catalog_html_out", None),
         no_catalog_render=True,
         config_dir=getattr(args, "config_dir", "configs"),
@@ -200,6 +225,9 @@ def _compare_scan_child(args: Namespace, library: str, version: str) -> Namespac
         parse_jobs=getattr(args, "parse_jobs", 8),
         skip_cache=getattr(args, "skip_cache", False),
         no_cache=getattr(args, "no_cache", False),
+        hash_policy=getattr(args, "hash_policy", None),
+        parse_file_types=getattr(args, "parse_file_types", None),
+        parse_exclude_file_types=getattr(args, "parse_exclude_file_types", None),
     )
 
 
@@ -446,7 +474,6 @@ def run_catalog_batch(args: Namespace) -> int:
         child.version = item["version_id"]
         child.out = None
         child.html_out = None
-        child.console_out = None
         child.no_catalog_render = True
         try:
             started_at = auto_scan_id()
@@ -587,7 +614,7 @@ def run_catalog_release_check(args: Namespace) -> int:
     from lib_guard.catalog.index import find_catalog_version, update_catalog_release_status
     from lib_guard.release.explain import explain_release_check
     from lib_guard.release.checker import check_release_scan
-    from lib_guard.review.release_result import release_result_from_check, write_release_result
+    from lib_guard.release.result import release_result_from_check, write_release_result
 
     item = find_catalog_version(args.catalog, args.library, args.version)
     scan_dir = item.get("scan", {}).get("scan_dir")
@@ -621,7 +648,7 @@ def run_catalog_release_link(args: Namespace) -> int:
     from lib_guard.catalog.index import find_catalog_version, update_catalog_release_status
     from lib_guard.release.bundle import create_manifest_template_from_catalog
     from lib_guard.release.linker import link_release_from_manifest
-    from lib_guard.review.release_result import release_result_from_link, write_release_result
+    from lib_guard.release.result import release_result_from_link, write_release_result
 
     item = find_catalog_version(args.catalog, args.library, args.version)
     scan_dir = item.get("scan", {}).get("scan_dir")
@@ -666,7 +693,7 @@ def run_catalog_release_batch(args: Namespace) -> int:
     from lib_guard.release.bundle import create_manifest_template_from_catalog
     from lib_guard.release.linker import link_release_from_manifest
     from lib_guard.release.postcheck import verify_release_manifest
-    from lib_guard.review.release_result import release_result_from_link, write_release_result
+    from lib_guard.release.result import release_result_from_link, write_release_result
 
     requested_versions = set(args.version or [])
     selected = []

@@ -29,6 +29,40 @@ The review pipeline exchanges JSON artifacts between stages:
 Policies in `configs/` define current catalog and release behavior. The active
 project policy files are `catalog_policy.json` and `release_policy.json`.
 
+## Model boundaries
+
+Keep the review data model split into three layers:
+
+| Layer | Owner | Meaning |
+| --- | --- | --- |
+| Source facts | user config and tool artifacts | User-confirmed library map, raw path, scan inventory, parser results, diff JSON, release readiness, and review overrides |
+| Derived review model | review/model/render adapter | Base selection, normalized file changes, review lanes, evidence quality, path-restructure hints, and the single `usage_decision` |
+| Presentation model | HTML renderer | Cards, tables, folded evidence, links, and Chinese copy |
+
+`library_registry.tsv` is the user-confirmed library root registry.
+`library_catalog.yml` is generated from that registry and is the catalog/scan/diff
+library map source. `library_candidates/latest.tsv` is only a discovery review
+queue; it is not a source fact until accepted into the registry.
+`catalog.json` is a generated catalog index plus merged runtime facts. Users
+should not manually edit runtime scan/diff/release fields inside `catalog.json`;
+manual corrections should go through catalog override/review commands so the
+generated model can be rebuilt.
+
+Catalog 内部命名契约。日常命令和主 UI 只展示“库名”和“版本名”；下面字段用于
+内部索引、兼容和报告路径，不要求用户记忆。
+
+| 字段 | 含义 | 示例 |
+| --- | --- | --- |
+| `formal_library_id` | 用户可复制的库名 | `vendor_A.openroad_platform.openroad_asap7` |
+| `typed_library_id` | 带 library type 的内部完整键，不在日常命令中展示 | `ip/vendor_A.openroad_platform.openroad_asap7` |
+| `version_id` | 原始版本目录名 | `20260627_asap7` |
+| `version_uid` | 内部全局版本键；旧字段 `version_key` 与它保持一致，不在日常命令中展示 | `ip/vendor_A.openroad_platform.openroad_asap7/20260627_asap7` |
+| `report_slug` | HTML 和文件系统目录名，只用于路径，不作为用户输入 | `ip_vendor_A.openroad_platform.openroad_asap7` |
+| `display_name` | UI 显示名，不作为高优先级查找键 | `openroad_asap7` |
+
+`catalog_state.json`, `manager_tasks.json`, and `report_index.json` are render
+artifacts. They must not become source facts for scan, diff, or release logic.
+
 `review_gate.json` is a lightweight gate summary. `blocking_items` can block
 `current`; `attention_items`, including focused File Diff recommendations, do
 not block `current` by default. Human decisions are written through CLI into
@@ -84,9 +118,27 @@ reviewer's source of truth:
 | `base_trust_status` | Trust state for the selected base, such as `PASS`, `WARNING`, or `BLOCKING` |
 | `base_trust_note` | Human-readable explanation of whether the selected base is release-grade evidence |
 | `status_message` | Actionable copy for the current update-detail status |
+| `usage_decision` | Single user-facing decision: `READY`, `USAGE_REVIEW_REQUIRED`, or `BLOCKED` |
+| `usage_decision_reasons` | Machine-readable reasons behind `usage_decision`, for example `diff_changed`, `recommended_file_diff`, `release_note_missing`, or `base_not_confirmed` |
+| `file_changes[].identity` | Lightweight file identity hints: basename, suffix, size, sha/hash, parser signature, and deterministic match key |
+| `path_restructure` | Heuristic review hint for likely repackaging or root-path movement; it must not claim content equivalence by itself |
 
 HTML renders from this model directly. Markdown export is optional evidence
 generated from the same model and is never an HTML input.
+
+Path movement has two separate meanings. `file_diff.renamed_or_moved` is a
+file-level match list and may be small when hashes are missing, duplicated, or
+summary-only. `file_diff.package_root_migrations` is the package-level signal:
+it groups logical-path pairs by old/new wrapper root and reports
+`matched_logical_paths`, `old_root_file_count`, and `new_root_file_count`.
+Version Review must use `package_root_migrations` when explaining repackaging;
+it must not present `renamed_or_moved` alone as the package migration scale.
+
+`file_changes[].identity` supports human review of added/removed path churn. It
+is not a fuzzy-match or equivalence algorithm. A matching basename/size/parser
+signature may justify a focused manual check, but the model must still label the
+raw compare result as added/removed until a real pairwise or owner review closes
+the question.
 
 ## File type lanes
 

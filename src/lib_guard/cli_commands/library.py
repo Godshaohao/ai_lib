@@ -35,3 +35,31 @@ def run_library_apply(args: Namespace) -> int:
     )
     print_json(result)
     return 0 if result.get("status") == "PASS" else 2
+
+
+def run_library_accept(args: Namespace) -> int:
+    from lib_guard.library_registry import accept_candidates_to_registry
+
+    result = accept_candidates_to_registry(
+        args.root,
+        candidates_path=args.input,
+        registry_path=args.registry,
+    )
+    print_json(result)
+    return 0 if result.get("status") == "PASS" else 2
+
+
+def run_library_add(args: Namespace) -> int:
+    from lib_guard.library_registry import add_library_to_registry
+
+    result = add_library_to_registry(
+        args.root,
+        registry_path=args.registry,
+        library_id=args.library_id,
+        root_abs=args.library_root,
+        display_name=args.display_name,
+        vendor=args.vendor,
+        middle_path=args.middle_path,
+    )
+    print_json(result)
+    return 0 if result.get("status") == "PASS" else 2

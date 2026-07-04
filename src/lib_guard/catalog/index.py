@@ -84,7 +84,7 @@ def _load_policy(policy_path: str | Path | None) -> dict[str, Any]:
             text = p.read_text(encoding="utf-8", errors="ignore")
             if "libraries:" in text:
                 yaml_library_catalog = True
-                policy = {"library_map": str(p), "pattern_fallback": False}
+                policy = {"library_map": str(p.resolve()), "pattern_fallback": False}
         else:
             loaded = _read_json(p, {}) if p.exists() else {}
             policy = dict(loaded) if isinstance(loaded, Mapping) else {}
@@ -153,6 +153,19 @@ def _version_type(stage: str) -> str:
     if stage == "dated":
         return "candidate"
     return "daily"
+
+
+def _safe_slug(value: Any) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "item")).strip("._")
+    return text or "item"
+
+
+def _typed_library_id(library_type: str, formal_library_id: str) -> str:
+    return f"{library_type}/{formal_library_id}"
+
+
+def _version_uid(library_type: str, formal_library_id: str, version_id: str) -> str:
+    return f"{_typed_library_id(library_type, formal_library_id)}/{version_id}"
 
 
 def _coerce_list(value: Any) -> list[str]:
@@ -282,6 +295,61 @@ def _looks_like_version(version_id: str, matched_stage_rules: list[str]) -> bool
     return bool(matched_stage_rules or re.search(r"\d", version_id))
 
 
+def _is_noise_version_dir(version_id: str, ignore: set[str]) -> bool:
+    lower = str(version_id or "").strip().lower()
+    if not lower:
+        return True
+    if lower in ignore:
+        return True
+    if lower in {
+        ".git",
+        ".svn",
+        "__pycache__",
+        "lef",
+        "lib",
+        "db",
+        "gds",
+        "oas",
+        "timing",
+        "spef",
+        "sdc",
+        "upf",
+        "cpf",
+        "doc",
+        "docs",
+        "script",
+        "scripts",
+        "source_package",
+        "src_package",
+        "tmp",
+        "temp",
+        "backup",
+        "bak",
+        "old",
+        "work",
+    }:
+        return True
+    if lower.startswith("upstream_"):
+        return True
+    return lower.endswith(("_source_package", "-source-package"))
+
+
+def _path_is_descendant(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return child.resolve() != parent.resolve()
+    except (OSError, ValueError):
+        return False
+
+
+def _path_has_noise_part(path: Path, root: Path, ignore: set[str]) -> bool:
+    try:
+        parts = path.resolve().relative_to(root.resolve()).parts
+    except (OSError, ValueError):
+        parts = path.parts
+    return any(_is_noise_version_dir(part, ignore) for part in parts)
+
+
 def _item_looks_like_version(item: Mapping[str, Any]) -> bool:
     return _looks_like_version(str(item.get("version_id") or ""), (item.get("detected", {}) or {}).get("matched_rules", []) or [])
 
@@ -300,7 +368,7 @@ def _fingerprint_payload(entries: list[Mapping[str, Any]], *, mode: str, truncat
 
 
 def _inventory_evidence(path: Path, policy: Mapping[str, Any], limit: int = 5000) -> dict[str, Any]:
-    from lib_guard.scan.file_classifier import FileClassifier
+    from lib_guard.scan.inventory import FileClassifier
 
     classifier = FileClassifier()
     counts: Counter[str] = Counter()
@@ -460,13 +528,18 @@ def _discover_by_library_map(root: Path, library_type: str, policy: Mapping[str,
     libraries: dict[str, list[dict[str, Any]]] = {}
     ignore = set(str(x).lower() for x in policy.get("ignore_dirs", []))
     refs = load_library_map(root, policy, policy.get("_policy_path"))
-    for ref in refs:
+    usable_refs = [ref for ref in refs if not _path_has_noise_part(ref.root, root, ignore)]
+    for ref in usable_refs:
         ref_type = ref.library_type or library_type
         if ref_type != library_type:
+            continue
+        if any(_path_is_descendant(other.root, ref.root) for other in usable_refs if other is not ref):
             continue
         versions = discover_versions(ref, ignore)
         for version in versions:
             stage, matched = _stage_for(version.version_id, list(policy.get("stage_rules", DEFAULT_STAGE_RULES)))
+            if _is_noise_version_dir(version.version_id, ignore):
+                continue
             detected = _detected(version.path, version.version_id, stage, matched, policy, structure_rule=version.structure_rule, collect_evidence=collect_evidence)
             detected["discovery_source"] = version.discovery_source
             libraries.setdefault(ref.library_id, []).append(
@@ -518,7 +591,7 @@ def _discover_flat_version_root(root: Path, library_type: str, policy: Mapping[s
 def _discover(root: Path, library_type: str, policy: Mapping[str, Any], *, collect_evidence: bool = False) -> dict[str, list[dict[str, Any]]]:
     ignore = set(str(x).lower() for x in policy.get("ignore_dirs", []))
     libraries: dict[str, list[dict[str, Any]]] = _discover_by_library_map(root, library_type, policy, collect_evidence=collect_evidence)
-    if libraries and policy.get("pattern_fallback") is False:
+    if policy.get("library_map") and policy.get("pattern_fallback") is False:
         return libraries
     mapped_paths = {str(Path(item["raw_path"])) for items in libraries.values() for item in items}
     rule_libraries = _discover_by_rules(root, library_type, policy, collect_evidence=collect_evidence)
@@ -582,6 +655,8 @@ def _discover_from_library_ref(ref: Any, library_type: str, policy: Mapping[str,
     items: list[dict[str, Any]] = []
     for version in versions:
         stage, matched = _stage_for(version.version_id, list(policy.get("stage_rules", DEFAULT_STAGE_RULES)))
+        if _is_noise_version_dir(version.version_id, ignore):
+            continue
         detected = _detected(version.path, version.version_id, stage, matched, policy, structure_rule=version.structure_rule, collect_evidence=collect_evidence)
         detected["discovery_source"] = version.discovery_source
         items.append(
@@ -623,9 +698,12 @@ def _discover_single_library(
         from lib_guard.discovery import LibraryRef, load_library_map
 
         refs = load_library_map(root, policy, policy.get("_policy_path"))
-        for ref in refs:
+        usable_refs = [ref for ref in refs if not _path_has_noise_part(ref.root, root, ignore)]
+        for ref in usable_refs:
             ref_type = ref.library_type or library_type
             if ref_type != library_type:
+                continue
+            if any(_path_is_descendant(other.root, ref.root) for other in usable_refs if other is not ref):
                 continue
             if library_filter in _library_filter_names_for_ref(ref, library_type):
                 return _discover_from_library_ref(ref, library_type, policy, ignore, collect_evidence=collect_evidence)
@@ -678,10 +756,46 @@ def _runtime_for(runtime_state: Mapping[str, Any], version_key: str) -> Mapping[
     return item if isinstance(item, Mapping) else {}
 
 
+def _clean_runtime_item(item: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned = {str(key): value for key, value in item.items()}
+    scan = cleaned.get("scan")
+    if isinstance(scan, Mapping):
+        cleaned["scan"] = {str(key): value for key, value in scan.items() if key != "console_html"}
+    return cleaned
+
+
+def _clean_catalog_legacy_fields(catalog: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned = dict(catalog)
+    runtime = cleaned.get("runtime_state")
+    if isinstance(runtime, Mapping):
+        cleaned["runtime_state"] = {str(key): _clean_runtime_item(value) for key, value in runtime.items() if isinstance(value, Mapping)}
+    libraries = []
+    for lib in cleaned.get("libraries", []) or []:
+        if not isinstance(lib, Mapping):
+            libraries.append(lib)
+            continue
+        lib_item = dict(lib)
+        versions = []
+        for version in lib_item.get("versions", []) or []:
+            if not isinstance(version, Mapping):
+                versions.append(version)
+                continue
+            version_item = dict(version)
+            scan = version_item.get("scan")
+            if isinstance(scan, Mapping):
+                version_item["scan"] = {str(key): value for key, value in scan.items() if key != "console_html"}
+            versions.append(version_item)
+        lib_item["versions"] = versions
+        libraries.append(lib_item)
+    if "libraries" in cleaned:
+        cleaned["libraries"] = libraries
+    return cleaned
+
+
 def _collect_runtime_state(data: Mapping[str, Any]) -> dict[str, Any]:
     runtime: dict[str, Any] = {}
     if isinstance(data.get("runtime_state"), Mapping):
-        runtime.update({str(k): dict(v) for k, v in data.get("runtime_state", {}).items() if isinstance(v, Mapping)})
+        runtime.update({str(k): _clean_runtime_item(v) for k, v in data.get("runtime_state", {}).items() if isinstance(v, Mapping)})
     overrides = data.get("manual_overrides", {}) if isinstance(data.get("manual_overrides"), Mapping) else {}
     for version_key, item in overrides.items():
         if not isinstance(item, Mapping):
@@ -692,7 +806,7 @@ def _collect_runtime_state(data: Mapping[str, Any]) -> dict[str, Any]:
         current = dict(runtime.get(str(version_key), {}) or {})
         for key, value in legacy.items():
             current[key] = dict(current.get(key, {}) or {}) | dict(value or {})
-        runtime[str(version_key)] = current
+        runtime[str(version_key)] = _clean_runtime_item(current)
     return runtime
 
 
@@ -788,8 +902,11 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
     versions: list[dict[str, Any]] = []
     ordered = sorted(discovered, key=lambda item: _version_sort_key(item["version_id"]))
     first = ordered[0] if ordered else {}
+    formal_library_id = library_name
+    typed_library_id = _typed_library_id(library_type, formal_library_id)
+    report_slug = _safe_slug(typed_library_id)
     library_root = first.get("library_root")
-    display_name = first.get("display_name") or library_name
+    display_name = first.get("display_name") or formal_library_id
     vendor = first.get("vendor")
     category = first.get("category")
     middle_path = first.get("middle_path")
@@ -803,7 +920,8 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
     for item in ordered:
         stage = item["stage"]
         version_id = item["version_id"]
-        version_key = f"{library_type}/{library_name}/{version_id}"
+        version_uid = _version_uid(library_type, formal_library_id, version_id)
+        version_key = version_uid
         parent = None
         if stage in {"stable", "final"}:
             parent = previous_by_stage.get(stage) or latest_known
@@ -839,7 +957,11 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
             manual_review = True
         version = {
             "version_key": version_key,
+            "version_uid": version_uid,
             "version_id": version_id,
+            "formal_library_id": formal_library_id,
+            "typed_library_id": typed_library_id,
+            "report_slug": report_slug,
             "display_name": version_id,
             "stage": stage,
             "version_type": _version_type(stage),
@@ -867,7 +989,7 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
                 "confidence": "HIGH" if item.get("detected", {}).get("confidence", 0) >= 0.7 else "LOW",
                 "source": lineage_source,
             },
-            "scan": {"status": "NOT_SCANNED", "scan_dir": None, "scan_id": None, "last_scan_at": None, "scan_html": None, "console_html": None},
+            "scan": {"status": "NOT_SCANNED", "scan_dir": None, "scan_id": None, "last_scan_at": None, "scan_html": None},
             "diff": {
                 "adjacent_status": "PENDING" if parent else "NOT_APPLICABLE",
                 "adjacent_old_version": parent,
@@ -901,9 +1023,12 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
     for version in versions:
         stage_counts[version.get("stage", "unknown")] = stage_counts.get(version.get("stage", "unknown"), 0) + 1
     return {
-        "library_id": f"{library_type}/{library_name}",
+        "library_id": typed_library_id,
+        "typed_library_id": typed_library_id,
         "library_type": library_type,
-        "library_name": library_name,
+        "library_name": formal_library_id,
+        "formal_library_id": formal_library_id,
+        "report_slug": report_slug,
         "display_name": display_name,
         "aliases": aliases,
         "vendor": vendor,
@@ -1161,7 +1286,9 @@ def scan_catalog(
     policy_hash = _sha256_file(policy_path)
     if not force and not library and isinstance(previous, Mapping) and previous.get("libraries") and isinstance(previous_state, Mapping):
         if _catalog_state_unchanged(previous_state, root_path, policy_hash, collect_evidence=collect_evidence):
-            catalog = dict(previous)
+            catalog = _clean_catalog_legacy_fields(previous)
+            if catalog != previous:
+                _write_json(out / "catalog.json", catalog)
             catalog["incremental_refresh"] = {
                 "mode": "skipped",
                 "reason": "raw_root_policy_and_library_roots_unchanged",
@@ -1282,7 +1409,12 @@ def apply_catalog_override(
 
 
 def _library_match_score(lib: Mapping[str, Any], query: str) -> int:
-    exact = {str(lib.get("library_id") or ""), str(lib.get("library_name") or "")}
+    exact = {
+        str(lib.get("formal_library_id") or ""),
+        str(lib.get("typed_library_id") or ""),
+        str(lib.get("library_id") or ""),
+        str(lib.get("library_name") or ""),
+    }
     aliases = {str(a) for a in lib.get("aliases", []) or [] if str(a)}
     if query in exact:
         return 100
@@ -1303,7 +1435,7 @@ def _select_catalog_library(catalog: Mapping[str, Any], library: str) -> Mapping
     matches = [lib for score, lib in scored if score == best]
     if len(matches) > 1:
         choices = ", ".join(str(lib.get("library_name") or lib.get("library_id")) for lib in matches)
-        raise ValueError(f"ambiguous library name or alias {library!r}; use full library_id. Matched: {choices}")
+        raise ValueError(f"ambiguous library name or alias {library!r}; use formal library name. Matched: {choices}")
     return matches[0]
 
 
@@ -1316,9 +1448,13 @@ def find_catalog_version(catalog_path: str | Path, library: str, version: str) -
             continue
         out = dict(item)
         out["library_id"] = lib.get("library_id")
+        out["formal_library_id"] = lib.get("formal_library_id") or lib.get("library_name")
+        out["typed_library_id"] = lib.get("typed_library_id") or lib.get("library_id")
         out["library_type"] = lib.get("library_type")
         out["library_name"] = lib.get("library_name")
         out["library_display_name"] = lib.get("display_name")
+        out["report_slug"] = lib.get("report_slug")
+        out.setdefault("version_uid", item.get("version_uid") or item.get("version_key"))
         out["aliases"] = list(lib.get("aliases", []) or [])
         out["vendor"] = lib.get("vendor")
         out["category"] = lib.get("category")
@@ -1384,7 +1520,6 @@ def update_catalog_scan_status(
     scan_id: str | None,
     status: str,
     scan_html: str | Path | None = None,
-    console_html: str | Path | None = None,
     input_fingerprint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     path = Path(catalog_path)
@@ -1397,7 +1532,6 @@ def update_catalog_scan_status(
         "scan_id": scan_id,
         "last_scan_at": _now(),
         "scan_html": str(scan_html) if scan_html else None,
-        "console_html": str(console_html) if console_html else None,
     }
     if input_fingerprint:
         item["scan"]["input_fingerprint"] = dict(input_fingerprint)
@@ -1509,6 +1643,8 @@ def render_catalog_html(
     render_library_pages: bool = True,
     max_attention_items: int = 10,
     max_report_rows: int = 16,
+    library_filter: str | None = None,
+    version_filter: str | None = None,
 ) -> dict[str, Any]:
     """Render Catalog HTML through the UI-layer renderer."""
     from lib_guard.render.catalog_report import render_catalog_html as _render_catalog_html
@@ -1519,4 +1655,6 @@ def render_catalog_html(
         render_library_pages=render_library_pages,
         max_attention_items=max_attention_items,
         max_report_rows=max_report_rows,
+        library_filter=library_filter,
+        version_filter=version_filter,
     )

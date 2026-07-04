@@ -181,7 +181,7 @@ class EffectiveManifestTest(unittest.TestCase):
             library_home = catalog_dir / "html" / "libraries" / "ip_ucie" / "index.html"
             self.assertTrue(library_home.exists())
             library_html = library_home.read_text(encoding="utf-8")
-            self.assertIn("Library Version Timeline", library_html)
+            self.assertIn("版本时间线", library_html)
             self.assertIn("latest_effective_ref", library_html)
             self.assertNotIn("Current Effective Detail", library_html)
             self.assertNotIn("Version Evidence", library_html)
@@ -321,7 +321,7 @@ class EffectiveManifestTest(unittest.TestCase):
 
             library_html = (html_dir / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
             self.assertIn("E3_20260624", library_html)
-            self.assertIn("Library Version Timeline", library_html)
+            self.assertIn("版本时间线", library_html)
             self.assertIn("E2_vs_E3", library_html)
             self.assertIn("打开报告", library_html)
             self.assertNotIn("<iframe", library_html.lower())
@@ -388,7 +388,7 @@ class EffectiveManifestTest(unittest.TestCase):
             library_html = (html_dir / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
             self.assertIn("Current Effective", library_html)
             self.assertIn(full.name, library_html)
-            self.assertIn("Library Version Timeline", library_html)
+            self.assertIn("版本时间线", library_html)
             self.assertNotIn("Current Effective Detail", library_html)
             self.assertNotIn("Current raw", library_html)
             self.assertNotIn("Version Evidence", library_html)

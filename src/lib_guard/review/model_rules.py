@@ -82,11 +82,11 @@ def resolve_review_base(version: Mapping[str, Any], library: Mapping[str, Any] |
 def classify_review_lane(file_type: str) -> dict[str, str]:
     key = str(file_type or "").lower()
     if key in SUMMARY_ONLY_TYPES:
-        return {"lane": "Summary-only", "hint": "摘要级审查；默认不生成文件级 Diff 命令"}
+        return {"lane": "Summary-only", "hint": "摘要级审查；默认不做文件级深度比较"}
     if key in BINARY_METADATA_ONLY_TYPES:
-        return {"lane": "Metadata-only", "hint": "metadata-only 审查；默认不生成文件级 Diff 命令"}
+        return {"lane": "Metadata-only", "hint": "metadata-only 审查；默认只看元数据/哈希/规模"}
     if key in P0_REVIEW_TYPES:
-        return {"lane": "P0", "hint": "建议优先做文件级 Diff"}
+        return {"lane": "P0", "hint": "重点确认内容变化或等价性"}
     if key in P1_REVIEW_TYPES:
         return {"lane": "P1", "hint": "建议定向审查"}
     return {"lane": "Review", "hint": "按需人工检查"}

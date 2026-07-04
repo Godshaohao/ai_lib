@@ -25,7 +25,7 @@ def status_class(value: Any) -> str:
         "REVIEW", "MANUAL_REVIEW", "NEEDS_FILE_DIFF", "FILE_DIFF_RECOMMENDED", "FILE_DIFF_PENDING",
         "PAIRWISE_PENDING", "PAIRWISE_PARTIAL", "DIFF", "CHANGED", "METADATA_ONLY", "MISSING",
         "EXTRA", "UNKNOWN", "NEEDS_BASE_CONFIRM", "RELEASE_CHECK_REQUIRED", "SCAN_NEEDS_REVIEW",
-        "REVIEW_REQUIRED", "COMPARE_PENDING", "NOT_READY", "LARGE_CHANGE", "DIFF_EXPLOSION", "PATH_RESTRUCTURE", "SCAN_EVIDENCE_INCOMPLETE",
+        "REVIEW_REQUIRED", "USAGE_REVIEW_REQUIRED", "COMPARE_PENDING", "NOT_READY", "LARGE_CHANGE", "DIFF_EXPLOSION", "PATH_RESTRUCTURE", "SCAN_EVIDENCE_INCOMPLETE",
     }
     bad = {
         "FAILED", "FAIL", "ERROR", "BLOCK", "BLOCKED", "BROKEN", "MISMATCH", "TARGET_MISMATCH",
@@ -50,11 +50,11 @@ def status_label(value: Any) -> str:
         "SCAN_READY": "Scan 可用", "READY_FOR_DIFF": "可进入 Diff", "SCAN_NEEDS_REVIEW": "Scan 需确认",
         "SCAN_BLOCKED": "Scan 阻塞", "NOT_SCANNED": "未扫描", "COMPARE_READY": "可对比",
         "COMPARE_PENDING": "待对比", "SAME": "无变化", "DIFF": "有差异", "CHANGED": "有变化",
-        "NEEDS_FILE_DIFF": "建议查看 File Diff", "FILE_DIFF_RECOMMENDED": "建议 File Diff",
-        "FILE_DIFF_PENDING": "重点 File Diff 待运行", "FILE_DIFF_DONE": "重点 File Diff 已生成",
+        "NEEDS_FILE_DIFF": "建议查看重点文件", "FILE_DIFF_RECOMMENDED": "建议查看重点文件",
+        "FILE_DIFF_PENDING": "重点文件待确认", "FILE_DIFF_DONE": "重点文件已确认",
         "PAIRWISE_PENDING": "Pairwise 待完成", "PAIRWISE_PARTIAL": "Pairwise 部分完成",
         "PAIRWISE_EMPTY": "无重点建议", "METADATA_ONLY": "仅 metadata", "REVIEW": "需审阅",
-        "NEEDS_REVIEW": "需审阅", "REVIEW_REQUIRED": "需审阅", "MANUAL_REVIEW": "需人工确认",
+        "NEEDS_REVIEW": "需审阅", "REVIEW_REQUIRED": "需审阅", "USAGE_REVIEW_REQUIRED": "需审查后使用", "MANUAL_REVIEW": "需人工确认",
         "NEEDS_BASE_CONFIRM": "需确认 base", "LARGE_CHANGE": "变化过大", "DIFF_EXPLOSION": "变化异常", "PATH_RESTRUCTURE": "疑似目录重组", "SCAN_EVIDENCE_INCOMPLETE": "Scan 证据不完整", "FILE_DIFF_RECOMMENDED": "建议查看重点文件", "RELEASE_CHECK_REQUIRED": "发布前检查",
         "RELEASED": "已发布", "RELEASE_BLOCKED": "发布阻塞", "APPLIED": "已应用", "DRY_RUN": "预演",
         "PASS_WITH_WARNING": "通过有注意项", "WARNING": "注意", "WARN": "注意", "PENDING": "待处理",
@@ -88,25 +88,6 @@ def button(label: str, href: str = "#", kind: str = "secondary", *, disabled: bo
 
 def action_strip(items: Sequence[str]) -> str:
     return "<div class='action-strip'>" + "".join(items) + "</div>"
-
-
-# ---- backward-compatible wrappers -------------------------------------------------
-def metric(label: str, value: Any, hint: str = "", status: Any = None) -> str:
-    """Compatibility wrapper for legacy renderers."""
-    return metric_card(label, value, hint, status)
-
-
-def action_bar(items: Sequence[tuple[str, Any, str]]) -> str:
-    """Compatibility wrapper for legacy renderers.
-
-    items: [(label, href, kind), ...]
-    """
-    return action_strip([button(str(label), str(href or ""), str(kind or "secondary"), disabled=not bool(href), target="_blank") for label, href, kind in items])
-
-
-def faceted_table(table_id: str, headers: list[str], rows: list[str], empty: str = "暂无数据", placeholder: str = "筛选") -> str:
-    """Compatibility alias. Current static HTML keeps the simple filterable table."""
-    return filterable_table(table_id, headers, rows, empty, placeholder)
 
 
 def command_chip(command: Any, *, label: str = "命令", disabled_text: str = "待生成命令") -> str:

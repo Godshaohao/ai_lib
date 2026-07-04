@@ -42,7 +42,7 @@ def file_type_to_view(file_type: str) -> str:
 
 
 def _classify_file(root: Path, file_path: Path) -> dict[str, Any]:
-    from lib_guard.scan.file_classifier import FileClassifier
+    from lib_guard.scan.inventory import FileClassifier
 
     rel = file_path.relative_to(root).as_posix()
     record = FileClassifier().classify({"path": rel, "name": file_path.name})

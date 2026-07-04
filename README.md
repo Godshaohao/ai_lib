@@ -7,17 +7,17 @@ raw delivery、扫描版本、生成结构化更新证据、渲染 HTML，并在
 ## 当前主流程
 
 ```text
-Catalog -> Version Review -> Release
+库目录 -> 版本审查 -> Release
 ```
 
-- Catalog 是库资产地图和报告入口。
-- Version Review 是普通 reviewer 的主页面，包含 release notes、scan evidence、
+- 库目录是库资产地图和报告入口。
+- 版本审查是普通 reviewer 的主页面，包含 release notes、scan evidence、
   parser summary、count/corner summary、readiness，以及相对当前有效库的更新证据。
 - Release 使用 manifest 驱动的文件级 symlink，只有 scan/diff/review gate 证据满足
   条件后才进入 link/verify。
 - Force release 入口保留，但必须提供 `--force-reason`，并写入
   `release_override.json` 审计绕过的 gate/check 证据。
-- Library Workspace 是高级账本，用来查看单库 timeline、effective 组合和历史报告。
+- 库工作台是高级账本，用来查看单库 timeline、effective 组合和历史报告。
 - Comparison Review 是手动 compare / debug 入口，不是普通用户查看更新详情的唯一入口。
 - File Diff 只用于推荐下钻的关键文件，不是全量完成度 scoreboard。
 - Review Gate 只记录真实 blocker 和 owner accept/waive 决策，不是多部门审批流。
@@ -94,7 +94,7 @@ setenv LIB_GUARD_CONFIG $WORK/lib_guard.yml
 
 ```bash
 PYTHONPATH=src python -m lib_guard.cli catalog scan --root "$RAW" --out "$WORK/catalog" --render --html-out "$WORK/catalog/html" --policy configs/catalog_policy.json
-PYTHONPATH=src python -m lib_guard.cli run-batch --catalog "$WORK/catalog/catalog.json" --mode candidate --workdir "$WORK" --parse-jobs 8
+PYTHONPATH=src python -m lib_guard.cli run-batch --catalog "$WORK/catalog/catalog.json" --workdir "$WORK" --parse-jobs 8
 PYTHONPATH=src python -m lib_guard.cli compare --catalog "$WORK/catalog/catalog.json" --library <LIBRARY> --new <VERSION> --base <BASE_VERSION> --workdir "$WORK"
 PYTHONPATH=src python -m compileall -q src
 PYTHONPATH=src python -m unittest discover -s src/lib_guard/test -p "test*.py"

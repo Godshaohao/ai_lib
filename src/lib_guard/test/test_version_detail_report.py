@@ -70,12 +70,15 @@ class VersionDetailReportTest(unittest.TestCase):
             lib, version = _write_version_detail_lane_fixture(root)
 
             from lib_guard.render.version_detail_report import (
+                _audit_evidence_panel,
                 build_version_update_detail_model,
                 render_version_update_detail_panel,
             )
 
             model = build_version_update_detail_model(root / "html", lib, version)
-            html = render_version_update_detail_panel(model)
+            main_html = render_version_update_detail_panel(model)
+            audit_html = _audit_evidence_panel(model)
+            html = main_html + audit_html
 
             self.assertEqual(
                 [item["path"] for item in model["recommended_file_diff"]],
@@ -89,15 +92,49 @@ class VersionDetailReportTest(unittest.TestCase):
                 [item["path"] for item in model["metadata_only_reviewed"]],
                 ["db/top.db", "layout/top.gds", "layout/top.oas"],
             )
-            self.assertIn("Recommended File Diff", html)
+            self.assertIn("重点变化文件", main_html)
+            self.assertNotIn("Summary-only / Metadata-only 明细", main_html)
+            self.assertIn("审计证据", audit_html)
+            self.assertIn("Summary-only / Metadata-only 明细", audit_html)
             self.assertIn("Summary-only Reviewed", html)
             self.assertIn("Metadata-only Reviewed", html)
-            self.assertIn("已完成摘要级审查；默认无需展开全文。", html)
-            self.assertIn("已完成 metadata-only 审查；二进制/版图文件默认只使用 hash/size/path/count 证据。", html)
+            self.assertIn("证据分层", html)
+            self.assertIn("混合证据", html)
+            self.assertIn("摘要级 3", html)
+            self.assertIn("metadata-only 3", html)
             summary_section = html.split("Summary-only Reviewed", 1)[1].split("Metadata-only Reviewed", 1)[0]
             metadata_section = html.split("Metadata-only Reviewed", 1)[1].split("Release note", 1)[0]
             self.assertNotIn("未生成 File Diff", summary_section)
             self.assertNotIn("未生成 File Diff", metadata_section)
+
+    def test_compressed_collateral_uses_real_file_type_not_gzip_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+            diff_dir = root / "diff"
+            (diff_dir / "file_diff.json").write_text(
+                json.dumps(
+                    {
+                        "added": [
+                            {"path": "timing/lib_fast.lib.gz", "file_type": "gz"},
+                            {"path": "parasitics/top.spef.gz", "file_type": "gz"},
+                            {"path": "rtl/top.v.gz", "file_type": "gz"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            by_path = {item["path"]: item["file_type"] for item in model["file_changes"]}
+
+            self.assertEqual(by_path["timing/lib_fast.lib.gz"], "liberty")
+            self.assertEqual(by_path["parasitics/top.spef.gz"], "spef")
+            self.assertEqual(by_path["rtl/top.v.gz"], "verilog")
+            self.assertNotIn("gz", set(by_path.values()))
 
     def test_update_detail_lane_sections_use_reviewer_columns(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -105,6 +142,7 @@ class VersionDetailReportTest(unittest.TestCase):
             lib, version = _write_version_detail_lane_fixture(root)
 
             from lib_guard.render.version_detail_report import (
+                _audit_evidence_panel,
                 build_version_update_detail_model,
                 render_version_update_detail_panel,
             )
@@ -115,31 +153,34 @@ class VersionDetailReportTest(unittest.TestCase):
             model["summary_only_reviewed"][0]["reason"] = "sentinel summary reason"
             model["metadata_only_reviewed"][0]["metadata_evidence"] = "sentinel metadata evidence"
             model["metadata_only_reviewed"][0]["reason"] = "sentinel metadata reason"
-            html = render_version_update_detail_panel(model)
+            main_html = render_version_update_detail_panel(model)
+            audit_html = _audit_evidence_panel(model)
+            html = main_html + audit_html
 
-            recommended_section = html.split("Recommended File Diff", 1)[1].split("Summary-only Reviewed", 1)[0]
-            summary_section = html.split("Summary-only Reviewed", 1)[1].split("Metadata-only Reviewed", 1)[0]
-            metadata_section = html.split("Metadata-only Reviewed", 1)[1].split("Release note", 1)[0]
+            recommended_section = main_html.split("重点变化文件", 1)[1]
+            summary_section = audit_html.split("Summary-only Reviewed", 1)[1].split("Metadata-only Reviewed", 1)[0]
+            metadata_section = audit_html.split("Metadata-only Reviewed", 1)[1].split("Release note", 1)[0]
 
-            for header in ["Priority", "file_type", "path", "reason", "command"]:
+            for header in ["变化", "类型", "路径", "审查级别", "建议"]:
                 self.assertIn(header, recommended_section)
             for header in ["file_type", "path", "summary evidence", "reason"]:
                 self.assertIn(header, summary_section)
             for header in ["file_type", "path", "metadata evidence", "reason"]:
                 self.assertIn(header, metadata_section)
-            self.assertIn("建议对这些 P0/P1 变化运行 File Diff 后再完成最终审查。", recommended_section)
             self.assertIn("lef/top.lef", recommended_section)
             self.assertIn("constraints/top.sdc", recommended_section)
-            self.assertIn("File Diff", recommended_section)
-            self.assertIn("lg.csh fd lane_demo patch_20260630 lef/top.lef", recommended_section)
-            self.assertIn("sentinel recommended reason", recommended_section)
+            self.assertIn("重点确认内容变化或等价性", recommended_section)
+            self.assertIn("先按 basename/hash/parser signature 匹配 old/new", recommended_section)
+            self.assertNotIn("lg.csh fd lane_demo patch_20260630 lef/top.lef", recommended_section)
+            self.assertNotIn("lg.csh fd lane_demo patch_20260630 lef/top.lef", html)
+            self.assertNotIn("lg.csh fd lane_demo patch_20260630 constraints/top.sdc", html)
             for path in ["rtl/top.v", "timing/top.lib", "parasitics/top.spef"]:
                 self.assertIn(path, summary_section)
             self.assertIn("sentinel summary evidence", summary_section)
             self.assertIn("sentinel summary reason", summary_section)
             self.assertIn(
                 "<td><code>timing/top.lib</code></td>"
-                "<td>摘要级审查；默认不生成文件级 Diff 命令</td>"
+                "<td>摘要级审查；默认不做文件级深度比较</td>"
                 "<td>已完成摘要级审查</td>",
                 summary_section,
             )
@@ -149,11 +190,90 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("sentinel metadata reason", metadata_section)
             self.assertIn(
                 "<td><code>layout/top.gds</code></td>"
-                "<td>metadata-only 审查；默认不生成文件级 Diff 命令</td>"
+                "<td>metadata-only 审查；默认只看元数据/哈希/规模</td>"
                 "<td>metadata-only 审查</td>",
                 metadata_section,
             )
-            self.assertIn("hash/size/path/count", metadata_section)
+
+    def test_path_restructure_is_called_out_before_full_file_list(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            diff_dir = root / "diff"
+            diff_dir.mkdir()
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps(
+                    {
+                        "status": "DIFF",
+                        "added_files": 181,
+                        "removed_files": 10,
+                        "changed_files": 0,
+                        "renamed_or_moved": 23,
+                        "package_root_migrations": 1,
+                        "package_root_migration_matched_files": 31,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "file_diff.json").write_text(
+                json.dumps(
+                    {
+                        "added": ["upstream_ae9a8ed9/lef/top.lef"],
+                        "removed": ["asap7_source_package/lef/top.lef"],
+                        "changed": [],
+                        "renamed_or_moved": [
+                            {"old": "asap7_source_package/README.md", "new": "upstream_ae9a8ed9/README.md"},
+                        ],
+                        "package_root_migrations": [
+                            {
+                                "old_root": "asap7_source_package",
+                                "new_root": "upstream_ae9a8ed9",
+                                "matched_logical_paths": 31,
+                                "old_root_file_count": 31,
+                                "new_root_file_count": 206,
+                                "raw_added_under_new_root": 181,
+                                "raw_removed_under_old_root": 9,
+                            }
+                        ],
+                        "counts": {
+                            "added": 181,
+                            "removed": 10,
+                            "changed": 0,
+                            "renamed_or_moved": 23,
+                            "package_root_migrations": 1,
+                            "package_root_migration_matched_files": 31,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/asap7", "library_name": "asap7"},
+                {
+                    "version_id": "20260627_asap7",
+                    "current_effective_ref": "20260624_asap7",
+                    "diff": {"current_effective_diff_dir": str(diff_dir)},
+                },
+            )
+            html = render_version_update_detail_panel(model)
+
+            self.assertTrue(model["path_restructure"]["suspected"])
+            self.assertIn("修改文件 0 个，新增 181 个，删除 10 个", model["headline"])
+            self.assertIn("疑似重打包 / 目录迁移", html)
+            self.assertIn("old root: <code>asap7_source_package</code>", html)
+            self.assertIn("new root: <code>upstream_ae9a8ed9</code>", html)
+            self.assertIn("逻辑路径匹配 31", html)
+            self.assertIn("old 包内 31 个文件，new 包内 206 个文件", html)
+            self.assertIn("文件级 moved/renamed 23", html)
+            self.assertLess(html.index("疑似重打包 / 目录迁移"), html.index("重点变化文件"))
 
     def test_markdown_export_uses_same_headline_and_evidence_counts_as_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -172,6 +292,8 @@ class VersionDetailReportTest(unittest.TestCase):
 
             self.assertIn(model["headline"], text)
             self.assertIn(model["confidence_note"], text)
+            self.assertIn(f"usage_decision: {model['usage_decision']}", text)
+            self.assertIn("usage_decision_reasons:", text)
             self.assertIn(f"recommended_file_diff: {len(model['recommended_file_diff'])}", text)
             self.assertIn(f"summary_only_reviewed: {len(model['summary_only_reviewed'])}", text)
             self.assertIn(f"metadata_only_reviewed: {len(model['metadata_only_reviewed'])}", text)
@@ -242,12 +364,12 @@ class VersionDetailReportTest(unittest.TestCase):
             )
 
             from lib_guard.render.version_detail_report import (
+                _audit_evidence_panel,
                 build_version_update_detail_model,
-                render_version_update_detail_panel,
             )
 
             model = build_version_update_detail_model(root / "html", lib, version)
-            html = render_version_update_detail_panel(model)
+            html = _audit_evidence_panel(model)
 
             self.assertIn("View Changes", html)
             self.assertIn("Type Changes", html)
@@ -291,17 +413,283 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("headline", model)
             self.assertIn("confidence_note", model)
             self.assertIn("primary_next_action", model)
+            self.assertEqual(model["file_diff_recommendations"], [])
             self.assertEqual(model["base_ref"], "current_effective")
             self.assertEqual(model["primary_next_action"]["kind"], "file_diff_recommended")
-            self.assertEqual(model["primary_next_action"]["command_count"], 2)
+            self.assertEqual(model["primary_next_action"]["command_count"], 0)
             self.assertIn("当前版本相对 current_effective", model["headline"])
-            self.assertIn("2 个建议下钻", model["headline"])
-            self.assertIn("5 个已按 Summary/Metadata-only 审查", model["headline"])
+            self.assertIn("修改文件 6 个，新增 1 个，删除 0 个", model["headline"])
+            self.assertIn("2 个需要优先下钻", model["headline"])
+            self.assertIn("5 个按 Summary/Metadata-only 处理", model["headline"])
             self.assertIn("Base source=current_effective", model["confidence_note"])
             self.assertIn("comparison_semantics=full", model["confidence_note"])
             self.assertIn(model["headline"], html)
             self.assertIn(model["confidence_note"], html)
-            self.assertIn("Run recommended File Diff", html)
+            self.assertIn("重点变化文件", html)
+            self.assertIn("变化风险", html)
+            self.assertIn("P0/P1=2", html)
+            self.assertNotIn("Run recommended File Diff", html)
+            self.assertNotIn("文件级 Diff 命令", html)
+            self.assertNotIn("$PROJ/scripts/lg.csh fd", html)
+
+    def test_version_update_detail_model_exposes_single_usage_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+
+            self.assertEqual(model["usage_decision"], "USAGE_REVIEW_REQUIRED")
+            self.assertIn("usage_decision_reasons", model)
+            self.assertIn("diff_changed", model["usage_decision_reasons"])
+            self.assertIn("recommended_file_diff", model["usage_decision_reasons"])
+            self.assertIn("release_note_missing", model["usage_decision_reasons"])
+
+            missing = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {"version_id": "orphan_20260630"},
+            )
+            self.assertEqual(missing["usage_decision"], "BLOCKED")
+            self.assertIn("base_not_confirmed", missing["usage_decision_reasons"])
+
+    def test_version_detail_top_copy_uses_ip_user_status_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+            version["review_gate"] = {
+                "status": "REVIEW_REQUIRED",
+                "blocking_items": [{"id": "gate.release_note", "title": "Release note missing"}],
+                "attention_items": [],
+            }
+
+            from lib_guard.render.version_detail_report import render_version_detail_page
+
+            page = Path(render_version_detail_page(root / "html", lib, version))
+            html = page.read_text(encoding="utf-8")
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            self.assertEqual(model["usage_decision"], "BLOCKED")
+            self.assertIn("review_gate_blocking", model["usage_decision_reasons"])
+            self.assertIn("必需 View 覆盖", html)
+            self.assertNotIn("View 完整性", html)
+            self.assertIn("Release note", html)
+            self.assertIn("缺失", html)
+            self.assertIn("管理门禁", html)
+            self.assertIn("影响使用", html)
+            self.assertNotIn("门禁状态</div><div class='metric-value'>需审阅", html)
+            self.assertNotIn("阻塞项</div><div class='metric-value'>1", html)
+
+    def test_version_update_detail_model_carries_scan_and_comparison_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scan_dir = root / "scan"
+            diff_dir = root / "diff"
+            scan_dir.mkdir()
+            diff_dir.mkdir()
+            (scan_dir / "summary").mkdir()
+            (scan_dir / "scan_meta.json").write_text(
+                json.dumps(
+                    {
+                        "scan_id": "SCAN_TARGET",
+                        "library_id": "ip/ucie",
+                        "version": "patch_20260701",
+                        "root_path": str(root / "raw"),
+                        "input_fingerprint": "fingerprint-target",
+                        "tool_version": "0.5.0",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (scan_dir / "file_inventory.json").write_text(
+                json.dumps({"file_type_counts": {"lef": 1, "unknown": 1}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (scan_dir / "parser_manifest.json").write_text(
+                json.dumps({"files": [{"parser_tasks": [{"parser_name": "LefParser"}]}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (scan_dir / "parser_results.json").write_text(json.dumps({"results": []}), encoding="utf-8")
+            (scan_dir / "summary" / "release_readiness.json").write_text(
+                json.dumps({"required_view_status": "PASS"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (diff_dir / "diff_meta.json").write_text(
+                json.dumps(
+                    {
+                        "diff_type": "scan_output_diff",
+                        "old_scan": str(root / "base_scan"),
+                        "new_scan": str(scan_dir),
+                        "old_scan_id": "SCAN_BASE",
+                        "new_scan_id": "SCAN_TARGET",
+                        "version_relation": {"diff_mode": "current_effective"},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps({"status": "DIFF", "changed_files": 1}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {
+                    "version_id": "patch_20260701",
+                    "scan": {"scan_dir": str(scan_dir)},
+                    "current_effective_ref": "base_20260630",
+                    "diff": {"current_effective_diff_dir": str(diff_dir)},
+                },
+            )
+
+            self.assertEqual(model["scan_context"]["scan_id"], "SCAN_TARGET")
+            self.assertEqual(model["scan_context"]["input_fingerprint"], "fingerprint-target")
+            self.assertEqual(model["scan_evidence"]["parser_task_count"], 1)
+            self.assertEqual(model["scan_evidence"]["unknown_count"], 1)
+            self.assertEqual(model["scan_evidence"]["required_view_status"], "PASS")
+            self.assertEqual(model["comparison_context"]["old_scan_id"], "SCAN_BASE")
+            self.assertEqual(model["comparison_context"]["new_scan_id"], "SCAN_TARGET")
+            self.assertEqual(model["comparison_context"]["relation_kind"], "current_effective")
+            self.assertEqual(model["scan_compatibility"]["status"], "PASS")
+            self.assertTrue(model["scan_compatibility"]["new_scan_matches_current"])
+
+    def test_file_changes_expose_identity_without_claiming_equivalence(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+            diff_dir = root / "diff"
+            (diff_dir / "file_diff.json").write_text(
+                json.dumps(
+                    {
+                        "added": [
+                            {
+                                "path": "upstream_ae9a8ed9/lef/top.lef",
+                                "file_type": "lef",
+                                "sha256": "new_hash",
+                                "size": 120,
+                                "parser_signature": "macro:top,pins:4",
+                            }
+                        ],
+                        "removed": [
+                            {
+                                "path": "asap7_source_package/lef/top.lef",
+                                "file_type": "lef",
+                                "sha256": "old_hash",
+                                "size": 120,
+                                "parser_signature": "macro:top,pins:4",
+                            }
+                        ],
+                        "counts": {"added": 1, "removed": 1, "changed": 0},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            by_path = {item["path"]: item for item in model["file_changes"]}
+            added = by_path["upstream_ae9a8ed9/lef/top.lef"]
+            removed = by_path["asap7_source_package/lef/top.lef"]
+
+            self.assertEqual(added["identity"]["basename"], "top.lef")
+            self.assertEqual(added["identity"]["suffix"], ".lef")
+            self.assertEqual(added["identity"]["sha256"], "new_hash")
+            self.assertEqual(added["identity"]["size"], 120)
+            self.assertEqual(added["identity"]["parser_signature"], "macro:top,pins:4")
+            self.assertEqual(added["identity"]["match_key"], "lef:top.lef:120:macro:top,pins:4")
+            self.assertEqual(removed["identity"]["match_key"], "lef:top.lef:120:macro:top,pins:4")
+            self.assertNotIn("equivalent", added)
+
+    def test_path_migration_evidence_is_attached_to_focus_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            diff_dir = root / "diff"
+            diff_dir.mkdir()
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps(
+                    {
+                        "status": "DIFF",
+                        "added_files": 1,
+                        "removed_files": 1,
+                        "changed_files": 0,
+                        "renamed_or_moved": 1,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "file_diff.json").write_text(
+                json.dumps(
+                    {
+                        "added": [{"path": "upstream_ae9a8ed9/lef/top.lef", "file_type": "lef"}],
+                        "removed": [{"path": "asap7_source_package/lef/top.lef", "file_type": "lef"}],
+                        "changed": [],
+                        "renamed_or_moved": [
+                            {
+                                "old": "asap7_source_package/lef/top.lef",
+                                "new": "upstream_ae9a8ed9/lef/top.lef",
+                                "reason": "same basename and content signature",
+                            }
+                        ],
+                        "counts": {"added": 1, "removed": 1, "changed": 0, "renamed_or_moved": 1},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/asap7", "library_name": "asap7"},
+                {
+                    "version_id": "20260627_asap7",
+                    "current_effective_ref": "20260624_asap7",
+                    "diff": {"current_effective_diff_dir": str(diff_dir)},
+                },
+            )
+            html = render_version_update_detail_panel(model)
+            rows = {item["path"]: item for item in model["file_changes"]}
+
+            self.assertEqual(rows["upstream_ae9a8ed9/lef/top.lef"]["match_status"], "matched_move")
+            self.assertEqual(
+                rows["upstream_ae9a8ed9/lef/top.lef"]["base_candidate"],
+                "asap7_source_package/lef/top.lef",
+            )
+            self.assertEqual(
+                rows["upstream_ae9a8ed9/lef/top.lef"]["target_candidate"],
+                "upstream_ae9a8ed9/lef/top.lef",
+            )
+            self.assertEqual(rows["asap7_source_package/lef/top.lef"]["match_status"], "matched_move")
+            self.assertEqual(
+                rows["asap7_source_package/lef/top.lef"]["base_candidate"],
+                "asap7_source_package/lef/top.lef",
+            )
+            self.assertEqual(
+                rows["asap7_source_package/lef/top.lef"]["target_candidate"],
+                "upstream_ae9a8ed9/lef/top.lef",
+            )
+            self.assertIn("匹配状态", html)
+            self.assertIn("Base 候选", html)
+            self.assertIn("Target 文件", html)
+            self.assertIn("matched_move", html)
+            self.assertIn("asap7_source_package/lef/top.lef", html)
+            self.assertIn("upstream_ae9a8ed9/lef/top.lef", html)
 
     def test_version_detail_headline_mentions_base_and_lane_counts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -336,8 +724,9 @@ class VersionDetailReportTest(unittest.TestCase):
                 ],
             )
             self.assertIn("当前版本相对 explicit", model["headline"])
-            self.assertIn("2 个建议下钻", model["headline"])
-            self.assertIn("5 个已按 Summary/Metadata-only 审查", model["headline"])
+            self.assertIn("修改文件 7 个，新增 1 个，删除 0 个", model["headline"])
+            self.assertIn("2 个需要优先下钻", model["headline"])
+            self.assertIn("5 个按 Summary/Metadata-only 处理", model["headline"])
 
     def test_current_effective_wins_over_stale_diff_base(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -556,14 +945,14 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(model["base_trust_status"], "WARNING")
             self.assertIn("该结果不是标准 current-effective 更新详情，仅供手动 compare/debug；release 前请确认 base。", html)
             for label in [
-                "Base source",
-                "Base version",
-                "Target version",
-                "Comparison semantics",
-                "Delete semantics",
-                "Markdown export",
+                "Base 来源",
+                "Base 版本",
+                "Target 版本",
+                "对比语义",
+                "删除语义",
             ]:
                 self.assertIn(label, html)
+            self.assertNotIn("Markdown export", html)
 
     def test_missing_base_blocks_update_detail_and_drives_primary_next_action(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -606,7 +995,7 @@ class VersionDetailReportTest(unittest.TestCase):
                     "target_version": "patch_20260630",
                     "comparison_semantics": "full",
                     "delete_semantics": "real_delete",
-                    "headline": "当前版本相对 current_effective 有 0 个变化文件，0 个建议下钻，0 个已按 Summary/Metadata-only 审查。",
+                    "headline": "当前版本相对 current_effective：修改文件 0 个，新增 0 个，删除 0 个；其中 0 个需要优先下钻，0 个按 Summary/Metadata-only 处理。",
                     "confidence_note": "Base source=current_effective ref=base_20260629 source_detail=current_effective_ref; comparison_semantics=full; delete_semantics=real_delete",
                     "primary_next_action": {
                         "kind": "review_evidence",

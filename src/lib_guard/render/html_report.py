@@ -15,6 +15,8 @@ import json
 import os
 import tempfile
 
+from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
+
 
 IMPLEMENTATION_TYPES = {"verilog", "cdl"}
 ABSTRACT_TYPES = {"lef"}
@@ -22,10 +24,10 @@ TIMING_TYPES = {"liberty", "lib", "db"}
 CONSTRAINT_TYPES = {"sdc", "spef"}
 POWER_TYPES = {"upf", "cpf"}
 LAYOUT_TYPES = {"gds", "oas", "layout", "milkyway"}
-BINARY_METADATA_TYPES = {"db", "gds", "oas", "milkyway", "layout"}
-COUNT_ONLY_TYPES = {"liberty", "lib", "db", "spef", "gds", "oas", "milkyway", "layout", "verilog"}
+BINARY_METADATA_TYPES = set(BINARY_METADATA_ONLY_TYPES)
+COUNT_ONLY_TYPES = set(SUMMARY_ONLY_TYPES) | set(BINARY_METADATA_ONLY_TYPES)
 DOC_TYPES = {"doc", "package", "waiver", "readme", "release_note", "update_note", "changelog", "known_issue", "integration_guide"}
-FILE_DIFF_TYPES = {"lef", "liberty", "lib", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db"}
+FILE_DIFF_TYPES = set(DEFAULT_FILE_DIFF_TYPES)
 CORE_VIEW_TYPES = ["lef", "liberty", "verilog"]
 VIEW_ORDER = ["lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db", "gds", "oas", "release_note", "waiver", "readme"]
 
@@ -616,7 +618,6 @@ def _file_diff_recommendation(
             "old_path": item.get("old_path") or item.get("old_file") or "-",
             "new_path": item.get("new_path") or item.get("new_file") or "-",
             "reason": item.get("reason") or item.get("review_reason") or "关键视图变化，建议打开 File Diff。",
-            "command": str(item.get("command") or ""),
             "status": status,
             "note": note,
             "result_html": href,
@@ -655,7 +656,6 @@ def _recommendation_rows(recommendation: Mapping[str, Any]) -> list[str]:
             f"<td><code>{ui.esc(item.get('old_path') or '-')}</code></td>"
             f"<td><code>{ui.esc(item.get('new_path') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('reason') or '')}</td>"
-            f"<td>{ui.command_chip(item.get('command'))}</td>"
             f"<td>{ui.badge(item.get('status') or 'FILE_DIFF_RECOMMENDED')}<div class='muted'>{ui.esc(item.get('note') or '')}</div></td>"
             f"<td>{ui.button('打开 File Diff', item.get('result_html') or '', 'primary', disabled=not bool(item.get('result_html')))}</td>"
             "</tr>"
@@ -679,21 +679,16 @@ def _diff_review_model(diff: Path, meta: Mapping[str, Any], summary: Mapping[str
         headline = f"发现 {len(blockers)} 个 Diff 阻塞项。"
     elif quality != "NORMAL":
         review_level = quality
-        headline = f"Comparison 需确认：{'; '.join(recommendation.get('quality_reasons') or [quality])}。系统只保留重点 File Diff 建议。"
+        headline = f"Comparison 需确认：{'; '.join(recommendation.get('quality_reasons') or [quality])}。系统只保留重点文件确认项。"
     elif recommendation["needs_run"]:
         review_level = "FILE_DIFF_RECOMMENDED"
-        headline = f"{len(changed_domains)} 个影响域有变化，建议查看 {recommendation['recommended_total']} 个重点文件。"
+        headline = f"{len(changed_domains)} 个影响域有变化，建议确认 {recommendation['recommended_total']} 个重点文件。"
     elif changed_domains:
         review_level = "CHANGED"
-        headline = f"{len(changed_domains)} 个影响域有变化，重点 File Diff 已有结果或无需运行。"
+        headline = f"{len(changed_domains)} 个影响域有变化，重点文件已有结果或无需额外确认。"
     else:
         review_level = "SAME"
         headline = "未发现需要优先处理的结构变化。"
-    first_cmd = ""
-    for item in recommendation.get("items", []) or []:
-        if str(item.get("status") or "").upper() not in {"DONE", "PASS", "SAME", "DIFF"}:
-            first_cmd = str(item.get("command") or "")
-            break
     return {
         "schema_version": "comparison_review.v2",
         "comparison_id": f"{mode}__{old_version}__{new_version}",
@@ -706,9 +701,9 @@ def _diff_review_model(diff: Path, meta: Mapping[str, Any], summary: Mapping[str
         "file_diff_recommendation": recommendation,
         "issues": issue_items,
         "next_action": {
-            "label": "运行重点 File Diff" if first_cmd else "查看证据 / 返回 Timeline",
-            "command": first_cmd,
-            "reason": "只对推荐队列生成命令；候选变化不做全量 File Diff。" if first_cmd else "当前没有待执行的重点 File Diff 命令。",
+            "label": "查看重点证据 / 返回 Timeline",
+            "command": "",
+            "reason": "页面只展示重点确认项；不再自动提供脚本命令。",
         },
         "evidence": {
             "diff_dir": str(diff),
@@ -783,14 +778,14 @@ def _view_rows(view_diff: Mapping[str, Any]) -> list[str]:
 def _review_mode_label(value: Any, file_type: str) -> str:
     text = str(value or "").strip().lower()
     labels = {
-        "manual_pairwise": "建议两两对比",
+        "manual_pairwise": "重点文件证据确认",
         "metadata_only": "只做 metadata",
         "governance": "治理/归档确认",
     }
     if text in labels:
         return labels[text]
     if str(file_type or "").lower() in FILE_DIFF_TYPES:
-        return "可两两对比"
+        return "重点文件证据确认"
     return "结构计数"
 
 
@@ -851,7 +846,7 @@ def _structure_overview_panel(view_diff: Mapping[str, Any], type_diff: Mapping[s
         f"<div class='structure-scroll'>{ui.table(['View', '类型', '状态', '数量', '含义', '判断'], view_rows, '暂无 View 信息')}</div>"
         "</section>"
         "<section class='structure-card'>"
-        "<div class='structure-card-head'><div><h3>File Type 全量变化</h3><p>说明每类文件是结构计数、metadata，还是建议进入两两对比。</p></div>"
+        "<div class='structure-card-head'><div><h3>File Type 全量变化</h3><p>说明每类文件是结构计数、metadata，还是重点文件证据确认。</p></div>"
         f"<div class='structure-kpis'><span>{ui.esc(type_summary.get('new_type_count', len(type_rows)))} types</span><span>{ui.esc(type_summary.get('changed_types', 0))} changed</span></div></div>"
         f"<div class='structure-scroll'>{ui.table(['领域', 'file_type', '数量', '增/删/改', '核查方式', '判断'], type_rows, '暂无 file_type 信息')}</div>"
         "</section>"
@@ -920,7 +915,7 @@ def render_diff_html(diff_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     if recommendation.get("comparison_quality") != "NORMAL":
         attention.append((recommendation.get("comparison_quality"), "Comparison 需确认", "变化规模或版本关系异常；不要执行全量 File Diff。", "comparison_review.json"))
     if recommendation.get("needs_run"):
-        attention.append(("WARNING", "重点 File Diff 建议", f"有 {recommendation.get('needs_run')} 个重点文件建议运行 File Diff。", "manual_pairwise_tasks.json"))
+        attention.append(("WARNING", "重点文件确认项", f"有 {recommendation.get('needs_run')} 个重点文件需要确认；不自动提供脚本命令。", "manual_pairwise_tasks.json"))
     for item in issues.get("issues", [])[:20]:
         attention.append((item.get("severity") or "WARNING", item.get("category") or "Diff issue", item.get("message") or item.get("title") or "需确认", "diff_issues.json"))
     body = (
@@ -940,8 +935,8 @@ def render_diff_html(diff_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         + ui.panel("结构概览", "优先看 view 是否齐、file_type 是否异常增长，再决定是否进入 File Diff。View 和 file_type 都显示全量，默认露出 10 行。", _structure_overview_panel(view_diff, type_diff))
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["review_level"])
         + ui.panel("变化影响域", "面向使用者：先看变更影响哪个领域，再决定是否打开 File Diff。", ui.impact_grid(review["impact"]))
-        + ui.panel("重点 File Diff 建议", "File Diff 是重点变化放大镜，不是全量差异完成度。只对 P0/P1 关键视图生成命令。", ui.filterable_table("recommend-file-diff-table", ["优先级", "Type", "Old", "New", "原因", "命令", "状态", "结果"], rec_rows, "暂无重点 File Diff 建议", "筛选 type / file / status"))
-        + ui.collapsible_panel("候选变化 / 已折叠", "候选变化不默认生成命令，避免错误 base 或大规模重组导致上千条无效 File Diff。", ui.metric_grid([("候选变化", recommendation.get("candidate_total", 0), "changed/candidate files", recommendation.get("comparison_quality")), ("已折叠", recommendation.get("suppressed_total", 0), "未进入重点队列", "WARNING" if recommendation.get("suppressed_total") else "PASS"), ("策略", recommendation.get("policy"), "key view first", "INFO")]) + ui.table(["Reason", "Count"], [f"<tr><td>{ui.esc(x.get('reason'))}</td><td>{ui.esc(x.get('count'))}</td></tr>" for x in recommendation.get("suppressed_summary", [])], "暂无折叠项"), open=False)
+        + ui.panel("重点文件确认项", "这里是重点变化证据入口，不是全量差异完成度；页面不再自动给出脚本命令。", ui.filterable_table("recommend-file-diff-table", ["优先级", "Type", "Old", "New", "原因", "状态", "结果"], rec_rows, "暂无重点文件确认项", "筛选 type / file / status"))
+        + ui.collapsible_panel("候选变化 / 已折叠", "候选变化不默认展开，避免错误 base 或大规模重组导致上千条无效确认项。", ui.metric_grid([("候选变化", recommendation.get("candidate_total", 0), "changed/candidate files", recommendation.get("comparison_quality")), ("已折叠", recommendation.get("suppressed_total", 0), "未进入重点队列", "WARNING" if recommendation.get("suppressed_total") else "PASS"), ("策略", recommendation.get("policy"), "key view first", "INFO")]) + ui.table(["Reason", "Count"], [f"<tr><td>{ui.esc(x.get('reason'))}</td><td>{ui.esc(x.get('count'))}</td></tr>" for x in recommendation.get("suppressed_summary", [])], "暂无折叠项"), open=False)
         + ui.panel("优先关注", "只列出会影响继续审阅的事项。", ui.attention_items(attention))
         + ui.collapsible_panel(
             "补充证据",

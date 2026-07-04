@@ -17,8 +17,10 @@ from lib_guard.project_config import (
     DEFAULT_PARSE_JOBS,
     DEFAULT_SCAN_MODE,
     PROJECT_CONFIG_DIR,
+    SCAN_STRATEGY_CONFIG_KEYS,
     SUMMARY_ONLY_TYPES,
     project_policy_path,
+    workspace_config_file_defaults,
     workspace_defaults,
 )
 
@@ -102,15 +104,18 @@ def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[st
     project_root = os.environ.get("LIB_GUARD_PROJECT_ROOT")
     default_policy = project_policy_path(project_root, CATALOG_POLICY_FILE)
     defaults = workspace_defaults(path.parent, library_type=cfg.get("library_type", DEFAULT_LIBRARY_TYPE))
-    derived_config_keys = {"library_list", "library_catalog", "library_versions", "versions"}
+    derived_config_keys = {"config_dir", "library_list", "library_registry", "library_candidates", "library_catalog", "library_versions", "versions"}
     for key, value in defaults.items():
         if key in derived_config_keys:
             continue
         cfg.setdefault(key, value)
-    config_dir = Path(cfg["config_dir"])
-    cfg.setdefault("library_list", str(config_dir / "library.list"))
-    cfg.setdefault("library_catalog", str(config_dir / "library_catalog.yml"))
-    cfg.setdefault("library_versions", cfg.get("versions") or defaults["library_versions"])
+    config_defaults = workspace_config_file_defaults(path.parent, cfg.get("config_dir") or defaults["config_dir"])
+    for key, value in config_defaults.items():
+        cfg.setdefault(key, value)
+    if cfg.get("versions"):
+        cfg.setdefault("library_versions", cfg["versions"])
+    else:
+        cfg.setdefault("library_versions", config_defaults["library_versions"])
     cfg.setdefault("versions", cfg["library_versions"])
     if "catalog_policy" not in cfg:
         library_catalog = Path(cfg["library_catalog"])
@@ -251,7 +256,12 @@ def _catalog_data(cfg: dict[str, str]) -> dict[str, Any]:
 
 
 def _library_match_score(item: dict[str, Any], library: str) -> int:
-    exact = {str(item.get("library_id") or ""), str(item.get("library_name") or "")}
+    exact = {
+        str(item.get("formal_library_id") or ""),
+        str(item.get("typed_library_id") or ""),
+        str(item.get("library_id") or ""),
+        str(item.get("library_name") or ""),
+    }
     aliases = {str(a) for a in item.get("aliases", []) or [] if str(a)}
     if library in exact:
         return 100
@@ -272,7 +282,7 @@ def _find_library(catalog: dict[str, Any], library: str) -> dict[str, Any]:
     matches = [item for score, item in scored if score == best]
     if len(matches) > 1:
         choices = ", ".join(str(item.get("library_name") or item.get("library_id")) for item in matches)
-        raise ValueError(f"ambiguous library alias {library!r}; use full library_id. Matched: {choices}")
+        raise ValueError(f"ambiguous library alias {library!r}; use formal library name. Matched: {choices}")
     return matches[0]
 
 
@@ -350,7 +360,7 @@ def _refresh_base_version(library: dict[str, Any], version: dict[str, Any], mode
 
 
 def _library_cli_name(library: dict[str, Any]) -> str:
-    return str(library.get("library_name") or library.get("library_id") or "")
+    return str(library.get("formal_library_id") or library.get("library_name") or library.get("library_id") or "")
 
 
 def _refresh_compare_command(
@@ -380,9 +390,7 @@ def _refresh_compare_command(
     if base:
         command.extend(["--base", base])
     command.append("--rescan" if rescan else "--scan-if-missing")
-    command.extend(["--scan-mode", cfg["mode"]])
-    command.extend(["--parse-jobs", cfg["parse_jobs"]])
-    command.extend(["--progress-interval", "1", "--console-progress"])
+    _append_scan_strategy(command, cfg)
     return command
 
 
@@ -528,10 +536,15 @@ def _build_parser() -> ArgumentParser:
   日常流程:
     lg.csh init $WORK --raw-root $RAW --library-type ip
     cd $WORK
-    lg.csh library discover
-    vi $WORK/config/library.list        # 人工确认 library map
+    lg.csh library add <正式库名> --root <库根目录>
+    lg.csh library discover             # 只生成候选快照，不覆盖人工 registry
+    vi $WORK/config/library_candidates/latest.tsv
+    lg.csh library accept
     lg.csh library apply
+    lg.csh library list                 # 查看命令应使用的正式库名
+    lg.csh library list <正式库名> --versions
     lg.csh cat --with-evidence
+    lg.csh cat ucie stable_20250608     # 只重渲染一个版本详情页，不重新 scan
     lg.csh override ucie stable_20250608 --base initial_20250601 --stage stable
     lg.csh scan ucie stable_20250608
     lg.csh refresh ucie
@@ -580,6 +593,7 @@ def _build_parser() -> ArgumentParser:
 
     p = sub.add_parser("catalog", aliases=["cat"], help="只刷新 catalog JSON 和 catalog HTML")
     p.add_argument("library", nargs="?")
+    p.add_argument("version", nargs="?")
     p.add_argument("--full", action="store_true", help="强制全量 catalog refresh，不复用 catalog_state.json")
     p.add_argument("--fast", action="store_true", help="只做目录级 catalog refresh；短命令默认使用该模式")
     p.add_argument("--with-evidence", action="store_true", help="为发现的版本收集轻量文件类型 evidence；大 RAW 树会更慢")
@@ -602,18 +616,34 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--note")
     p.add_argument("--updated-by", default="short_cli")
 
-    root_library = sub.add_parser("library", help="发现并应用人工确认后的 library map")
+    root_library = sub.add_parser("library", help="维护人工确认 library registry，并生成正式 library map")
     lsp = root_library.add_subparsers(dest="library_cmd", required=True)
-    p = lsp.add_parser("discover", help="从 RAW 中发现候选 library root，写出可人工编辑的 library.list")
-    p.add_argument("--out", help="可编辑 library.list 输出，默认 $WORK/config/library.list")
-    p.add_argument("--json-out", help="机器发现 evidence JSON，默认 $WORK/config/library_discovery.json")
-    p.add_argument("--html-out", help="发现结果审查 HTML，默认 $WORK/config/library_discovery.html")
+    p = lsp.add_parser("discover", help="从 RAW 中发现候选 library root，写出候选快照；不会覆盖人工 registry")
+    p.add_argument("--out", help="候选 TSV 输出，默认 $WORK/config/library_candidates/latest.tsv")
+    p.add_argument("--json-out", help="机器发现 evidence JSON，默认 $WORK/config/library_candidates/latest.json")
+    p.add_argument("--html-out", help="发现结果审查 HTML，默认 $WORK/config/library_candidates/latest.html")
     p.add_argument("--max-depth", type=int, default=8)
     p.add_argument("--min-versions", type=int, default=2)
     p.add_argument("--default-status", choices=["REVIEW", "OK"], default="REVIEW")
 
-    p = lsp.add_parser("apply", help="把人工确认后的 library.list 转成正式 library_catalog.yml")
-    p.add_argument("--input", help="输入 library.list，默认 $WORK/config/library.list")
+    p = lsp.add_parser("accept", help="把候选 TSV 中标为 OK/ENABLE 的行合并进人工 registry")
+    p.add_argument("--input", help="候选 TSV 输入，默认 $WORK/config/library_candidates/latest.tsv")
+    p.add_argument("--registry", help="人工确认 registry，默认 $WORK/config/library_registry.tsv")
+
+    p = lsp.add_parser("list", help="列出 catalog 中可直接用于命令的正式库名和版本名")
+    p.add_argument("library", nargs="?", help="正式库名；传入后可配合 --versions 列版本")
+    p.add_argument("--versions", action="store_true", help="列出该库的版本名")
+
+    p = lsp.add_parser("add", help="已知库根时直接加入人工 registry，不做 discover")
+    p.add_argument("library_id", help="正式库名，例如 vendor_A.openroad_platform.openroad_asap7")
+    p.add_argument("--root", required=True, help="库根目录，不是 RAW root")
+    p.add_argument("--display-name")
+    p.add_argument("--vendor")
+    p.add_argument("--middle-path")
+    p.add_argument("--registry", help="人工确认 registry，默认 $WORK/config/library_registry.tsv")
+
+    p = lsp.add_parser("apply", help="把人工确认后的 registry 转成正式 library_catalog.yml")
+    p.add_argument("--input", help="输入 registry，默认 $WORK/config/library_registry.tsv")
     p.add_argument("--out", help="正式 library_catalog.yml 输出，默认 $WORK/config/library_catalog.yml")
 
     p = sub.add_parser("diff", aliases=["cmp"], help="按 base 关系运行结构 diff；默认不偷偷重扫")
@@ -685,6 +715,7 @@ def _build_parser() -> ArgumentParser:
 def _catalog_scan_command(
     cfg: dict[str, str],
     library: str | None = None,
+    version: str | None = None,
     *,
     full: bool = False,
     with_evidence: bool = False,
@@ -707,6 +738,8 @@ def _catalog_scan_command(
         command.extend(["--policy", cfg["catalog_policy"]])
     if library:
         command.extend(["--library", library])
+    if version:
+        command.extend(["--render-version", version])
     if full:
         command.append("--full")
     # Short commands default to fast catalog discovery. Use --with-evidence when
@@ -718,8 +751,25 @@ def _catalog_scan_command(
         command.append("--fast")
     return command
 
+
+def _catalog_render_command(cfg: dict[str, str], library: str | None = None, version: str | None = None) -> list[str]:
+    command = [
+        "catalog",
+        "render",
+        "--catalog",
+        cfg["catalog"],
+        "--out",
+        cfg["catalog_html"],
+    ]
+    if library:
+        command.extend(["--library", library])
+    if version:
+        command.extend(["--version", version])
+    return command
+
+
 def _scan_run_command(cfg: dict[str, str], library: str, version: str) -> list[str]:
-    return [
+    command = [
         "run",
         "--catalog",
         cfg["catalog"],
@@ -727,33 +777,39 @@ def _scan_run_command(cfg: dict[str, str], library: str, version: str) -> list[s
         library,
         "--version",
         version,
-        "--mode",
-        cfg["mode"],
         "--workdir",
         cfg["workspace"],
         "--console-progress",
         "--progress-interval",
         "1",
-        "--parse-jobs",
-        cfg["parse_jobs"],
         "--catalog-html-out",
         cfg["catalog_html"],
     ]
+    _append_scan_strategy(command, cfg)
+    return command
+
+
+def _append_scan_strategy(command: list[str], cfg: dict[str, str]) -> None:
+    command.extend(["--parse-jobs", cfg["parse_jobs"]])
+    for key in SCAN_STRATEGY_CONFIG_KEYS:
+        value = cfg.get(key)
+        if value:
+            command.extend([f"--{key.replace('_', '-')}", value])
 
 
 def _library_discover_command(cfg: dict[str, str], args: Any) -> list[str]:
-    config_dir = Path(cfg.get("config_dir") or Path(cfg["workspace"]) / "config")
+    candidates = Path(cfg["library_candidates"])
     return [
         "library",
         "discover",
         "--root",
         cfg["raw_root"],
         "--out",
-        args.out or str(config_dir / "library.list"),
+        args.out or str(candidates),
         "--json-out",
-        args.json_out or str(config_dir / "library_discovery.json"),
+        args.json_out or str(candidates.with_suffix(".json")),
         "--html-out",
-        args.html_out or str(config_dir / "library_discovery.html"),
+        args.html_out or str(candidates.with_suffix(".html")),
         "--max-depth",
         str(args.max_depth),
         "--min-versions",
@@ -763,17 +819,64 @@ def _library_discover_command(cfg: dict[str, str], args: Any) -> list[str]:
     ]
 
 
+def _library_accept_command(cfg: dict[str, str], args: Any) -> list[str]:
+    return [
+        "library",
+        "accept",
+        "--root",
+        cfg["raw_root"],
+        "--input",
+        args.input or cfg["library_candidates"],
+        "--registry",
+        args.registry or cfg["library_registry"],
+    ]
+
+
+def _library_add_command(cfg: dict[str, str], args: Any) -> list[str]:
+    command = [
+        "library",
+        "add",
+        "--root",
+        cfg["raw_root"],
+        "--registry",
+        args.registry or cfg["library_registry"],
+        "--library-id",
+        args.library_id,
+        "--library-root",
+        args.root,
+    ]
+    for opt, value in [
+        ("--display-name", args.display_name),
+        ("--vendor", args.vendor),
+        ("--middle-path", args.middle_path),
+    ]:
+        if value:
+            command.extend([opt, value])
+    return command
+
+
+def _library_list_command(cfg: dict[str, str], args: Any) -> list[str]:
+    command = ["catalog", "list", "--catalog", cfg["catalog"]]
+    if getattr(args, "library", None):
+        command.extend(["--library", args.library])
+    if getattr(args, "versions", False):
+        command.append("--versions")
+    return command
+
+
 def _library_apply_command(cfg: dict[str, str], args: Any) -> list[str]:
-    config_dir = Path(cfg.get("config_dir") or Path(cfg["workspace"]) / "config")
+    registry_path = Path(cfg["library_registry"])
+    legacy_list = Path(cfg["library_list"])
+    default_input = str(registry_path if registry_path.exists() or not legacy_list.exists() else legacy_list)
     return [
         "library",
         "apply",
         "--root",
         cfg["raw_root"],
         "--input",
-        args.input or str(config_dir / "library.list"),
+        args.input or default_input,
         "--out",
-        args.out or str(config_dir / "library_catalog.yml"),
+        args.out or cfg["library_catalog"],
         "--library-type",
         cfg["library_type"],
     ]
@@ -849,18 +952,15 @@ def _scan_batch_command(
         "run-batch",
         "--catalog",
         cfg["catalog"],
-        "--mode",
-        cfg["mode"],
         "--workdir",
         cfg["workspace"],
         "--console-progress",
         "--progress-interval",
         "1",
-        "--parse-jobs",
-        cfg["parse_jobs"],
         "--catalog-html-out",
         cfg["catalog_html"],
     ]
+    _append_scan_strategy(command, cfg)
     if library:
         command.extend(["--library", library])
     if only_missing:
@@ -1081,14 +1181,23 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
     if args.short_command == "library":
         if args.library_cmd == "discover":
             return [_library_discover_command(cfg, args)]
+        if args.library_cmd == "accept":
+            return [_library_accept_command(cfg, args)]
+        if args.library_cmd == "list":
+            return [_library_list_command(cfg, args)]
+        if args.library_cmd == "add":
+            return [_library_add_command(cfg, args)]
         if args.library_cmd == "apply":
             return [_library_apply_command(cfg, args)]
         raise ValueError(f"unsupported library command: {args.library_cmd}")
     if args.short_command == "catalog":
+        if args.library and getattr(args, "version", None):
+            return [_catalog_render_command(cfg, args.library, args.version)]
         return [
             _catalog_scan_command(
                 cfg,
                 args.library,
+                getattr(args, "version", None),
                 full=bool(getattr(args, "full", False)),
                 with_evidence=bool(getattr(args, "with_evidence", False)),
             )
@@ -1155,14 +1264,10 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             compare.extend(["--base", args.base])
         if getattr(args, "scan_if_missing", False) or getattr(args, "auto_scan", False):
             compare.append("--scan-if-missing")
-            compare.extend(["--scan-mode", cfg["mode"]])
-            compare.extend(["--parse-jobs", cfg["parse_jobs"]])
-            compare.extend(["--progress-interval", "1", "--console-progress"])
+            _append_scan_strategy(compare, cfg)
         if getattr(args, "rescan", False):
             compare.append("--rescan")
-            compare.extend(["--scan-mode", cfg["mode"]])
-            compare.extend(["--parse-jobs", cfg["parse_jobs"]])
-            compare.extend(["--progress-interval", "1", "--console-progress"])
+            _append_scan_strategy(compare, cfg)
         commands.append(compare)
         return commands
     if args.short_command == "file-diff":

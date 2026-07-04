@@ -174,14 +174,12 @@ class ScanRunner:
         self.progress: Any = None
 
     def _build_default_services(self, config: Any) -> ScannerServices:
+        from .artifacts import IntegrityBuilder, ScanStateStore, SignatureBuilder
         from .cache import ScanCache
         from .inventory import FileClassifier, FileWalker, HashManager
-        from .integrity import IntegrityBuilder
         from .parser_engine import ParserRegistry, ParserSelector
         from .policy import ScanPolicy
         from .report import ScanReportWriter
-        from .signatures import SignatureBuilder
-        from .state import ScanStateStore
 
         return ScannerServices(
             file_walker=FileWalker(config),
@@ -232,6 +230,7 @@ class ScanRunner:
             self.progress.stage("7/7 write", "writing scan outputs")
             bundle = self._bundle(records, parser_task_list, parser_manifest, parser_results, summaries, signatures, integrity, issues, parser_quality, context, status)
             self.services.report_writer.write_bundle(bundle, context)
+            self._build_derived_outputs(context)
             self.services.state_store.save(records, bundle, context)
             self.progress.finish(status=status, active_workers=[], by_type=self._progress_by_type_from_manifest(parser_manifest), summary=self._progress_summary_from_manifest(parser_manifest))
             return ScanRunResult(status=status, scan_id=context.scan_id, out_dir=str(context.out_dir), stats=self.stats, bundle=bundle)
@@ -241,9 +240,15 @@ class ScanRunner:
             bundle = self._bundle([], {"schema_version": context.schema_version, "scan_id": context.scan_id, "task_count": 0, "tasks": []}, {"schema_version": context.schema_version, "files": []}, {}, {}, {}, {"status": "FAILED", "issues": []}, issues, {"schema_version": context.schema_version, "status": "FAILED", "parsers": []}, context, "FAILED")
             bundle.scan_meta["error"] = error
             self.services.report_writer.write_bundle(bundle, context)
+            self._build_derived_outputs(context)
             if self.progress is not None:
                 self.progress.finish(status="FAILED", active_workers=[], by_type={}, summary={"failed": 1})
             return ScanRunResult(status="FAILED", scan_id=context.scan_id, out_dir=str(context.out_dir), stats=self.stats, bundle=bundle)
+
+    def _build_derived_outputs(self, context: ScanContext) -> None:
+        from .derived import build_scan_derived_outputs
+
+        build_scan_derived_outputs(context.out_dir)
 
     def _context(self) -> ScanContext:
         scan_id = str(_get(self.config, "scan_id", time.strftime("%Y%m%d_%H%M%S")))
@@ -305,7 +310,6 @@ class ScanRunner:
         manifest = {"schema_version": context.schema_version, "scan_id": context.scan_id, "files": []}
         parser_task_list, planned_by_file = self._build_parser_task_list(records, context)
         self._write_incremental_json(context.out_dir / "parser_task_list.json", parser_task_list)
-        self._write_incremental_json(context.out_dir / "parser_manifest.json", manifest)
         progress_state = self._new_parse_progress_state(parser_task_list)
         self._emit_parse_progress("stage_start", "parser task list frozen", progress_state, force=True)
         parse_jobs = max(1, min(int(parser_task_list.get("parse_jobs", 1) or 1), 16))
@@ -322,7 +326,7 @@ class ScanRunner:
             if not plans:
                 file_entry["parser_tasks"].append({"parser_name": None, "status": "SKIPPED", "result_status": "SKIPPED", "result_path": None, "cache_status": "NOT_APPLICABLE", "cache_used": False, "elapsed_ms": 0})
             manifest["files"].append(file_entry)
-            self._write_incremental_json(context.out_dir / "parser_manifest.json", manifest)
+        self._write_incremental_json(context.out_dir / "parser_manifest.json", manifest)
         self._emit_parse_progress("stage_finish", "parser stage finished", progress_state, force=True)
         return parser_results, manifest, parser_task_list
 
@@ -483,7 +487,7 @@ class ScanRunner:
                     "parser_version": task.parser_version,
                     "parser_schema_version": parser_schema_version,
                     "cache_key": cache_key,
-                    "cache_status_planned": "HIT" if self.services.cache.get_parser_result(cache_key, task=task, record=record, context=context) is not None else "MISS",
+                    "cache_status_planned": "PENDING",
                     "reason": task.reason,
                     "priority": self._parser_task_priority(record),
                     "estimated_cost": self._parser_task_estimated_cost(record),

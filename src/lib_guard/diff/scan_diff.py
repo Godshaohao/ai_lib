@@ -123,6 +123,15 @@ def _logical_file_key(path: str) -> str:
     return "/".join(parts)
 
 
+def _path_root(path: str) -> str:
+    parts = [part for part in str(path or "").replace("\\", "/").split("/") if part]
+    return parts[0] if parts else "-"
+
+
+def _root_counts(items: Mapping[str, Mapping[str, Any]]) -> Counter[str]:
+    return Counter(_path_root(path) for path in items)
+
+
 def _unique_logical_index(items: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
     logical_to_paths: dict[str, list[str]] = {}
     for path in items:
@@ -166,24 +175,103 @@ def _changed_files(old_items: dict[str, dict[str, Any]], new_items: dict[str, di
     return changed
 
 
-def _moved_files(old_items: dict[str, dict[str, Any]], new_items: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    old_by_hash = {str(v.get("hash")): k for k, v in old_items.items() if v.get("hash")}
+def _moved_files(
+    old_items: dict[str, dict[str, Any]],
+    new_items: dict[str, dict[str, Any]],
+    *,
+    exclude_old: set[str] | None = None,
+    exclude_new: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    excluded_old = set(exclude_old or set())
+    excluded_new = set(exclude_new or set())
+    old_by_hash: dict[str, list[str]] = {}
+    for path, item in old_items.items():
+        if path in excluded_old:
+            continue
+        digest = str(item.get("hash") or "")
+        if digest:
+            old_by_hash.setdefault(digest, []).append(path)
+    used_old: set[str] = set()
     moved = []
-    for new_path, new in new_items.items():
+    for new_path, new in sorted(new_items.items()):
+        if new_path in excluded_new:
+            continue
         digest = str(new.get("hash") or "")
-        old_path = old_by_hash.get(digest)
-        if old_path and old_path != new_path and old_path not in new_items:
-            moved.append({"old": old_path, "new": new_path, "hash": digest})
+        candidates = [
+            old_path
+            for old_path in old_by_hash.get(digest, [])
+            if old_path not in used_old and old_path != new_path and old_path not in new_items
+        ]
+        if candidates:
+            basename = Path(new_path).name
+            old_path = next((path for path in candidates if Path(path).name == basename), candidates[0])
+            used_old.add(old_path)
+            moved.append({"old": old_path, "new": new_path, "hash": digest, "reason": "hash_match"})
     return moved
+
+
+def _package_root_migrations(
+    old_items: Mapping[str, Mapping[str, Any]],
+    new_items: Mapping[str, Mapping[str, Any]],
+    logical_pairs: list[dict[str, Any]],
+    *,
+    raw_added: set[str],
+    raw_removed: set[str],
+) -> list[dict[str, Any]]:
+    old_counts = _root_counts(old_items)
+    new_counts = _root_counts(new_items)
+    by_pair: dict[tuple[str, str], dict[str, Any]] = {}
+    for pair in logical_pairs:
+        old_path = str(pair.get("old") or "")
+        new_path = str(pair.get("new") or "")
+        old_root = _path_root(old_path)
+        new_root = _path_root(new_path)
+        if not old_path or not new_path or old_root == new_root or old_root == "-" or new_root == "-":
+            continue
+        key = (old_root, new_root)
+        row = by_pair.setdefault(
+            key,
+            {
+                "old_root": old_root,
+                "new_root": new_root,
+                "matched_logical_paths": 0,
+                "changed_logical_paths": 0,
+                "same_signature_paths": 0,
+                "old_root_file_count": old_counts[old_root],
+                "new_root_file_count": new_counts[new_root],
+                "raw_added_under_new_root": sum(1 for path in raw_added if _path_root(path) == new_root),
+                "raw_removed_under_old_root": sum(1 for path in raw_removed if _path_root(path) == old_root),
+                "sample_mappings": [],
+            },
+        )
+        row["matched_logical_paths"] += 1
+        if pair.get("signature_changed"):
+            row["changed_logical_paths"] += 1
+        else:
+            row["same_signature_paths"] += 1
+        if len(row["sample_mappings"]) < 10:
+            row["sample_mappings"].append(
+                {
+                    "logical_path": pair.get("logical_path"),
+                    "old": old_path,
+                    "new": new_path,
+                    "signature_changed": bool(pair.get("signature_changed")),
+                }
+            )
+    return sorted(by_pair.values(), key=lambda item: (-int(item["matched_logical_paths"]), str(item["old_root"]), str(item["new_root"])))
 
 
 def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
     old_files = _inventory_index(old_scan)
     new_files = _inventory_index(new_scan)
+    physical_old_files = dict(old_files)
+    physical_new_files = dict(new_files)
     raw_added = set(new_files) - set(old_files)
     raw_removed = set(old_files) - set(new_files)
     changed = _changed_files(old_files, new_files)
     logical_path_changes: list[dict[str, Any]] = []
+    logical_path_moves: list[dict[str, Any]] = []
+    logical_pairs: list[dict[str, Any]] = []
     old_logical = _unique_logical_index(old_files)
     new_logical = _unique_logical_index(new_files)
     logical_changed: list[str] = []
@@ -196,10 +284,28 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
             continue
         old_item = old_files[old_path]
         new_item = new_files[new_path]
-        if _file_signature(old_item) == _file_signature(new_item):
-            continue
+        signature_changed = _file_signature(old_item) != _file_signature(new_item)
+        logical_pairs.append(
+            {
+                "logical_path": logical,
+                "old": old_path,
+                "new": new_path,
+                "signature_changed": signature_changed,
+            }
+        )
         paired_old.add(old_path)
         paired_new.add(new_path)
+        if not signature_changed:
+            logical_path_moves.append(
+                {
+                    "old": old_path,
+                    "new": new_path,
+                    "hash": _content_signature(new_item) or _content_signature(old_item),
+                    "logical_path": logical,
+                    "reason": "logical_path_same_signature",
+                }
+            )
+            continue
         logical_changed.append(logical)
         logical_path_changes.append({"logical_path": logical, "old": old_path, "new": new_path})
         old_files[logical] = {**old_item, "path": logical, "physical_path": old_path, "logical_path": logical, "abs_path": old_item.get("abs_path")}
@@ -211,12 +317,20 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
         new = new_files[key]
         if _content_signature(old) == _content_signature(new) and old.get("size_bytes") == new.get("size_bytes"):
             metadata_only.append(key)
-    moved = _moved_files(old_files, new_files)
+    moved = logical_path_moves + _moved_files(old_files, new_files, exclude_old=paired_old, exclude_new=paired_new)
     moved_old = {str(item.get("old")) for item in moved if item.get("old")}
     moved_new = {str(item.get("new")) for item in moved if item.get("new")}
     added = sorted(raw_added - moved_new - paired_new)
     removed = sorted(raw_removed - moved_old - paired_old)
     unchanged = sorted((set(old_files) & set(new_files)) - set(changed))
+    package_root_migrations = _package_root_migrations(
+        physical_old_files,
+        physical_new_files,
+        logical_pairs,
+        raw_added=raw_added,
+        raw_removed=raw_removed,
+    )
+    package_root_migration_matched_files = sum(int(item.get("matched_logical_paths") or 0) for item in package_root_migrations)
     return {
         "schema_version": "1.0",
         "added": added,
@@ -224,6 +338,7 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
         "changed": changed,
         "renamed_or_moved": moved,
         "logical_path_changes": logical_path_changes,
+        "package_root_migrations": package_root_migrations,
         "unchanged": unchanged,
         "metadata_only_changed": metadata_only,
         "counts": {
@@ -232,6 +347,8 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
             "changed": len(changed),
             "renamed_or_moved": len(moved),
             "logical_path_changed": len(logical_path_changes),
+            "package_root_migrations": len(package_root_migrations),
+            "package_root_migration_matched_files": package_root_migration_matched_files,
             "unchanged": len(unchanged),
             "metadata_only_changed": len(metadata_only),
         },
@@ -687,6 +804,8 @@ def _diff_summary(
         "removed_files": file_diff["counts"]["removed"],
         "changed_files": file_diff["counts"]["changed"],
         "renamed_or_moved": file_diff["counts"].get("renamed_or_moved", 0),
+        "package_root_migrations": file_diff["counts"].get("package_root_migrations", 0),
+        "package_root_migration_matched_files": file_diff["counts"].get("package_root_migration_matched_files", 0),
         "added_components": component_diff["counts"]["added"],
         "removed_components": component_diff["counts"]["removed"],
         "changed_components": component_diff["counts"]["changed"],
@@ -710,7 +829,7 @@ def _recommended_actions(status: str, issues: dict[str, Any]) -> list[str]:
     if status == "PASS_WITH_WARNING":
         return ["发布前复核 warning，并补齐人工确认记录。"]
     if status == "DIFF":
-        return ["执行手动两两对比任务，把结果作为 release evidence 归档。"]
+        return ["确认重点文件证据，并把确认结果作为 release evidence 归档。"]
     return ["无差异动作要求。"]
 
 
@@ -804,7 +923,7 @@ def diff_scan_outputs(
     manual_pairwise_tasks = {
         **pairwise_tasks,
         "governance_role": "manual_deep_diff",
-        "description": "Deep semantic file comparison is intentionally manual and pairwise. Scan diff only schedules these commands.",
+        "description": "Deep semantic file comparison is intentionally manual and pairwise. Scan diff records focused evidence candidates but does not provide executable script commands.",
     }
     pairwise_task_status = build_pairwise_task_status(pairwise_tasks)
     issues = _diff_issues(

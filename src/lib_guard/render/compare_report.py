@@ -148,13 +148,16 @@ def commands_panel(manifest: Mapping[str, Any]) -> str:
     commands = [str(cmd) for cmd in manifest.get("deep_diff_commands", []) or [] if str(cmd).strip()]
     if not commands:
         return panel(
-            "重点 File Diff 建议",
-            "只在 replace 文件可定位两端来源时生成命令。",
-            "<div class='empty'>当前没有可生成的重点 File Diff 建议。</div>",
+            "重点文件确认项",
+            "只记录可定位两端来源的重点文件，不在页面展开脚本命令。",
+            "<div class='empty'>当前没有重点文件确认项。</div>",
             panel_id="commands",
         )
-    body = "".join(command_chip(cmd, idx) for idx, cmd in enumerate(commands[:120], 1))
-    return panel("重点 File Diff 建议", "这些命令只作为人工复核入口，不会自动执行。", f"<div class='command-list'>{body}</div>", panel_id="commands")
+    body = (
+        "<div class='notice warn'><b>重点文件确认项</b>"
+        f"<span>检测到 {esc(len(commands))} 个历史 deep_diff 候选；页面不再展开脚本命令，请回到版本详情页查看证据入口。</span></div>"
+    )
+    return panel("重点文件确认项", "保留候选数量，不展示可复制脚本命令。", body, panel_id="commands")
 
 
 def changed_table(manifest: Mapping[str, Any]) -> str:
@@ -168,8 +171,6 @@ def changed_table(manifest: Mapping[str, Any]) -> str:
             str(row.get(k) or "")
             for k in ["relpath", "file_type", "old_source_version", "new_source_version", "old_source_path", "new_source_path", "action"]
         ).lower()
-        cmd = row.get("deep_diff_command") or ""
-        cmd_cell = command_chip(cmd, idx) if cmd else "<span class='muted'>-</span>"
         rows.append(
             f"<tr id='file-{idx}' data-search='{esc(search)}'>"
             f"<td class='num'><a href='#file-{idx}'>{idx}</a></td>"
@@ -180,7 +181,6 @@ def changed_table(manifest: Mapping[str, Any]) -> str:
             f"<td><code class='long-token' title='{esc(row.get('new_source_version'))}'>{esc(short(row.get('new_source_version')))}</code></td>"
             f"<td><code class='path-line' title='{esc(row.get('old_source_path'))}'>{esc(short(row.get('old_source_path'), 26, 18))}</code></td>"
             f"<td><code class='path-line' title='{esc(row.get('new_source_path'))}'>{esc(short(row.get('new_source_path'), 26, 18))}</code></td>"
-            f"<td>{cmd_cell}</td>"
             "</tr>"
         )
     tools = (
@@ -190,7 +190,7 @@ def changed_table(manifest: Mapping[str, Any]) -> str:
         "</div>"
     )
     return tools + table(
-        ["#", "动作", "文件", "类型", "基准来源", "对比来源", "基准路径", "对比路径", "命令"],
+        ["#", "动作", "文件", "类型", "基准来源", "对比来源", "基准路径", "对比路径"],
         rows,
         table_id="changed-table",
         empty="没有变化文件。",
