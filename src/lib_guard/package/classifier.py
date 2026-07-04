@@ -4,26 +4,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-
-FILE_TYPE_TO_VIEW = {
-    "verilog": "rtl",
-    "lef": "lef",
-    "liberty": "lib",
-    "db": "db",
-    "gds": "gds",
-    "oas": "oas",
-    "cdl": "cdl",
-    "sdc": "sdc",
-    "upf": "upf",
-    "cpf": "cpf",
-    "spef": "spef",
-    "sdf": "sdf",
-    "doc": "doc",
-    "waiver": "waiver",
-    "package": "doc",
-    "flow_config": "flow",
-    "tech_config": "tech",
-}
+from lib_guard.view_types import package_view_type
 
 FULL_PACKAGE_REQUIRED_VIEWS = {
     "ip": {"rtl", "lef", "lib"},
@@ -38,7 +19,7 @@ CORE_VIEWS = {"rtl", "lef", "lib", "db", "gds", "oas", "cdl", "sdc", "upf", "cpf
 
 
 def file_type_to_view(file_type: str) -> str:
-    return FILE_TYPE_TO_VIEW.get(str(file_type or "unknown"), str(file_type or "unknown"))
+    return package_view_type(file_type)
 
 
 def _classify_file(root: Path, file_path: Path) -> dict[str, Any]:

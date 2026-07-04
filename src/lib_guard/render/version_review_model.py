@@ -3,6 +3,14 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any, Mapping
 
+from lib_guard.view_types import (
+    USAGE_AREAS,
+    canonical_file_type,
+    canonical_view_type,
+    usage_area_for_view,
+    view_label,
+    view_sort_key,
+)
 
 GROUP_LABELS = ["对比范围", "包根目录迁移", "文件匹配质量", "内容变化", "原始审计判断"]
 STATUS_COPY = {
@@ -64,82 +72,6 @@ ACTION_COPY = {
     "Confirm base version": "确认 Base 版本",
     "No action required": "无需动作",
 }
-VIEW_LABELS = {
-    "timing_lib": "Liberty / Timing",
-    "rtl_model": "RTL model",
-    "physical_abstract": "LEF / Physical abstract",
-    "layout": "GDS/OAS / Layout",
-    "constraint": "SDC / Constraint",
-    "power_intent": "UPF/CPF / Power intent",
-    "parasitic_compiled": "SPEF/DB/NDM / Parasitic & compiled",
-    "netlist": "CDL/SPICE / Netlist",
-    "tech_flow_config": "Tech/Flow config",
-    "doc_evidence": "Doc / Release evidence",
-    "waiver": "Waiver / Signoff evidence",
-    "unknown": "Unknown / 待分类",
-    "other": "Other / Evidence",
-}
-VIEW_ORDER = [
-    "timing_lib",
-    "rtl_model",
-    "physical_abstract",
-    "layout",
-    "constraint",
-    "power_intent",
-    "parasitic_compiled",
-    "netlist",
-    "tech_flow_config",
-    "doc_evidence",
-    "waiver",
-    "unknown",
-    "other",
-]
-USAGE_AREAS = {
-    "Timing / STA": {"timing_lib", "parasitic_compiled"},
-    "Physical / PD": {"physical_abstract", "layout", "tech_flow_config"},
-    "RTL / Integration": {"rtl_model"},
-    "Constraint / Intent": {"constraint", "power_intent"},
-    "Netlist / LVS": {"netlist"},
-    "Evidence / Waiver": {"waiver", "doc_evidence", "unknown", "other"},
-}
-RAW_TYPE_TO_VIEW = {
-    "liberty": "timing_lib",
-    "lib": "timing_lib",
-    "verilog": "rtl_model",
-    "systemverilog": "rtl_model",
-    "vhdl": "rtl_model",
-    "v": "rtl_model",
-    "sv": "rtl_model",
-    "lef": "physical_abstract",
-    "gds": "layout",
-    "oas": "layout",
-    "sdc": "constraint",
-    "upf": "power_intent",
-    "cpf": "power_intent",
-    "spef": "parasitic_compiled",
-    "db": "parasitic_compiled",
-    "ndm": "parasitic_compiled",
-    "milkyway": "parasitic_compiled",
-    "sdf": "parasitic_compiled",
-    "cdl": "netlist",
-    "spice": "netlist",
-    "sp": "netlist",
-    "spi": "netlist",
-    "flow_config": "tech_flow_config",
-    "tech_config": "tech_flow_config",
-    "cfg": "tech_flow_config",
-    "tcl": "tech_flow_config",
-    "lydrc": "tech_flow_config",
-    "doc": "doc_evidence",
-    "md": "doc_evidence",
-    "txt": "doc_evidence",
-    "readme": "doc_evidence",
-    "package": "doc_evidence",
-    "waiver": "waiver",
-    "unknown": "unknown",
-}
-
-
 def _as_mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -215,18 +147,15 @@ def _status_message(model: Mapping[str, Any]) -> str:
 
 
 def _norm_type(value: Any) -> str:
-    text = str(value or "unknown").strip().lower()
-    if text in {"", "-"}:
-        return "unknown"
-    return {"lib": "liberty", "spi": "spice"}.get(text, text)
+    return canonical_file_type(value)
 
 
 def _view_label(file_type: str) -> str:
-    return VIEW_LABELS.get(file_type, file_type or "unknown")
+    return view_label(file_type)
 
 
 def _view_sort_key(file_type: str) -> tuple[int, str]:
-    return (VIEW_ORDER.index(file_type) if file_type in VIEW_ORDER else 999, file_type)
+    return view_sort_key(file_type)
 
 
 def _current_type_counts(model: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -246,8 +175,7 @@ def _current_type_counts(model: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _canonical_view_type(file_type: Any) -> str:
-    raw_type = _norm_type(file_type)
-    return RAW_TYPE_TO_VIEW.get(raw_type, "other")
+    return canonical_view_type(file_type)
 
 
 def _aggregate_counts_by_view(raw_counts: Mapping[str, Any]) -> dict[str, int]:
@@ -299,10 +227,7 @@ def _evidence_levels_for_view(file_changes: list[Mapping[str, Any]], view_type: 
 
 
 def _usage_area_for_type(file_type: str) -> str:
-    for area, file_types in USAGE_AREAS.items():
-        if file_type in file_types:
-            return area
-    return "Other / Evidence"
+    return usage_area_for_view(file_type)
 
 
 def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[str, Any]]) -> list[dict[str, Any]]:

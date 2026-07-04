@@ -8,10 +8,11 @@ the HTML panel; the HTML renderer never reads Markdown.
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from lib_guard.diff.file_match import default_path_match_evidence, path_match_evidence as build_path_match_evidence
 from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
 from lib_guard.review.io import read_json
 from lib_guard.review.model_rules import (
@@ -25,6 +26,7 @@ from lib_guard.render import catalog_report as catalog
 from lib_guard.render import product_theme as ui
 from lib_guard.render.version_review_model import build_version_review_model
 from lib_guard.render.version_review_render import render_ip_user_view, render_version_review_groups
+from lib_guard.view_types import canonical_file_type, package_view_type
 
 
 STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
@@ -512,92 +514,6 @@ def _path_restructure_summary(file_diff: Mapping[str, Any], summary: Mapping[str
     }
 
 
-def _change_paths_for_match(value: Any, *, raw_path: Any = None) -> list[str]:
-    if isinstance(value, Mapping):
-        iterable = [{"path": key, **(item if isinstance(item, Mapping) else {})} for key, item in value.items()]
-    elif isinstance(value, list):
-        iterable = value
-    else:
-        iterable = []
-    paths: list[str] = []
-    for item in iterable:
-        if isinstance(item, Mapping):
-            path = common.relative_display_path(item.get("path") or item.get("relpath") or item.get("file") or "-", base=raw_path)
-        else:
-            path = common.relative_display_path(item, base=raw_path)
-        if path and path != "-":
-            paths.append(path)
-    return paths
-
-
-def _path_match_evidence(file_diff: Mapping[str, Any], *, raw_path: Any = None) -> dict[str, dict[str, str]]:
-    evidence: dict[str, dict[str, str]] = {}
-    for item in file_diff.get("renamed_or_moved", []) or []:
-        if not isinstance(item, Mapping):
-            continue
-        old_path = common.relative_display_path(item.get("old") or item.get("base") or "-", base=raw_path)
-        new_path = common.relative_display_path(item.get("new") or item.get("target") or "-", base=raw_path)
-        if old_path == "-" or new_path == "-":
-            continue
-        reason = str(item.get("reason") or item.get("match_reason") or "renamed_or_moved")
-        row_evidence = {
-            "match_status": "matched_move",
-            "base_candidate": old_path,
-            "target_candidate": new_path,
-            "match_reason": reason,
-        }
-        evidence[old_path] = dict(row_evidence)
-        evidence[new_path] = dict(row_evidence)
-
-    added_by_name: dict[str, list[str]] = defaultdict(list)
-    removed_by_name: dict[str, list[str]] = defaultdict(list)
-    for path in _change_paths_for_match(file_diff.get("added"), raw_path=raw_path):
-        added_by_name[Path(path).name].append(path)
-    for path in _change_paths_for_match(file_diff.get("removed"), raw_path=raw_path):
-        removed_by_name[Path(path).name].append(path)
-    for basename in sorted(set(added_by_name) & set(removed_by_name)):
-        added_paths = sorted(added_by_name[basename])
-        removed_paths = sorted(removed_by_name[basename])
-        if len(added_paths) != 1 or len(removed_paths) != 1:
-            continue
-        added_path = added_paths[0]
-        removed_path = removed_paths[0]
-        if added_path in evidence or removed_path in evidence:
-            continue
-        row_evidence = {
-            "match_status": "candidate_match",
-            "base_candidate": removed_path,
-            "target_candidate": added_path,
-            "match_reason": "same basename candidate",
-        }
-        evidence[added_path] = dict(row_evidence)
-        evidence[removed_path] = dict(row_evidence)
-    return evidence
-
-
-def _default_path_match_evidence(change: str, path: str) -> dict[str, str]:
-    if change == "changed":
-        return {
-            "match_status": "not_applicable",
-            "base_candidate": path or "-",
-            "target_candidate": path or "-",
-            "match_reason": "same path changed",
-        }
-    if change == "removed":
-        return {
-            "match_status": "unmatched",
-            "base_candidate": path or "-",
-            "target_candidate": "-",
-            "match_reason": "no deterministic match",
-        }
-    return {
-        "match_status": "unmatched",
-        "base_candidate": "-",
-        "target_candidate": path or "-",
-        "match_reason": "no deterministic match",
-    }
-
-
 def _group_file_changes_by_review_mode(file_changes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     lane_priority = {"P0": 0, "P1": 1}
     recommended = [
@@ -760,11 +676,11 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     release_evidence_diff = dict(common.version_diff_json(diff_dir, "release_evidence_diff.json"))
     diff_issues = dict(common.version_diff_json(diff_dir, "diff_issues.json"))
     file_changes = _iter_file_changes(file_diff, raw_path=version.get("raw_path"))
-    path_match_evidence = _path_match_evidence(file_diff, raw_path=version.get("raw_path"))
+    path_match_evidence = build_path_match_evidence(file_diff, raw_path=version.get("raw_path"))
     for item in file_changes:
         path = str(item.get("path") or "")
         change = str(item.get("change") or "")
-        item.update(path_match_evidence.get(path) or _default_path_match_evidence(change, path))
+        item.update(path_match_evidence.get(path) or default_path_match_evidence(change, path))
     added_files = _as_int(summary.get("added_files", _as_mapping(file_diff.get("counts")).get("added")))
     removed_files = _as_int(summary.get("removed_files", _as_mapping(file_diff.get("counts")).get("removed")))
     changed_files = summary.get("changed_files")
@@ -1313,35 +1229,12 @@ def _review_gate_summary_panel(version: Mapping[str, Any]) -> str:
 
 
 def _scope_for_file_type(file_type: str) -> str:
-    key = str(file_type or "unknown").lower()
-    return {
-        "verilog": "rtl",
-        "systemverilog": "rtl",
-        "v": "rtl",
-        "sv": "rtl",
-        "lef": "lef",
-        "liberty": "lib",
-        "lib": "lib",
-        "db": "db",
-        "gds": "gds",
-        "oas": "oas",
-        "cdl": "cdl",
-        "spice": "cdl",
-        "sdc": "sdc",
-        "upf": "upf",
-        "cpf": "cpf",
-        "spef": "spef",
-        "sdf": "sdf",
-        "doc": "doc",
-        "waiver": "waiver",
-        "package": "doc",
-        "flow_config": "flow",
-        "tech_config": "tech",
-    }.get(key, "未知")
+    scope = package_view_type(file_type)
+    return "未知" if scope == "unknown" else scope
 
 
 def _view_label(file_type: str) -> str:
-    key = str(file_type or "unknown").lower()
+    key = canonical_file_type(file_type)
     if key == "unknown":
         return "未知 / 待确认"
     return f"{_scope_for_file_type(key)} / {key}"
@@ -1351,7 +1244,7 @@ def _parser_status_by_file_type(parser_manifest: Mapping[str, Any]) -> dict[str,
     priority = ["FAILED", "PASS_EMPTY", "UNSUPPORTED", "SKIPPED", "METADATA_ONLY", "PASS"]
     found: dict[str, set[str]] = {}
     for file_entry in parser_manifest.get("files", []) or []:
-        file_type = str(file_entry.get("file_type") or "unknown").lower()
+        file_type = canonical_file_type(file_entry.get("file_type"))
         for task in file_entry.get("parser_tasks", []) or []:
             status = str(task.get("result_status") or task.get("status") or "SKIPPED").upper()
             found.setdefault(file_type, set()).add(status)
@@ -1362,8 +1255,9 @@ def _parser_status_by_file_type(parser_manifest: Mapping[str, Any]) -> dict[str,
 
 
 def _first_file_for_type(inventory: Mapping[str, Any], file_type: str) -> str:
+    wanted = canonical_file_type(file_type)
     for item in inventory.get("files", []) or []:
-        if str(item.get("file_type") or "unknown").lower() == file_type:
+        if canonical_file_type(item.get("file_type")) == wanted:
             return str(item.get("path") or "-")
     return "-"
 
@@ -1422,17 +1316,17 @@ def _required_optional_view_maps(readiness: Mapping[str, Any]) -> tuple[dict[str
         if not isinstance(component, Mapping):
             continue
         for view in component.get("required_views", []) or []:
-            key = str(view).lower()
+            key = canonical_file_type(view)
             result = (component.get("required_view_results") or {}).get(view) or {}
             required[key] = result if isinstance(result, Mapping) else {}
         for view in component.get("optional_views", []) or []:
-            key = str(view).lower()
+            key = canonical_file_type(view)
             result = (component.get("optional_view_results") or {}).get(view) or {}
             optional.setdefault(key, result if isinstance(result, Mapping) else {})
         for view, result in (component.get("required_view_results") or {}).items():
-            required[str(view).lower()] = result if isinstance(result, Mapping) else {}
+            required[canonical_file_type(view)] = result if isinstance(result, Mapping) else {}
         for view, result in (component.get("optional_view_results") or {}).items():
-            optional.setdefault(str(view).lower(), result if isinstance(result, Mapping) else {})
+            optional.setdefault(canonical_file_type(view), result if isinstance(result, Mapping) else {})
     return required, optional
 
 
@@ -1444,13 +1338,16 @@ def _view_coverage_rows(
 ) -> list[str]:
     required, optional = _required_optional_view_maps(readiness)
     parser_status = _parser_status_by_file_type(parser_manifest)
-    keys = set(str(k).lower() for k in counts) | set(required) | set(optional)
+    canonical_counts: Counter[str] = Counter()
+    for file_type, count in counts.items():
+        canonical_counts[canonical_file_type(file_type)] += int(count or 0)
+    keys = set(canonical_counts) | set(required) | set(optional)
     view_order = ["verilog", "lef", "liberty", "db", "gds", "oas", "cdl", "sdc", "upf", "cpf", "spef", "sdf", "flow_config", "tech_config", "doc", "waiver", "package", "unknown"]
     rows: list[str] = []
-    for file_type in sorted(keys, key=lambda item: (view_order.index(item) if item in view_order else 999, item)):
+    for file_type in sorted(keys, key=lambda item: (view_order.index(item) if item in view_order else 999, package_view_type(item), item)):
         result = required.get(file_type) or optional.get(file_type) or {}
         requirement = "必需" if file_type in required else "可选" if file_type in optional else "检测到"
-        count = int(counts.get(file_type, 0) or 0)
+        count = int(canonical_counts.get(file_type, 0) or 0)
         found = result.get("found")
         status = str(result.get("status") or ("FOUND" if count else "MISSING")).upper()
         parser = result.get("parser_status") or parser_status.get(file_type) or "-"
@@ -1487,8 +1384,11 @@ def _view_coverage_panel(
     counts: Mapping[str, int],
 ) -> str:
     required, optional = _required_optional_view_maps(readiness)
-    unknown_count = int(counts.get("unknown", 0) or 0)
-    manual_count = int(counts.get("flow_config", 0) or 0) + int(counts.get("tech_config", 0) or 0)
+    canonical_counts: Counter[str] = Counter()
+    for file_type, count in counts.items():
+        canonical_counts[canonical_file_type(file_type)] += int(count or 0)
+    unknown_count = int(canonical_counts.get("unknown", 0) or 0)
+    manual_count = int(canonical_counts.get("flow_config", 0) or 0) + int(canonical_counts.get("tech_config", 0) or 0)
     rows = _view_coverage_rows(inventory, parser_manifest, readiness, counts)
     status = readiness.get("required_view_status") or readiness.get("bundle_status") or ("PASS" if rows else "UNKNOWN")
     coverage_judgment = _judgment_strip(

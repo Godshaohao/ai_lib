@@ -8,49 +8,10 @@ from typing import Any, Mapping
 import getpass
 import json
 
+from lib_guard.view_types import RELEASE_VIEW_DIR_ALIASES, release_view_dir
 
-VIEW_DIR_ALIASES = {
-    "rtl": "RTL",
-    "verilog": "RTL",
-    "systemverilog": "RTL",
-    "lef": "LEF",
-    "lib": "LIB",
-    "liberty": "LIB",
-    "db": "DB",
-    "gds": "GDS",
-    "oas": "OAS",
-    "cdl": "CDL",
-    "spice": "CDL",
-    "sdc": "SDC",
-    "upf": "UPF",
-    "cpf": "CPF",
-    "spef": "SPEF",
-    "sdf": "SDF",
-    "doc": "DOC",
-    "docs": "DOC",
-    "waiver": "WAIVER",
-    "package": "DOC",
-    "flow": "FLOW",
-    "flow_config": "FLOW",
-    "tech": "TECH",
-    "tech_config": "TECH",
-}
-
+VIEW_DIR_ALIASES = RELEASE_VIEW_DIR_ALIASES
 VIEW_DIRS = set(VIEW_DIR_ALIASES)
-
-FILE_TYPE_TO_VIEW = {
-    "verilog": "RTL",
-    "systemverilog": "RTL",
-    "doc": "DOC",
-    "md": "DOC",
-    "txt": "DOC",
-    "liberty": "LIB",
-    "lib": "LIB",
-    "flow_config": "FLOW",
-    "tech_config": "TECH",
-    "spice": "CDL",
-    "package": "DOC",
-}
 
 
 def utc_now() -> str:
@@ -153,13 +114,11 @@ def _classify_file_type(source_root: Path, file_path: Path) -> str:
 
 
 def canonical_view_dir(value: Any) -> str:
-    key = str(value or "").strip().lower()
-    return VIEW_DIR_ALIASES.get(key, str(value or "UNKNOWN").strip().upper() or "UNKNOWN")
+    return release_view_dir(value)
 
 
 def _release_view_for_file_type(file_type: Any) -> str:
-    key = str(file_type or "").strip().lower()
-    return FILE_TYPE_TO_VIEW.get(key) or canonical_view_dir(key or "unknown")
+    return release_view_dir(file_type)
 
 
 def normalize_release_relpath(relpath: str | Path, *, file_type: Any = None) -> Path:
