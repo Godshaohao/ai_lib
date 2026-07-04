@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Any, Mapping
 
 
@@ -54,13 +54,71 @@ REASON_COPY = {
     "recommended_file_diff": "存在 P0/P1 重点文件",
     "release_note_missing": "缺少 release note",
     "review_gate_blocking": "Review Gate 有阻塞项",
+    "review_gate_attention": "Review Gate 需关注",
     "base_not_confirmed": "Base 未确认",
+    "diff_incomplete": "缺少上一版对比证据",
 }
 ACTION_COPY = {
     "Review focused file evidence": "审查重点文件证据",
     "Open comparison review": "打开对比审查",
     "Confirm base version": "确认 Base 版本",
     "No action required": "无需动作",
+}
+VIEW_LABELS = {
+    "liberty": "Liberty / Timing",
+    "lib": "Liberty / Timing",
+    "spef": "SPEF / Parasitic",
+    "db": "DB / Compiled model",
+    "ndm": "NDM / Compiled model",
+    "lef": "LEF / Physical abstract",
+    "gds": "GDS / Layout",
+    "oas": "OAS / Layout",
+    "verilog": "Verilog / RTL model",
+    "systemverilog": "SystemVerilog / RTL model",
+    "vhdl": "VHDL / RTL model",
+    "sdc": "SDC / Constraint",
+    "upf": "UPF / Power intent",
+    "cpf": "CPF / Power intent",
+    "sdf": "SDF / Delay annotation",
+    "cdl": "CDL / Netlist",
+    "spice": "SPICE / Netlist",
+    "sp": "SPICE / Netlist",
+    "waiver": "Waiver / Signoff evidence",
+    "doc": "Doc / Evidence",
+    "package": "Package metadata",
+    "unknown": "Unknown / 待分类",
+}
+VIEW_ORDER = [
+    "liberty",
+    "lib",
+    "spef",
+    "db",
+    "ndm",
+    "lef",
+    "gds",
+    "oas",
+    "verilog",
+    "systemverilog",
+    "vhdl",
+    "sdc",
+    "upf",
+    "cpf",
+    "sdf",
+    "cdl",
+    "spice",
+    "sp",
+    "waiver",
+    "doc",
+    "package",
+    "unknown",
+]
+USAGE_AREAS = {
+    "Timing / STA": {"liberty", "lib", "spef", "db", "ndm", "sdf"},
+    "Physical / PD": {"lef", "gds", "oas", "db", "ndm"},
+    "RTL / Integration": {"verilog", "systemverilog", "vhdl"},
+    "Constraint / Intent": {"sdc", "upf", "cpf"},
+    "Netlist / LVS": {"cdl", "spice", "sp"},
+    "Evidence / Waiver": {"waiver", "doc", "package", "unknown"},
 }
 
 
@@ -138,6 +196,232 @@ def _status_message(model: Mapping[str, Any]) -> str:
     return str(model.get("status_message") or STATUS_COPY.get(status) or f"更新详情状态：{status or 'UNKNOWN'}。")
 
 
+def _norm_type(value: Any) -> str:
+    text = str(value or "unknown").strip().lower()
+    if text in {"", "-"}:
+        return "unknown"
+    return {"lib": "liberty", "spi": "spice"}.get(text, text)
+
+
+def _view_label(file_type: str) -> str:
+    return VIEW_LABELS.get(file_type, file_type or "unknown")
+
+
+def _view_sort_key(file_type: str) -> tuple[int, str]:
+    return (VIEW_ORDER.index(file_type) if file_type in VIEW_ORDER else 999, file_type)
+
+
+def _current_type_counts(model: Mapping[str, Any]) -> Mapping[str, Any]:
+    scan_evidence = _as_mapping(model.get("scan_evidence"))
+    return _as_mapping(scan_evidence.get("counts"))
+
+
+def _change_counts_by_type(file_changes: list[Mapping[str, Any]]) -> dict[str, dict[str, int]]:
+    out: dict[str, dict[str, int]] = defaultdict(lambda: {"added": 0, "removed": 0, "changed": 0})
+    for item in file_changes:
+        file_type = _norm_type(item.get("file_type"))
+        change = str(item.get("change") or "").lower()
+        if change in {"added", "removed", "changed"}:
+            out[file_type][change] += 1
+    return dict(out)
+
+
+def _evidence_levels_for_type(file_changes: list[Mapping[str, Any]], file_type: str) -> list[str]:
+    levels: set[str] = set()
+    for item in file_changes:
+        if _norm_type(item.get("file_type")) != file_type:
+            continue
+        lane = str(item.get("review_lane") or "").strip()
+        if lane == "Summary-only":
+            levels.add("Summary-only")
+        elif lane == "Metadata-only":
+            levels.add("Metadata-only")
+        elif lane in {"P0", "P1"}:
+            levels.add("Focused review")
+        elif lane:
+            levels.add("Manual-review")
+    return sorted(levels, key=lambda item: ["Focused review", "Manual-review", "Summary-only", "Metadata-only"].index(item) if item in {"Focused review", "Manual-review", "Summary-only", "Metadata-only"} else 99)
+
+
+def _usage_area_for_type(file_type: str) -> str:
+    for area, file_types in USAGE_AREAS.items():
+        if file_type in file_types:
+            return area
+    return "Other / Evidence"
+
+
+def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    current_counts = _current_type_counts(model)
+    delta = _change_counts_by_type(file_changes)
+    keys = set(delta)
+    keys.update(_norm_type(key) for key, value in current_counts.items() if _as_int(value))
+    rows: list[dict[str, Any]] = []
+    for file_type in sorted(keys, key=_view_sort_key):
+        counts = delta.get(file_type, {"added": 0, "removed": 0, "changed": 0})
+        delta_total = counts["added"] + counts["removed"] + counts["changed"]
+        evidence_levels = _evidence_levels_for_type(file_changes, file_type)
+        current_total = _as_int(current_counts.get(file_type))
+        if not current_total and file_type == "liberty":
+            current_total = _as_int(current_counts.get("lib"))
+        status = "WARNING" if delta_total else "PASS" if current_total else "INFO"
+        rows.append(
+            {
+                "file_type": file_type,
+                "view": _view_label(file_type),
+                "usage_area": _usage_area_for_type(file_type),
+                "current_count": current_total,
+                "added": counts["added"],
+                "removed": counts["removed"],
+                "changed": counts["changed"],
+                "delta_total": delta_total,
+                "evidence_level": " / ".join(evidence_levels) if evidence_levels else "No delta",
+                "status": status,
+            }
+        )
+    return rows
+
+
+def _build_usage_area_sections(view_rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    for area in list(USAGE_AREAS) + ["Other / Evidence"]:
+        rows = [row for row in view_rows if row.get("usage_area") == area and _as_int(row.get("delta_total"))]
+        if not rows:
+            continue
+        types = ", ".join(str(row.get("file_type")) for row in rows[:5])
+        delta_total = sum(_as_int(row.get("delta_total")) for row in rows)
+        evidence = sorted({str(row.get("evidence_level") or "-") for row in rows})
+        sections.append(
+            {
+                "area": area,
+                "status": "WARNING",
+                "summary": f"{delta_total} 个变化；涉及 {types or '-'}。",
+                "evidence": "；".join(evidence[:3]) if evidence else "-",
+                "rows": rows,
+            }
+        )
+    if not sections:
+        sections.append(
+            {
+                "area": "使用场景影响",
+                "status": "PASS",
+                "summary": "未识别到相对上一有效版的 view 变化。",
+                "evidence": "-",
+                "rows": [],
+            }
+        )
+    return sections
+
+
+def _review_gate_counts(model: Mapping[str, Any]) -> tuple[int, int, str]:
+    gate = _as_mapping(model.get("review_gate"))
+    return (
+        len(gate.get("blocking_items", []) or []),
+        len(gate.get("attention_items", []) or []),
+        str(gate.get("status") or "NOT_BUILT").upper(),
+    )
+
+
+def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the default IP-user surface from the richer update-detail model.
+
+    This adapter deliberately hides management/debug details by default. It keeps
+    the user's first screen focused on previous-effective delta, view impact, and
+    evidence level. Gate/release/debug data may still exist in the source model,
+    but it is rendered as hidden evidence instead of the primary story.
+    """
+
+    file_changes = [item for item in model.get("file_changes", []) or [] if isinstance(item, Mapping)]
+    lane_counts = _as_mapping(model.get("lane_counts"))
+    view_rows = _build_view_delta_rows(model, file_changes)
+    changed_view_rows = [row for row in view_rows if _as_int(row.get("delta_total"))]
+    added = _as_int(model.get("added_files"))
+    removed = _as_int(model.get("removed_files"))
+    changed = _as_int(model.get("changed_files"))
+    p0p1 = _as_int(lane_counts.get("recommended_file_diff"))
+    summary_only = _as_int(lane_counts.get("summary_only"))
+    metadata_only = _as_int(lane_counts.get("metadata_only"))
+    status_key = str(model.get("status") or "").upper()
+    base_key = str(model.get("base_trust_status") or "").upper()
+    base_blocked = status_key in {"NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"} or base_key in {"BLOCK", "BLOCKING", "BLOCKED"}
+    diff_missing = status_key in {"DIFF_NOT_RUN", "NO_DIFF_SUMMARY"}
+    gate_blocking, gate_attention, gate_status = _review_gate_counts(model)
+
+    if base_blocked:
+        ip_decision = "BLOCKED"
+        ip_label = "不可接入"
+        main_reason = "Base / Scan / Diff 基础证据不可信，不能作为上一版更新判断。"
+    elif diff_missing:
+        ip_decision = "USAGE_REVIEW_REQUIRED"
+        ip_label = "缺少上一版对比"
+        main_reason = "需要先生成相对上一有效版的更新详情。"
+    elif added or removed or changed or p0p1 or summary_only or metadata_only:
+        ip_decision = "USAGE_REVIEW_REQUIRED"
+        ip_label = "需审查更新后使用"
+        main_reason = "相对上一有效版存在 view 更新；按使用场景查看影响。"
+    else:
+        ip_decision = "READY"
+        ip_label = "可接入"
+        main_reason = "未识别到影响使用的上一版更新。"
+
+    if gate_blocking:
+        release_decision = "BLOCKED"
+        release_label = "正式放行受阻"
+        release_reason = f"Review Gate 有 {gate_blocking} 个管理阻塞项；这不等同于所有技术更新不可审查。"
+    elif gate_status in {"REVIEW_REQUIRED", "NEEDS_REVIEW", "ATTENTION"} or gate_attention:
+        release_decision = "WARNING"
+        release_label = "正式放行待确认"
+        release_reason = f"Review Gate 有 {gate_attention} 个关注项。"
+    elif gate_status in {"READY", "PASS", "OK"}:
+        release_decision = "PASS"
+        release_label = "正式放行通过"
+        release_reason = "Review Gate 已关闭。"
+    else:
+        release_decision = "INFO"
+        release_label = "正式放行未建立"
+        release_reason = "未发现可展示的 Review Gate 证据。"
+
+    top_views = ", ".join(
+        f"{row.get('file_type')}:{row.get('delta_total')}"
+        for row in sorted(changed_view_rows, key=lambda row: -_as_int(row.get("delta_total")))[:5]
+    )
+    if not top_views:
+        top_views = "无 view delta"
+
+    must_check = []
+    if changed_view_rows:
+        must_check.append("先看 View Delta：确认相对上一有效版哪些 view 新增、删除、修改。")
+        must_check.append("按使用场景筛选：Timing 看 Liberty/SPEF/DB，Physical 看 LEF/GDS/OAS/DB，Integration 看 Verilog/SystemVerilog，Constraint 看 SDC/UPF/CPF。")
+    if summary_only or metadata_only:
+        must_check.append("确认轻量证据等级是否满足当前使用场景；Summary-only / Metadata-only 是正常证据策略，不自动代表不完整。")
+    if p0p1:
+        must_check.append(f"查看 {p0p1} 个重点变化文件，但不要把 P0/P1 自动理解成 blocker。")
+    if gate_blocking:
+        must_check.append("正式 release 受管理门禁影响；IP 技术审查和正式放行状态需要分开展示。")
+    if not must_check:
+        must_check.append("当前没有必须确认的上一版更新项。")
+
+    return {
+        "schema_version": "ip_user_view.v1",
+        "source_model": "version_update_detail.v1",
+        "ip_use_decision": ip_decision,
+        "ip_use_label": ip_label,
+        "ip_use_status": _status_from_usage(ip_decision),
+        "main_reason": main_reason,
+        "release_decision": release_decision,
+        "release_label": release_label,
+        "release_reason": release_reason,
+        "base_label": f"{_copy(BASE_REF_COPY, model.get('base_ref'))} / {model.get('base_version') or '-'}",
+        "comparison_label": f"{_copy(SEMANTICS_COPY, model.get('comparison_semantics'))}；{_copy(DELETE_COPY, model.get('delete_semantics'))}",
+        "delta_summary": f"新增 {added} / 删除 {removed} / 修改 {changed}",
+        "top_view_delta": top_views,
+        "evidence_summary": f"Focused {p0p1} / Summary-only {summary_only} / Metadata-only {metadata_only}",
+        "view_delta_rows": view_rows,
+        "usage_area_sections": _build_usage_area_sections(view_rows),
+        "must_check_items": must_check,
+        "non_blocker_note": "普通增量变化、Summary-only、Metadata-only、P0/P1 不自动构成阻塞；只有 Base/Scan/Diff 基础证据不可信或明确 gate blocker 才升级为阻塞。",
+    }
+
+
 def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
     file_changes = [item for item in model.get("file_changes", []) or [] if isinstance(item, Mapping)]
     path_restructure = _as_mapping(model.get("path_restructure"))
@@ -188,7 +472,7 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
             "label": "包根目录迁移",
             "status": "WARNING" if migration_suspected else "PASS",
             "summary": (
-                "疑似重打包 / 目录迁移，需要确认路径变化是否影响脚本引用、flow config、release manifest。"
+                "检测到包装目录变化；系统已按逻辑路径做上一版匹配。该信息用于解释新增/删除统计，不默认代表 IP 使用风险。"
                 if migration_suspected
                 else "未识别到包根目录迁移。"
             ),
@@ -252,7 +536,7 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
                 [
                     ("使用决策", usage_text),
                     ("Release note", "已发现" if release_notes else "缺失"),
-                    ("阻塞问题", blocking_issues),
+                    ("Diff 阻塞问题", blocking_issues),
                     ("主动作", _action_text(model.get("primary_next_action"))),
                 ]
             ),
@@ -262,4 +546,5 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
         "schema_version": "version_review_model.v1",
         "source_model": "version_update_detail.v1",
         "groups": groups,
+        "ip_user_view": build_ip_user_view_model(model),
     }

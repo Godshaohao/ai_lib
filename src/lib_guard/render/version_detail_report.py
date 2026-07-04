@@ -24,7 +24,7 @@ from lib_guard.render import catalog_render_common as common
 from lib_guard.render import catalog_report as catalog
 from lib_guard.render import product_theme as ui
 from lib_guard.render.version_review_model import build_version_review_model
-from lib_guard.render.version_review_render import render_version_review_groups
+from lib_guard.render.version_review_render import render_ip_user_view, render_version_review_groups
 
 
 STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
@@ -879,6 +879,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "summary_only_changes": summary_only_reviewed,
         "metadata_only_reviewed_changes": metadata_only_reviewed,
         "release_notes": release_notes,
+        "review_gate": version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {},
         "recommended_actions": [_normalize_recommended_action(action) for action in (summary.get("recommended_actions", []) or []) if str(action).strip()],
         "file_diff_recommendations": commands,
         "metadata_only_changes": metadata_only_changes,
@@ -889,6 +890,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     model["confidence_note"] = _version_update_confidence_note(model)
     model["primary_next_action"] = _primary_next_action(status, recommended_count, len(commands))
     model["version_review_model"] = build_version_review_model(model)
+    model["ip_user_view_model"] = _as_mapping(model["version_review_model"].get("ip_user_view"))
     return model
 
 
@@ -1123,7 +1125,7 @@ def _evidence_judgment(model: Mapping[str, Any]) -> tuple[str, str, str]:
     release_notes = len(model.get("release_notes", []) or [])
     if metadata_only or summary_only:
         label = "混合证据"
-        status = "WARNING"
+        status = "INFO"
     else:
         label = "内容级证据"
         status = "PASS"
@@ -1217,8 +1219,9 @@ def _version_overview_panel(
     unknown_count: int,
     required_view_status: Any,
 ) -> str:
-    decision = _usage_decision(model, version)
-    review_text = ui.status_label(decision)
+    ip_model = _as_mapping(model.get("ip_user_view_model"))
+    decision = str(ip_model.get("ip_use_decision") or _usage_decision(model, version))
+    review_text = str(ip_model.get("ip_use_label") or ui.status_label(decision))
     file_change_total = (
         _summary_value(model, "added_files")
         + _summary_value(model, "removed_files")
@@ -1228,25 +1231,20 @@ def _version_overview_panel(
     base_status = model.get("base_trust_status") or "WARNING"
     delivery_status = required_view_status or "UNKNOWN"
     release_note_found = bool(model.get("release_notes"))
-    usable_label = "可使用"
-    if str(decision).upper() in {"BLOCKED", "NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"}:
-        usable_label = "不可直接使用"
-    elif str(decision).upper() in {"USAGE_REVIEW_REQUIRED", "CHANGED", "DIFF", "REVIEW", "DIFF_REVIEW", "WARNING"}:
-        usable_label = "需确认后使用"
     judgment = _judgment_strip(
         [
-            ("可用性", usable_label, ui.status_label(decision), decision),
+            ("接入判断", review_text, ip_model.get("main_reason") or ui.status_label(decision), decision),
             ("Base", "已确认" if str(base_status).upper() == "PASS" else "待确认", f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}", base_status),
             ("必需 View 覆盖", ui.status_label(delivery_status), "覆盖满足不等于全文 Parser 通过", delivery_status),
-            ("变化影响", f"P0/P1 {p0p1_count}", f"{file_change_total} 个变化；{_top_file_type_text(model, limit=2)}", "WARNING" if p0p1_count else "PASS"),
-            ("Release note", "已发现" if release_note_found else "缺失", "release note / changelog 证据", "PASS" if release_note_found else "WARNING"),
-            ("待确认", str(unknown_count), "unknown / 分类待确认" if unknown_count else "无 unknown", "WARNING" if unknown_count else "PASS"),
+            ("上一版对比", ip_model.get("delta_summary") or f"{file_change_total} 个变化", ip_model.get("top_view_delta") or _top_file_type_text(model, limit=2), "WARNING" if file_change_total else "PASS"),
+            ("证据等级", ip_model.get("evidence_summary") or "-", "轻量证据不自动代表不完整", "INFO"),
+            ("正式放行", ip_model.get("release_label") or ("已发现 RN" if release_note_found else "RN 缺失"), ip_model.get("release_reason") or "release note / gate 证据", ip_model.get("release_decision") or ("PASS" if release_note_found else "WARNING")),
         ]
     )
     return (
         "<section class='version-overview'>"
         "<div class='overview-head'>"
-        f"<div class='overview-title'><h2>IP 版本使用事实</h2><p>先看能不能用、影响哪些 view、哪些变化必须确认；管理证据收在右侧和折叠区。</p></div>{ui.badge(decision, review_text)}</div>"
+        f"<div class='overview-title'><h2>IP 版本更新摘要</h2><p>先看上一有效版对比、View Delta、证据等级和使用场景影响；管理/Debug 证据默认下沉。</p></div>{ui.badge(decision, review_text)}</div>"
         "<div class='overview-grid'>"
         f"<div class='overview-cell'><b>库</b><em title='{ui.esc(lib_id)}'>{ui.esc(lib_id)}</em></div>"
         f"<div class='overview-cell'><b>版本</b><em title='{ui.esc(version_id)}'>{ui.esc(version_id)}</em></div>"
@@ -1261,9 +1259,9 @@ def _review_gate_summary_panel(version: Mapping[str, Any]) -> str:
     impact, detail, status = _management_gate_user_impact(version)
     blocking = len((gate or {}).get("blocking_items", []) or [])
     attention = len((gate or {}).get("attention_items", []) or [])
-    return ui.panel(
-        "管理门禁",
-        "面向 release owner 的 gate 状态；这里明确它是否影响当前版本使用判断。",
+    return ui.collapsible_panel(
+        "正式放行 / 管理门禁",
+        "面向 release owner 的 gate 状态；默认折叠，不作为 IP 使用者主线。",
         ui.metric_grid(
             [
                 ("使用影响", impact, detail, status),
@@ -1271,6 +1269,7 @@ def _review_gate_summary_panel(version: Mapping[str, Any]) -> str:
                 ("管理关注", attention, "建议补充证据", "WARNING" if attention else "PASS"),
             ]
         ),
+        open=False,
     )
 
 
@@ -1549,9 +1548,9 @@ def _quality_panel(
     evidence_context = "<div class='context-list'>" + "".join(
         f"<div class='context-row'><b>{ui.esc(label)}</b><em>{ui.esc(value)}</em></div>" for label, value in evidence_rows
     ) + "</div>"
-    return ui.panel(
-        "证据入口",
-        "追溯 scan、parser、diff 和原始路径；这些是证据，不作为主屏使用结论。",
+    return ui.collapsible_panel(
+        "证据入口 / Debug",
+        "追溯 scan、parser、diff 和原始路径；这些是证据，不作为 IP 使用者主屏结论。",
         _judgment_strip(
             [
                 ("Raw Scan", "有清单" if file_total else "缺清单", f"{file_total} files", scan_status),
@@ -1562,6 +1561,7 @@ def _quality_panel(
             ]
         )
         + evidence_context,
+        open=False,
     )
 
 
@@ -1668,27 +1668,36 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
     base_version = model.get("base_version") or "-"
     base_ref = model.get("base_ref") or "NEEDS_BASE_CONFIRM"
     review_model = _as_mapping(model.get("version_review_model")) or build_version_review_model(model)
+    ip_model = _as_mapping(model.get("ip_user_view_model")) or _as_mapping(review_model.get("ip_user_view"))
     lead = (
         "<div class='version-update-lead'>"
         f"<b>{ui.esc(model.get('headline') or '-')}</b>"
         f"<p>{ui.esc(model.get('confidence_note') or '-')}</p>"
         "</div>"
     )
-    return ui.panel(
-        f"更新详情（vs {_cn_base_ref(base_ref)} / {base_version}）",
-        "按五组审查字段展示本次版本变化；完整审计证据放在后续折叠区。",
-        lead
+    advanced_review = (
+        "<details class='detail-fold review-fold'>"
+        "<summary>高级审查字段 / 管理证据</summary>"
         + render_version_review_groups(review_model)
-        + "<h3>重点变化文件</h3>"
-        + "<div class='quality-note'><b>显示范围</b> 仅显示 P0/P1/Review 重点变化，最多 120 行；完整变化文件在下方折叠证据中查看。P0/P1 与 Review 会同时进入本表，所以行数可能大于 P0/P1 数。</div>"
+        + "</details>"
+    )
+    focus_changes = (
+        "<details class='detail-fold review-fold'>"
+        "<summary>变化文件明细（按需展开）</summary>"
+        "<div class='quality-note'><b>显示范围</b> 默认不把文件清单作为 IP 使用者主线；这里仅显示 P0/P1/Review 重点变化，最多 120 行。完整变化文件在审计证据中查看。</div>"
         + catalog._scroll_table(
             ["变化", "类型", "路径", "审查级别", "匹配状态", "Base 候选", "Target 文件", "建议"],
             _focus_file_change_rows(model),
             "暂无重点变化文件；可展开完整变化文件查看。",
             "focus-change-scroll",
-        ),
+        )
+        + "</details>"
     )
-
+    return ui.panel(
+        f"上一有效版更新摘要（vs {_cn_base_ref(base_ref)} / {base_version}）",
+        "默认面向 IP 使用者：先看上一版对比、view delta、证据等级和使用场景影响；管理和 debug 证据默认折叠。",
+        lead + render_ip_user_view(ip_model) + advanced_review + focus_changes,
+    )
 
 def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Path) -> str:
     path = Path(out_md)
@@ -1870,24 +1879,22 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
             open=False,
         )
     )
-    usage_decision = _usage_decision(model, version)
-    gate = version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {}
-    gate_status = (gate or {}).get("status") or "NOT_BUILT"
+    ip_model = _as_mapping(model.get("ip_user_view_model"))
+    usage_decision = str(ip_model.get("ip_use_decision") or _usage_decision(model, version))
     rail = ui.status_rail(
         [
-            ("使用建议", usage_decision, "统一主状态"),
-            ("Scan", version.get("scan_status") or "NOT_SCANNED", "单版本扫描证据"),
+            ("接入判断", ip_model.get("ip_use_label") or usage_decision, ip_model.get("main_reason") or "IP 使用者主状态"),
             ("Base", model.get("base_trust_status") or "WARNING", f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"),
             ("必需 View", required_view_status or "UNKNOWN", "覆盖满足不等于全文 Parser"),
-            ("Diff", model.get("status") or "COMPARE_PENDING", "当前版本对比状态"),
-            ("Gate", gate_status, "管理门禁状态"),
-            ("Release Note", "FOUND" if model.get("release_notes") else "MISSING", "release note / changelog"),
+            ("上一版对比", model.get("status") or "COMPARE_PENDING", ip_model.get("delta_summary") or "当前版本对比状态"),
+            ("证据等级", ip_model.get("evidence_summary") or "-", "轻量证据不自动代表不完整"),
+            ("正式放行", ip_model.get("release_label") or "未建立", ip_model.get("release_reason") or "管理门禁状态"),
         ]
     )
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / {version_id}",
         "版本审查",
-        "面向 IP 使用者展示可用性、Base 关系、使用影响、必需 View 覆盖和证据入口。",
+        "面向 IP 使用者展示上一有效版对比、View Delta、证据等级和使用场景影响。",
         catalog_browser_styles() + body,
         decision=usage_decision,
         rail=rail,

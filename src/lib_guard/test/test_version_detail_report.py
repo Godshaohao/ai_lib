@@ -267,14 +267,14 @@ class VersionDetailReportTest(unittest.TestCase):
 
             self.assertTrue(model["path_restructure"]["suspected"])
             self.assertIn("修改文件 0 个，新增 181 个，删除 10 个", model["headline"])
-            self.assertIn("疑似重打包 / 目录迁移", html)
+            self.assertIn("包装目录变化", html)
             self.assertIn("old root: <code>asap7_source_package</code>", html)
             self.assertIn("new root: <code>upstream_ae9a8ed9</code>", html)
-            self.assertIn("包根识别 31", html)
+            self.assertIn("逻辑路径匹配 31", html)
             self.assertIn("包根/文件级匹配 31", html)
             self.assertIn("old 包内 31 个文件，new 包内 206 个文件", html)
             self.assertIn("文件级一一匹配 23", html)
-            self.assertLess(html.index("疑似重打包 / 目录迁移"), html.index("重点变化文件"))
+            self.assertLess(html.index("包装目录变化"), html.index("变化文件明细（按需展开）"))
 
     def test_markdown_export_uses_same_headline_and_evidence_counts_as_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -479,9 +479,11 @@ class VersionDetailReportTest(unittest.TestCase):
                 self.assertTrue(group["facts"], group["label"])
 
             html = render_version_update_detail_panel(model)
-            positions = [html.index(label) for label in labels]
+            positions = [html.index(f"<h3>{label}</h3>") for label in labels]
             self.assertEqual(positions, sorted(positions))
-            self.assertIn("更新详情分组", html)
+            self.assertIn("IP 使用者默认视图", html)
+            self.assertIn("View Delta Matrix", html)
+            self.assertIn("高级审查字段", html)
             self.assertNotIn("VersionReviewModel", html)
             self.assertNotIn("任务清单</h3>", html)
             self.assertNotIn("使用影响（vs", html)
