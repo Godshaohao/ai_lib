@@ -64,10 +64,10 @@ def render_version_review_groups(review_model: Mapping[str, Any]) -> str:
             + "</section>"
         )
     if not cards:
-        cards.append("<div class='muted-box'>暂无 VersionReviewModel 分组。</div>")
+        cards.append("<div class='muted-box'>暂无更新详情分组。</div>")
     return (
         "<div class='version-review-model'>"
-        "<div class='quality-note'><b>VersionReviewModel</b> 更新详情按五组中文字段渲染：对比范围、包根目录迁移、文件匹配质量、内容变化、使用影响。</div>"
+        "<div class='quality-note'><b>更新详情分组</b> 按五组中文字段渲染：对比范围、包根目录迁移、文件匹配质量、内容变化、使用影响。</div>"
         "<div class='review-group-grid'>"
         + "".join(cards)
         + "</div></div>"

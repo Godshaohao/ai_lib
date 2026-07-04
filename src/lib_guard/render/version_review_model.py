@@ -7,10 +7,60 @@ from typing import Any, Mapping
 GROUP_LABELS = ["对比范围", "包根目录迁移", "文件匹配质量", "内容变化", "使用影响"]
 STATUS_COPY = {
     "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg refresh <LIB>。",
-    "NEEDS_BASE_CONFIRM": "无法确定 base；请先确认 current_effective 或 previous_effective。",
+    "NEEDS_BASE_CONFIRM": "无法确定 Base；请先确认当前有效版本或上一有效版本。",
     "NO_DIFF_SUMMARY": "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
     "CHANGED": "已完成比较，有变化。",
     "SAME": "已完成比较，无变化。",
+}
+BASE_REF_COPY = {
+    "current_effective": "当前有效版本",
+    "previous_effective": "上一有效版本",
+    "latest_effective": "最新有效版本",
+    "explicit": "手动指定",
+    "adjacent": "相邻版本",
+    "NEEDS_BASE_CONFIRM": "待确认 Base",
+}
+BASE_SOURCE_COPY = {
+    "current_effective_ref": "当前有效版本引用",
+    "previous_effective_version": "上一有效版本",
+    "latest_effective_ref": "最新有效版本引用",
+    "explicit": "手动指定",
+    "manual": "手动指定",
+    "diff_summary": "Diff 记录",
+}
+SEMANTICS_COPY = {
+    "full": "全量",
+    "incremental": "增量",
+}
+DELETE_COPY = {
+    "real_delete": "缺失文件视为真实删除",
+    "out_of_scope_missing": "缺失文件不视为删除",
+}
+DIFF_STATUS_COPY = {
+    "CHANGED": "有变化",
+    "SAME": "无变化",
+    "DIFF_NOT_RUN": "未生成",
+    "NEEDS_BASE_CONFIRM": "Base 待确认",
+    "NO_DIFF_SUMMARY": "缺少 Diff 摘要",
+}
+USAGE_COPY = {
+    "BLOCKED": "不可直接使用",
+    "USAGE_REVIEW_REQUIRED": "需审查后使用",
+    "READY": "可使用",
+    "UNKNOWN": "待判断",
+}
+REASON_COPY = {
+    "diff_changed": "存在版本变化",
+    "recommended_file_diff": "存在 P0/P1 重点文件",
+    "release_note_missing": "缺少 release note",
+    "review_gate_blocking": "Review Gate 有阻塞项",
+    "base_not_confirmed": "Base 未确认",
+}
+ACTION_COPY = {
+    "Review focused file evidence": "审查重点文件证据",
+    "Open comparison review": "打开对比审查",
+    "Confirm base version": "确认 Base 版本",
+    "No action required": "无需动作",
 }
 
 
@@ -62,6 +112,27 @@ def _facts(items: list[tuple[str, Any]]) -> list[dict[str, str]]:
     return [{"label": label, "value": str(value if value is not None else "-")} for label, value in items]
 
 
+def _copy(mapping: Mapping[str, str], value: Any) -> str:
+    text = str(value or "")
+    return mapping.get(text, text or "-")
+
+
+def _base_source_text(base_ref: Any, base_source: Any) -> str:
+    return f"{_copy(BASE_REF_COPY, base_ref)} / {_copy(BASE_SOURCE_COPY, base_source)}"
+
+
+def _reasons_text(reasons: Any) -> str:
+    items = [str(item) for item in reasons or []]
+    if not items:
+        return "-"
+    return "，".join(_copy(REASON_COPY, item) for item in items)
+
+
+def _action_text(action: Any) -> str:
+    label = _as_mapping(action).get("label")
+    return _copy(ACTION_COPY, label)
+
+
 def _status_message(model: Mapping[str, Any]) -> str:
     status = str(model.get("status") or "").upper()
     return str(model.get("status_message") or STATUS_COPY.get(status) or f"更新详情状态：{status or 'UNKNOWN'}。")
@@ -89,6 +160,8 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
     matched_move = max(match_counts["matched_move"], matched_by_root)
     unmatched_added_removed = max(0, added + removed - matched_by_root)
     evidence_label = "混合证据" if summary_only or metadata_only else "内容级证据"
+    usage_text = _copy(USAGE_COPY, usage_decision)
+    reasons_text = _reasons_text(model.get("usage_decision_reasons"))
 
     groups = [
         {
@@ -101,12 +174,12 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
             ).strip(),
             "facts": _facts(
                 [
-                    ("Base 来源", f"{model.get('base_ref') or '-'} / {model.get('base_source') or '-'}"),
+                    ("Base 来源", _base_source_text(model.get("base_ref"), model.get("base_source"))),
                     ("Base 版本", model.get("base_version") or "-"),
                     ("Target 版本", model.get("target_version") or model.get("version_id") or "-"),
-                    ("对比语义", model.get("comparison_semantics") or "-"),
-                    ("删除语义", model.get("delete_semantics") or "-"),
-                    ("Diff 状态", model.get("status") or "-"),
+                    ("对比语义", _copy(SEMANTICS_COPY, model.get("comparison_semantics"))),
+                    ("删除语义", _copy(DELETE_COPY, model.get("delete_semantics"))),
+                    ("Diff 状态", _copy(DIFF_STATUS_COPY, model.get("status"))),
                 ]
             ),
         },
@@ -174,13 +247,13 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
             "key": "usage_impact",
             "label": "使用影响",
             "status": _status_from_usage(usage_decision),
-            "summary": f"使用建议：{usage_decision}；原因：{', '.join(str(item) for item in model.get('usage_decision_reasons', []) or []) or '-'}。",
+            "summary": f"使用建议：{usage_text}；原因：{reasons_text}。",
             "facts": _facts(
                 [
-                    ("使用决策", usage_decision),
+                    ("使用决策", usage_text),
                     ("Release note", "已发现" if release_notes else "缺失"),
                     ("阻塞问题", blocking_issues),
-                    ("主动作", _as_mapping(model.get("primary_next_action")).get("label") or "-"),
+                    ("主动作", _action_text(model.get("primary_next_action"))),
                 ]
             ),
         },

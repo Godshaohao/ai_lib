@@ -418,12 +418,12 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(model["base_ref"], "current_effective")
             self.assertEqual(model["primary_next_action"]["kind"], "file_diff_recommended")
             self.assertEqual(model["primary_next_action"]["command_count"], 0)
-            self.assertIn("当前版本相对 current_effective", model["headline"])
+            self.assertIn("当前版本相对 当前有效版本", model["headline"])
             self.assertIn("修改文件 6 个，新增 1 个，删除 0 个", model["headline"])
             self.assertIn("2 个需要优先下钻", model["headline"])
             self.assertIn("5 个按 Summary/Metadata-only 处理", model["headline"])
-            self.assertIn("Base source=current_effective", model["confidence_note"])
-            self.assertIn("comparison_semantics=full", model["confidence_note"])
+            self.assertIn("Base 来源：当前有效版本", model["confidence_note"])
+            self.assertIn("对比口径：全量", model["confidence_note"])
             self.assertIn(model["headline"], html)
             self.assertIn(model["confidence_note"], html)
             self.assertIn("重点变化文件", html)
@@ -481,7 +481,8 @@ class VersionDetailReportTest(unittest.TestCase):
             html = render_version_update_detail_panel(model)
             positions = [html.index(label) for label in labels]
             self.assertEqual(positions, sorted(positions))
-            self.assertIn("VersionReviewModel", html)
+            self.assertIn("更新详情分组", html)
+            self.assertNotIn("VersionReviewModel", html)
             self.assertNotIn("任务清单</h3>", html)
             self.assertNotIn("使用影响（vs", html)
 
@@ -753,7 +754,7 @@ class VersionDetailReportTest(unittest.TestCase):
                     "layout/top.oas",
                 ],
             )
-            self.assertIn("当前版本相对 explicit", model["headline"])
+            self.assertIn("当前版本相对 手动指定 Base", model["headline"])
             self.assertIn("修改文件 7 个，新增 1 个，删除 0 个", model["headline"])
             self.assertIn("2 个需要优先下钻", model["headline"])
             self.assertIn("5 个按 Summary/Metadata-only 处理", model["headline"])
@@ -1011,7 +1012,7 @@ class VersionDetailReportTest(unittest.TestCase):
 
         cases = {
             "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg refresh <LIB>。",
-            "NEEDS_BASE_CONFIRM": "无法确定 base；请先确认 current_effective 或 previous_effective。",
+            "NEEDS_BASE_CONFIRM": "无法确定 Base；请先确认当前有效版本或上一有效版本。",
             "NO_DIFF_SUMMARY": "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
             "CHANGED": "已完成比较，有变化。",
             "SAME": "已完成比较，无变化。",
@@ -1025,8 +1026,8 @@ class VersionDetailReportTest(unittest.TestCase):
                     "target_version": "patch_20260630",
                     "comparison_semantics": "full",
                     "delete_semantics": "real_delete",
-                    "headline": "当前版本相对 current_effective：修改文件 0 个，新增 0 个，删除 0 个；其中 0 个需要优先下钻，0 个按 Summary/Metadata-only 处理。",
-                    "confidence_note": "Base source=current_effective ref=base_20260629 source_detail=current_effective_ref; comparison_semantics=full; delete_semantics=real_delete",
+                    "headline": "当前版本相对 当前有效版本：修改文件 0 个，新增 0 个，删除 0 个；其中 0 个需要优先下钻，0 个按 Summary/Metadata-only 处理。",
+                    "confidence_note": "Base 来源：当前有效版本 / 当前有效版本引用；Base 版本：base_20260629；对比口径：全量；删除口径：缺失文件视为真实删除",
                     "primary_next_action": {
                         "kind": "review_evidence",
                         "label": "Review evidence",

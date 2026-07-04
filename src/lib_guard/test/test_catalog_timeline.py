@@ -1376,7 +1376,8 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn("对比前检查", version_html)
             self.assertIn("原始证据", version_html)
             self.assertLess(version_html.find("<h2>更新详情"), version_html.find("<h2>证据入口"))
-            self.assertIn("VersionReviewModel", version_html)
+            self.assertIn("更新详情分组", version_html)
+            self.assertNotIn("VersionReviewModel", version_html)
             for label in ["对比范围", "包根目录迁移", "文件匹配质量", "内容变化", "使用影响"]:
                 self.assertIn(f"<h3>{label}</h3>", version_html)
             self.assertIn("对比口径", version_html)
