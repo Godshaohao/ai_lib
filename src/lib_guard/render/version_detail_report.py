@@ -934,36 +934,61 @@ def _file_change_rows(model: Mapping[str, Any]) -> list[str]:
     return _file_change_rows_for(model.get("file_changes", []))
 
 
-def _summary_only_rows(model: Mapping[str, Any]) -> list[str]:
-    rows: list[str] = []
-    for item in model.get("summary_only_reviewed", []) or []:
+def _lane_summary_rows(items: list[Any], *, evidence_keys: tuple[str, ...], default_evidence: str) -> list[str]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in items:
         if not isinstance(item, Mapping):
             continue
+        file_type = str(item.get("file_type") or "unknown")
+        group = grouped.setdefault(file_type, {"count": 0, "examples": [], "evidence": []})
+        group["count"] += 1
+        path = str(item.get("path") or "")
+        if path and len(group["examples"]) < 3:
+            group["examples"].append(path)
+        for key in evidence_keys:
+            text = str(item.get(key) or "").strip()
+            if text and text not in group["evidence"] and len(group["evidence"]) < 2:
+                group["evidence"].append(text)
+    rows: list[str] = []
+    for file_type, group in sorted(grouped.items(), key=lambda pair: (-int(pair[1]["count"]), pair[0])):
+        examples = ", ".join(group["examples"]) if group["examples"] else "-"
+        evidence = "；".join(group["evidence"]) if group["evidence"] else default_evidence
         rows.append(
             "<tr>"
-            f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
-            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
-            f"<td>{ui.esc(item.get('summary_evidence') or item.get('metadata_evidence') or item.get('hint') or '-')}</td>"
-            f"<td>{ui.esc(item.get('reason') or '已完成摘要级审查')}</td>"
+            f"<td><code>{ui.esc(file_type)}</code></td>"
+            f"<td>{ui.esc(group['count'])}</td>"
+            f"<td><code>{ui.esc(examples)}</code></td>"
+            f"<td>{ui.esc(evidence)}</td>"
             "</tr>"
         )
     return rows
 
 
-def _metadata_only_rows(model: Mapping[str, Any]) -> list[str]:
-    rows: list[str] = []
-    for item in model.get("metadata_only_reviewed", []) or []:
-        if not isinstance(item, Mapping):
-            continue
-        rows.append(
-            "<tr>"
-            f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
-            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
-            f"<td>{ui.esc(item.get('metadata_evidence') or item.get('hint') or 'hash/size/path/count')}</td>"
-            f"<td>{ui.esc(item.get('reason') or 'metadata-only 审查')}</td>"
-            "</tr>"
-        )
-    return rows
+def _summary_only_summary_rows(model: Mapping[str, Any]) -> list[str]:
+    return _lane_summary_rows(
+        list(model.get("summary_only_reviewed", []) or []),
+        evidence_keys=("summary_evidence", "hint", "reason"),
+        default_evidence="摘要级审查；默认不做文件级深度比较",
+    )
+
+
+def _metadata_only_summary_rows(model: Mapping[str, Any]) -> list[str]:
+    return _lane_summary_rows(
+        list(model.get("metadata_only_reviewed", []) or []),
+        evidence_keys=("metadata_evidence", "hint", "reason"),
+        default_evidence="metadata-only 审查；默认只看元数据/哈希/规模",
+    )
+
+
+def _file_change_artifact_rows(model: Mapping[str, Any]) -> list[str]:
+    file_changes = [item for item in model.get("file_changes", []) or [] if isinstance(item, Mapping)]
+    return [
+        f"<tr><td>完整变化文件</td><td>{ui.esc(len(file_changes))}</td><td>见 file_diff.json；详情页只保留重点变化表。</td></tr>",
+        f"<tr><td>新增</td><td>{ui.esc(model.get('added_files') or 0)}</td><td>按 View 变化矩阵聚合展示。</td></tr>",
+        f"<tr><td>删除</td><td>{ui.esc(model.get('removed_files') or 0)}</td><td>按 View 变化矩阵聚合展示。</td></tr>",
+        f"<tr><td>修改</td><td>{ui.esc(model.get('changed_files') or 0)}</td><td>按 View 变化矩阵聚合展示。</td></tr>",
+        f"<tr><td>P0/P1 重点</td><td>{ui.esc(len(model.get('recommended_file_diff', []) or []))}</td><td>主页面的变化文件明细只展示 P0/P1/Review。</td></tr>",
+    ]
 
 
 def _focus_file_change_rows(model: Mapping[str, Any]) -> list[str]:
@@ -1015,6 +1040,54 @@ def _mapping_rows(value: Mapping[str, Any], *, prefix: str = "") -> list[str]:
     return rows
 
 
+def _compact_json_summary(value: Mapping[str, Any]) -> str:
+    if not value:
+        return "缺失"
+    parts: list[str] = []
+    status = value.get("status")
+    if status:
+        parts.append(f"status={status}")
+    summary = value.get("summary")
+    if isinstance(summary, Mapping):
+        for key, item in summary.items():
+            if isinstance(item, (Mapping, list)):
+                continue
+            parts.append(f"{key}={item}")
+            if len(parts) >= 6:
+                break
+    for key in ["views", "by_type", "by_role", "issues"]:
+        item = value.get(key)
+        if isinstance(item, Mapping):
+            parts.append(f"{key}={len(item)}")
+        elif isinstance(item, list):
+            parts.append(f"{key}={len(item)}")
+    return "；".join(parts[:8]) if parts else "有证据，详见原始 JSON"
+
+
+def _evidence_artifact_links(model: Mapping[str, Any]) -> str:
+    links = _as_mapping(model.get("trace_links"))
+    items = [
+        ("diff_summary.json", common.href(links.get("diff_summary") or ""), "Diff 总指标"),
+        ("file_diff.json", common.href(links.get("file_diff") or ""), "完整变化文件"),
+        ("view_diff.json", common.href(links.get("view_diff") or ""), "View 级变化证据"),
+        ("type_diff.json", common.href(links.get("type_diff") or ""), "原始 file_type 变化证据"),
+        ("release_readiness_diff.json", common.href(links.get("release_readiness_diff") or ""), "Release readiness 变化"),
+        ("release_evidence_diff.json", common.href(links.get("release_evidence_diff") or ""), "Release evidence 变化"),
+        ("diff_issues.json", common.href(links.get("diff_issues") or ""), "Diff issue 明细"),
+    ]
+    return ui.trace_link_list(items)
+
+
+def _evidence_json_summary_rows(model: Mapping[str, Any]) -> list[str]:
+    items = [
+        ("view_diff", _compact_json_summary(_as_mapping(model.get("view_diff")))),
+        ("type_diff", _compact_json_summary(_as_mapping(model.get("type_diff")))),
+        ("release_readiness_diff", _compact_json_summary(_as_mapping(model.get("release_readiness_diff")))),
+        ("release_evidence_diff", _compact_json_summary(_as_mapping(model.get("release_evidence_diff")))),
+    ]
+    return [f"<tr><td><code>{ui.esc(label)}</code></td><td>{ui.esc(summary)}</td></tr>" for label, summary in items]
+
+
 def _diff_issue_rows(model: Mapping[str, Any]) -> list[str]:
     issues = _as_mapping(model.get("diff_issues")).get("issues", [])
     rows: list[str] = []
@@ -1063,7 +1136,7 @@ def _cn_delete_semantics(value: Any) -> str:
 def _version_detail_styles() -> str:
     return """
 <style>
-.version-dashboard{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:start}.version-main,.version-side{display:flex;flex-direction:column;gap:18px}.version-side{position:sticky;top:18px}.version-overview{border:1px solid #d8dee8;border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}.overview-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}.overview-title h2{margin:0 0 4px;font-size:20px}.overview-title p{font-size:13px}.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.overview-cell{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px}.overview-cell b{display:block;font-size:12px;color:#667085}.overview-cell em{display:block;font-style:normal;font-weight:800;color:#172033;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.overview-context{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:12px 14px;margin-top:12px}.overview-context h3{margin:0 0 8px;font-size:13px;color:#344054}.overview-context-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.overview-context-item b{display:block;font-size:11px;color:#667085}.overview-context-item code,.overview-context-item em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.overview-context-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.judgment-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:14px}.judgment-item{border:1px solid #d8dee8;border-left-width:4px;border-radius:10px;background:#fff;padding:10px 12px;min-height:82px}.judgment-item b{display:block;font-size:11px;text-transform:uppercase;color:#667085;margin-bottom:6px}.judgment-item strong{display:block;color:#172033;font-size:15px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.judgment-item span{display:block;color:#667085;font-size:12px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.judgment-ok{border-left-color:#067647}.judgment-warn{border-left-color:#b54708}.judgment-bad{border-left-color:#b42318}.judgment-neutral{border-left-color:#98a2b3}.change-brief{display:grid;grid-template-columns:1.2fr 1fr;gap:10px;margin:12px 0}.change-brief-block{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px}.change-brief-block b{display:block;color:#344054;margin-bottom:5px}.change-brief-block p{margin:0;color:#667085;font-size:13px}.change-brief-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.change-brief-tags code{background:#f2f4f7;border:1px solid #e4e7ec;border-radius:6px;padding:2px 6px}.version-update-lead{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin-bottom:12px}.version-update-lead b{display:block;color:#172033;margin-bottom:5px}.version-update-lead p{margin:0;color:#667085;font-size:13px}.version-review-model{margin-top:12px}.review-group-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:12px 0}.review-group-card{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px;min-width:0}.review-group-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}.review-group-head h3{margin:0;font-size:14px;color:#344054}.review-group-card p{font-size:13px;margin:0 0 10px;color:#667085}.review-group-facts{font-size:12px}.review-group-facts th,.review-group-facts td{padding:7px 8px}.base-trust-context{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px;margin-bottom:12px}.base-trust-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}.base-trust-head b{color:#344054}.base-trust-context p{margin:0 0 10px;color:#667085;font-size:13px}.context-list{display:flex;flex-direction:column;gap:8px}.context-row{border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:9px 10px}.context-row b{display:block;font-size:12px;color:#667085}.context-row code,.context-row em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.section-label{margin:18px 0 8px;font-weight:900;color:#344054}.empty-guidance{border:1px dashed #d3dae6;border-radius:10px;background:#fbfcff;color:#667085;padding:12px 14px;margin:10px 0}.quality-note{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin:12px 0;color:#667085}.quality-note b{color:#344054}.panel-body>h3{font-size:14px;margin:18px 0 8px;color:#344054}.version-scroll-table.focus-change-scroll,.version-scroll-table.change-scroll{height:420px;max-height:420px;overflow:scroll}.version-scroll-table.change-scroll td:nth-child(5),.version-scroll-table.focus-change-scroll td:nth-child(5){min-width:220px}.version-scroll-table.change-scroll table,.version-scroll-table.focus-change-scroll table{min-width:1780px}.version-scroll-table.change-scroll td:nth-child(3) code,.version-scroll-table.focus-change-scroll td:nth-child(3) code,.version-scroll-table.summary-only-scroll td:nth-child(2) code,.version-scroll-table.metadata-only-scroll td:nth-child(2) code{min-width:640px}.version-scroll-table.summary-only-scroll table,.version-scroll-table.metadata-only-scroll table{min-width:980px}.version-scroll-table.corner-detail-scroll{max-height:320px}.version-scroll-table.corner-detail-scroll table{min-width:980px}.version-scroll-table.unknown-detail-scroll{max-height:260px}.version-scroll-table.unknown-detail-scroll table{min-width:860px}.detail-fold.review-fold{border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;margin-top:12px}.detail-fold.review-fold summary{color:#344054}.raw-scan-note{border-left:4px solid #b85c00;background:#fff7e8;border-radius:10px;padding:12px 14px;margin:12px 0;color:#664000}.raw-scan-note b{display:block;color:#4f2f00}.side-panel .panel{box-shadow:none}.evidence-actions{display:grid;gap:8px}.evidence-actions .btn{justify-content:flex-start}.evidence-detail-stack{display:flex;flex-direction:column;gap:14px}.evidence-detail-stack details{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px 12px}.evidence-detail-stack summary{font-weight:800;color:#344054;cursor:pointer}@media(max-width:1100px){.version-dashboard{grid-template-columns:1fr}.version-side{position:static}.overview-grid,.overview-context-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-context{grid-template-columns:1fr}.overview-context-actions{justify-content:flex-start}.judgment-strip{grid-template-columns:1fr 1fr}.change-brief{grid-template-columns:1fr}}@media(max-width:640px){.overview-head{display:block}.overview-grid,.overview-context-grid,.judgment-strip{grid-template-columns:1fr}.version-dashboard{gap:12px}.panel-head{display:block}.panel-actions{margin-top:10px}.version-scroll-table.change-scroll,.version-scroll-table.focus-change-scroll{height:360px}}
+.version-dashboard{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start}.version-main,.version-side{display:flex;flex-direction:column;gap:18px}.version-side{position:sticky;top:18px}.version-overview{border:1px solid #d8dee8;border-radius:14px;background:#fff;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}.overview-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}.overview-title h2{margin:0 0 4px;font-size:20px}.overview-title p{font-size:13px}.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.compact-overview-grid{grid-template-columns:1.25fr 1fr 1fr 1fr 1fr}.overview-cell{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px;min-width:0}.overview-cell b{display:block;font-size:12px;color:#667085}.overview-cell em{display:block;font-style:normal;font-weight:800;color:#172033;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.overview-cell span{display:block;margin-top:3px;color:#667085;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.overview-actions{display:flex;justify-content:flex-end;margin-top:12px}.overview-context{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:12px 14px;margin-top:12px}.overview-context h3{margin:0 0 8px;font-size:13px;color:#344054}.overview-context-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.overview-context-item b{display:block;font-size:11px;color:#667085}.overview-context-item code,.overview-context-item em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.overview-context-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.judgment-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:14px}.judgment-item{border:1px solid #d8dee8;border-left-width:4px;border-radius:10px;background:#fff;padding:10px 12px;min-height:76px}.judgment-item b{display:block;font-size:11px;text-transform:uppercase;color:#667085;margin-bottom:6px}.judgment-item strong{display:block;color:#172033;font-size:15px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.judgment-item span{display:block;color:#667085;font-size:12px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.judgment-ok{border-left-color:#067647}.judgment-warn{border-left-color:#b54708}.judgment-bad{border-left-color:#b42318}.judgment-neutral{border-left-color:#98a2b3}.change-brief{display:grid;grid-template-columns:1.2fr 1fr;gap:10px;margin:12px 0}.change-brief-block{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px}.change-brief-block b{display:block;color:#344054;margin-bottom:5px}.change-brief-block p{margin:0;color:#667085;font-size:13px}.change-brief-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.change-brief-tags code{background:#f2f4f7;border:1px solid #e4e7ec;border-radius:6px;padding:2px 6px}.version-update-lead{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin-bottom:12px}.version-update-lead b{display:block;color:#172033;margin-bottom:5px}.version-update-lead p{margin:0;color:#667085;font-size:13px}.version-review-model{margin-top:12px}.review-group-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:12px 0}.review-group-card{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px;min-width:0}.review-group-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}.review-group-head h3{margin:0;font-size:14px;color:#344054}.review-group-card p{font-size:13px;margin:0 0 10px;color:#667085}.review-group-facts{font-size:12px}.review-group-facts th,.review-group-facts td{padding:7px 8px}.base-trust-context{border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 14px;margin-bottom:12px}.base-trust-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}.base-trust-head b{color:#344054}.base-trust-context p{margin:0 0 10px;color:#667085;font-size:13px}.context-list{display:flex;flex-direction:column;gap:8px}.context-row{border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:9px 10px}.context-row b{display:block;font-size:12px;color:#667085}.context-row code,.context-row em{display:block;font-style:normal;color:#344054;overflow-wrap:anywhere}.section-label{margin:18px 0 8px;font-weight:900;color:#344054}.empty-guidance{border:1px dashed #d3dae6;border-radius:10px;background:#fbfcff;color:#667085;padding:12px 14px;margin:10px 0}.quality-note{border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:12px 14px;margin:12px 0;color:#667085}.quality-note b{color:#344054}.panel-body>h3{font-size:14px;margin:18px 0 8px;color:#344054}.version-scroll-table.focus-change-scroll,.version-scroll-table.change-scroll{height:420px;max-height:420px;overflow:scroll}.version-scroll-table.change-scroll td:nth-child(5),.version-scroll-table.focus-change-scroll td:nth-child(5){min-width:220px}.version-scroll-table.change-scroll table,.version-scroll-table.focus-change-scroll table{min-width:1780px}.version-scroll-table.change-scroll td:nth-child(3) code,.version-scroll-table.focus-change-scroll td:nth-child(3) code,.version-scroll-table.summary-only-scroll td:nth-child(2) code,.version-scroll-table.metadata-only-scroll td:nth-child(2) code{min-width:640px}.version-scroll-table.summary-only-scroll table,.version-scroll-table.metadata-only-scroll table{min-width:980px}.version-scroll-table.corner-detail-scroll{max-height:320px}.version-scroll-table.corner-detail-scroll table{min-width:980px}.version-scroll-table.unknown-detail-scroll{max-height:260px}.version-scroll-table.unknown-detail-scroll table{min-width:860px}.detail-fold.review-fold{border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;margin-top:12px}.detail-fold.review-fold summary{color:#344054}.raw-scan-note{border-left:4px solid #b85c00;background:#fff7e8;border-radius:10px;padding:12px 14px;margin:12px 0;color:#664000}.raw-scan-note b{display:block;color:#4f2f00}.side-panel .panel{box-shadow:none}.evidence-actions{display:grid;gap:8px}.evidence-actions .btn{justify-content:flex-start}.evidence-detail-stack{display:flex;flex-direction:column;gap:14px}.evidence-detail-stack details{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px 12px}.evidence-detail-stack summary{font-weight:800;color:#344054;cursor:pointer}@media(max-width:1200px){.compact-overview-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:1100px){.version-dashboard{grid-template-columns:1fr}.version-side{position:static}.overview-grid,.overview-context-grid,.compact-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-context{grid-template-columns:1fr}.overview-context-actions,.overview-actions{justify-content:flex-start}.judgment-strip{grid-template-columns:1fr 1fr}.change-brief{grid-template-columns:1fr}}@media(max-width:640px){.overview-head{display:block}.overview-grid,.overview-context-grid,.compact-overview-grid,.judgment-strip{grid-template-columns:1fr}.version-dashboard{gap:12px}.panel-head{display:block}.panel-actions{margin-top:10px}.version-scroll-table.change-scroll,.version-scroll-table.focus-change-scroll{height:360px}}
 </style>
 """
 
@@ -1168,55 +1241,13 @@ def _management_gate_user_impact(version: Mapping[str, Any]) -> tuple[str, str, 
     return "未建立", "无管理门禁证据", "INFO"
 
 
-def _version_context_band(
-    out_path: Path,
-    safe_lib: str,
-    lib_id: str,
-    version_id: str,
-    version: Mapping[str, Any],
-    model: Mapping[str, Any],
-    scan_dir: Path | None,
-) -> str:
-    rows = [
-        ("库", lib_id),
-        ("版本", version_id),
-        ("Base", f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"),
-        ("包类型", model.get("package_type") or version.get("package_type") or "-"),
-        ("对比口径", _cn_semantics(model.get("comparison_semantics"))),
-        ("缺失文件口径", _cn_delete_semantics(model.get("delete_semantics"))),
-        ("交付相对路径", catalog._raw_relpath(version.get("raw_path"))),
-    ]
-    items = "".join(
-        f"<div class='overview-context-item'><b>{ui.esc(label)}</b><em>{ui.esc(value)}</em></div>" for label, value in rows
-    )
-    actions = (
-        "<div class='overview-context-actions'>"
-        + ui.button("库工作台", common.href(out_path / "libraries" / safe_lib / "index.html"), "primary", target="_blank")
-        + ui.button("Scan 目录", common.href(scan_dir), "secondary", disabled=not bool(scan_dir), target="_blank")
-        + "</div>"
-    )
-    return (
-        "<div class='overview-context'>"
-        "<div><h3>版本坐标</h3>"
-        f"<div class='overview-context-grid'>{items}</div></div>"
-        f"{actions}</div>"
-    )
-
-
 def _version_overview_panel(
     out_path: Path,
     safe_lib: str,
-    lib_id: str,
-    version_id: str,
     version: Mapping[str, Any],
     model: Mapping[str, Any],
     *,
     scan_dir: Path | None,
-    relation: str,
-    parser_task_count: int,
-    count_only_total: int,
-    file_total: int,
-    unknown_count: int,
     required_view_status: Any,
 ) -> str:
     ip_model = _as_mapping(model.get("ip_user_view_model"))
@@ -1227,30 +1258,38 @@ def _version_overview_panel(
         + _summary_value(model, "removed_files")
         + _summary_value(model, "changed_files")
     )
-    p0p1_count = _lane_count(model, "recommended_file_diff")
     base_status = model.get("base_trust_status") or "WARNING"
     delivery_status = required_view_status or "UNKNOWN"
-    release_note_found = bool(model.get("release_notes"))
-    judgment = _judgment_strip(
+    base_label = "已确认" if str(base_status).upper() == "PASS" else "待确认"
+    delta_text = ip_model.get("delta_summary") or f"{file_change_total} 个变化"
+    top_view_delta = ip_model.get("top_view_delta") or _top_file_type_text(model, limit=2)
+    overview_items = [
+        ("接入判断", review_text, ip_model.get("main_reason") or ui.status_label(decision)),
+        ("对比 Base", base_label, f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"),
+        ("View 变化", delta_text, top_view_delta),
+        ("必需 View", ui.status_label(delivery_status), "覆盖满足不等于全文 Parser 通过"),
+        ("证据等级", ip_model.get("evidence_summary") or "-", "轻量证据不自动代表不完整"),
+    ]
+    overview_cells = "".join(
+        "<div class='overview-cell'><b>{label}</b><em title='{value}'>{value}</em><span title='{hint}'>{hint}</span></div>".format(
+            label=ui.esc(label),
+            value=ui.esc(value),
+            hint=ui.esc(hint),
+        )
+        for label, value, hint in overview_items
+    )
+    actions = ui.action_strip(
         [
-            ("接入判断", review_text, ip_model.get("main_reason") or ui.status_label(decision), decision),
-            ("Base", "已确认" if str(base_status).upper() == "PASS" else "待确认", f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}", base_status),
-            ("必需 View 覆盖", ui.status_label(delivery_status), "覆盖满足不等于全文 Parser 通过", delivery_status),
-            ("上一版对比", ip_model.get("delta_summary") or f"{file_change_total} 个变化", ip_model.get("top_view_delta") or _top_file_type_text(model, limit=2), "WARNING" if file_change_total else "PASS"),
-            ("证据等级", ip_model.get("evidence_summary") or "-", "轻量证据不自动代表不完整", "INFO"),
-            ("正式放行", ip_model.get("release_label") or ("已发现 RN" if release_note_found else "RN 缺失"), ip_model.get("release_reason") or "release note / gate 证据", ip_model.get("release_decision") or ("PASS" if release_note_found else "WARNING")),
+            ui.button("库工作台", common.href(out_path / "libraries" / safe_lib / "index.html"), "primary", target="_blank"),
+            ui.button("Scan 目录", common.href(scan_dir), "secondary", disabled=not bool(scan_dir), target="_blank"),
         ]
     )
     return (
         "<section class='version-overview'>"
         "<div class='overview-head'>"
-        f"<div class='overview-title'><h2>IP 版本更新摘要</h2><p>先看上一有效版对比、View Delta、证据等级和使用场景影响；管理/Debug 证据默认下沉。</p></div>{ui.badge(decision, review_text)}</div>"
-        "<div class='overview-grid'>"
-        f"<div class='overview-cell'><b>库</b><em title='{ui.esc(lib_id)}'>{ui.esc(lib_id)}</em></div>"
-        f"<div class='overview-cell'><b>版本</b><em title='{ui.esc(version_id)}'>{ui.esc(version_id)}</em></div>"
-        f"<div class='overview-cell'><b>Base → Target</b><em title='{ui.esc(model.get('base_version') or '-')}'>{ui.esc(model.get('base_ref') or '-')} → 当前版本</em></div>"
-        f"<div class='overview-cell'><b>包类型</b><em>{ui.esc(model.get('package_type') or '-')}</em></div>"
-        f"</div>{_version_context_band(out_path, safe_lib, lib_id, version_id, version, model, scan_dir)}{judgment}</section>"
+        f"<div class='overview-title'><h2>版本使用结论</h2><p>面向 IP 使用者：先判断能否接入，再看 View 变化矩阵；管理审计和证据入口默认折叠。</p></div>{ui.badge(decision, review_text)}</div>"
+        f"<div class='overview-grid compact-overview-grid'>{overview_cells}</div>"
+        f"<div class='overview-actions'>{actions}</div></section>"
     )
 
 
@@ -1260,12 +1299,12 @@ def _review_gate_summary_panel(version: Mapping[str, Any]) -> str:
     blocking = len((gate or {}).get("blocking_items", []) or [])
     attention = len((gate or {}).get("attention_items", []) or [])
     return ui.collapsible_panel(
-        "正式放行 / 管理门禁",
-        "面向 release owner 的 gate 状态；默认折叠，不作为 IP 使用者主线。",
+        "正式放行管理",
+        "面向发布负责人的 gate 状态；默认折叠，不作为 IP 使用者主线。",
         ui.metric_grid(
             [
                 ("使用影响", impact, detail, status),
-                ("管理阻塞", blocking, "需要 release owner 关闭 / 接受 / 豁免", "BLOCKED" if blocking else "PASS"),
+                ("管理阻塞", blocking, "需要发布负责人关闭 / 接受 / 豁免", "BLOCKED" if blocking else "PASS"),
                 ("管理关注", attention, "建议补充证据", "WARNING" if attention else "PASS"),
             ]
         ),
@@ -1460,9 +1499,9 @@ def _view_coverage_panel(
             ("人工审查", str(manual_count), "flow_config / tech_config", "WARNING" if manual_count else "PASS"),
         ]
     )
-    return ui.panel(
-        "必需 View 覆盖",
-        "按 IP 使用需要检查 LEF、Liberty、Verilog、GDS、SPEF、DB、SDC、UPF 等 view 是否齐全。",
+    return ui.collapsible_panel(
+        "必需 View 覆盖证据",
+        "Raw Scan 的 view 覆盖证据；主判断已汇总到顶部结论和 View 变化矩阵。",
         coverage_judgment
         + catalog._scroll_table(
             ["View / Scope", "要求", "文件数", "状态", "Parser", "校验级别", "代表路径 / 说明"],
@@ -1471,6 +1510,7 @@ def _view_coverage_panel(
             "view-coverage-scroll",
         )
         + _unknown_file_breakdown_html(inventory),
+        open=False,
     )
 
 
@@ -1511,7 +1551,7 @@ def _parser_panel(parser_manifest: Mapping[str, Any], parser_results: Mapping[st
     if not rows:
         empty = "<div class='empty-guidance'><b>当前 Scan 没有生成可展示的 Parser 结果</b>常见原因：本次 raw 包只包含文档/脚本，或相关文件类型没有 parser 任务。</div>"
     return ui.collapsible_panel(
-        "Parser 证据",
+        "解析证据",
         "按文件类型聚合 Parser 结果；代表对象和来源文件作为追溯证据折叠展示。",
         empty
         + ui.faceted_table(
@@ -1527,16 +1567,12 @@ def _parser_panel(parser_manifest: Mapping[str, Any], parser_results: Mapping[st
 
 def _quality_panel(
     parser_task_count: int,
-    count_only_total: int,
     file_total: int,
-    corner_summary: Mapping[str, Any],
     model: Mapping[str, Any],
     version: Mapping[str, Any],
     scan_dir: Path | None,
 ) -> str:
-    evidence_label, evidence_detail, evidence_status = _evidence_judgment(model)
-    scan_status = "PASS" if file_total else "WARNING"
-    parser_status = "PASS" if parser_task_count else "WARNING"
+    evidence_label, evidence_detail, _ = _evidence_judgment(model)
     diff_status = model.get("status") or "UNKNOWN"
     rn_count = len(model.get("release_notes", []) or [])
     scan_id = (version.get("scan") or {}).get("scan_id") or version.get("scan_id") or "-"
@@ -1544,106 +1580,94 @@ def _quality_panel(
         ("scan_id", scan_id),
         ("Scan 目录", scan_dir or "-"),
         ("绝对 Raw 路径", version.get("raw_path") or "-"),
+        ("文件清单", f"{file_total} files"),
+        ("Parser 任务", f"{parser_task_count} tasks"),
+        ("Diff 状态", ui.status_label(diff_status)),
+        ("发布说明", f"{rn_count} 个"),
+        ("证据分层", f"{evidence_label} - {evidence_detail}"),
     ]
     evidence_context = "<div class='context-list'>" + "".join(
         f"<div class='context-row'><b>{ui.esc(label)}</b><em>{ui.esc(value)}</em></div>" for label, value in evidence_rows
     ) + "</div>"
+    trace_links = ui.trace_link_list(
+        [
+            ("scan_dir", common.href(scan_dir), "Raw Scan 输出目录"),
+            ("file_inventory.json", common.href(scan_dir / "file_inventory.json") if scan_dir else "", "文件清单来源"),
+            ("parser_manifest.json", common.href(scan_dir / "parser_manifest.json") if scan_dir else "", "Parser 任务清单"),
+            ("parser_results.json", common.href(scan_dir / "parser_results.json") if scan_dir else "", "Parser 结果数据"),
+        ]
+    )
     return ui.collapsible_panel(
-        "证据入口 / Debug",
-        "追溯 scan、parser、diff 和原始路径；这些是证据，不作为 IP 使用者主屏结论。",
-        _judgment_strip(
-            [
-                ("Raw Scan", "有清单" if file_total else "缺清单", f"{file_total} files", scan_status),
-                ("Parser", "有内容级 Parser" if parser_task_count else "无 Parser", f"{parser_task_count} tasks", parser_status),
-                ("Diff", ui.status_label(diff_status), "当前版本更新详情", diff_status),
-                ("Release note", "已发现" if rn_count else "缺失", f"{rn_count} 个 release note", "PASS" if rn_count else "WARNING"),
-                ("证据分层", evidence_label, evidence_detail, evidence_status),
-            ]
-        )
-        + evidence_context,
+        "证据入口 / 调试",
+        "追溯 scan、parser、diff 和原始路径；这些是证据入口，不作为 IP 使用者主屏结论。",
+        trace_links + evidence_context,
         open=False,
     )
 
 
 def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
-    empty_next = "暂无文件级 diff 明细。请先运行 lg cmp 或 lg lib-diff 生成当前库对比结果。"
     body = (
         "<div class='evidence-detail-stack'>"
+        "<details><summary>原始 JSON 链接</summary>"
+        "<div class='quality-note'><b>减噪策略</b> 主页面只保留摘要和入口；完整 JSON 不再内嵌，避免浏览器搜索被 debug 数据污染。</div>"
+        + _evidence_artifact_links(model)
+        + "</details>"
         "<details><summary>完整 Diff 指标</summary>"
         + catalog._scroll_table(["指标", "数值"], _metric_rows(model), "暂无自动 Diff 结果；下一步运行 lg cmp 或 lg lib-diff。", "metric-scroll")
         + "</details>"
-        "<details><summary>完整变化文件</summary>"
+        "<details><summary>完整变化文件入口</summary>"
+        "<div class='quality-note'><b>减噪策略</b> 完整逐文件变化不再内嵌到详情页；请打开 file_diff.json 查看全量清单。主页面仅保留重点变化文件。</div>"
         + catalog._scroll_table(
-            ["变化", "类型", "路径", "审查级别", "匹配状态", "Base 候选", "Target 文件", "建议"],
-            _file_change_rows(model),
-            empty_next,
-            "change-scroll",
+            ["范围", "数量", "说明"],
+            _file_change_artifact_rows(model),
+            "暂无文件级 diff 摘要。请先运行 lg cmp 或 lg lib-diff。",
+            "change-summary-scroll",
         )
         + "</details>"
-        "<details><summary>Summary-only / Metadata-only 明细</summary>"
-        + "<h3>Summary-only Reviewed</h3>"
+        "<details><summary>Summary-only / Metadata-only 摘要</summary>"
+        + "<div class='quality-note'><b>证据分层</b> Summary-only / Metadata-only 是正常证据策略，不自动代表不完整；这里按类型聚合，完整文件列表见 file_diff.json。</div>"
+        + "<h3>Summary-only 按类型汇总</h3>"
         + catalog._scroll_table(
-            ["file_type", "path", "summary evidence", "reason"],
-            _summary_only_rows(model),
+            ["文件类型", "数量", "代表文件", "证据"],
+            _summary_only_summary_rows(model),
             "暂无 summary-only 审查项。",
             "summary-only-scroll",
         )
-        + "<h3>Metadata-only Reviewed</h3>"
+        + "<h3>Metadata-only 按类型汇总</h3>"
         + catalog._scroll_table(
-            ["file_type", "path", "metadata evidence", "reason"],
-            _metadata_only_rows(model),
+            ["文件类型", "数量", "代表文件", "证据"],
+            _metadata_only_summary_rows(model),
             "暂无 metadata-only 审查项。",
             "metadata-only-scroll",
         )
         + "</details>"
-        "<details><summary>Release note 与结构变化证据</summary>"
-        + "<h3>Release note</h3>"
+        "<details><summary>发布说明与结构变化证据</summary>"
+        + "<h3>发布说明</h3>"
         + ui.faceted_table(
             "release-note-table",
-            ["Release note", "摘要"],
+            ["发布说明", "摘要"],
             _release_note_rows(model),
             "暂无 release_note / changelog 摘要",
             "搜索 release note / changelog",
             [(0, "文件")],
         )
-        + "<h3>View Changes</h3>"
+        + "<h3>结构变化摘要</h3>"
         + catalog._scroll_table(
-            ["字段", "值"],
-            _mapping_rows(_as_mapping(model.get("view_diff"))),
-            "暂无 view_diff.json 变化证据。",
-            "view-change-scroll",
-        )
-        + "<h3>Type Changes</h3>"
-        + catalog._scroll_table(
-            ["字段", "值"],
-            _mapping_rows(_as_mapping(model.get("type_diff"))),
-            "暂无 type_diff.json 变化证据。",
-            "type-change-scroll",
-        )
-        + "<h3>Release Readiness Changes</h3>"
-        + catalog._scroll_table(
-            ["字段", "值"],
-            _mapping_rows(_as_mapping(model.get("release_readiness_diff"))),
-            "暂无 release_readiness_diff.json 变化证据。",
-            "release-readiness-change-scroll",
-        )
-        + "<h3>Release Evidence Changes</h3>"
-        + catalog._scroll_table(
-            ["字段", "值"],
-            _mapping_rows(_as_mapping(model.get("release_evidence_diff"))),
-            "暂无 release_evidence_diff.json 变化证据。",
-            "release-evidence-change-scroll",
+            ["证据", "摘要"],
+            _evidence_json_summary_rows(model),
+            "暂无结构变化证据。",
+            "evidence-json-summary-scroll",
         )
         + "</details>"
-        "<details><summary>Diff Issues / 建议动作</summary>"
-        + "<h3>Diff Issues</h3>"
+        "<details><summary>Diff 问题 / 建议动作</summary>"
+        + "<h3>Diff 问题</h3>"
         + ui.faceted_table(
             "diff-issue-table",
-            ["Severity", "Category", "Issue"],
+            ["级别", "类别", "问题"],
             _diff_issue_rows(model),
             "暂无 diff_issues.json 问题。",
             "搜索 issue / category / severity",
-            [(0, "Severity"), (1, "Category")],
+            [(0, "级别"), (1, "类别")],
         )
         + "<h3>建议动作</h3>"
         + ui.faceted_table(
@@ -1658,7 +1682,7 @@ def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
     )
     return ui.collapsible_panel(
         "审计证据",
-        "完整指标、完整变化清单、summary/metadata-only 明细、release 证据和 diff issues 默认折叠，供 release owner 追溯。",
+        "完整指标、完整变化文件入口、summary/metadata-only 摘要、发布证据和 diff 问题默认折叠，供发布负责人追溯。",
         body,
         open=False,
     )
@@ -1671,7 +1695,8 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
     ip_model = _as_mapping(model.get("ip_user_view_model")) or _as_mapping(review_model.get("ip_user_view"))
     lead = (
         "<div class='version-update-lead'>"
-        f"<b>{ui.esc(model.get('headline') or '-')}</b>"
+        f"<b>本次变化一句话</b>"
+        f"<p>{ui.esc(model.get('headline') or '-')}</p>"
         f"<p>{ui.esc(model.get('confidence_note') or '-')}</p>"
         "</div>"
     )
@@ -1684,18 +1709,18 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
     focus_changes = (
         "<details class='detail-fold review-fold'>"
         "<summary>变化文件明细（按需展开）</summary>"
-        "<div class='quality-note'><b>显示范围</b> 默认不把文件清单作为 IP 使用者主线；这里仅显示 P0/P1/Review 重点变化，最多 120 行。完整变化文件在审计证据中查看。</div>"
+        "<div class='quality-note'><b>显示范围</b> 默认不把文件清单作为 IP 使用者主线；这里仅显示 P0/P1/Review 重点变化，最多 120 行。完整变化文件请打开审计证据中的 file_diff.json。</div>"
         + catalog._scroll_table(
             ["变化", "类型", "路径", "审查级别", "匹配状态", "Base 候选", "Target 文件", "建议"],
             _focus_file_change_rows(model),
-            "暂无重点变化文件；可展开完整变化文件查看。",
+            "暂无重点变化文件；可打开 file_diff.json 查看全量变化。",
             "focus-change-scroll",
         )
         + "</details>"
     )
     return ui.panel(
-        f"上一有效版更新摘要（vs {_cn_base_ref(base_ref)} / {base_version}）",
-        "默认面向 IP 使用者：先看上一版对比、view delta、证据等级和使用场景影响；管理和 debug 证据默认折叠。",
+        f"View 变化矩阵（vs {_cn_base_ref(base_ref)} / {base_version}）",
+        "默认面向 IP 使用者：按 view 聚合新增、删除、修改和证据等级；管理和调试证据默认折叠。",
         lead + render_ip_user_view(ip_model) + advanced_review + focus_changes,
     )
 
@@ -1815,7 +1840,6 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
     safe_ver = common.safe(version_id)
     page = out_path / "libraries" / safe_lib / "versions" / safe_ver / "index.html"
     tags = catalog._version_tags(version)
-    relation = common.relation_status(version)
     model = build_version_update_detail_model(out_path, lib, version)
     md_path = page.parent / "current_lib_diff.md"
     model["markdown_export_path"] = str(md_path)
@@ -1834,23 +1858,15 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
     parser_task_count = _as_int(scan_evidence.get("parser_task_count"))
     corner_summary = scan_evidence.get("corner_summary") or inventory.get("corner_filename_summary") or {}
     file_total = _as_int(scan_evidence.get("file_total")) or sum(int(v or 0) for v in counts.values())
-    unknown_count = _as_int(scan_evidence.get("unknown_count")) or int(counts.get("unknown", 0) or 0)
     required_view_status = scan_evidence.get("required_view_status") or release_readiness.get("required_view_status") or release_readiness.get("bundle_status")
     body = (
         _version_detail_styles()
         + _version_overview_panel(
             out_path,
             safe_lib,
-            lib_id,
-            version_id,
             version,
             model,
             scan_dir=scan_dir,
-            relation=relation,
-            parser_task_count=parser_task_count,
-            count_only_total=count_only_total,
-            file_total=file_total,
-            unknown_count=unknown_count,
             required_view_status=required_view_status,
         )
         + "<div class='version-dashboard'><main class='version-main'>"
@@ -1861,43 +1877,18 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
         + _parser_panel(parser_manifest, parser_results)
         + _audit_evidence_panel(model)
         + "</main><aside class='version-side'>"
-        + _quality_panel(parser_task_count, count_only_total, file_total, corner_summary, model, version, scan_dir)
+        + _quality_panel(parser_task_count, file_total, model, version, scan_dir)
         + _review_gate_summary_panel(version)
         + "</aside></div>"
-        + ui.collapsible_panel(
-            "原始证据",
-            "原始 JSON、Scan 目录和 Markdown 导出默认折叠，便于人工追溯。",
-            ui.trace_link_list(
-                [
-                    ("scan_dir", common.href(scan_dir), "Raw Scan 输出目录"),
-                    ("file_inventory.json", common.href(scan_dir / "file_inventory.json") if scan_dir else "", "本页文件清单来源"),
-                    ("parser_manifest.json", common.href(scan_dir / "parser_manifest.json") if scan_dir else "", "Parser 任务清单"),
-                    ("parser_results.json", common.href(scan_dir / "parser_results.json") if scan_dir else "", "Parser 结果数据"),
-                    ("current_lib_diff.md", common.href(md_path) if md_path.exists() else "", "显式导出时由 version_update_detail_model 生成"),
-                ]
-            ),
-            open=False,
-        )
     )
     ip_model = _as_mapping(model.get("ip_user_view_model"))
     usage_decision = str(ip_model.get("ip_use_decision") or _usage_decision(model, version))
-    rail = ui.status_rail(
-        [
-            ("接入判断", ip_model.get("ip_use_label") or usage_decision, ip_model.get("main_reason") or "IP 使用者主状态"),
-            ("Base", model.get("base_trust_status") or "WARNING", f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"),
-            ("必需 View", required_view_status or "UNKNOWN", "覆盖满足不等于全文 Parser"),
-            ("上一版对比", model.get("status") or "COMPARE_PENDING", ip_model.get("delta_summary") or "当前版本对比状态"),
-            ("证据等级", ip_model.get("evidence_summary") or "-", "轻量证据不自动代表不完整"),
-            ("正式放行", ip_model.get("release_label") or "未建立", ip_model.get("release_reason") or "管理门禁状态"),
-        ]
-    )
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / {version_id}",
         "版本审查",
-        "面向 IP 使用者展示上一有效版对比、View Delta、证据等级和使用场景影响。",
+        "面向 IP 使用者展示上一有效版对比、View 变化、证据等级和使用场景影响。",
         catalog_browser_styles() + body,
         decision=usage_decision,
-        rail=rail,
         nav="<a href='../../../index.html'>目录</a><a class='active' href='#'>版本详情</a><a href='../index.html'>库工作台</a>",
         meta=ui.compact_meta([("库", lib_id), ("版本", version_id), ("标签", ", ".join(sorted(tags)))]),
     )

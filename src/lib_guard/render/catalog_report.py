@@ -1270,10 +1270,10 @@ def _parser_detail_html(data: Mapping[str, Any]) -> str:
             "</tr>"
         )
     if not rows:
-        return "<details class='detail-fold'><summary>Parser Details</summary><div class='muted-box'>No extracted detail examples</div></details>"
+        return "<details class='detail-fold'><summary>解析对象明细</summary><div class='muted-box'>暂无可展示的解析对象示例</div></details>"
     return (
-        "<details class='detail-fold parser-detail'><summary>Parser Details</summary>"
-        + ui.table(["对象类型", "代表对象", "来源文件"], rows, "No extracted detail examples")
+        "<details class='detail-fold parser-detail'><summary>解析对象明细</summary>"
+        + ui.table(["对象类型", "代表对象", "来源文件"], rows, "暂无可展示的解析对象示例")
         + "</details>"
     )
 
@@ -1415,12 +1415,12 @@ def _version_parser_aggregate_rows(parser_manifest: Mapping[str, Any], parser_re
                 + "</div>"
             )
         detail_html = (
-            "<details class='detail-fold parser-detail'><summary>Parser Details / 代表对象</summary>"
-            + ui.table(["对象类型", "代表对象", "来源文件"], detail_rows, "No extracted objects")
+            "<details class='detail-fold parser-detail'><summary>解析对象明细</summary>"
+            + ui.table(["对象类型", "代表对象", "来源文件"], detail_rows, "暂无可展示的解析对象")
             + "</details>"
         )
         files_html = (
-            "<details class='detail-fold'><summary>Parsed Files</summary>"
+            "<details class='detail-fold'><summary>已解析文件</summary>"
             + "<div class='muted-box'>"
             + "<br>".join(f"<code>{ui.esc(path)}</code>" for path in group["files"][:20])
             + ("<br><span class='muted'>...</span>" if len(group["files"]) > 20 else "")

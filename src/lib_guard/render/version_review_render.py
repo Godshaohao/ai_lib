@@ -70,14 +70,21 @@ def _view_delta_rows(ip_model: Mapping[str, Any]) -> list[str]:
         if not int(item.get("delta_total") or 0) and not int(item.get("current_count") or 0):
             continue
         delta = f"+{item.get('added') or 0} / -{item.get('removed') or 0} / ~{item.get('changed') or 0}"
+        raw_types = str(item.get("raw_types") or "-")
+        raw_delta_types = str(item.get("raw_delta_types") or "-")
+        if raw_delta_types not in {"-", raw_types}:
+            raw_text = f"当前 {raw_types}; 更新 {raw_delta_types}"
+        else:
+            raw_text = raw_types
         rows.append(
             "<tr>"
-            f"<td><b>{ui.esc(item.get('view') or item.get('file_type') or '-')}</b><br><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
+            f"<td><b>{ui.esc(item.get('view') or item.get('view_type') or '-')}</b><br><code>{ui.esc(item.get('view_type') or item.get('file_type') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('current_count') or 0)}</td>"
             f"<td><code>{ui.esc(delta)}</code></td>"
             f"<td>{ui.esc(item.get('evidence_level') or '-')}</td>"
+            f"<td><code>{ui.esc(raw_text)}</code></td>"
             f"<td>{ui.esc(item.get('usage_area') or '-')}</td>"
-            f"<td>{ui.badge(item.get('status') or 'INFO')}</td>"
+            f"<td>{ui.badge(item.get('status') or 'INFO', item.get('status_label') or item.get('status') or 'INFO')}</td>"
             "</tr>"
         )
     return rows
@@ -118,22 +125,12 @@ def _must_check_list(ip_model: Mapping[str, Any]) -> str:
 def render_ip_user_view(ip_model: Mapping[str, Any]) -> str:
     if not ip_model:
         return "<div class='muted-box'>暂无 IP 使用者视图模型。</div>"
-    strip = (
-        "<div class='judgment-strip'>"
-        + _summary_tile("接入判断", ip_model.get("ip_use_label") or "待判断", ip_model.get("main_reason") or "-", ip_model.get("ip_use_status") or ip_model.get("ip_use_decision"))
-        + _summary_tile("Base", ip_model.get("base_label") or "-", ip_model.get("comparison_label") or "-", "PASS")
-        + _summary_tile("上一版对比", ip_model.get("delta_summary") or "-", ip_model.get("top_view_delta") or "-", ip_model.get("ip_use_status") or "INFO")
-        + _summary_tile("证据等级", ip_model.get("evidence_summary") or "-", "轻量证据是正常策略，不自动代表不完整", "INFO")
-        + _summary_tile("正式放行", ip_model.get("release_label") or "-", ip_model.get("release_reason") or "-", ip_model.get("release_decision") or "INFO")
-        + "</div>"
-    )
     return (
         "<div class='ip-user-view'>"
-        "<div class='quality-note'><b>IP 使用者默认视图</b> 本屏只回答上一有效版到当前版的有效更新、view 影响和证据等级；管理门禁、包根匹配算法、原始 JSON 默认下沉。</div>"
-        + strip
-        + "<h3>View Delta Matrix（相对上一有效版）</h3>"
+        "<div class='quality-note'><b>IP 使用者默认视图</b> 主表只回答上一有效版到当前版的 View 变化、证据等级和使用场景影响；管理门禁、包根匹配算法、原始 JSON 默认下沉。</div>"
+        "<h3>各 View 影响</h3>"
         + _simple_table(
-            ["View", "当前数量", "新增/删除/修改", "证据等级", "使用场景", "状态"],
+            ["View 类别", "当前数量", "新增/删除/修改", "证据等级", "原始类型", "使用场景", "状态"],
             _view_delta_rows(ip_model),
             "暂无 view delta。",
         )
@@ -187,7 +184,7 @@ def render_version_review_groups(review_model: Mapping[str, Any]) -> str:
         cards.append("<div class='muted-box'>暂无更新详情分组。</div>")
     return (
         "<div class='version-review-model'>"
-        "<div class='quality-note'><b>高级审查字段</b> 保留对比范围、包根匹配、文件匹配质量、内容变化和使用影响，默认作为证据/管理层信息，不抢占 IP 使用者主线。</div>"
+        "<div class='quality-note'><b>高级审查字段</b> 保留对比范围、包根匹配、文件匹配质量、内容变化和原始审计判断，默认作为证据/管理层信息，不抢占 IP 使用者主线。</div>"
         "<div class='review-group-grid'>"
         + "".join(cards)
         + "</div></div>"
