@@ -17,6 +17,7 @@ from lib_guard.project_config import (
     DEFAULT_PARSE_JOBS,
     DEFAULT_SCAN_MODE,
     PROJECT_CONFIG_DIR,
+    RELEASE_POLICY_FILE,
     SCAN_STRATEGY_CONFIG_KEYS,
     SUMMARY_ONLY_TYPES,
     project_policy_path,
@@ -101,8 +102,9 @@ def _find_config(cwd: str | Path, explicit: str | Path | None = None) -> Path:
 def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[str, str]:
     path = _find_config(cwd, explicit)
     cfg = _parse_config(path)
-    project_root = os.environ.get("LIB_GUARD_PROJECT_ROOT")
-    default_policy = project_policy_path(project_root, CATALOG_POLICY_FILE)
+    project_root = os.environ.get("LIB_GUARD_PROJECT_ROOT") or Path(__file__).resolve().parents[2]
+    default_catalog_policy = project_policy_path(project_root, CATALOG_POLICY_FILE)
+    default_release_policy = project_policy_path(project_root, RELEASE_POLICY_FILE)
     defaults = workspace_defaults(path.parent, library_type=cfg.get("library_type", DEFAULT_LIBRARY_TYPE))
     derived_config_keys = {"config_dir", "library_list", "library_registry", "library_candidates", "library_catalog", "library_versions", "versions"}
     for key, value in defaults.items():
@@ -121,8 +123,10 @@ def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[st
         library_catalog = Path(cfg["library_catalog"])
         if library_catalog.exists():
             cfg["catalog_policy"] = str(library_catalog)
-        elif default_policy and default_policy.exists():
-            cfg["catalog_policy"] = str(default_policy)
+        elif default_catalog_policy and default_catalog_policy.exists():
+            cfg["catalog_policy"] = str(default_catalog_policy)
+    if "release_policy" not in cfg and default_release_policy and default_release_policy.exists():
+        cfg["release_policy"] = str(default_release_policy)
     cfg.setdefault("mode", DEFAULT_SCAN_MODE)
     cfg.setdefault("parse_jobs", DEFAULT_PARSE_JOBS)
     return cfg
@@ -1300,6 +1304,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             command.append("--manual-large-file-opt-in")
         return [command]
     if args.short_command == "release":
+        if args.force and not args.force_reason:
+            raise ValueError("lg rel --force requires --force-reason")
         commands: list[list[str]] = []
         check_cmd = [
             "catalog",
@@ -1310,6 +1316,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             args.library,
             "--version",
             args.version,
+            "--policy",
+            cfg["release_policy"],
             "--alias",
             args.alias,
         ]
@@ -1330,6 +1338,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             args.version,
             "--release-root",
             cfg["release_root"],
+            "--policy",
+            cfg["release_policy"],
             "--alias",
             args.alias,
             "--link-mode",

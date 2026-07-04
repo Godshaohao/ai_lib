@@ -80,6 +80,8 @@ class ReleaseExplainTest(unittest.TestCase):
             self.assertEqual(len(commands), 1)
             self.assertEqual(commands[0][:2], ["catalog", "release-check"])
             self.assertIn("--explain", commands[0])
+            self.assertIn("--policy", commands[0])
+            self.assertTrue(commands[0][commands[0].index("--policy") + 1].endswith("configs/release_policy.json"))
 
     def test_catalog_release_check_parser_accepts_explain(self) -> None:
         from lib_guard.cli import build_parser
