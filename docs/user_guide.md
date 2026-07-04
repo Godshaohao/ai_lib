@@ -65,11 +65,11 @@ $WORK/catalog/html/index.html
 ## 3. 人工确认版本关系
 
 如果 catalog 自动推断的 stage、base、package type、update scope 不可信，
-使用 `override` 写入人工确认。
+使用 `library override` 写入人工确认。
 
 ```csh
-$PROJ/scripts/lg.csh override <LIBRARY> <VERSION> --stage stable --base <BASE_VERSION>
-$PROJ/scripts/lg.csh override <LIBRARY> <VERSION> --package-type PARTIAL_UPDATE --update-scope lef,lib
+$PROJ/scripts/lg.csh library override <LIBRARY> <VERSION> --stage stable --base <BASE_VERSION>
+$PROJ/scripts/lg.csh library override <LIBRARY> <VERSION> --package-type PARTIAL_UPDATE --update-scope lef,lib
 ```
 
 这一步会写入 catalog 的 manual override 状态。不要直接手改生成后的
@@ -79,7 +79,7 @@ $PROJ/scripts/lg.csh override <LIBRARY> <VERSION> --package-type PARTIAL_UPDATE 
 
 ```csh
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
-$PROJ/scripts/lg.csh refresh <LIBRARY>
+$PROJ/scripts/lg.csh cat <LIBRARY> --update-detail
 # 手动 compare/debug 时再显式指定 base 或 adjacent/cumulative
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
 ```
@@ -89,7 +89,7 @@ $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-mis
 - `scan`：只有一种用户态动作。扫描深度通过策略配置，不再选择多个 mode。
 - 常用策略：`--parse-file-types lef,cdl`、`--parse-exclude-file-types verilog,liberty,spef`、
   `--hash-policy smart/full`、`--parse-jobs 8`。
-- `refresh`：刷新 Version Review 的日常更新详情，默认先使用 `current_effective`，
+- `cat <LIBRARY> --update-detail`：刷新 Version Review 的日常更新详情，默认先使用 `current_effective`，
   没有当前有效库时再使用 `previous_effective`。
 - `cmp`：手动 structural compare/debug，适合显式指定 base 或 adjacent/cumulative。
 - `--scan-if-missing`：只补缺少或已过期的 scan evidence，适合手动对比。
@@ -114,17 +114,17 @@ Version Review 中的 File Diff lane 表示审查方式：
   等 metadata evidence 审查，不是漏跑。
 
 `--force-large` 只用于专家显式手动 `fd`。它表示人工接受大文件、集合文件或二进制
-metadata lane 的下钻成本，不会影响 `refresh`、`cmp` 或自动 pairwise 推荐。
+metadata lane 的下钻成本，不会影响 `cat --update-detail`、`cmp` 或自动 pairwise 推荐。
 
 ## 6. Review Gate 人工决策
 
 Review Gate 只记录真正会阻塞 release 的问题和 owner 决策。
 
 ```csh
-$PROJ/scripts/lg.csh rv-check  <LIBRARY> <VERSION> --gate current
-$PROJ/scripts/lg.csh rv-list   <LIBRARY> <VERSION> --gate current
-$PROJ/scripts/lg.csh rv-accept <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
-$PROJ/scripts/lg.csh rv-waive  <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
+$PROJ/scripts/lg.csh rv check  <LIBRARY> <VERSION> --gate current
+$PROJ/scripts/lg.csh rv list   <LIBRARY> <VERSION> --gate current
+$PROJ/scripts/lg.csh rv accept <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
+$PROJ/scripts/lg.csh rv waive  <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
 ```
 
 `current` 默认要求 blocking item 关闭，但不要求所有 File Diff recommendation

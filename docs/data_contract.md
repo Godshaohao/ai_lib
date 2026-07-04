@@ -75,8 +75,8 @@ Review to render “更新详情”. HTML must be generated from this model dire
 `current_lib_diff.md` is only an optional export from the same model and is not a
 page input.
 
-The normal Version Review update detail is populated by `refresh`. Base
-selection defaults to `current_effective`, then `previous_effective`; manual
+The normal Version Review update detail is populated by `cat --update-detail`.
+Base selection defaults to `current_effective`, then `previous_effective`; manual
 `cmp` remains the compare/debug path for explicit base, adjacent, or cumulative
 investigation. Focused `fd` output is a manual drill-down artifact, not the
 primary model input.

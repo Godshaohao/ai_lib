@@ -10,8 +10,8 @@ release evidence 和 HTML 页面，但以下判断必须由人确认。
 | 阶段 | 人工确认内容 | 命令/文件 |
 | --- | --- | --- |
 | Library Map | 哪些候选目录是真正的库，vendor/category/library 如何归属 | `lg.csh library add` 或 `lg.csh library discover` 后确认 `$WORK/config/library_candidates/latest.tsv`，再合并到 `$WORK/config/library_registry.tsv` |
-| 版本关系 | stage、base、package type、update scope、是否 current effective | `lg.csh override` |
-| Review Gate | blocking item 是否 accept/waive | `lg.csh rv-accept` / `lg.csh rv-waive` |
+| 版本关系 | stage、base、package type、update scope、是否 current effective | `lg.csh library override` |
+| Review Gate | blocking item 是否 accept/waive | `lg.csh rv accept` / `lg.csh rv waive` |
 | Action 编排 | 哪些版本需要 scan、哪些 effective 组合需要构建、哪些 diff/release 要跑 | `$WORK/actions/<library>.action` |
 
 ## Library Map 确认
@@ -36,10 +36,10 @@ $PROJ/scripts/lg.csh library apply
 
 ## 版本关系 Override
 
-当自动推断结果不可信时，用 `override` 固化人工判断：
+当自动推断结果不可信时，用 `library override` 固化人工判断：
 
 ```csh
-$PROJ/scripts/lg.csh override sky130ram 20260626_sky130ram_update \
+$PROJ/scripts/lg.csh library override sky130ram 20260626_sky130ram_update \
   --stage stable \
   --base 20260619_sky130ram \
   --package-type PARTIAL_UPDATE \
@@ -59,19 +59,19 @@ $PROJ/scripts/lg.csh override sky130ram 20260626_sky130ram_update \
 先查看 gate：
 
 ```csh
-$PROJ/scripts/lg.csh rv-check <LIBRARY> <VERSION> --gate current
-$PROJ/scripts/lg.csh rv-list  <LIBRARY> <VERSION> --gate current
+$PROJ/scripts/lg.csh rv check <LIBRARY> <VERSION> --gate current
+$PROJ/scripts/lg.csh rv list  <LIBRARY> <VERSION> --gate current
 ```
 
 再由 owner 记录决策：
 
 ```csh
-$PROJ/scripts/lg.csh rv-accept <LIBRARY> <VERSION> \
+$PROJ/scripts/lg.csh rv accept <LIBRARY> <VERSION> \
   --item metadata.db.changed:db/ucie.db \
   --by lib_owner \
   --reason "DB hash change accepted for current."
 
-$PROJ/scripts/lg.csh rv-waive <LIBRARY> <VERSION> \
+$PROJ/scripts/lg.csh rv waive <LIBRARY> <VERSION> \
   --item doc.release_note.missing \
   --by lib_owner \
   --reason "Release note waived for internal test drop."

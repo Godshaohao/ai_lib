@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 GROUP_LABELS = ["对比范围", "包根目录迁移", "文件匹配质量", "内容变化", "原始审计判断"]
 STATUS_COPY = {
-    "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg refresh <LIB>。",
+    "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg cat <LIB> --update-detail。",
     "NEEDS_BASE_CONFIRM": "无法确定 Base；请先确认当前有效版本或上一有效版本。",
     "NO_DIFF_SUMMARY": "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
     "CHANGED": "已完成比较，有变化。",

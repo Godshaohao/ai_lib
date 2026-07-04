@@ -1109,7 +1109,7 @@ class VersionDetailReportTest(unittest.TestCase):
         from lib_guard.render.version_detail_report import render_version_update_detail_panel
 
         cases = {
-            "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg refresh <LIB>。",
+            "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg cat <LIB> --update-detail。",
             "NEEDS_BASE_CONFIRM": "无法确定 Base；请先确认当前有效版本或上一有效版本。",
             "NO_DIFF_SUMMARY": "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
             "CHANGED": "已完成比较，有变化。",
@@ -1145,8 +1145,8 @@ class VersionDetailReportTest(unittest.TestCase):
                 html = render_version_update_detail_panel(model)
 
                 if status == "DIFF_NOT_RUN":
-                    self.assertIn("尚未生成更新详情；请运行 lg refresh &lt;LIB&gt;。", html)
-                    self.assertNotIn("lg refresh <LIB>", html)
+                    self.assertIn("尚未生成更新详情；请运行 lg cat &lt;LIB&gt; --update-detail。", html)
+                    self.assertNotIn("lg cat <LIB> --update-detail", html)
                 else:
                     self.assertIn(expected, html)
 

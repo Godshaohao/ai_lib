@@ -24,14 +24,14 @@ $WORK/review/<library>/<version>/review_overrides.json
 常用命令：
 
 ```csh
-$PROJ/scripts/lg.csh rv-check  <LIBRARY> <VERSION> --gate current
-$PROJ/scripts/lg.csh rv-list   <LIBRARY> <VERSION> --gate current
-$PROJ/scripts/lg.csh rv-accept <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
-$PROJ/scripts/lg.csh rv-waive  <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
+$PROJ/scripts/lg.csh rv check  <LIBRARY> <VERSION> --gate current
+$PROJ/scripts/lg.csh rv list   <LIBRARY> <VERSION> --gate current
+$PROJ/scripts/lg.csh rv accept <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
+$PROJ/scripts/lg.csh rv waive  <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
 ```
 
 `lg.csh action` 是 action 文件执行入口；Review Gate 的人工决策只使用
-`rv-*` 命令。
+`rv` 子命令。
 
 每个 `blocking_items` 和 `attention_items` 条目都会带解释字段：
 

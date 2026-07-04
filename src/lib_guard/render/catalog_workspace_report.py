@@ -443,7 +443,7 @@ def _task_rows(tasks: Mapping[str, Any], limit: int = 50) -> list[str]:
 
 
 def _command_examples() -> str:
-    examples = [("刷新目录", "$PROJ/scripts/lg.csh cat"), ("扫描版本", "$PROJ/scripts/lg.csh scan <library> <version>"), ("绑定关系", "$PROJ/scripts/lg.csh override <library> <version> --package-type PARTIAL_UPDATE --update-scope lib,lef --base-full <full_version> --previous-effective <prev_version> --note \"manual confirmed\""), ("执行对比", "$PROJ/scripts/lg.csh cmp <library> <version> --scan-if-missing"), ("发布检查", "$PROJ/scripts/lg.csh rel <library> <version> --check-first"), ("PowerShell", ".\\scripts\\lg.ps1 cmp <library> <version> --scan-if-missing")]
+    examples = [("刷新目录", "$PROJ/scripts/lg.csh cat"), ("扫描版本", "$PROJ/scripts/lg.csh scan <library> <version>"), ("绑定关系", "$PROJ/scripts/lg.csh library override <library> <version> --package-type PARTIAL_UPDATE --update-scope lib,lef --base-full <full_version> --previous-effective <prev_version> --note \"manual confirmed\""), ("执行对比", "$PROJ/scripts/lg.csh cmp <library> <version> --scan-if-missing"), ("发布检查", "$PROJ/scripts/lg.csh rel <library> <version> --check-first"), ("PowerShell", ".\\scripts\\lg.ps1 cmp <library> <version> --scan-if-missing")]
     boxes = "".join(ui.command_box(command, title=title, note="示例命令。实际执行时替换 <library> / <version> / <relpath>。") for title, command in examples)
     return "<div class='command-example-grid'>" + boxes + "</div>"
 

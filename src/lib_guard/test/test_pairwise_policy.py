@@ -140,7 +140,7 @@ class PairwisePolicyTest(unittest.TestCase):
 
         file_diff_parser = next(
             action
-            for action in parser._subparsers._group_actions[0].choices["file-diff"]._actions
+            for action in parser._subparsers._group_actions[0].choices["fd"]._actions
             if action.dest == "type"
         )
         self.assertEqual(

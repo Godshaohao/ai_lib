@@ -51,7 +51,7 @@ class BatchManifestTest(unittest.TestCase):
             self.assertEqual(result_data["status"], "FAILED")
             self.assertIn("$PROJ/scripts/lg.csh scan ucie bad_20250609", rerun.read_text(encoding="utf-8"))
 
-    def test_compare_rerun_script_uses_diff_command(self) -> None:
+    def test_compare_rerun_script_uses_cmp_command(self) -> None:
         from lib_guard.batch.manifest import make_batch_run_dir, write_rerun_failed_csh
 
         with tempfile.TemporaryDirectory() as td:
@@ -61,7 +61,7 @@ class BatchManifestTest(unittest.TestCase):
                 [{"library_name": "ucie", "version_id": "stable_20250608", "status": "FAILED"}],
                 "compare",
             )
-            self.assertIn("$PROJ/scripts/lg.csh diff ucie stable_20250608 --scan-if-missing", rerun.read_text(encoding="utf-8"))
+            self.assertIn("$PROJ/scripts/lg.csh cmp ucie stable_20250608 --scan-if-missing", rerun.read_text(encoding="utf-8"))
 
 
 class BatchPlanOnlyCliTest(unittest.TestCase):

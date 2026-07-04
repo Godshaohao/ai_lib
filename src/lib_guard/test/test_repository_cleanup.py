@@ -188,9 +188,9 @@ class RepositoryCleanupTest(unittest.TestCase):
         self.assertIn("Comparison Review", text)
         self.assertIn("手动", text)
 
-    def test_cli_reference_separates_refresh_from_manual_compare(self) -> None:
+    def test_cli_reference_separates_update_detail_from_manual_compare(self) -> None:
         text = (ROOT / "docs" / "cli_reference.md").read_text(encoding="utf-8")
-        self.assertIn("`refresh`", text)
+        self.assertIn("`cat --update-detail`", text)
         self.assertIn("current_effective", text)
         self.assertIn("previous_effective", text)
         self.assertIn("adjacent", text)
@@ -218,9 +218,9 @@ class RepositoryCleanupTest(unittest.TestCase):
         missing = [token for token in required if token not in text]
         self.assertFalse(missing, "data contract missing tokens:\n" + "\n".join(missing))
 
-    def test_current_docs_explain_refresh_cmp_fd_lanes_and_force_large(self) -> None:
+    def test_current_docs_explain_update_detail_cmp_fd_lanes_and_force_large(self) -> None:
         required = [
-            "refresh",
+            "cat --update-detail",
             "current_effective",
             "cmp",
             "summary-only",

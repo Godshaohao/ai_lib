@@ -30,7 +30,7 @@ from lib_guard.render.version_review_render import render_ip_user_view, render_v
 STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
 FALLBACK_BASE_REFS = {"adjacent_fallback", "recorded_base", "recorded_base_fallback", "unknown"}
 UPDATE_STATUS_COPY = {
-    "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg refresh <LIB>。",
+    "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg cat <LIB> --update-detail。",
     "NEEDS_BASE_CONFIRM": "无法确定 base；请先确认 current_effective 或 previous_effective。",
     "NO_DIFF_SUMMARY": "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
     "CHANGED": "已完成比较，有变化。",

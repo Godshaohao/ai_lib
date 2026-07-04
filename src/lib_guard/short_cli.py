@@ -28,11 +28,19 @@ from lib_guard.project_config import (
 PAIRWISE_FILE_DIFF_TYPES = set(DEFAULT_FILE_DIFF_TYPES)
 FORCE_LARGE_FILE_DIFF_TYPES = set(SUMMARY_ONLY_TYPES) | set(BINARY_METADATA_ONLY_TYPES)
 MANUAL_FILE_DIFF_TYPES = PAIRWISE_FILE_DIFF_TYPES | FORCE_LARGE_FILE_DIFF_TYPES
-SHORT_COMMAND_ALIASES = {
-    "cat": "catalog",
-    "cmp": "diff",
-    "fd": "file-diff",
-    "rel": "release",
+SHORT_COMMAND_ALIASES: dict[str, str] = {}
+LEGACY_SHORT_COMMAND_REWRITES = {
+    "catalog": ["cat"],
+    "diff": ["cmp"],
+    "file-diff": ["fd"],
+    "release": ["rel"],
+    "refresh": ["cat", "--update-detail"],
+    "override": ["library", "override"],
+    "rv-build": ["rv", "build"],
+    "rv-check": ["rv", "check"],
+    "rv-list": ["rv", "list"],
+    "rv-accept": ["rv", "accept"],
+    "rv-waive": ["rv", "waive"],
 }
 
 
@@ -502,6 +510,29 @@ def _canonical_command(name: str | None) -> str | None:
     return SHORT_COMMAND_ALIASES.get(str(name), name) if name else name
 
 
+def _rewrite_legacy_short_argv(argv: list[str]) -> list[str]:
+    if not argv:
+        return argv
+    rewritten = list(argv)
+    idx = 0
+    while idx < len(rewritten):
+        item = rewritten[idx]
+        if item == "--config":
+            idx += 2
+            continue
+        if item.startswith("--config="):
+            idx += 1
+            continue
+        if item.startswith("-"):
+            idx += 1
+            continue
+        replacement = LEGACY_SHORT_COMMAND_REWRITES.get(item)
+        if replacement:
+            return [*rewritten[:idx], *replacement, *rewritten[idx + 1 :]]
+        return rewritten
+    return rewritten
+
+
 def _relpath_parts(relpath: str) -> tuple[str, ...]:
     normalized = relpath.replace("\\", "/").strip()
     drive_like = len(normalized) >= 2 and normalized[1] == ":"
@@ -535,8 +566,6 @@ def _build_parser() -> ArgumentParser:
         description="lib_guard 日常短命令入口",
         formatter_class=RawDescriptionHelpFormatter,
         epilog=f"""示例:
-  当前推荐别名: catalog -> cat, diff -> cmp, file-diff -> fd, release -> rel
-
   日常流程:
     lg.csh init $WORK --raw-root $RAW --library-type ip
     cd $WORK
@@ -549,14 +578,14 @@ def _build_parser() -> ArgumentParser:
     lg.csh library list <正式库名> --versions
     lg.csh cat --with-evidence
     lg.csh cat ucie stable_20250608     # 只重渲染一个版本详情页，不重新 scan
-    lg.csh override ucie stable_20250608 --base initial_20250601 --stage stable
+    lg.csh library override ucie stable_20250608 --base initial_20250601 --stage stable
     lg.csh scan ucie stable_20250608
-    lg.csh refresh ucie
+    lg.csh cat ucie --update-detail
     # 手动 compare/debug 时再显式指定 base 或 adjacent/cumulative
     lg.csh cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
-    lg.csh rv-check ucie stable_20250608 --gate current
-    lg.csh rv-accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason accepted
+    lg.csh rv check ucie stable_20250608 --gate current
+    lg.csh rv accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason accepted
     lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
 
   Action 文件批处理:
@@ -586,7 +615,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--raw-root")
     p.add_argument("--library-type", default="ip")
 
-    p = sub.add_parser("scan", help="刷新 catalog 或扫描指定版本")
+    p = sub.add_parser("scan", help="扫描指定版本，或按策略批量补 scan evidence")
     p.add_argument("library", nargs="?")
     p.add_argument("version", nargs="?")
     p.add_argument("--missing", action="store_true", help="只扫描缺少或已过期 scan evidence 的版本")
@@ -595,30 +624,17 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="只扫描某个 catalog stage")
     p.add_argument("--with-evidence", action="store_true", help="扫描前刷新带文件类型 evidence 的 catalog")
 
-    p = sub.add_parser("catalog", aliases=["cat"], help="只刷新 catalog JSON 和 catalog HTML")
+    p = sub.add_parser("cat", help="刷新 catalog/HTML，或刷新版本详情更新证据")
     p.add_argument("library", nargs="?")
     p.add_argument("version", nargs="?")
     p.add_argument("--full", action="store_true", help="强制全量 catalog refresh，不复用 catalog_state.json")
     p.add_argument("--fast", action="store_true", help="只做目录级 catalog refresh；短命令默认使用该模式")
     p.add_argument("--with-evidence", action="store_true", help="为发现的版本收集轻量文件类型 evidence；大 RAW 树会更慢")
-
-    p = sub.add_parser("override", help="人工确认/修正一个 catalog 版本的 stage、base、package 关系")
-    p.add_argument("library")
-    p.add_argument("version")
-    p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"])
-    p.add_argument("--parent", help="Compatibility alias for --previous-effective")
-    p.add_argument("--base", help="Compatibility alias for --base-full")
-    p.add_argument("--package-type", choices=["FULL_PACKAGE", "PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "UNKNOWN_PACKAGE"])
-    p.add_argument("--update-scope", help="Comma/space separated scope, e.g. lib,lef")
-    p.add_argument("--standalone", action="store_true", default=None)
-    p.add_argument("--base-required", action="store_true", default=None)
-    p.add_argument("--base-full", dest="base_full_version", help="Nearest confirmed full package baseline")
-    p.add_argument("--previous-effective", dest="previous_effective_version", help="Previous accepted/effective version used as default diff target")
-    p.add_argument("--compare-default", choices=["previous_effective", "full_baseline", "none"])
-    p.add_argument("--current-effective", action="store_true", default=None)
-    p.add_argument("--manual-review", action="store_true", default=None)
-    p.add_argument("--note")
-    p.add_argument("--updated-by", default="short_cli")
+    p.add_argument("--update-detail", action="store_true", help="刷新 Version Review 更新详情；旧 refresh 命令会改写到这里")
+    p.add_argument("--all", action="store_true", help="配合 --update-detail 刷新所有 catalog library 的更新详情")
+    p.add_argument("--mode", default="current_effective", choices=["current_effective", "previous_effective", "adjacent", "cumulative"], help="更新详情默认使用 current/previous effective；adjacent 仅用于显式手动 compare")
+    p.add_argument("--rescan", action="store_true", help="配合 --update-detail 强制重扫 old/new 版本")
+    p.add_argument("--refresh-catalog", action="store_true", help="配合 --update-detail 先刷新 catalog")
 
     root_library = sub.add_parser("library", help="维护人工确认 library registry，并生成正式 library map")
     lsp = root_library.add_subparsers(dest="library_cmd", required=True)
@@ -650,7 +666,25 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--input", help="输入 registry，默认 $WORK/config/library_registry.tsv")
     p.add_argument("--out", help="正式 library_catalog.yml 输出，默认 $WORK/config/library_catalog.yml")
 
-    p = sub.add_parser("diff", aliases=["cmp"], help="按 base 关系运行结构 diff；默认不偷偷重扫")
+    p = lsp.add_parser("override", help="人工确认/修正一个 catalog 版本的 stage、base、package 关系")
+    p.add_argument("library")
+    p.add_argument("version")
+    p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"])
+    p.add_argument("--parent", help="Compatibility alias for --previous-effective")
+    p.add_argument("--base", help="Compatibility alias for --base-full")
+    p.add_argument("--package-type", choices=["FULL_PACKAGE", "PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "UNKNOWN_PACKAGE"])
+    p.add_argument("--update-scope", help="Comma/space separated scope, e.g. lib,lef")
+    p.add_argument("--standalone", action="store_true", default=None)
+    p.add_argument("--base-required", action="store_true", default=None)
+    p.add_argument("--base-full", dest="base_full_version", help="Nearest confirmed full package baseline")
+    p.add_argument("--previous-effective", dest="previous_effective_version", help="Previous accepted/effective version used as default diff target")
+    p.add_argument("--compare-default", choices=["previous_effective", "full_baseline", "none"])
+    p.add_argument("--current-effective", action="store_true", default=None)
+    p.add_argument("--manual-review", action="store_true", default=None)
+    p.add_argument("--note")
+    p.add_argument("--updated-by", default="short_cli")
+
+    p = sub.add_parser("cmp", help="按 base 关系运行结构 diff；默认不偷偷重扫")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"], help="Catalog relation used when --base is not provided")
@@ -661,15 +695,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--refresh-catalog", action="store_true", help="compare 前刷新该 library catalog；默认使用已有 catalog.json")
     p.add_argument("--with-evidence", action="store_true", help="配合 --refresh-catalog 收集文件类型 evidence")
 
-    p = sub.add_parser("refresh", help="刷新 latest/current raw version 的更新详情 diff")
-    p.add_argument("library", nargs="?")
-    p.add_argument("--all", action="store_true", help="Refresh latest/current raw version diff for every catalog library")
-    p.add_argument("--mode", default="current_effective", choices=["current_effective", "previous_effective", "adjacent", "cumulative"], help="更新详情默认优先使用 current effective，previous effective 作为显式回退；adjacent 仅用于显式手动 compare")
-    p.add_argument("--rescan", action="store_true", help="Force rescan before compare instead of scanning only missing evidence")
-    p.add_argument("--refresh-catalog", action="store_true", help="Refresh catalog before resolving latest/current versions")
-    p.add_argument("--with-evidence", action="store_true", help="When --refresh-catalog is used, collect file-type evidence during catalog refresh")
-
-    p = sub.add_parser("file-diff", aliases=["fd"], help="基于 catalog raw path 运行单文件两两 diff；不会运行 scan")
+    p = sub.add_parser("fd", help="基于 catalog raw path 运行单文件两两 diff；不会运行 scan")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("relpath")
@@ -677,7 +703,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--type", choices=sorted(MANUAL_FILE_DIFF_TYPES), help="Override inferred file type")
     p.add_argument("--force-large", action="store_true", help="Expert opt-in: allow summary-only or metadata-only file types to run manual file diff")
 
-    p = sub.add_parser("release", aliases=["rel"], help="对已扫描版本执行 release check/link/verify 规划；不会运行 scan")
+    p = sub.add_parser("rel", help="对已扫描版本执行 release check/link/verify 规划；不会运行 scan")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("--alias", default="current")
@@ -699,14 +725,16 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("library")
     p.add_argument("--action", help="Explicit action file path. Default: $WORK/actions/<library>.action")
 
-    for name in ["rv-build", "rv-check", "rv-list"]:
-        p = sub.add_parser(name, help="构建/检查/列出指定版本的轻量 Review Gate")
+    root_rv = sub.add_parser("rv", help="Review Gate 构建、检查、列表和 owner 决策")
+    rvsp = root_rv.add_subparsers(dest="rv_cmd", required=True)
+    for name in ["build", "check", "list"]:
+        p = rvsp.add_parser(name, help="构建/检查/列出指定版本的轻量 Review Gate")
         p.add_argument("library")
         p.add_argument("version")
         p.add_argument("--gate", default="current", choices=["stage", "current", "approved"])
 
-    for name in ["rv-accept", "rv-waive"]:
-        p = sub.add_parser(name, help="记录 owner accept/waive 人工决策")
+    for name in ["accept", "waive"]:
+        p = rvsp.add_parser(name, help="记录 owner accept/waive 人工决策")
         p.add_argument("library")
         p.add_argument("version")
         p.add_argument("--gate", default="current", choices=["stage", "current", "approved"])
@@ -1175,6 +1203,7 @@ def _review_commands(cfg: dict[str, str], args: Any) -> list[list[str]]:
 
 def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> list[list[str]]:
     parser = _build_parser()
+    argv = _rewrite_legacy_short_argv(list(argv))
     args = parser.parse_args(argv)
     args.short_command = _canonical_command(args.short_command)
     if args.short_command == "init":
@@ -1193,8 +1222,12 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             return [_library_add_command(cfg, args)]
         if args.library_cmd == "apply":
             return [_library_apply_command(cfg, args)]
+        if args.library_cmd == "override":
+            return [_override_command(cfg, args)]
         raise ValueError(f"unsupported library command: {args.library_cmd}")
-    if args.short_command == "catalog":
+    if args.short_command == "cat":
+        if getattr(args, "update_detail", False):
+            return _refresh_commands(cfg, args)
         if args.library and getattr(args, "version", None):
             return [_catalog_render_command(cfg, args.library, args.version)]
         return [
@@ -1206,15 +1239,11 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
                 with_evidence=bool(getattr(args, "with_evidence", False)),
             )
         ]
-    if args.short_command == "override":
-        return [_override_command(cfg, args)]
-    if args.short_command in {"rv-build", "rv-check", "rv-list", "rv-accept", "rv-waive"}:
-        review_subcommand = args.short_command.removeprefix("rv-")
+    if args.short_command == "rv":
+        review_subcommand = args.rv_cmd
         return [_review_gate_command(cfg, args, review_subcommand)]
-    if args.short_command in {"action", "act", "review"}:
+    if args.short_command == "action":
         return _review_commands(cfg, args)
-    if args.short_command == "refresh":
-        return _refresh_commands(cfg, args)
     if args.short_command == "scan":
         with_evidence = bool(getattr(args, "with_evidence", False))
         if args.library and args.version:
@@ -1242,8 +1271,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
                     stage=getattr(args, "stage", None),
                 ),
             ]
-        return [_catalog_scan_command(cfg)]
-    if args.short_command == "diff":
+        raise ValueError("lg scan requires <library> <version> or <library> --missing/--all-versions. Use lg cat to refresh catalog/HTML.")
+    if args.short_command == "cmp":
         commands: list[list[str]] = []
         if getattr(args, "rescan", False) and (getattr(args, "scan_if_missing", False) or getattr(args, "auto_scan", False)):
             raise ValueError("Use only one of --scan-if-missing/--auto-scan or --rescan")
@@ -1274,7 +1303,7 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             _append_scan_strategy(compare, cfg)
         commands.append(compare)
         return commands
-    if args.short_command == "file-diff":
+    if args.short_command == "fd":
         data = _catalog_data(cfg)
         lib = _find_library(data, args.library)
         new_version = _find_version(lib, args.version)
@@ -1303,7 +1332,7 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         if bool(getattr(args, "force_large", False)) and file_type in FORCE_LARGE_FILE_DIFF_TYPES:
             command.append("--manual-large-file-opt-in")
         return [command]
-    if args.short_command == "release":
+    if args.short_command == "rel":
         if args.force and not args.force_reason:
             raise ValueError("lg rel --force requires --force-reason")
         commands: list[list[str]] = []
@@ -1387,17 +1416,19 @@ def run_init(args: Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    argv = _rewrite_legacy_short_argv(argv)
     parser = _build_parser()
     args = parser.parse_args(argv)
     args.short_command = _canonical_command(args.short_command)
     if args.short_command == "init":
         return run_init(args)
-    commands = build_cli_commands(argv, cwd=Path.cwd())
-    if args.short_command == "scan" and not getattr(args, "library", None):
-        print("[WARN] 'lg scan' without target now refreshes catalog only.", file=sys.stderr)
-        print("[INFO] Use 'lg catalog' for discovery, or 'lg scan <library> <version>' for scan HTML.", file=sys.stderr)
-    if args.short_command == "diff" and getattr(args, "auto_scan", False):
-        print("[WARN] 'lg diff --auto-scan' is deprecated and now means --scan-if-missing, not forced rescan.", file=sys.stderr)
+    try:
+        commands = build_cli_commands(argv, cwd=Path.cwd())
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if args.short_command == "cmp" and getattr(args, "auto_scan", False):
+        print("[WARN] 'lg cmp --auto-scan' is deprecated and now means --scan-if-missing, not forced rescan.", file=sys.stderr)
         print("[INFO] Use --rescan only when you intentionally want to rebuild both scan outputs.", file=sys.stderr)
     for command in commands:
         print("python -m lib_guard.cli " + shlex.join(_command_for_execution(command)))

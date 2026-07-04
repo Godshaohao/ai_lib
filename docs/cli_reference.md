@@ -9,25 +9,18 @@ Status: current
 | `init` | 创建 workspace 配置 |
 | `library add` | 已知库根时直接加入人工确认 registry |
 | `library discover` / `library accept` / `library apply` | 发现候选库、合并人工确认、生成正式 library map |
-| `cat` | 刷新 catalog 和 catalog HTML |
-| `override` | 人工确认版本 stage/base/package 关系 |
+| `library override` | 人工确认版本 stage/base/package 关系 |
+| `cat` | 刷新 catalog/HTML；加 `--update-detail` 时刷新版本详情更新证据 |
 | `scan` | 扫描一个版本或一批版本 |
-| `refresh` | 刷新 Version Review 的更新详情，默认按当前有效库语义选择 base |
 | `cmp` | 手动对比更新版本和指定 base 版本 |
 | `fd` | 运行单文件两两 diff |
-| `rv-check` / `rv-list` | 查看 Review Gate 状态 |
-| `rv-accept` / `rv-waive` | 记录 owner 决策 |
+| `rv check` / `rv list` | 查看 Review Gate 状态 |
+| `rv accept` / `rv waive` | 记录 owner 决策 |
 | `rel` | 执行 release check/link/verify 规划 |
 | `action` | 执行一个 workspace action 文件 |
 
-推荐别名只保留：
-
-| 别名 | 原命令 |
-| --- | --- |
-| `cat` | `catalog` |
-| `cmp` | `diff` |
-| `fd` | `file-diff` |
-| `rel` | `release` |
+旧短命令 `catalog/diff/file-diff/release/refresh/override/rv-check` 仅作为兼容改写保留，
+不再出现在推荐 help 中。
 
 ## 常用示例
 
@@ -40,20 +33,20 @@ lg.csh library apply
 lg.csh library list
 lg.csh library list vendor_A.openroad_platform.openroad_asap7 --versions
 lg.csh cat --with-evidence
-lg.csh override ucie stable_20250608 --stage stable --base stable_20250601
+lg.csh library override ucie stable_20250608 --stage stable --base stable_20250601
 lg.csh scan ucie stable_20250608
 lg.csh scan ucie stable_20250608 --parse-file-types lef,cdl
 lg.csh scan ucie stable_20250608 --hash-policy full
-lg.csh refresh ucie
+lg.csh cat ucie --update-detail
 lg.csh cmp ucie stable_20250608 --base stable_20250601 --scan-if-missing
 lg.csh fd ucie stable_20250608 lef/ucie.lef --base stable_20250601 --type lef
-lg.csh rv-check ucie stable_20250608 --gate current
-lg.csh rv-accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason "DB hash change accepted for current."
+lg.csh rv check ucie stable_20250608 --gate current
+lg.csh rv accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason "DB hash change accepted for current."
 lg.csh action ucie
 lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
 ```
 
-## `refresh` 和 `cmp` 的边界
+## `cat --update-detail` 和 `cmp` 的边界
 
 ## `scan` 的边界
 
@@ -70,7 +63,7 @@ lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
 
 新命令保持 `scan` 这一种用户态动作，用策略参数表达扫描深度。
 
-`refresh` 是版本详情页更新证据的日常入口。默认行为是：
+`cat <LIBRARY> --update-detail` 是版本详情页更新证据的日常入口。默认行为是：
 
 - 优先使用 `current_effective`。
 - 没有当前有效库时使用 `previous_effective`。
@@ -79,7 +72,7 @@ lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
 `adjacent` 只用于手动 compare 场景，必须显式指定：
 
 ```csh
-lg.csh refresh ucie --mode adjacent
+lg.csh cat ucie --update-detail --mode adjacent
 lg.csh cmp ucie stable_20250608 --mode adjacent --scan-if-missing
 ```
 

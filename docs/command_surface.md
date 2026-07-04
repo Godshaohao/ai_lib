@@ -17,14 +17,13 @@ Status: current
 | `init` | 创建 workspace 级 `lib_guard.yml` |
 | `library add` | 已知库根时直接加入人工确认 registry |
 | `library discover` / `library accept` / `library apply` | 发现候选库、合并人工确认、生成正式 library map |
-| `cat` | 刷新 catalog JSON 和 catalog HTML |
-| `override` | 人工确认或修正版本 stage/base/package 关系 |
+| `library override` | 人工确认或修正版本 stage/base/package 关系 |
+| `cat` | 刷新 catalog/HTML；加 `--update-detail` 时刷新版本详情更新证据 |
 | `scan` | 为一个版本或一批版本生成 Version Review evidence |
-| `refresh` | 刷新 Version Review 的日常更新详情 |
 | `cmp` | 手动将一个更新版本和指定 base 版本做结构对比 |
 | `fd` | 对关键文件运行两两 File Diff |
-| `rv-check` / `rv-list` | 检查 Review Gate 状态 |
-| `rv-accept` / `rv-waive` | 记录 owner 人工 accept/waive 决策 |
+| `rv check` / `rv list` | 检查 Review Gate 状态 |
+| `rv accept` / `rv waive` | 记录 owner 人工 accept/waive 决策 |
 | `rel` | 执行 release check/link/verify 规划 |
 | `action` | 执行 workspace action 文件 |
 
@@ -43,14 +42,14 @@ $PROJ/scripts/lg.csh library list <LIBRARY> --versions
 $PROJ/scripts/lg.csh cat --with-evidence
 
 # 如 catalog 自动推断的 stage/base/package 关系不可靠，先人工确认
-$PROJ/scripts/lg.csh override <LIBRARY> <VERSION> --stage stable --base <BASE_VERSION>
+$PROJ/scripts/lg.csh library override <LIBRARY> <VERSION> --stage stable --base <BASE_VERSION>
 
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
-$PROJ/scripts/lg.csh refresh <LIBRARY>
+$PROJ/scripts/lg.csh cat <LIBRARY> --update-detail
 # 手动 compare/debug 时再显式指定 base 或 adjacent/cumulative
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> --base <BASE_VERSION> --type <FILE_TYPE>
-$PROJ/scripts/lg.csh rv-check <LIBRARY> <VERSION> --gate current
+$PROJ/scripts/lg.csh rv check <LIBRARY> <VERSION> --gate current
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
 ```

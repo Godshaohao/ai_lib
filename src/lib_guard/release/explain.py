@@ -8,6 +8,23 @@ def _text(value: Any, default: str = "") -> str:
     return text or default
 
 
+def _action_text(value: Any, default: str) -> str:
+    text = _text(value, default)
+    replacements = {
+        "rv-check": "rv check",
+        "rv-list": "rv list",
+        "rv-accept": "rv accept",
+        "rv-waive": "rv waive",
+        "lg.csh release": "lg.csh rel",
+        "lg.csh file-diff": "lg.csh fd",
+        "lg.csh diff": "lg.csh cmp",
+        "lg.csh refresh": "lg.csh cat --update-detail",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+
 def _blockers_from_review_gate(review_gate: Mapping[str, Any]) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     for item in review_gate.get("blocking_items", []) or []:
@@ -19,7 +36,7 @@ def _blockers_from_review_gate(review_gate: Mapping[str, Any]) -> list[dict[str,
                 "category": _text(item.get("category"), "review_gate"),
                 "title": _text(item.get("title"), "Release review blocker"),
                 "reason": _text(item.get("why") or item.get("message"), "Release is blocked by review gate."),
-                "next_action": _text(item.get("next_action"), "accept/waive the item or force release with audit reason"),
+                "next_action": _action_text(item.get("next_action"), "rv accept/rv waive the item or force release with audit reason"),
             }
         )
     return blockers
@@ -46,7 +63,7 @@ def _blockers_from_release_check(result: Mapping[str, Any]) -> list[dict[str, An
                 "category": _text(issue.get("category"), "release_check"),
                 "title": _text(issue.get("title"), "Release check issue"),
                 "reason": _text(issue.get("message") or issue.get("reason"), "Release check issue requires attention."),
-                "next_action": _text(issue.get("next_action"), "fix release evidence or force release with audit reason"),
+                "next_action": _action_text(issue.get("next_action"), "fix release evidence or force release with audit reason"),
             }
         )
     return blockers
@@ -98,7 +115,7 @@ def explain_release_check(result: Mapping[str, Any]) -> dict[str, Any]:
         "failed_phase": phase,
         "blockers": blockers,
         "safe_actions": [
-            f"lg.csh rv-check {library} {version} --gate current",
+            f"lg.csh rv check {library} {version} --gate current",
             f"lg.csh rel {library} {version} --check-first --explain",
         ],
         "force_actions": [

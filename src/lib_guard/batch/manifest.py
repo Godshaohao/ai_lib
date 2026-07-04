@@ -120,7 +120,7 @@ def write_rerun_failed_csh(run_dir: Path, failures: list[dict[str, Any]], batch_
         if not library or not version:
             continue
         if batch_type == "compare":
-            lines.append(f"$PROJ/scripts/lg.csh diff {library} {version} --scan-if-missing")
+            lines.append(f"$PROJ/scripts/lg.csh cmp {library} {version} --scan-if-missing")
         else:
             lines.append(f"$PROJ/scripts/lg.csh scan {library} {version}")
     script.write_text("\n".join(lines) + "\n", encoding="utf-8")

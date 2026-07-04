@@ -1723,9 +1723,9 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertNotIn("--root", catalog_version_cmds[0])
             self.assertNotIn("--with-evidence", catalog_version_cmds[0])
 
-            all_scan_cmds = build_cli_commands(["scan"], cwd=workspace)
-            self.assertEqual(len(all_scan_cmds), 1)
-            self.assertEqual(all_scan_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+            with self.assertRaises(ValueError) as no_target_scan_error:
+                build_cli_commands(["scan"], cwd=workspace)
+            self.assertIn("lg scan requires <library> <version>", str(no_target_scan_error.exception))
 
             full_catalog_cmds = build_cli_commands(["catalog", "--full"], cwd=workspace)
             self.assertEqual(full_catalog_cmds[0][:2], ["catalog", "scan"])
@@ -1831,11 +1831,11 @@ class ScanPipelineTest(unittest.TestCase):
 
             config = write_default_config(workspace, raw_root=raw)
             with patch.dict(os.environ, {"LIB_GUARD_CONFIG": str(config)}):
-                scan_cmds = build_cli_commands(["scan"], cwd=caller)
+                cat_cmds = build_cli_commands(["cat"], cwd=caller)
 
-            self.assertEqual(len(scan_cmds), 1)
-            self.assertEqual(scan_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
-            self.assertIn(str(catalog.parent), scan_cmds[0])
+            self.assertEqual(len(cat_cmds), 1)
+            self.assertEqual(cat_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+            self.assertIn(str(catalog.parent), cat_cmds[0])
 
     def test_short_cli_simplifies_v6_file_diff_scenarios(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1927,10 +1927,9 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertIn("示例", help_text)
         self.assertIn("日常流程", help_text)
         self.assertIn("lg.csh scan", help_text)
-        self.assertIn("lg.csh refresh", help_text)
+        self.assertIn("lg.csh cat ucie --update-detail", help_text)
         self.assertIn("lg.ps1 scan", help_text)
-        self.assertIn("file-diff -> fd", help_text)
-        self.assertIn("diff -> cmp", help_text)
+        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,rv}", help_text)
         self.assertIn("--force-large", help_text)
         self.assertIn("spice", help_text)
         self.assertIn("touchstone", help_text)
@@ -1939,9 +1938,9 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertNotIn("liberty", supported_types)
         self.assertNotIn("spef", supported_types)
         self.assertNotIn("db", supported_types)
-        self.assertIn("lg.csh override", help_text)
+        self.assertIn("lg.csh library override", help_text)
         self.assertIn("lg.csh action", help_text)
-        self.assertIn("lg.csh rv-accept", help_text)
+        self.assertIn("lg.csh rv accept", help_text)
         for token in ["waiver", "ibis", "pwl", "snp", "cpm"]:
             self.assertIn(token, supported_types)
         self.assertNotIn("filediff", help_text)
@@ -1953,7 +1952,7 @@ class ScanPipelineTest(unittest.TestCase):
         parser = _build_parser()
         subparsers = [action for action in parser._actions if isinstance(action, argparse._SubParsersAction)]
         self.assertEqual(1, len(subparsers))
-        file_diff_parser = subparsers[0].choices["file-diff"]
+        file_diff_parser = subparsers[0].choices["fd"]
         help_text = file_diff_parser.format_help()
 
         self.assertIn("--force-large", help_text)

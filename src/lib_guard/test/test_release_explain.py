@@ -40,7 +40,7 @@ class ReleaseExplainTest(unittest.TestCase):
         self.assertEqual(explain["status"], "BLOCKED")
         self.assertEqual(explain["failed_phase"], "REVIEW_GATE_BLOCKED")
         self.assertEqual(explain["blockers"][0]["id"], "metadata.db.changed:db/ucie.db")
-        self.assertEqual(explain["blockers"][0]["next_action"], "rv-accept or force release with audit reason")
+        self.assertEqual(explain["blockers"][0]["next_action"], "rv accept or force release with audit reason")
         self.assertTrue(explain["safe_actions"])
         self.assertTrue(any("--explain" in action for action in explain["safe_actions"]))
         self.assertFalse(any("--apply" in action for action in explain["safe_actions"]))
