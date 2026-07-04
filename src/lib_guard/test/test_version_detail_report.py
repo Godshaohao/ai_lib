@@ -270,9 +270,10 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("疑似重打包 / 目录迁移", html)
             self.assertIn("old root: <code>asap7_source_package</code>", html)
             self.assertIn("new root: <code>upstream_ae9a8ed9</code>", html)
-            self.assertIn("逻辑路径匹配 31", html)
+            self.assertIn("包根识别 31", html)
+            self.assertIn("包根/文件级匹配 31", html)
             self.assertIn("old 包内 31 个文件，new 包内 206 个文件", html)
-            self.assertIn("文件级 moved/renamed 23", html)
+            self.assertIn("文件级一一匹配 23", html)
             self.assertLess(html.index("疑似重打包 / 目录迁移"), html.index("重点变化文件"))
 
     def test_markdown_export_uses_same_headline_and_evidence_counts_as_model(self) -> None:
@@ -454,6 +455,35 @@ class VersionDetailReportTest(unittest.TestCase):
             )
             self.assertEqual(missing["usage_decision"], "BLOCKED")
             self.assertIn("base_not_confirmed", missing["usage_decision_reasons"])
+
+    def test_version_review_model_groups_update_detail_into_five_chinese_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+
+            from lib_guard.render.version_detail_report import (
+                build_version_update_detail_model,
+                render_version_update_detail_panel,
+            )
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            review_model = model["version_review_model"]
+            labels = [group["label"] for group in review_model["groups"]]
+
+            self.assertEqual(review_model["schema_version"], "version_review_model.v1")
+            self.assertEqual(labels, ["对比范围", "包根目录迁移", "文件匹配质量", "内容变化", "使用影响"])
+            for group in review_model["groups"]:
+                self.assertIn("status", group)
+                self.assertIn("summary", group)
+                self.assertIn("facts", group)
+                self.assertTrue(group["facts"], group["label"])
+
+            html = render_version_update_detail_panel(model)
+            positions = [html.index(label) for label in labels]
+            self.assertEqual(positions, sorted(positions))
+            self.assertIn("VersionReviewModel", html)
+            self.assertNotIn("任务清单</h3>", html)
+            self.assertNotIn("使用影响（vs", html)
 
     def test_version_detail_top_copy_uses_ip_user_status_contract(self) -> None:
         with tempfile.TemporaryDirectory() as td:

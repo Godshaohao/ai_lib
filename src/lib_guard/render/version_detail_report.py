@@ -23,6 +23,8 @@ from lib_guard.render.catalog_workspace_report import catalog_browser_styles
 from lib_guard.render import catalog_render_common as common
 from lib_guard.render import catalog_report as catalog
 from lib_guard.render import product_theme as ui
+from lib_guard.render.version_review_model import build_version_review_model
+from lib_guard.render.version_review_render import render_version_review_groups
 
 
 STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
@@ -862,6 +864,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     model["headline"] = _version_update_headline(base_ref, added_files, removed_files, _as_int(changed_files), recommended_count, reviewed_count)
     model["confidence_note"] = _version_update_confidence_note(model)
     model["primary_next_action"] = _primary_next_action(status, recommended_count, len(commands))
+    model["version_review_model"] = build_version_review_model(model)
     return model
 
 
@@ -1090,17 +1093,6 @@ def _top_file_type_text(model: Mapping[str, Any], *, limit: int = 4) -> str:
     return ", ".join(f"{name}:{count}" for name, count in counts.most_common(limit))
 
 
-def _top_file_type_tags(model: Mapping[str, Any], *, limit: int = 5) -> str:
-    counts: Counter[str] = Counter()
-    for item in model.get("file_changes", []) or []:
-        if not isinstance(item, Mapping):
-            continue
-        counts[str(item.get("file_type") or "-").lower()] += 1
-    if not counts:
-        return "<span class='muted'>无文件类型变化</span>"
-    return "".join(f"<code>{ui.esc(name)}:{ui.esc(count)}</code>" for name, count in counts.most_common(limit))
-
-
 def _evidence_judgment(model: Mapping[str, Any]) -> tuple[str, str, str]:
     summary_only = _lane_count(model, "summary_only")
     metadata_only = _lane_count(model, "metadata_only")
@@ -1148,84 +1140,6 @@ def _management_gate_user_impact(version: Mapping[str, Any]) -> tuple[str, str, 
     if status in {"READY", "PASS", "OK"}:
         return "不影响使用", "管理门禁已关闭", "PASS"
     return "未建立", "无管理门禁证据", "INFO"
-
-
-def _change_brief_html(model: Mapping[str, Any], *, added_files: int, removed_files: int, changed_files: int, status: str) -> str:
-    p0p1_count = _lane_count(model, "recommended_file_diff")
-    summary_only = _lane_count(model, "summary_only")
-    metadata_only = _lane_count(model, "metadata_only")
-    blocking = _lane_count(model, "blocking_issues")
-    risk_label = "有高优先级变化" if p0p1_count else "无 P0/P1 变化"
-    risk_status = "WARNING" if p0p1_count or blocking else status
-    return (
-        "<div class='change-brief'>"
-        "<div class='change-brief-block'>"
-        f"<b>变化风险 {ui.badge(risk_status, risk_label)}</b>"
-        f"<p>新增 {ui.esc(added_files)} / 删除 {ui.esc(removed_files)} / 修改 {ui.esc(changed_files)}；P0/P1={ui.esc(p0p1_count)}，阻塞问题={ui.esc(blocking)}。</p>"
-        f"<div class='change-brief-tags'>{_top_file_type_tags(model)}</div>"
-        "</div>"
-        "<div class='change-brief-block'>"
-        f"<b>证据分层 {ui.badge('WARNING' if summary_only or metadata_only else 'PASS', '混合证据' if summary_only or metadata_only else '内容级')}</b>"
-        f"<p>摘要级 {ui.esc(summary_only)}，metadata-only {ui.esc(metadata_only)}。这些不是失败，但不能假装成全文级 Diff。</p>"
-        "</div>"
-        "</div>"
-    )
-
-
-def _path_restructure_html(model: Mapping[str, Any]) -> str:
-    item = _as_mapping(model.get("path_restructure"))
-    if not item.get("suspected"):
-        return ""
-    old_root = item.get("old_root") or "-"
-    new_root = item.get("new_root") or "-"
-    moved = _as_int(item.get("renamed_or_moved"))
-    matched = _as_int(item.get("package_root_migration_matched_files"))
-    old_root_count = _as_int(item.get("old_root_file_count"))
-    new_root_count = _as_int(item.get("new_root_file_count"))
-    changed = _as_int(item.get("changed_files"))
-    if matched:
-        detail = (
-            f"逻辑路径匹配 {ui.esc(matched)}；old 包内 {ui.esc(old_root_count)} 个文件，"
-            f"new 包内 {ui.esc(new_root_count)} 个文件；文件级 moved/renamed {ui.esc(moved)}，"
-            f"真实 modified {ui.esc(changed)}。"
-        )
-    else:
-        detail = f"文件级 moved/renamed {ui.esc(moved)}，真实 modified {ui.esc(changed)}。"
-    return (
-        "<div class='quality-note path-restructure-note'>"
-        f"<b>疑似重打包 / 目录迁移</b> old root: <code>{ui.esc(old_root)}</code>，"
-        f"new root: <code>{ui.esc(new_root)}</code>；{detail}"
-        "需要确认路径变化是否影响脚本引用、flow config、release manifest。"
-        "</div>"
-    )
-
-
-def _review_task_summary_html(model: Mapping[str, Any]) -> str:
-    p0p1 = _lane_count(model, "recommended_file_diff")
-    review_count = sum(
-        1
-        for item in model.get("file_changes", []) or []
-        if isinstance(item, Mapping) and item.get("review_lane") == "Review"
-    )
-    reviewed = _lane_count(model, "summary_only") + _lane_count(model, "metadata_only")
-    moved = _as_int(_as_mapping(model.get("path_restructure")).get("renamed_or_moved"))
-    unknown = sum(
-        1
-        for item in model.get("file_changes", []) or []
-        if isinstance(item, Mapping) and str(item.get("file_type") or "").lower() == "unknown"
-    )
-    has_release_note = bool(model.get("release_notes"))
-    release_note_status = "缺失" if not has_release_note else "已发现"
-    migration_review_count = _as_int(_as_mapping(model.get("path_restructure")).get("package_root_migration_matched_files")) or moved
-    tasks = [
-        ("路径迁移等价性", migration_review_count, "确认 root 变化是否只是重打包", "WARNING" if migration_review_count else "PASS"),
-        ("P0/P1", p0p1, "必须确认", "WARNING" if p0p1 else "PASS"),
-        ("Review", review_count, "按需确认", "WARNING" if review_count else "PASS"),
-        ("Summary/Metadata", reviewed, "默认归档", "INFO" if reviewed else "PASS"),
-        ("Release note", release_note_status, "release note / changelog 证据", "PASS" if has_release_note else "WARNING"),
-        ("Unknown 文件", unknown, "待分类文件", "WARNING" if unknown else "PASS"),
-    ]
-    return ui.metric_grid(tasks)
 
 
 def _version_context_band(
@@ -1729,51 +1643,18 @@ def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
 def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
     base_version = model.get("base_version") or "-"
     base_ref = model.get("base_ref") or "NEEDS_BASE_CONFIRM"
-    status = str(model.get("status") or "UNKNOWN")
-    meta = ui.compact_meta(
-        [
-            ("Base 来源", f"{base_ref} / {model.get('base_source') or '-'}"),
-            ("Base 版本", base_version),
-            ("Target 版本", model.get("target_version") or model.get("version_id") or "-"),
-            ("对比语义", _cn_semantics(model.get("comparison_semantics"))),
-            ("删除语义", _cn_delete_semantics(model.get("delete_semantics"))),
-        ]
-    )
-    fact_summary_html = (
+    review_model = _as_mapping(model.get("version_review_model")) or build_version_review_model(model)
+    lead = (
         "<div class='version-update-lead'>"
         f"<b>{ui.esc(model.get('headline') or '-')}</b>"
         f"<p>{ui.esc(model.get('confidence_note') or '-')}</p>"
         "</div>"
     )
-    trust_context_html = (
-        "<div class='base-trust-context'>"
-        "<div class='base-trust-head'>"
-        "<b>对比口径</b>"
-        f"{ui.badge(model.get('base_trust_status') or 'WARNING', model.get('base_trust_status') or 'WARNING')}"
-        "</div>"
-        f"<p>{ui.esc(model.get('base_trust_note') or '-')}</p>"
-        f"{meta}"
-        "</div>"
-    )
-    status_message = ui.esc(model.get("status_message") or _update_status_message(status))
-    status_message_html = (
-        "<div class='quality-note'>"
-        f"<b>{ui.esc(status)}</b> {status_message}"
-        "</div>"
-    )
-    added_files = _as_int(_summary_metric_value(model, "added_files"))
-    removed_files = _as_int(_summary_metric_value(model, "removed_files"))
-    changed_files = _as_int(_summary_metric_value(model, "changed_files", model.get("changed_files")))
     return ui.panel(
-        f"使用影响（vs {base_ref} / {base_version}）",
-        "展示本次版本相对 Base 会影响哪些文件、view 和人工确认点；完整审计证据放在后续折叠区。",
-        fact_summary_html
-        + trust_context_html
-        + status_message_html
-        + _change_brief_html(model, added_files=added_files, removed_files=removed_files, changed_files=changed_files, status=status)
-        + _path_restructure_html(model)
-        + "<h3>任务清单</h3>"
-        + _review_task_summary_html(model)
+        f"更新详情（vs {base_ref} / {base_version}）",
+        "由 VersionReviewModel 的五组中文字段渲染；完整审计证据放在后续折叠区。",
+        lead
+        + render_version_review_groups(review_model)
         + "<h3>重点变化文件</h3>"
         + "<div class='quality-note'><b>显示范围</b> 仅显示 P0/P1/Review 重点变化，最多 120 行；完整变化文件在下方折叠证据中查看。P0/P1 与 Review 会同时进入本表，所以行数可能大于 P0/P1 数。</div>"
         + catalog._scroll_table(
