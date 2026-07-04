@@ -48,7 +48,7 @@ def _file_record(package: Mapping[str, Any], source_root: Path, file_path: Path,
     if file_type == "unknown" and not package.get("manual_include"):
         return None
     target_relpath = release_relative_path(source_root, file_path).as_posix()
-    view = target_relpath.split("/", 1)[0] if "/" in target_relpath else file_type_to_view(file_type)
+    view = file_type_to_view(file_type)
     return {
         "target_relpath": target_relpath,
         "source_package": package.get("version_id") or package.get("version_key"),

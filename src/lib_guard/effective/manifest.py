@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from lib_guard.release.bundle import normalize_release_relpath
+
 SCHEMA_VERSION = "effective_manifest.v2"
 RELEASE_SCHEMA_VERSION = "effective_release_preview.v1"
 DEFAULT_VIEW_ORDER = [
@@ -457,18 +459,22 @@ def release_preview(
     files = manifest.get("effective_files", {}) or {}
     previous_files = {}
     if previous_release:
-        previous_files = previous_release.get("release_files", {}) or previous_release.get("files", {}) or {}
+        previous_files = {
+            normalize_release_relpath(rel, file_type=(info or {}).get("file_type")).as_posix(): info
+            for rel, info in (previous_release.get("release_files", {}) or previous_release.get("files", {}) or {}).items()
+        }
 
     release_files: dict[str, dict[str, Any]] = {}
     delta: list[dict[str, Any]] = []
     actions = Counter()
     for rel, info in sorted(files.items()):
-        release_path = f"{release_root_text.rstrip('/')}/{manifest.get('library_name') or manifest.get('library_id')}/{release_id}/{rel}"
+        release_rel = normalize_release_relpath(rel, file_type=info.get("file_type")).as_posix()
+        release_path = f"{release_root_text.rstrip('/')}/{release_rel}"
         source_version = info.get("source_version")
         source_path = info.get("source_path") or rel
         raw_root = info.get("raw_root") or ""
         source_abs = f"{raw_root.rstrip('/')}/{source_path}" if raw_root else source_path
-        previous = previous_files.get(rel)
+        previous = previous_files.get(release_rel)
         if not previous:
             action = "add"
         elif previous.get("source_version") != source_version or previous.get("source_path") != source_path:
@@ -478,7 +484,7 @@ def release_preview(
         actions[action] += 1
         row = {
             "release_path": release_path,
-            "relpath": rel,
+            "relpath": release_rel,
             "source_version": source_version,
             "source_version_short": short_name(str(source_version)),
             "source_path": source_path,
@@ -487,13 +493,13 @@ def release_preview(
             "action": action,
             "link_mode": link_mode,
         }
-        release_files[rel] = row
+        release_files[release_rel] = row
         if action != "keep":
             delta.append(row)
 
     if previous_files:
         for rel, old in sorted(previous_files.items()):
-            if rel not in files:
+            if rel not in release_files:
                 actions["delete"] += 1
                 delta.append({
                     "release_path": old.get("release_path") or rel,

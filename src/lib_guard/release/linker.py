@@ -316,6 +316,7 @@ def link_release_from_manifest(
     manifest = load_release_manifest(manifest_path, release_root=release_root, alias=alias)
     run_dir = manifest_run_dir(manifest_path, out_dir)
     dry_run = not bool(apply)
+    mirror_release_root = bool(manifest.get("mirror_release_root"))
     override_path = run_dir / "release_override.json" if force else None
     created: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -364,7 +365,7 @@ def link_release_from_manifest(
             failed_item["error"] = str(exc)
             failed.append(failed_item)
 
-    if apply and overwrite and not failed:
+    if apply and overwrite and mirror_release_root and not failed:
         for existing in _release_existing_files(release_dir):
             if existing in expected_targets:
                 continue
@@ -411,6 +412,7 @@ def link_release_from_manifest(
         "apply": bool(apply),
         "mode": mode,
         "overwrite": overwrite,
+        "mirror_release_root": mirror_release_root,
         "force": bool(force),
         "force_reason": force_reason or "",
         "force_by": force_by if force else "",

@@ -9,36 +9,47 @@ import getpass
 import json
 
 
-VIEW_DIRS = {
-    "rtl",
-    "verilog",
-    "lef",
-    "lib",
-    "liberty",
-    "db",
-    "gds",
-    "oas",
-    "cdl",
-    "spice",
-    "sdc",
-    "upf",
-    "cpf",
-    "spef",
-    "sdf",
-    "doc",
-    "docs",
-    "waiver",
-    "package",
-    "flow",
-    "tech",
+VIEW_DIR_ALIASES = {
+    "rtl": "RTL",
+    "verilog": "RTL",
+    "systemverilog": "RTL",
+    "lef": "LEF",
+    "lib": "LIB",
+    "liberty": "LIB",
+    "db": "DB",
+    "gds": "GDS",
+    "oas": "OAS",
+    "cdl": "CDL",
+    "spice": "CDL",
+    "sdc": "SDC",
+    "upf": "UPF",
+    "cpf": "CPF",
+    "spef": "SPEF",
+    "sdf": "SDF",
+    "doc": "DOC",
+    "docs": "DOC",
+    "waiver": "WAIVER",
+    "package": "DOC",
+    "flow": "FLOW",
+    "flow_config": "FLOW",
+    "tech": "TECH",
+    "tech_config": "TECH",
 }
 
+VIEW_DIRS = set(VIEW_DIR_ALIASES)
+
 FILE_TYPE_TO_VIEW = {
-    "verilog": "rtl",
-    "doc": "doc",
-    "liberty": "lib",
-    "flow_config": "flow",
-    "tech_config": "tech",
+    "verilog": "RTL",
+    "systemverilog": "RTL",
+    "doc": "DOC",
+    "md": "DOC",
+    "txt": "DOC",
+    "liberty": "LIB",
+    "lib": "LIB",
+    "flow_config": "FLOW",
+    "tech_config": "TECH",
+    "spice": "CDL",
+    "package": "DOC",
 }
 
 
@@ -112,7 +123,10 @@ def load_release_manifest(
             raise ValueError(f"release manifest files[{idx}] requires source_path")
         if not entry.get("target_relpath") and not entry.get("relative_path"):
             raise ValueError(f"release manifest files[{idx}] requires target_relpath")
-        entry["target_relpath"] = str(entry.get("target_relpath") or entry.get("relative_path")).replace("\\", "/")
+        entry["target_relpath"] = normalize_release_relpath(
+            str(entry.get("target_relpath") or entry.get("relative_path")).replace("\\", "/"),
+            file_type=entry.get("file_type"),
+        ).as_posix()
         entry.setdefault("relative_path", entry["target_relpath"])
         entry.setdefault("library_type", manifest.get("library_type", "unknown"))
         entry.setdefault("library_name", manifest.get("library_name", "unknown"))
@@ -138,16 +152,34 @@ def _classify_file_type(source_root: Path, file_path: Path) -> str:
     return str(record.get("file_type") or "unknown")
 
 
+def canonical_view_dir(value: Any) -> str:
+    key = str(value or "").strip().lower()
+    return VIEW_DIR_ALIASES.get(key, str(value or "UNKNOWN").strip().upper() or "UNKNOWN")
+
+
+def _release_view_for_file_type(file_type: Any) -> str:
+    key = str(file_type or "").strip().lower()
+    return FILE_TYPE_TO_VIEW.get(key) or canonical_view_dir(key or "unknown")
+
+
+def normalize_release_relpath(relpath: str | Path, *, file_type: Any = None) -> Path:
+    rel = Path(str(relpath).replace("\\", "/"))
+    parts = [part for part in rel.parts if part not in {"", "."}]
+    for idx, part in enumerate(parts):
+        view = VIEW_DIR_ALIASES.get(part.lower())
+        if view:
+            tail = parts[idx + 1 :]
+            return Path(view, *tail) if tail else Path(view)
+    view = _release_view_for_file_type(file_type)
+    return Path(view, *parts) if parts else Path(view)
+
+
 def release_relative_path(source_root: str | Path, file_path: str | Path) -> Path:
     source = Path(source_root)
     file = Path(file_path)
     rel = file.relative_to(source)
-    parts = rel.parts
-    if parts and parts[0].lower() in VIEW_DIRS:
-        return Path(*parts)
     file_type = _classify_file_type(source, file)
-    view = FILE_TYPE_TO_VIEW.get(file_type, file_type or "unknown")
-    return Path(view) / rel
+    return normalize_release_relpath(rel, file_type=file_type)
 
 
 def iter_release_files(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -322,9 +354,13 @@ def create_manifest_from_snapshot(
     for item in snapshot.get("resolved_files", []) or []:
         if not isinstance(item, Mapping):
             continue
+        target_relpath = normalize_release_relpath(
+            str(item.get("target_relpath") or ""),
+            file_type=item.get("file_type"),
+        ).as_posix()
         files.append(
             {
-                "target_relpath": item.get("target_relpath"),
+                "target_relpath": target_relpath,
                 "source_path": item.get("source_path"),
                 "source_package": item.get("source_package"),
                 "source_kind": item.get("source_kind"),

@@ -68,7 +68,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             self.assertEqual(dry["status"], "DRY_RUN")
             self.assertFalse((release_root / "current").exists())
             self.assertFalse((release_root / "ucie").exists())
-            self.assertTrue(any(item["relative_path"] == "rtl/top.v" for item in dry["planned_files"]))
+            self.assertTrue(any(item["relative_path"] == "RTL/top.v" for item in dry["planned_files"]))
             self.assertTrue((run_dir / "release_link_result.json").exists())
             self.assertTrue((run_dir / "release_result.json").exists())
             dry_result = json.loads((run_dir / "release_result.json").read_text(encoding="utf-8"))
@@ -79,9 +79,11 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             self.assertEqual(applied["status"], "APPLIED")
             applied_result = json.loads((run_dir / "release_result.json").read_text(encoding="utf-8"))
             self.assertEqual(applied_result["status"], "APPLIED")
-            self.assertTrue((release_root / "rtl" / "top.v").exists())
-            self.assertTrue((release_root / "doc" / "README.md").exists())
-            self.assertTrue((release_root / "lef" / "block.lef").exists())
+            self.assertTrue((release_root / "RTL" / "top.v").exists())
+            self.assertTrue((release_root / "DOC" / "README.md").exists())
+            self.assertTrue((release_root / "LEF" / "block.lef").exists())
+            self.assertFalse((release_root / "rtl").exists())
+            self.assertFalse((release_root / "lef").exists())
             self.assertFalse((release_root / "current").exists())
             self.assertFalse((release_root / "ucie").exists())
 
@@ -118,18 +120,18 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             (ucie / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
             (ddr / "block.lef").write_text("VERSION 5.8 ;\nMACRO D\nEND D\n", encoding="utf-8")
             self._write_manifest(manifest_path, release_root, ucie, ddr)
-            (release_root / "rtl").mkdir(parents=True)
-            (release_root / "rtl" / "top.v").write_text("stale file\n", encoding="utf-8")
-            (release_root / "lef").mkdir(parents=True)
-            (release_root / "lef" / "extra.lef").write_text("extra\n", encoding="utf-8")
+            (release_root / "RTL").mkdir(parents=True)
+            (release_root / "RTL" / "top.v").write_text("stale file\n", encoding="utf-8")
+            (release_root / "LEF").mkdir(parents=True)
+            (release_root / "LEF" / "extra.lef").write_text("extra\n", encoding="utf-8")
             (run_dir / "release_link_result.json").write_text(
                 json.dumps(
                     {
                         "created_links": [
                             {
                                 "library_name": "ucie",
-                                "relative_path": "rtl/top.v",
-                                "link_path": str(release_root / "rtl" / "top.v"),
+                                "relative_path": "RTL/top.v",
+                                "link_path": str(release_root / "RTL" / "top.v"),
                                 "target_path": str(base / "wrong_source"),
                                 "status": "COPIED",
                             }
@@ -153,7 +155,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             self.assertIn("extra_file", categories)
             self.assertIn("target_mismatch", categories)
 
-    def test_manifest_apply_overwrite_mirrors_release_root_files(self) -> None:
+    def test_manifest_apply_overwrite_replaces_targets_without_deleting_unlisted_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             ucie = base / "raw" / "ucie" / "stable_20260620"
@@ -165,18 +167,78 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             ddr.mkdir(parents=True)
             (ucie / "rtl" / "new_top.v").write_text("module new_top; endmodule\n", encoding="utf-8")
             (ddr / "ddr.v").write_text("module ddr; endmodule\n", encoding="utf-8")
-            (release_root / "rtl").mkdir(parents=True)
-            (release_root / "rtl" / "old_top.v").write_text("old\n", encoding="utf-8")
+            (release_root / "RTL").mkdir(parents=True)
+            (release_root / "RTL" / "new_top.v").write_text("old target\n", encoding="utf-8")
+            (release_root / "RTL" / "old_top.v").write_text("keep me\n", encoding="utf-8")
             self._write_manifest(manifest_path, release_root, ucie, ddr)
 
             from lib_guard.release.linker import link_release_from_manifest
 
             result = link_release_from_manifest(manifest_path, apply=True, mode="copy", overwrite=True)
             self.assertEqual(result["status"], "APPLIED")
-            self.assertTrue((release_root / "rtl" / "new_top.v").exists())
-            self.assertTrue((release_root / "rtl" / "ddr.v").exists())
-            self.assertFalse((release_root / "rtl" / "old_top.v").exists())
+            self.assertEqual((release_root / "RTL" / "new_top.v").read_text(encoding="utf-8"), "module new_top; endmodule\n")
+            self.assertTrue((release_root / "RTL" / "ddr.v").exists())
+            self.assertTrue((release_root / "RTL" / "old_top.v").exists())
+            self.assertEqual(result["summary"]["removed_files"], 0)
+
+    def test_manifest_mirror_release_root_removes_unlisted_files_only_when_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            ucie = base / "raw" / "ucie" / "stable_20260620"
+            ddr = base / "raw" / "ddr" / "final_20260601"
+            release_root = base / "release_area"
+            run_dir = base / "release_runs" / "PD_LIB_CURRENT_20260620"
+            manifest_path = run_dir / "release_manifest.json"
+            (ucie / "rtl").mkdir(parents=True)
+            ddr.mkdir(parents=True)
+            (ucie / "rtl" / "new_top.v").write_text("module new_top; endmodule\n", encoding="utf-8")
+            (ddr / "ddr.v").write_text("module ddr; endmodule\n", encoding="utf-8")
+            (release_root / "RTL").mkdir(parents=True)
+            (release_root / "RTL" / "old_top.v").write_text("remove me\n", encoding="utf-8")
+            manifest = self._write_manifest(manifest_path, release_root, ucie, ddr)
+            manifest["mirror_release_root"] = True
+            manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            from lib_guard.release.linker import link_release_from_manifest
+
+            result = link_release_from_manifest(manifest_path, apply=True, mode="copy", overwrite=True)
+            self.assertEqual(result["status"], "APPLIED")
+            self.assertTrue((release_root / "RTL" / "new_top.v").exists())
+            self.assertTrue((release_root / "RTL" / "ddr.v").exists())
+            self.assertFalse((release_root / "RTL" / "old_top.v").exists())
             self.assertEqual(result["summary"]["removed_files"], 1)
+
+    def test_release_relative_path_strips_package_prefix_and_uses_uppercase_view_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw" / "vendor_A" / "openroad_asap7" / "20260627_asap7"
+            lef = root / "upstream_ae9a8ed9" / "lef" / "tech.lef"
+            verilog = root / "upstream_ae9a8ed9" / "yoSys" / "cells.v"
+            lef.parent.mkdir(parents=True)
+            verilog.parent.mkdir(parents=True)
+            lef.write_text("MACRO X\nEND X\n", encoding="utf-8")
+            verilog.write_text("module cells; endmodule\n", encoding="utf-8")
+
+            from lib_guard.release.bundle import release_relative_path
+
+            self.assertEqual(release_relative_path(root, lef).as_posix(), "LEF/tech.lef")
+            self.assertEqual(release_relative_path(root, verilog).as_posix(), "RTL/upstream_ae9a8ed9/yoSys/cells.v")
+
+    def test_release_relpath_normalizes_common_view_aliases(self) -> None:
+        from lib_guard.release.bundle import normalize_release_relpath
+
+        cases = [
+            ("source_package/lib/slow.lib", "liberty", "LIB/slow.lib"),
+            ("source_package/spef/top.spef", "spef", "SPEF/top.spef"),
+            ("source_package/db/top.db", "db", "DB/top.db"),
+            ("source_package/gds/top.gds", "gds", "GDS/top.gds"),
+            ("source_package/oas/top.oas", "oas", "OAS/top.oas"),
+            ("source_package/tech/rules.lydrc", "tech_config", "TECH/rules.lydrc"),
+            ("source_package/docs/release_note.md", "doc", "DOC/release_note.md"),
+            ("misc/top.sv", "systemverilog", "RTL/misc/top.sv"),
+        ]
+        for relpath, file_type, expected in cases:
+            with self.subTest(relpath=relpath, file_type=file_type):
+                self.assertEqual(normalize_release_relpath(relpath, file_type=file_type).as_posix(), expected)
 
     def test_manifest_template_selects_one_latest_scanned_version_per_library(self) -> None:
         with tempfile.TemporaryDirectory() as td:

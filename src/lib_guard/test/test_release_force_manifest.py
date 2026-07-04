@@ -120,7 +120,7 @@ class ReleaseForceManifestTest(unittest.TestCase):
 
             override_path = run_dir / "release_override.json"
             self.assertEqual(result["status"], "FORCED_APPLIED")
-            self.assertTrue((release_root / "rtl" / "top.v").exists())
+            self.assertTrue((release_root / "RTL" / "top.v").exists())
             self._assert_force_audit_fields(result, override_path)
             release_result = self._read_json(run_dir / "release_result.json")
             self._assert_force_audit_fields(release_result, override_path)

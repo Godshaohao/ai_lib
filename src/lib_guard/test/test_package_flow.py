@@ -123,8 +123,8 @@ class PackageFlowTest(unittest.TestCase):
             self.assertEqual(snapshot["resolved_views"]["rtl"], "ucie_rtl_patch_20260618")
             self.assertEqual(snapshot["resolved_views"]["doc"], "ucie_rtl_patch_20260618")
             self.assertEqual(snapshot["resolved_views"]["lef"], "ucie_full_20260601")
-            self.assertTrue(any(item["target_relpath"] == "rtl/top.v" and item["source_kind"] == "update" for item in snapshot["resolved_files"]))
-            self.assertTrue(any(item["target_relpath"] == "lef/ucie.lef" and item["source_kind"] == "base" for item in snapshot["resolved_files"]))
+            self.assertTrue(any(item["target_relpath"] == "RTL/top.v" and item["source_kind"] == "update" for item in snapshot["resolved_files"]))
+            self.assertTrue(any(item["target_relpath"] == "LEF/ucie.lef" and item["source_kind"] == "base" for item in snapshot["resolved_files"]))
 
     def test_release_manifest_from_snapshot_preserves_source_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -165,7 +165,7 @@ class PackageFlowTest(unittest.TestCase):
             self.assertEqual(manifest["files"][0]["source_package"], "ucie_rtl_patch_20260618")
             self.assertEqual(manifest["files"][0]["source_kind"], "update")
             planned = iter_release_files(manifest)
-            self.assertEqual(planned[0]["relative_path"], "rtl/top.v")
+            self.assertEqual(planned[0]["relative_path"], "RTL/top.v")
             self.assertEqual(planned[0]["source_package"], "ucie_rtl_patch_20260618")
             self.assertEqual(planned[0]["source_kind"], "update")
 
@@ -239,7 +239,7 @@ class PackageFlowTest(unittest.TestCase):
             )
             data = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(data["snapshot_id"], "ucie_snapshot")
-            rtl = next(item for item in data["files"] if item["target_relpath"] == "rtl/top.v")
+            rtl = next(item for item in data["files"] if item["target_relpath"] == "RTL/top.v")
             self.assertEqual(rtl["source_package"], "ucie_rtl_patch_20260618")
 
 

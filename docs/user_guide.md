@@ -154,8 +154,15 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
 ```
 
-Release 使用 manifest-driven file-level symlink/copy 规划。默认不会因为存在
-File Diff recommendation 就阻塞 `current`，除非 release policy 明确要求。
+Release 使用 manifest-driven file-level symlink/copy 规划，正式目录是扁平大写
+View 目录，例如 `LEF/`、`LIB/`、`RTL/`、`GDS/`。raw 包里的
+`upstream_xxx/lef/...`、`source_package/lef/...` 这类包装目录不会进入正式
+release 路径。
+
+`--overwrite` 只替换 manifest 中列出的目标文件，不会清空 release root 中其他
+库文件。只有完整组合 release 的 manifest 显式设置 `mirror_release_root=true`
+时，才按 manifest 镜像删除未列出的旧文件。默认不会因为存在 File Diff
+recommendation 就阻塞 `current`，除非 release policy 明确要求。
 
 `--explain` 只输出 release check 的阻塞解释，不执行 link/apply。强制发布入口仍然
 保留，但必须显式写明原因：

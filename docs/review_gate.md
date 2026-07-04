@@ -49,7 +49,10 @@ Release policy 默认规则：
 - `current` 要求 `review_gate.blocking_open == 0`。
 - `current` 默认不要求所有 File Diff recommendation 都完成。
 - `approved` 可以由 policy 要求更严格的 deep diff 或 pairwise completion。
-- release 默认使用 manifest-driven file-level symlink 模式。
+- release 默认使用 manifest-driven file-level symlink 模式，正式落盘为扁平大写
+  View 目录，例如 `LEF/`、`LIB/`、`RTL/`、`GDS/`。`--overwrite` 只替换
+  manifest 中列出的目标；只有完整组合 release 显式设置 `mirror_release_root=true`
+  时才删除未列出的旧文件。
 
 人工确认和 action 文件详见
 [人工确认与 Action 流程](manual_confirmation_action.md)。
