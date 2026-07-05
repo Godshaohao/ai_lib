@@ -84,15 +84,13 @@ def base_full_version(version: Mapping[str, Any]) -> str | None:
 
 
 def previous_effective_version(version: Mapping[str, Any]) -> str | None:
-    diff = version.get("diff") or {}
     lineage = version.get("lineage") or {}
     for key in ["previous_effective_version", "parent_version"]:
         value = version.get(key)
         if value:
             return str(value)
-    for value in [diff.get("adjacent_old_version"), lineage.get("parent_candidate")]:
-        if value:
-            return str(value)
+    if str(lineage.get("source") or "").lower() == "manual" and lineage.get("parent_candidate"):
+        return str(lineage.get("parent_candidate"))
     return None
 
 

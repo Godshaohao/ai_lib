@@ -6,7 +6,7 @@ The review pipeline exchanges JSON artifacts between stages:
 
 | Artifact | Producer | Consumer |
 | --- | --- | --- |
-| `catalog.json` | catalog scan | short CLI, renderer, batch scan, compare |
+| `catalog.json` | catalog refresh | short CLI, renderer, batch scan, compare |
 | `file_inventory.json` | scan | version review, readiness, diff |
 | `parser_manifest.json` | scan | parser executor, version review |
 | `parser_results.json` | parser executor | summary, diff, version review |

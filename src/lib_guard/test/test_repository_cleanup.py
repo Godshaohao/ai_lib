@@ -152,13 +152,10 @@ class RepositoryCleanupTest(unittest.TestCase):
         ]
         paths = [
             ROOT / "README.md",
+            ROOT / "docs" / "basic_tutorial.md",
             ROOT / "docs" / "cli_reference.md",
-            ROOT / "docs" / "command_surface.md",
-            ROOT / "docs" / "user_guide.md",
             ROOT / "docs" / "data_contract.md",
-            ROOT / "docs" / "manual_confirmation_action.md",
-            ROOT / "docs" / "review_gate.md",
-            ROOT / "docs" / "test_config_inventory.md",
+            ROOT / "docs" / "config_reference.md",
         ]
         hits: list[str] = []
         for path in paths:
@@ -200,8 +197,8 @@ class RepositoryCleanupTest(unittest.TestCase):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("库目录 -> 版本审查 -> Release", text)
         self.assertNotIn("Catalog -> Library Workspace -> Version Review -> Comparison Review -> File Diff -> Release", text)
-        self.assertIn("库工作台", text)
-        self.assertIn("高级", text)
+        self.assertIn("docs/basic_tutorial.md", text)
+        self.assertIn("docs/cli_reference.md", text)
         self.assertIn("Comparison Review", text)
         self.assertIn("手动", text)
 
@@ -236,23 +233,36 @@ class RepositoryCleanupTest(unittest.TestCase):
         self.assertFalse(missing, "data contract missing tokens:\n" + "\n".join(missing))
 
     def test_current_docs_explain_update_detail_cmp_fd_lanes_and_force_large(self) -> None:
-        required = [
-            "cat --update-detail",
-            "current_effective",
-            "cmp",
-            "summary-only",
-            "metadata-only",
-            "--force-large",
-            "Version Review",
-        ]
-        paths = [
-            ROOT / "README.md",
-            ROOT / "docs" / "user_guide.md",
-            ROOT / "docs" / "cli_reference.md",
-            ROOT / "docs" / "data_contract.md",
-        ]
+        required_by_path = {
+            ROOT / "docs" / "basic_tutorial.md": [
+                "cat <LIBRARY> --update-detail",
+                "current_effective",
+                "cmp",
+                "summary-only",
+                "metadata-only",
+                "--force-large",
+                "Version Review",
+            ],
+            ROOT / "docs" / "cli_reference.md": [
+                "cat <LIBRARY> --update-detail",
+                "current_effective",
+                "cmp",
+                "summary-only",
+                "metadata-only",
+                "--force-large",
+                "Version Review",
+            ],
+            ROOT / "docs" / "data_contract.md": [
+                "cat --update-detail",
+                "current_effective",
+                "summary-only",
+                "metadata-only",
+                "--force-large",
+                "Version Review",
+            ],
+        }
         missing: list[str] = []
-        for path in paths:
+        for path, required in required_by_path.items():
             text = path.read_text(encoding="utf-8")
             rel = path.relative_to(ROOT).as_posix()
             for token in required:
@@ -269,6 +279,23 @@ class RepositoryCleanupTest(unittest.TestCase):
             "Backward-compatible aggregate",
         ]:
             self.assertIn(token, data_contract)
+
+    def test_docs_are_consolidated_around_basic_tutorial(self) -> None:
+        expected = {
+            "architecture.md",
+            "basic_tutorial.md",
+            "cli_reference.md",
+            "compatibility.md",
+            "config_reference.md",
+            "data_contract.md",
+            "index.md",
+            "test_plan.md",
+        }
+        actual = {path.name for path in (ROOT / "docs").glob("*.md")}
+        self.assertEqual(expected, actual)
+        index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+        self.assertIn("basic_tutorial.md", index)
+        self.assertIn("config_reference.md", index)
 
     def test_current_tests_are_not_v5_named(self) -> None:
         stale = sorted((ROOT / "src" / "lib_guard" / "test").glob("test_v5_*.py"))

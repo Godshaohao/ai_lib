@@ -212,9 +212,14 @@ def _sync_version_relation_fields(item: dict[str, Any]) -> dict[str, Any]:
     lineage = dict(item.get("lineage", {}) or {})
     diff = dict(item.get("diff", {}) or {})
 
-    previous_effective = item.get("previous_effective_version") or lineage.get("parent_candidate") or diff.get("adjacent_old_version")
+    lineage_source = str(lineage.get("source") or "").lower()
+    previous_effective = item.get("previous_effective_version") or item.get("parent_version")
+    if not previous_effective and lineage_source == "manual":
+        previous_effective = lineage.get("parent_candidate")
+    adjacent_target = diff.get("adjacent_old_version") or lineage.get("parent_candidate")
     base_full = item.get("base_full_version") or item.get("base_version") or lineage.get("base_candidate") or diff.get("cumulative_base_version")
     previous_effective = str(previous_effective) if previous_effective else None
+    adjacent_target = str(adjacent_target) if adjacent_target else None
     base_full = str(base_full) if base_full else None
 
     if previous_effective:
@@ -227,7 +232,7 @@ def _sync_version_relation_fields(item: dict[str, Any]) -> dict[str, Any]:
     item["lineage"] = lineage
 
     cumulative_target = base_full if base_full and base_full != version_id else None
-    _sync_diff_target(diff, target=previous_effective, status_key="adjacent_status", version_key="adjacent_old_version", dir_key="adjacent_diff_dir", html_key="adjacent_diff_html")
+    _sync_diff_target(diff, target=adjacent_target, status_key="adjacent_status", version_key="adjacent_old_version", dir_key="adjacent_diff_dir", html_key="adjacent_diff_html")
     _sync_diff_target(diff, target=cumulative_target, status_key="cumulative_status", version_key="cumulative_base_version", dir_key="cumulative_diff_dir", html_key="cumulative_diff_html")
     if bool(item.get("manual_review")) and cumulative_target:
         _sync_diff_target(diff, target=cumulative_target, status_key="base_status", version_key="base_version", dir_key="base_diff_dir", html_key="base_diff_html")
@@ -796,6 +801,22 @@ def _collect_runtime_state(data: Mapping[str, Any]) -> dict[str, Any]:
     runtime: dict[str, Any] = {}
     if isinstance(data.get("runtime_state"), Mapping):
         runtime.update({str(k): _clean_runtime_item(v) for k, v in data.get("runtime_state", {}).items() if isinstance(v, Mapping)})
+    for lib in data.get("libraries", []) or []:
+        if not isinstance(lib, Mapping):
+            continue
+        for version in lib.get("versions", []) or []:
+            if not isinstance(version, Mapping):
+                continue
+            version_key = str(version.get("version_key") or version.get("version_uid") or "")
+            if not version_key:
+                continue
+            legacy = {k: version.get(k) for k in ["scan", "diff", "release"] if isinstance(version.get(k), Mapping)}
+            if not legacy:
+                continue
+            current = dict(runtime.get(version_key, {}) or {})
+            for key, value in legacy.items():
+                current[key] = dict(value or {}) | dict(current.get(key, {}) or {})
+            runtime[version_key] = _clean_runtime_item(current)
     overrides = data.get("manual_overrides", {}) if isinstance(data.get("manual_overrides"), Mapping) else {}
     for version_key, item in overrides.items():
         if not isinstance(item, Mapping):
@@ -951,7 +972,7 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
         update_scope = _coerce_list(package_info.get("update_scope", []))
         standalone = bool(package_info.get("standalone")) or package_type == "FULL_PACKAGE"
         base_required = bool(package_info.get("base_required"))
-        previous_effective_version = parent
+        previous_effective_version = None
         base_full_version = version_id if standalone else (base if version_id != base else None)
         if base_required and not standalone and not base_full_version:
             manual_review = True
@@ -976,7 +997,7 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
             "base_version": base_full_version,
             "base_full_version": base_full_version,
             "previous_effective_version": previous_effective_version,
-            "compare_default": "previous_effective" if previous_effective_version else "none",
+            "compare_default": "none",
             "current_effective": False,
             "classification_confidence": package_info.get("classification_confidence"),
             "classification_evidence": package_info.get("classification_evidence", {}),
@@ -1471,7 +1492,7 @@ def resolve_catalog_pair(catalog_path: str | Path, library: str, new: str, *, mo
     if base:
         old_version = base
         relation_mode = "base"
-        base_source = "manual"
+        base_source = "explicit"
     elif mode == "cumulative":
         old_version = diff.get("cumulative_base_version")
         relation_mode = "cumulative"
@@ -1552,6 +1573,7 @@ def update_catalog_diff_status(
     diff_dir: str | Path,
     status: str,
     diff_html: str | Path | None = None,
+    base_source: str | None = None,
 ) -> dict[str, Any]:
     path = Path(catalog_path)
     data = _read_json(path, {}) or {}
@@ -1561,7 +1583,12 @@ def update_catalog_diff_status(
     if mode == "cumulative":
         diff.update({"cumulative_status": "DIFF_DONE", "cumulative_base_version": old_version, "cumulative_diff_dir": str(diff_dir), "cumulative_diff_html": str(diff_html) if diff_html else None})
     elif mode == "base":
-        diff.update({"base_status": "DIFF_DONE", "base_version": old_version, "base_diff_dir": str(diff_dir), "base_diff_html": str(diff_html) if diff_html else None})
+        source = str(base_source or "explicit")
+        diff.update({"base_status": "DIFF_DONE", "base_version": old_version, "base_source": source, "base_version_source": source, "base_diff_dir": str(diff_dir), "base_diff_html": str(diff_html) if diff_html else None})
+        if source == "current_effective":
+            diff.update({"current_effective_ref": old_version, "current_effective_diff_dir": str(diff_dir), "current_effective_diff_html": str(diff_html) if diff_html else None})
+        elif source == "previous_effective":
+            diff.update({"previous_effective_version": old_version, "previous_effective_diff_dir": str(diff_dir), "previous_effective_diff_html": str(diff_html) if diff_html else None})
     else:
         diff.update({"adjacent_status": "DIFF_DONE", "adjacent_old_version": old_version, "adjacent_diff_dir": str(diff_dir), "adjacent_diff_html": str(diff_html) if diff_html else None})
     item["diff"] = diff

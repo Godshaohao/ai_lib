@@ -317,7 +317,7 @@ def _latest_effective_item(items: list[dict[str, Any]]) -> dict[str, Any] | None
     for item in items:
         if item.get("is_current_effective") or item.get("effective_status") == "current":
             return item
-    return items[-1] if items else None
+    return None
 
 
 def _version_effective_refs(version_id: str, effective_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -371,8 +371,6 @@ def _current_effective_item_ref(effective_items: list[dict[str, Any]]) -> str:
     for item in effective_items:
         if item.get("is_current_effective") or item.get("effective_status") == "current":
             return str(item.get("effective_id") or "")
-    if effective_items:
-        return str((effective_items[-1] or {}).get("effective_id") or "")
     return ""
 
 
@@ -466,9 +464,6 @@ def _library_timeline(lib: Mapping[str, Any], effective_items: list[dict[str, An
             ]
             if later_raw_full:
                 latest_ref = str(later_raw_full[-1].get("version_id") or latest_ref)
-        else:
-            candidates = [n for n in nodes if n.get("node_kind") == "effective" or (n.get("node_kind") == "raw" and n.get("package_type") == "full")]
-            latest_ref = str((candidates[-1] if candidates else {}).get("version_id") or "")
     for node in nodes:
         if latest_ref and str(node.get("version_id") or "") == latest_ref:
             node["usage_status"] = "current"
@@ -713,7 +708,7 @@ def _latest_effective_version(lib: Mapping[str, Any], versions: list[Mapping[str
     for version in reversed(versions):
         if _truthy(version.get("current_effective")):
             return str(version.get("version_id") or version.get("version") or "-")
-    return str(versions[-1].get("version_id") or versions[-1].get("version") or "-") if versions else "-"
+    return ""
 
 
 def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any) -> str:
@@ -777,7 +772,7 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
         ui.button("进入库工作台", _href(home_path), "primary", disabled=not bool(home_path), target="_blank"),
         ui.button("Effective", _href((latest_effective_item or {}).get("html")), "secondary", disabled=not bool((latest_effective_item or {}).get("html")), target="_blank"),
     ])
-    effective_label = str((latest_effective_item or {}).get("effective_id") or latest_effective)
+    effective_label = str((latest_effective_item or {}).get("effective_id") or latest_effective or "待确认")
     status_badge = "" if _status_key(status) == "UNKNOWN" else ui.badge(status)
     changed_badge = ui.quiet_badge("CHANGED", changed) if changed else ""
     return (
@@ -1797,6 +1792,52 @@ def _matches_selector(aliases: set[str], selector: Any) -> bool:
     return any(value in aliases for value in values)
 
 
+def _first_existing_state_match(item: Mapping[str, Any], old_items: list[Mapping[str, Any]], alias_fn: Any) -> Mapping[str, Any]:
+    aliases = alias_fn(item)
+    for old in old_items:
+        if aliases & alias_fn(old):
+            return old
+    return {}
+
+
+def _preserve_unrendered_catalog_links(
+    out: Path,
+    state: Mapping[str, Any],
+    *,
+    library_filter: str | None,
+    version_filter: str | None,
+) -> None:
+    if not library_filter and not version_filter:
+        return
+    previous = read_json(out / "catalog_state.json", default={}) or {}
+    old_libraries = [item for item in previous.get("libraries", []) or [] if isinstance(item, Mapping)]
+    if not old_libraries:
+        return
+    for lib in state.get("libraries", []) or []:
+        if not isinstance(lib, dict):
+            continue
+        old_lib = _first_existing_state_match(lib, old_libraries, _library_selector_aliases)
+        if not old_lib:
+            continue
+        lib_selected = _matches_selector(_library_selector_aliases(lib), library_filter)
+        if not lib_selected:
+            if old_lib.get("library_home_html") and not lib.get("library_home_html"):
+                lib["library_home_html"] = old_lib.get("library_home_html")
+        old_versions = [item for item in old_lib.get("versions", []) or [] if isinstance(item, Mapping)]
+        for version in lib.get("versions", []) or []:
+            if not isinstance(version, dict):
+                continue
+            version_selected = lib_selected and _matches_selector(_version_selector_aliases(version), version_filter)
+            if version_selected:
+                continue
+            old_version = _first_existing_state_match(version, old_versions, _version_selector_aliases)
+            old_links = old_version.get("links") if isinstance(old_version.get("links"), Mapping) else {}
+            if old_links:
+                merged_links = dict(old_links)
+                merged_links.update(version.get("links") or {})
+                version["links"] = merged_links
+
+
 def render_catalog_html(
     catalog_json: str | Path,
     out_dir: str | Path,
@@ -1838,6 +1879,7 @@ def render_catalog_html(
             lib_id = str(lib.get("typed_library_id") or lib.get("library_id") or lib.get("formal_library_id") or lib.get("library_name") or "")
             lib["library_home_html"] = render_library_workspace_page(out, lib, _effective_items_for_lib(effective_by_lib, lib), list(compare_by_lib.get(lib_id, []) or []))
             rendered_libraries += 1
+    _preserve_unrendered_catalog_links(out, state, library_filter=library_filter, version_filter=version_filter)
     report_index = _write_report_index(out, state, effective_by_lib, compare_by_lib)
     for stale_name in ("review_state.json", "review_tasks.json"):
         stale_path = out / stale_name

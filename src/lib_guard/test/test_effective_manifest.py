@@ -329,7 +329,7 @@ class EffectiveManifestTest(unittest.TestCase):
             self.assertIn("打开报告", library_html)
             self.assertNotIn("<iframe", library_html.lower())
 
-    def test_timeline_can_point_latest_effective_to_raw_full(self) -> None:
+    def test_timeline_keeps_generated_effective_as_candidate_until_current_pointer_exists(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             raw = root / "raw"
@@ -377,20 +377,21 @@ class EffectiveManifestTest(unittest.TestCase):
             result = render_catalog_html(catalog_dir / "catalog.json", html_dir)
             report_index = json.loads(Path(result["report_index"]).read_text(encoding="utf-8"))
             lib_entry = report_index["libraries"]["ip/ucie"]
-            self.assertEqual(lib_entry["latest_effective_ref"], full.name)
+            self.assertEqual(lib_entry["latest_effective_ref"], "")
+            self.assertEqual(lib_entry["current_effective"], "")
 
             nodes = {node["version_id"]: node for node in lib_entry["timeline"]}
             self.assertEqual(nodes[full.name]["node_kind"], "raw")
             self.assertEqual(nodes[full.name]["package_type"], "full")
-            self.assertEqual(nodes[full.name]["usage_status"], "current")
+            self.assertEqual(nodes[full.name]["usage_status"], "usable")
             self.assertEqual(nodes[patch.name]["package_type"], "partial")
             self.assertEqual(nodes[patch.name]["usage_status"], "accepted")
             self.assertEqual(nodes["effective_20260624"]["node_kind"], "effective")
             self.assertEqual(nodes["effective_20260624"]["package_type"], "composed")
+            self.assertNotEqual(nodes["effective_20260624"]["usage_status"], "current")
 
             library_html = (html_dir / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Current Effective", library_html)
-            self.assertIn(full.name, library_html)
+            self.assertIn("当前有效", library_html)
             self.assertIn("版本时间线", library_html)
             self.assertNotIn("Current Effective Detail", library_html)
             self.assertNotIn("Current raw", library_html)

@@ -555,6 +555,9 @@ def _cn_base_source(value: Any) -> str:
         "latest_effective_ref": "最新有效版本引用",
         "explicit": "手动指定",
         "manual": "手动指定",
+        "diff.base_version:explicit": "Diff 记录：手动指定",
+        "diff.base_version:current_effective": "Diff 记录：当前有效版本",
+        "diff.base_version:previous_effective": "Diff 记录：上一有效版本",
         "diff_summary": "Diff 记录",
     }.get(text, text or "-")
 

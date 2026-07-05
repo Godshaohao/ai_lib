@@ -113,13 +113,14 @@ def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[st
     project_root = os.environ.get("LIB_GUARD_PROJECT_ROOT") or Path(__file__).resolve().parents[2]
     default_catalog_policy = project_policy_path(project_root, CATALOG_POLICY_FILE)
     default_release_policy = project_policy_path(project_root, RELEASE_POLICY_FILE)
-    defaults = workspace_defaults(path.parent, library_type=cfg.get("library_type", DEFAULT_LIBRARY_TYPE))
+    workspace_root = Path(cfg.get("workspace") or path.parent)
+    defaults = workspace_defaults(workspace_root, library_type=cfg.get("library_type", DEFAULT_LIBRARY_TYPE))
     derived_config_keys = {"config_dir", "library_list", "library_registry", "library_candidates", "library_catalog", "library_versions", "versions"}
     for key, value in defaults.items():
         if key in derived_config_keys:
             continue
         cfg.setdefault(key, value)
-    config_defaults = workspace_config_file_defaults(path.parent, cfg.get("config_dir") or defaults["config_dir"])
+    config_defaults = workspace_config_file_defaults(workspace_root, cfg.get("config_dir") or defaults["config_dir"])
     for key, value in config_defaults.items():
         cfg.setdefault(key, value)
     if cfg.get("versions"):
@@ -309,16 +310,14 @@ def _latest_refresh_version(library: dict[str, Any]) -> dict[str, Any] | None:
     versions = [item for item in library.get("versions", []) or [] if isinstance(item, dict)]
     if not versions:
         return None
-    current_raw = [item for item in versions if item.get("current_effective")]
-    if current_raw:
-        return current_raw[-1]
     by_id = {str(item.get("version_id") or ""): item for item in versions}
     summary = library.get("summary", {}) or {}
-    latest_ref = _version_ref((summary or {}).get("latest_effective_ref"))
-    if latest_ref and latest_ref in by_id:
-        return by_id[latest_ref]
-    for key in ["latest_version", "current_version"]:
+    for key in ["latest_version", "latest_delivery_version"]:
         value = _version_ref(summary.get(key))
+        if value and value in by_id:
+            return by_id[value]
+    for key in ["latest_version", "latest_delivery_version"]:
+        value = _version_ref(library.get(key))
         if value and value in by_id:
             return by_id[value]
     return versions[-1]
@@ -348,27 +347,51 @@ def _library_summary_ref(library: dict[str, Any], target_version: str, keys: lis
     return None
 
 
+def _manual_lineage_parent(version: dict[str, Any]) -> str | None:
+    lineage = version.get("lineage", {}) or {}
+    if str(lineage.get("source") or "").lower() == "manual":
+        return _version_ref(lineage.get("parent_candidate"), str(version.get("version_id") or ""))
+    return None
+
+
 def _refresh_base_version(library: dict[str, Any], version: dict[str, Any], mode: str) -> str | None:
+    base, _source = _refresh_base_version_with_source(library, version, mode)
+    return base
+
+
+def _refresh_base_version_with_source(library: dict[str, Any], version: dict[str, Any], mode: str) -> tuple[str | None, str | None]:
     target = str(version.get("version_id") or "")
     lineage = version.get("lineage", {}) or {}
     diff = version.get("diff", {}) or {}
     if mode == "adjacent":
-        return _version_ref(diff.get("adjacent_old_version"), target)
+        return _version_ref(diff.get("adjacent_old_version"), target), "adjacent"
     if mode == "cumulative":
-        return _version_ref(diff.get("cumulative_base_version") or version.get("base_full_version") or version.get("base_version") or lineage.get("base_candidate"), target)
+        return _version_ref(diff.get("cumulative_base_version") or version.get("base_full_version") or version.get("base_version") or lineage.get("base_candidate"), target), "cumulative"
     if mode == "current_effective":
-        return (
+        current = (
             _version_ref(version.get("current_effective_ref"), target)
             or _version_ref(version.get("latest_effective_ref"), target)
             or _library_summary_ref(library, target, ["current_effective", "current_effective_ref", "latest_effective_ref", "current_version"])
-            or _version_ref(version.get("previous_effective_version") or version.get("parent_version") or lineage.get("parent_candidate"), target)
         )
-    return (
-        _version_ref(version.get("previous_effective_version") or version.get("parent_version") or lineage.get("parent_candidate"), target)
-        or _version_ref(version.get("current_effective_ref"), target)
+        if current:
+            return current, "current_effective"
+        return _version_ref(version.get("previous_effective_version") or version.get("parent_version"), target) or _manual_lineage_parent(version), "previous_effective"
+    previous = (
+        _version_ref(version.get("previous_effective_version") or version.get("parent_version"), target)
+        or _manual_lineage_parent(version)
+    )
+    if previous:
+        return previous, "previous_effective"
+    if mode == "previous_effective":
+        return None, None
+    current = (
+        _version_ref(version.get("current_effective_ref"), target)
         or _version_ref(version.get("latest_effective_ref"), target)
         or _library_summary_ref(library, target, ["current_effective", "current_effective_ref", "latest_effective_ref", "current_version"])
     )
+    if current:
+        return current, "current_effective"
+    return None, None
 
 
 def _library_cli_name(library: dict[str, Any]) -> str:
@@ -382,6 +405,7 @@ def _refresh_compare_command(
     *,
     mode: str | None = None,
     base: str | None = None,
+    base_source: str | None = None,
     rescan: bool = False,
 ) -> list[str]:
     command = [
@@ -401,6 +425,8 @@ def _refresh_compare_command(
         command.extend(["--mode", mode])
     if base:
         command.extend(["--base", base])
+    if base_source:
+        command.extend(["--base-source", base_source])
     command.append("--rescan" if rescan else "--scan-if-missing")
     _append_scan_strategy(command, cfg)
     return command
@@ -434,8 +460,9 @@ def _refresh_commands(cfg: dict[str, str], args: Any) -> list[list[str]]:
             continue
         mode = getattr(args, "mode", "current_effective")
         base = None
+        base_source = None
         if mode in {"previous_effective", "current_effective"}:
-            base = _refresh_base_version(lib, version, mode)
+            base, base_source = _refresh_base_version_with_source(lib, version, mode)
             if not base:
                 raise ValueError(f"refresh cannot resolve {mode} base for {library_name}/{version_id}; set previous_effective/current_effective or run cmp --base explicitly")
         commands.append(
@@ -445,6 +472,7 @@ def _refresh_commands(cfg: dict[str, str], args: Any) -> list[list[str]]:
                 version_id,
                 mode=mode if mode in {"adjacent", "cumulative"} else None,
                 base=base,
+                base_source=base_source,
                 rescan=bool(getattr(args, "rescan", False)),
             )
         )
@@ -571,6 +599,7 @@ def _build_parser() -> ArgumentParser:
     cd $WORK
     lg.csh library add <正式库名> --root <库根目录> --apply
     lg.csh library discover             # 只生成候选快照，不覆盖人工 registry
+    lg.csh library discover --max-depth 4 --max-dirs 5000 --max-candidates 200
     vi $WORK/config/library_candidates/latest.tsv
     lg.csh library accept
     lg.csh library apply
@@ -646,8 +675,10 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--out", help="候选 TSV 输出，默认 $WORK/config/library_candidates/latest.tsv")
     p.add_argument("--json-out", help="机器发现 evidence JSON，默认 $WORK/config/library_candidates/latest.json")
     p.add_argument("--html-out", help="发现结果审查 HTML，默认 $WORK/config/library_candidates/latest.html")
-    p.add_argument("--max-depth", type=int, default=8)
+    p.add_argument("--max-depth", type=int, default=4)
     p.add_argument("--min-versions", type=int, default=2)
+    p.add_argument("--max-dirs", type=int, default=5000)
+    p.add_argument("--max-candidates", type=int, default=200)
     p.add_argument("--default-status", choices=["REVIEW", "OK"], default="REVIEW")
 
     p = lsp.add_parser("accept", help="把候选 TSV 中标为 OK/ENABLE 的行合并进人工 registry")
@@ -657,6 +688,7 @@ def _build_parser() -> ArgumentParser:
     p = lsp.add_parser("list", help="列出 catalog 中可直接用于命令的正式库名和版本名")
     p.add_argument("library", nargs="?", help="正式库名；传入后可配合 --versions 列版本")
     p.add_argument("--versions", action="store_true", help="列出该库的版本名")
+    p.add_argument("--effective", action="store_true", help="并排列出交付库库存和当前 Effective 有效组合")
 
     p = lsp.add_parser("add", help="已知库根时直接加入人工 registry，不做 discover")
     p.add_argument("library_id", help="正式库名，例如 vendor_A.openroad_platform.openroad_asap7")
@@ -760,7 +792,7 @@ def _catalog_scan_command(
     catalog = cfg["catalog"]
     command = [
         "catalog",
-        "scan",
+        "refresh",
         "--root",
         cfg["raw_root"],
         "--out",
@@ -858,6 +890,10 @@ def _library_discover_command(cfg: dict[str, str], args: Any) -> list[str]:
         str(args.max_depth),
         "--min-versions",
         str(args.min_versions),
+        "--max-dirs",
+        str(args.max_dirs),
+        "--max-candidates",
+        str(args.max_candidates),
         "--default-status",
         args.default_status,
     ]
@@ -905,6 +941,8 @@ def _library_list_command(cfg: dict[str, str], args: Any) -> list[str]:
         command.extend(["--library", args.library])
     if getattr(args, "versions", False):
         command.append("--versions")
+    if getattr(args, "effective", False):
+        command.extend(["--effective", "--html-out", cfg["catalog_html"]])
     return command
 
 

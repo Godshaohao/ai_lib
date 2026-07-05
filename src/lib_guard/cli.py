@@ -6,7 +6,7 @@ Commands:
 - history list/latest
 - render
 - release check/link
-- catalog scan/compare/release
+- catalog refresh/compare/release
 - file-diff
 
 This CLI keeps scan, render, release, catalog, and diff boundaries explicit.
@@ -378,8 +378,10 @@ def add_library_parser(subparsers: Any) -> None:
     p.add_argument("--out", required=True, help="Candidate TSV output; this should not be the stable registry")
     p.add_argument("--json-out", help="Machine discovery evidence JSON")
     p.add_argument("--html-out", help="Discovery review HTML")
-    p.add_argument("--max-depth", type=int, default=8)
+    p.add_argument("--max-depth", type=int, default=4)
     p.add_argument("--min-versions", type=int, default=2)
+    p.add_argument("--max-dirs", type=int, default=5000)
+    p.add_argument("--max-candidates", type=int, default=200)
     p.add_argument("--default-status", choices=["REVIEW", "OK"], default="REVIEW")
     p.set_defaults(func=run_library_discover)
 
@@ -417,24 +419,30 @@ def add_catalog_parser(subparsers: Any) -> None:
     root = subparsers.add_parser("catalog", help="Discover raw library assets and render catalog HTML")
     sp = root.add_subparsers(dest="catalog_cmd", required=True)
 
-    p = sp.add_parser("scan", help="Discover libraries and versions from a raw root")
-    p.add_argument("--root", required=True)
-    p.add_argument("--out", required=True)
-    p.add_argument("--library-type", default="ip")
-    p.add_argument("--library", help="Refresh only this library in the catalog; keeps previous catalog entries for other libraries.")
-    p.add_argument("--full", action="store_true", help="Force a full catalog refresh and ignore catalog_state.json.")
-    p.add_argument("--fast", action="store_true", help="Directory-only discovery; do not recurse into version directories for file-type evidence.")
-    p.add_argument("--with-evidence", action="store_true", help="Collect lightweight file-type evidence during catalog discovery; slower on large RAW trees.")
-    p.add_argument("--policy")
-    p.add_argument("--render", action="store_true", help="Also render Chinese catalog HTML")
-    p.add_argument("--html-out")
-    p.add_argument("--render-version", help="When --render is used with --library, only refresh this version detail page.")
-    p.set_defaults(func=run_catalog_scan)
+    def add_refresh_parser(name: str, help_text: str) -> None:
+        p = sp.add_parser(name, help=help_text)
+        p.add_argument("--root", required=True)
+        p.add_argument("--out", required=True)
+        p.add_argument("--library-type", default="ip")
+        p.add_argument("--library", help="Refresh only this library in the catalog; keeps previous catalog entries for other libraries.")
+        p.add_argument("--full", action="store_true", help="Force a full catalog refresh and ignore catalog_state.json.")
+        p.add_argument("--fast", action="store_true", help="Directory-only discovery; do not recurse into version directories for file-type evidence.")
+        p.add_argument("--with-evidence", action="store_true", help="Collect lightweight file-type evidence during catalog discovery; slower on large RAW trees.")
+        p.add_argument("--policy")
+        p.add_argument("--render", action="store_true", help="Also render Chinese catalog HTML")
+        p.add_argument("--html-out")
+        p.add_argument("--render-version", help="When --render is used with --library, only refresh this version detail page.")
+        p.set_defaults(func=run_catalog_scan)
+
+    add_refresh_parser("refresh", "Refresh catalog index and optionally render catalog HTML")
+    add_refresh_parser("scan", "Compatibility alias for catalog refresh")
 
     p = sp.add_parser("list", help="List libraries or versions in a catalog")
     p.add_argument("--catalog", required=True)
     p.add_argument("--library")
     p.add_argument("--versions", action="store_true")
+    p.add_argument("--effective", action="store_true", help="列出交付库库存和当前 Effective 有效组合；Effective 只从 report_index.json 读取")
+    p.add_argument("--html-out", help="包含 report_index.json 的 catalog HTML 目录；默认使用 catalog.json 旁边的 html 目录")
     p.set_defaults(func=run_catalog_list)
 
     p = sp.add_parser("render", help="Render catalog.json into Chinese HTML")
@@ -530,6 +538,7 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--new", required=True)
     p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"])
     p.add_argument("--base", help="Explicit old/base version for this comparison")
+    p.add_argument("--base-source", choices=["explicit", "current_effective", "previous_effective"], help="Semantic source of --base for Version Detail review")
     p.add_argument("--workdir", default="work")
     p.add_argument("--out")
     p.add_argument("--html-out")

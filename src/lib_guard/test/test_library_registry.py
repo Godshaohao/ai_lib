@@ -29,7 +29,6 @@ class LibraryRegistryTest(unittest.TestCase):
 
             candidates = discover_library_candidates(raw, default_status="OK")
             active_ids = [item.library_id for item in candidates if item.status == "REVIEW"]
-            ignored = {item.library_id: item.reason for item in candidates if item.status == "IGNORE"}
 
             self.assertEqual(
                 active_ids,
@@ -40,9 +39,64 @@ class LibraryRegistryTest(unittest.TestCase):
                 ],
             )
             self.assertEqual({item.status for item in candidates if item.library_id in active_ids}, {"REVIEW"})
-            self.assertIn("vendor_A", ignored)
-            self.assertIn("suppressed_by_child", ignored["vendor_A"])
+            self.assertFalse(any(item.library_id == "vendor_A" for item in candidates))
             self.assertFalse(any("source_package" in item for item in active_ids))
+            self.assertFalse(any(item.status == "IGNORE" for item in candidates))
+
+    def test_discover_deduplicates_same_resolved_library_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "vendor_A" / "openroad_asap7"
+            for version in ["20260624_asap7", "20260627_asap7"]:
+                view_dir = root / version / "lef"
+                view_dir.mkdir(parents=True)
+                (view_dir / "tech.lef").write_text("MACRO A\n", encoding="utf-8")
+
+            from lib_guard.library_registry import LibraryCandidate, _suppress_ancestor_candidates
+
+            duplicate = LibraryCandidate(
+                status="REVIEW",
+                library_id="vendor_A_openroad_asap7",
+                root_abs=str(root.resolve()),
+                display_name="openroad_asap7",
+                vendor="vendor_A",
+                middle_path="",
+                version_count=2,
+                example_versions=["20260624_asap7", "20260627_asap7"],
+                confidence=0.8,
+                reason="test",
+            )
+            parent = LibraryCandidate(
+                status="REVIEW",
+                library_id="vendor_A",
+                root_abs=str((raw / "vendor_A").resolve()),
+                display_name="vendor_A",
+                vendor="vendor_A",
+                middle_path="",
+                version_count=2,
+                example_versions=["openroad_asap7"],
+                confidence=0.6,
+                reason="test",
+            )
+
+            candidates = _suppress_ancestor_candidates([parent, duplicate, duplicate])
+
+            self.assertEqual([item.library_id for item in candidates], ["vendor_A_openroad_asap7"])
+
+    def test_discover_does_not_promote_top_level_vendor_as_library(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            vendor = raw / "Vendor_A"
+            for version in ["20251213_ANA_IP_N7_Final_Release", "20260306_Analog_IP_P3_Final_Release_Maintenance"]:
+                view_dir = vendor / version / "payload" / "lef"
+                view_dir.mkdir(parents=True)
+                (view_dir / "macro.lef").write_text("MACRO X\n", encoding="utf-8")
+
+            from lib_guard.library_registry import discover_library_candidates
+
+            candidates = discover_library_candidates(raw, max_depth=4)
+
+            self.assertFalse(candidates)
 
     def test_discover_accepts_arbitrary_instance_names_when_cohort_has_view_hints(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -81,6 +135,51 @@ class LibraryRegistryTest(unittest.TestCase):
 
             self.assertEqual(active_ids, ["vendor_Y_macro"])
             self.assertFalse(any(part in item for item in active_ids for part in ["source_package", "_lef", "_lib"]))
+
+    def test_discover_stops_at_version_dirs_and_does_not_promote_deep_views(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "Vendor_A" / "Analog_IP"
+            releases = [
+                "20251213_ANA_IP_N7_Final_Release",
+                "20260306_Analog_IP_P3_Final_Release_Maintenance",
+            ]
+            for release in releases:
+                phys = (
+                    root
+                    / release
+                    / f"UVIP_{release}_MX"
+                    / "decap_soc"
+                    / "MA_DECAP_H"
+                    / "phys_ver"
+                )
+                phys.mkdir(parents=True)
+                (phys / "macro.lef").write_text("MACRO X\n", encoding="utf-8")
+                for corner_drop in ["R1", "R2"]:
+                    nested = phys / corner_drop
+                    nested.mkdir()
+                    (nested / "macro.lef").write_text("MACRO X\n", encoding="utf-8")
+                dft = root / release / f"UVIP_{release}_MX" / "fnpll" / "ma_fnpll" / "dft"
+                dft.mkdir(parents=True)
+                (dft / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+                for corner_drop in ["R1", "R2"]:
+                    nested = dft / corner_drop
+                    nested.mkdir()
+                    (nested / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+
+            from lib_guard.library_registry import discover_to_files
+
+            out = Path(td) / "candidates.tsv"
+            result = discover_to_files(raw, list_out=out, max_depth=8, max_dirs=1000)
+            text = out.read_text(encoding="utf-8")
+            data_lines = [line for line in text.splitlines() if line and not line.startswith("#")]
+            data_text = "\n".join(data_lines)
+
+            self.assertEqual(result["status"], "PASS")
+            self.assertIn("Vendor_A_Analog_IP", data_text)
+            self.assertNotIn("phys_ver", data_text)
+            self.assertNotIn("\tdft\t", data_text)
+            self.assertLess(result["visited_dirs"], 20)
 
     def test_apply_writes_dotted_formal_ids_and_underscore_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -268,6 +367,24 @@ class LibraryRegistryTest(unittest.TestCase):
             self.assertTrue(candidates.exists())
             self.assertIn("vendor_X_custom_ip", candidates.read_text(encoding="utf-8"))
             self.assertIn("vendor_old.ip", registry.read_text(encoding="utf-8"))
+
+    def test_discover_limits_large_raw_tree_and_reports_truncation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            for idx in range(40):
+                noisy = raw / f"vendor_{idx:02d}" / f"misc_{idx:02d}"
+                noisy.mkdir(parents=True)
+                (noisy / "README.txt").write_text("not a library\n", encoding="utf-8")
+
+            from lib_guard.library_registry import discover_to_files
+
+            out = Path(td) / "candidates.tsv"
+            result = discover_to_files(raw, list_out=out, max_dirs=10, max_candidates=5)
+
+            self.assertEqual(result["status"], "PASS")
+            self.assertLessEqual(result["visited_dirs"], 10)
+            self.assertTrue(result["truncated"])
+            self.assertTrue(any("max_dirs" in warning for warning in result["warnings"]))
 
 
 if __name__ == "__main__":

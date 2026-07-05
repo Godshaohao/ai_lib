@@ -19,6 +19,8 @@ def run_library_discover(args: Namespace) -> int:
         max_depth=args.max_depth,
         min_versions=args.min_versions,
         default_status=args.default_status,
+        max_dirs=args.max_dirs,
+        max_candidates=args.max_candidates,
     )
     print_json(result)
     return 0 if result.get("status") == "PASS" else 2

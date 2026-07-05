@@ -75,6 +75,8 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             self.assertEqual(commands[-1][0], "compare")
             self.assertIn("--base", commands[-1])
             self.assertEqual(commands[-1][commands[-1].index("--base") + 1], "base")
+            self.assertIn("--base-source", commands[-1])
+            self.assertEqual(commands[-1][commands[-1].index("--base-source") + 1], "previous_effective")
 
     def test_legacy_refresh_is_rewritten_to_cat_update_detail_for_compatibility(self) -> None:
         td, workspace = self._workspace()

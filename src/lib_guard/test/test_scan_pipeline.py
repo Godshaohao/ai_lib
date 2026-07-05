@@ -1660,6 +1660,10 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(library_discover_cmds[0][0:2], ["library", "discover"])
             self.assertIn(str(workspace / "config" / "library_candidates" / "latest.tsv"), library_discover_cmds[0])
             self.assertNotIn(str(workspace / "config" / "library.list"), library_discover_cmds[0])
+            self.assertIn("--max-depth", library_discover_cmds[0])
+            self.assertIn("4", library_discover_cmds[0])
+            self.assertIn("--max-candidates", library_discover_cmds[0])
+            self.assertIn("200", library_discover_cmds[0])
 
             library_apply_cmds = build_cli_commands(["library", "apply"], cwd=workspace)
             self.assertEqual(library_apply_cmds[0][0:2], ["library", "apply"])
@@ -1718,13 +1722,19 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("vendor_A.openroad_platform.openroad_asap7", library_list_versions_cmds[0])
             self.assertIn("--versions", library_list_versions_cmds[0])
 
+            library_effective_cmds = build_cli_commands(["library", "list", "--effective"], cwd=workspace)
+            self.assertEqual(library_effective_cmds[0][0:2], ["catalog", "list"])
+            self.assertIn("--effective", library_effective_cmds[0])
+            self.assertIn("--html-out", library_effective_cmds[0])
+            self.assertIn(str(workspace / "catalog" / "html"), library_effective_cmds[0])
+
             catalog_cmds = build_cli_commands(["catalog"], cwd=workspace)
             self.assertEqual(len(catalog_cmds), 1)
-            self.assertEqual(catalog_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+            self.assertEqual(catalog_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
 
             catalog_lib_cmds = build_cli_commands(["catalog", "ucie"], cwd=workspace)
             self.assertEqual(len(catalog_lib_cmds), 1)
-            self.assertEqual(catalog_lib_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+            self.assertEqual(catalog_lib_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
             self.assertIn("--library", catalog_lib_cmds[0])
             self.assertIn("ucie", catalog_lib_cmds[0])
 
@@ -1743,7 +1753,7 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("lg scan requires <library> <version>", str(no_target_scan_error.exception))
 
             full_catalog_cmds = build_cli_commands(["catalog", "--full"], cwd=workspace)
-            self.assertEqual(full_catalog_cmds[0][:2], ["catalog", "scan"])
+            self.assertEqual(full_catalog_cmds[0][:2], ["catalog", "refresh"])
             self.assertIn("--full", full_catalog_cmds[0])
 
             with self.assertRaises(ValueError) as scan_error:
@@ -1751,7 +1761,7 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("scan 'ucie' is ambiguous", str(scan_error.exception))
 
             lib_scan_cmds = build_cli_commands(["scan", "ucie", "--all-versions"], cwd=workspace)
-            self.assertEqual(lib_scan_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+            self.assertEqual(lib_scan_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
             self.assertIn("--library", lib_scan_cmds[0])
             self.assertIn("ucie", lib_scan_cmds[0])
             self.assertEqual(lib_scan_cmds[1][0], "run-batch")
@@ -1771,13 +1781,13 @@ class ScanPipelineTest(unittest.TestCase):
 
             undiscovered_scan_cmds = build_cli_commands(["scan", "ucie", "future_20250615"], cwd=workspace)
             self.assertEqual(len(undiscovered_scan_cmds), 2)
-            self.assertEqual(undiscovered_scan_cmds[0][:2], ["catalog", "scan"])
+            self.assertEqual(undiscovered_scan_cmds[0][:2], ["catalog", "refresh"])
             self.assertEqual(undiscovered_scan_cmds[1][0], "run")
             self.assertIn("future_20250615", undiscovered_scan_cmds[1])
 
             evidence_scan_cmds = build_cli_commands(["scan", "ucie", "stable_20250608", "--with-evidence"], cwd=workspace)
             self.assertEqual(len(evidence_scan_cmds), 2)
-            self.assertEqual(evidence_scan_cmds[0][:2], ["catalog", "scan"])
+            self.assertEqual(evidence_scan_cmds[0][:2], ["catalog", "refresh"])
             self.assertIn("--with-evidence", evidence_scan_cmds[0])
             self.assertEqual(evidence_scan_cmds[1][0], "run")
 
@@ -1795,7 +1805,7 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertNotIn("--scan-if-missing", diff_cmds[0])
 
             refresh_diff_cmds = build_cli_commands(["diff", "ucie", "stable_20250608", "--refresh-catalog"], cwd=workspace)
-            self.assertEqual(refresh_diff_cmds[0][:2], ["catalog", "scan"])
+            self.assertEqual(refresh_diff_cmds[0][:2], ["catalog", "refresh"])
             self.assertEqual(refresh_diff_cmds[-1][0], "compare")
 
             explicit_diff_cmds = build_cli_commands(["diff", "ucie", "stable_20250608", "--base", "initial_20250601", "--auto-scan"], cwd=workspace)
@@ -1849,7 +1859,7 @@ class ScanPipelineTest(unittest.TestCase):
                 cat_cmds = build_cli_commands(["cat"], cwd=caller)
 
             self.assertEqual(len(cat_cmds), 1)
-            self.assertEqual(cat_cmds[0][:4], ["catalog", "scan", "--root", str(raw)])
+            self.assertEqual(cat_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
             self.assertIn(str(catalog.parent), cat_cmds[0])
 
     def test_short_cli_simplifies_v6_file_diff_scenarios(self) -> None:
@@ -1920,7 +1930,7 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(explicit_cmd[0:2], ["file-diff", "snp"])
 
             catalog_alias_cmd = build_cli_commands(["cat", "u"], cwd=workspace)
-            self.assertEqual(catalog_alias_cmd[0][0:2], ["catalog", "scan"])
+            self.assertEqual(catalog_alias_cmd[0][0:2], ["catalog", "refresh"])
             diff_alias_cmd = build_cli_commands(["cmp", "u", "stable_20250608", "--base", "initial_20250601"], cwd=workspace)
             self.assertEqual(diff_alias_cmd[0][0], "compare")
             self.assertIn("--base", diff_alias_cmd[0])
@@ -1933,6 +1943,8 @@ class ScanPipelineTest(unittest.TestCase):
         text = wrapper.read_text(encoding="utf-8")
         self.assertIn("lib_guard.short_cli", text)
         self.assertIn("PYTHONPATH", text)
+        self.assertIn("LIB_GUARD_PYTHON", text)
+        self.assertIn("setenv LIB_GUARD_PYTHON", text)
 
     def test_short_cli_help_shows_minimal_workflow_examples(self) -> None:
         from lib_guard.short_cli import _build_parser
@@ -2446,6 +2458,31 @@ class ScanPipelineTest(unittest.TestCase):
 
             for key in ["catalog", "catalog_html", "library_registry", "library_candidates", "library_catalog", "library_versions", "actions_dir"]:
                 self.assertEqual(cfg[key], defaults[key])
+
+    def test_short_cli_symlinked_config_uses_workspace_library_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "work" / "review"
+            raw = workspace / "raw"
+            config_dir = workspace / "config"
+            config_dir.mkdir(parents=True)
+            library_catalog = config_dir / "library_catalog.yml"
+            library_catalog.write_text(
+                'version: 1\n'
+                f'raw_root: "{raw}"\n'
+                'libraries: {}\n',
+                encoding="utf-8",
+            )
+
+            from lib_guard.short_cli import build_cli_commands, write_default_config
+
+            config = write_default_config(workspace, raw_root=raw)
+            (root / "lib_guard.yml").symlink_to(config)
+
+            command = build_cli_commands(["cat"], cwd=root)[0]
+
+            self.assertIn("--policy", command)
+            self.assertEqual(command[command.index("--policy") + 1], str(library_catalog))
 
     def test_scan_writer_keeps_release_readiness_as_derived_output(self) -> None:
         import inspect

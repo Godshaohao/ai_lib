@@ -59,14 +59,21 @@ def resolve_review_base(version: Mapping[str, Any], library: Mapping[str, Any] |
         value = version.get(key) or diff.get(key) or lineage.get(key)
         if value and not isinstance(value, bool):
             return {"base_ref": "current_effective", "base_version": str(value), "base_source": key}
-    previous = version.get("previous_effective_version") or version.get("parent_version") or lineage.get("parent_candidate")
+    previous = version.get("previous_effective_version") or version.get("parent_version")
+    if not previous and str(lineage.get("source") or "").lower() == "manual":
+        previous = lineage.get("parent_candidate")
     if previous:
         return {"base_ref": "previous_effective", "base_version": str(previous), "base_source": "previous_effective_version"}
     diff_base = diff.get("base_version")
     diff_base_source = str(diff.get("base_source") or diff.get("base_version_source") or "").lower()
     diff_kind = str(diff.get("kind") or diff.get("diff_kind") or "").lower()
-    if diff_base and (diff_base_source in {"explicit", "current_effective"} or diff_kind == "current_library_diff"):
-        base_ref = "current_effective" if diff_base_source == "current_effective" or diff_kind == "current_library_diff" else "explicit"
+    if diff_base and (diff_base_source in {"explicit", "current_effective", "previous_effective"} or diff_kind == "current_library_diff"):
+        if diff_base_source == "current_effective" or diff_kind == "current_library_diff":
+            base_ref = "current_effective"
+        elif diff_base_source == "previous_effective":
+            base_ref = "previous_effective"
+        else:
+            base_ref = "explicit"
         return {"base_ref": base_ref, "base_version": str(diff_base), "base_source": f"diff.base_version:{diff_base_source or diff_kind}"}
     full_base = _base_full_version(version)
     if full_base:

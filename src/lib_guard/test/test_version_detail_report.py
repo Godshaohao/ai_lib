@@ -973,11 +973,25 @@ class VersionDetailReportTest(unittest.TestCase):
                     },
                 },
             )
+            previous_model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {
+                    "version_id": "patch_20260630",
+                    "diff": {
+                        "base_version": "previous_base",
+                        "base_source": "previous_effective",
+                        "previous_effective_diff_dir": str(diff_dir),
+                    },
+                },
+            )
 
             self.assertEqual(explicit_model["base_ref"], "explicit")
             self.assertEqual(explicit_model["base_version"], "manual_base")
             self.assertEqual(current_model["base_ref"], "current_effective")
             self.assertEqual(current_model["base_version"], "effective_base")
+            self.assertEqual(previous_model["base_ref"], "previous_effective")
+            self.assertEqual(previous_model["base_version"], "previous_base")
 
     def test_current_library_diff_uses_current_effective_lane(self) -> None:
         with tempfile.TemporaryDirectory() as td:

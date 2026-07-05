@@ -2,16 +2,14 @@ Status: current
 
 # 文档索引
 
-这里是 `lib_guard` 当前文档入口。日常使用优先看用户流程、命令入口分层、
-人工确认与 Action 流程。
+这里是 `lib_guard` 当前文档入口。普通用户先看基础教程；需要查参数时看 CLI
+参考；需要改策略或调试 evidence 时看配置和数据契约。
 
-- [架构说明](architecture.md)
-- [命令入口分层](command_surface.md)
-- [人工确认与 Action 流程](manual_confirmation_action.md)
-- [用户使用指南](user_guide.md)
+- [基础教程：从新库入库到 Release](basic_tutorial.md)
 - [CLI 参考](cli_reference.md)
+- [配置参考](config_reference.md)
 - [数据契约](data_contract.md)
-- [Review Gate](review_gate.md)
+- [架构说明](architecture.md)
 - [测试计划](test_plan.md)
 - [兼容层说明](compatibility.md)
 

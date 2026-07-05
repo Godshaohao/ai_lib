@@ -1,49 +1,73 @@
 Status: current
 
-# Architecture
+# 架构说明
 
-`lib_guard` is organized around review evidence:
+`lib_guard` 围绕审查证据组织，而不是围绕页面或命令组织。
 
 ```text
-raw delivery -> catalog -> scan -> parser results -> summary/readiness -> diff
-  -> review_gate + owner overrides when needed -> manifest-driven symlink release
+raw delivery
+  -> catalog
+  -> scan
+  -> parser results
+  -> summary/readiness
+  -> diff
+  -> review gate / owner override
+  -> manifest-driven symlink release
 ```
 
-The current source-of-truth modules are:
+## 源码边界
 
-| Area | Path |
+| 责任 | 路径 |
 | --- | --- |
-| Catalog state | `src/lib_guard/catalog/` |
-| Scan inventory and parsers | `src/lib_guard/scan/` |
-| Summary builders | `src/lib_guard/summary/` |
-| Structural comparison | `src/lib_guard/diff/` |
-| Package/effective composition | `src/lib_guard/package/`, `src/lib_guard/effective/` |
-| Release evidence | `src/lib_guard/release/` |
-| Review gate aggregation | `src/lib_guard/review/` |
-| Review rendering | `src/lib_guard/render/` |
-| CLI | `src/lib_guard/cli.py`, `src/lib_guard/short_cli.py`, `src/lib_guard/cli_commands/` |
+| Catalog 状态和库清单 | `src/lib_guard/catalog/` |
+| Scan inventory 和 parser | `src/lib_guard/scan/` |
+| Summary/readiness 构建 | `src/lib_guard/summary/` |
+| 结构化对比 | `src/lib_guard/diff/` |
+| Package/effective 组合 | `src/lib_guard/package/`, `src/lib_guard/effective/` |
+| Release evidence 和 link/verify | `src/lib_guard/release/` |
+| Review Gate 聚合 | `src/lib_guard/review/` |
+| HTML 渲染 | `src/lib_guard/render/` |
+| CLI 入口 | `src/lib_guard/cli.py`, `src/lib_guard/short_cli.py`, `src/lib_guard/cli_commands/` |
 
-Render ownership:
+## Render 边界
 
-| Page / boundary | Owner |
+| 页面 / 边界 | Owner |
 | --- | --- |
-| Catalog render orchestration | `src/lib_guard/render/catalog_report.py::render_catalog_html` |
-| Catalog Browser and Library Workspace pages | `src/lib_guard/render/catalog_workspace_report.py` |
-| Version Detail and update detail model | `src/lib_guard/render/version_detail_report.py` |
-| Shared visual components | `src/lib_guard/render/product_theme.py` |
+| Catalog 渲染编排 | `src/lib_guard/render/catalog_report.py::render_catalog_html` |
+| Catalog Browser / Library Workspace | `src/lib_guard/render/catalog_workspace_report.py` |
+| Version Detail / update detail model | `src/lib_guard/render/version_detail_report.py` |
+| 共享视觉组件 | `src/lib_guard/render/product_theme.py` |
 
-`catalog_report.py` should stay as the catalog render facade and state/task
-adapter. It should not become the owner of Version Detail or manual compare page
-logic.
+`catalog_report.py` 是 catalog render facade 和 state/task adapter，不应继续吸收
+Version Detail、manual compare 或 release 逻辑。
 
-Generated HTML and JSON under `work/` are review artifacts. They should be
-recreated from source data and policies.
+## 生成物边界
 
-Catalog HTML writes `catalog_state.json`, `manager_tasks.json`, and
-`report_index.json`. Version-level `review_gate` data is embedded in
-`catalog_state.json` and can also be written to
-`review/<library>/<version>/review_gate.json`.
+`work/` 下的 HTML 和 JSON 是审查产物，可以从源码、RAW、策略和 evidence 重新生成。
+它们不是 source of truth。
 
-File Diff recommendations are attention items by default. Metadata-only binary
-changes, catalog trust problems, and release fatal issues are the normal sources
-of blocking review gate items.
+Catalog HTML 会写出：
+
+- `catalog_state.json`
+- `manager_tasks.json`
+- `report_index.json`
+
+版本级 `review_gate` 会嵌入 `catalog_state.json`，也可以写到：
+
+```text
+review/<library>/<version>/review_gate.json
+```
+
+## 阻塞口径
+
+File Diff 推荐默认只是 attention item，不等同 blocker。
+
+常见 blocker 来源是：
+
+- metadata-only 二进制变化需要 owner 决策。
+- catalog 信任问题。
+- release fatal issue。
+- review gate 中未 accept/waive 的真实 blocking item。
+
+页面和 release 逻辑不能把“算法匹配推断”直接当成事实结论；路径迁移、matched/moved
+一类信息必须保留 match reason 和 confidence。

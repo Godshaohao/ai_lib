@@ -5,7 +5,7 @@ from __future__ import annotations
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Mapping
 import json
 
 from .common import auto_scan_id, default_cache_dir, default_state_dir, print_json, refresh_catalog_html
@@ -53,19 +53,106 @@ def _library_match_names(lib: dict[str, Any]) -> set[str]:
     return {name for name in names if name}
 
 
+def _report_index_path(args: Namespace) -> Path:
+    if getattr(args, "html_out", None):
+        return Path(args.html_out) / "report_index.json"
+    return Path(args.catalog).parent / "html" / "report_index.json"
+
+
+def _load_report_index(args: Namespace) -> dict[str, Any]:
+    path = _report_index_path(args)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _report_library_entry(report_index: Mapping[str, Any], lib: dict[str, Any]) -> dict[str, Any]:
+    libraries = report_index.get("libraries", {}) if isinstance(report_index.get("libraries"), dict) else {}
+    for key in _library_match_names(lib):
+        if key in libraries and isinstance(libraries[key], dict):
+            return libraries[key]
+    suffixes = {key.rsplit("/", 1)[-1] for key in _library_match_names(lib)}
+    for key, value in libraries.items():
+        if key in suffixes or str(key).rsplit("/", 1)[-1] in suffixes:
+            return value if isinstance(value, dict) else {}
+    return {}
+
+
+def _effective_list_rows(data: dict[str, Any], args: Namespace) -> list[dict[str, Any]]:
+    report_index = _load_report_index(args)
+    rows: list[dict[str, Any]] = []
+    for lib in data.get("libraries", []) or []:
+        if args.library and args.library not in _library_match_names(lib):
+            continue
+        summary = lib.get("summary") or {}
+        versions = list(lib.get("versions", []) or [])
+        report_lib = _report_library_entry(report_index, lib)
+        effective = report_lib.get("effective", {}) if isinstance(report_lib.get("effective"), dict) else {}
+        current_id = str(report_lib.get("current_effective") or "")
+        current = effective.get(current_id, {}) if current_id and isinstance(effective.get(current_id), dict) else {}
+        current_summary = current.get("summary", {}) if isinstance(current.get("summary"), dict) else {}
+        latest_delivery = summary.get("latest_version") or (versions[-1].get("version_id") if versions else None)
+        if not report_lib:
+            source = "catalog_only"
+            effective_status = "NEEDS_EFFECTIVE_CONFIRM"
+        elif effective:
+            source = "report_index"
+            effective_status = "CURRENT_EFFECTIVE_READY" if current_id and current else "HAS_EFFECTIVE_NO_CURRENT"
+        else:
+            source = "report_index_no_effective"
+            effective_status = "NEEDS_EFFECTIVE_CONFIRM"
+        rows.append(
+            {
+                "库名": lib.get("formal_library_id") or lib.get("library_name"),
+                "交付版本数": summary.get("version_count", len(versions)),
+                "最新交付版本": latest_delivery,
+                "当前Effective": current_id or None,
+                "有效状态": effective_status,
+                "Effective数": len(effective),
+                "Effective文件数": current_summary.get("file_count"),
+                "Effective组件数": current_summary.get("component_count"),
+                "Manifest": current.get("manifest"),
+                "ReleasePreview": current.get("release_preview"),
+                "来源": source,
+            }
+        )
+    return rows
+
+
 def run_catalog_list(args: Namespace) -> int:
     data = json.loads(Path(args.catalog).read_text(encoding="utf-8"))
+    if getattr(args, "effective", False):
+        print_json({"status": "PASS", "rows": _effective_list_rows(data, args), "report_index": str(_report_index_path(args))})
+        return 0
     rows = []
     for lib in data.get("libraries", []) or []:
         if args.library and args.library not in _library_match_names(lib):
             continue
         if args.versions:
             for version in lib.get("versions", []) or []:
+                diff = version.get("diff", {}) or {}
+                lineage = version.get("lineage", {}) or {}
+                previous_effective = version.get("previous_effective_version") or version.get("parent_version")
+                if not previous_effective and str(lineage.get("source") or "").lower() == "manual":
+                    previous_effective = lineage.get("parent_candidate")
+                diff_source = diff.get("base_source") or diff.get("base_version_source")
+                diff_base = diff.get("base_version")
+                if not diff_base and diff_source in {"previous_effective", "current_effective", "explicit"}:
+                    diff_base = diff.get("previous_effective_version") or diff.get("current_effective_ref")
                 rows.append(
                     {
                         "库名": lib.get("formal_library_id") or lib.get("library_name"),
                         "版本名": version.get("version_id"),
                         "阶段": version.get("stage"),
+                        "上一有效版": previous_effective,
+                        "相邻上一版": diff.get("adjacent_old_version"),
+                        "当前有效引用": version.get("current_effective_ref") or version.get("latest_effective_ref"),
+                        "已运行Diff来源": diff_source,
+                        "已运行Diff基准": diff_base,
                         "原始路径": version.get("raw_path"),
                         "需确认": version.get("manual_review"),
                         "建议动作": version.get("recommended_action"),
@@ -330,6 +417,7 @@ def run_catalog_compare(args: Namespace) -> int:
         diff_dir=diff_dir,
         status=diff_result.get("status", "DIFF"),
         diff_html=html_result.get("index_html"),
+        base_source=getattr(args, "base_source", None) or ("explicit" if explicit_base else None),
     )
     catalog_html = refresh_catalog_html(args)
     result = {

@@ -36,6 +36,9 @@ DEFAULT_IGNORE_DIRS = {
     "old",
 }
 DEFAULT_VERSION_PATTERNS = ["20*", "v*", "initial_*", "stable_*", "release_*", "final_*"]
+DEFAULT_DISCOVER_MAX_DEPTH = 4
+DEFAULT_DISCOVER_MAX_DIRS = 5000
+DEFAULT_DISCOVER_MAX_CANDIDATES = 200
 NEGATIVE_CANDIDATE_DIR_NAMES = DEFAULT_IGNORE_DIRS | {
     ".svn",
     "lef",
@@ -61,9 +64,11 @@ CORE_VIEW_SUFFIXES = {".v", ".sv", ".lef", ".lib", ".db", ".gds", ".oas", ".cdl"
 HINT_SKIP_DIR_NAMES = {".git", ".svn", "__pycache__", "tmp", "temp", "backup", "bak", "old", "work"}
 WEAK_NAME_PATTERNS = [
     r"\d{2,8}([._-]\d+)*.*",
+    r"\d{4}q[1-4].*",
     r"v\d+.*",
     r"r\d+.*",
     r"rev.*",
+    r"beta.*",
     r"release.*",
     r"final.*",
     r"stable.*",
@@ -148,6 +153,28 @@ def _weak_name_signal(name: str) -> str | None:
     return None
 
 
+def _is_version_like_dir_name(name: str) -> bool:
+    return _weak_name_signal(name) is not None
+
+
+def _has_version_like_ancestor(raw_root: Path, path: Path) -> bool:
+    try:
+        rel = path.resolve().relative_to(raw_root.resolve())
+    except (OSError, ValueError):
+        return True
+    return any(_is_version_like_dir_name(part) for part in rel.parts[:-1])
+
+
+def _is_top_level_vendor_dir(raw_root: Path, path: Path) -> bool:
+    try:
+        rel = path.resolve().relative_to(raw_root.resolve())
+    except (OSError, ValueError):
+        return False
+    if len(rel.parts) != 1:
+        return False
+    return rel.parts[0].lower().startswith("vendor")
+
+
 def _direct_dirs(path: Path) -> list[Path]:
     try:
         return sorted([p for p in path.iterdir() if p.is_dir() and not _is_negative_candidate_dir_name(p.name)], key=lambda p: p.name.lower())
@@ -195,13 +222,13 @@ def _bounded_hint_scan(path: Path, *, max_depth: int = 4, max_entries: int = 400
 def _delivery_instance_from_child(child: Path) -> tuple[bool, set[str], str]:
     if _is_negative_candidate_dir_name(child.name):
         return False, set(), "negative_name"
+    name_signal = _weak_name_signal(child.name)
+    if not name_signal:
+        return False, set(), "no_version_name_hint"
     hints = _bounded_hint_scan(child)
     if not hints:
         return False, set(), "no_view_hint"
-    name_signal = _weak_name_signal(child.name)
-    reason = "has_view_hint"
-    if name_signal:
-        reason += f"+name_hint={name_signal}"
+    reason = f"has_view_hint+name_hint={name_signal}"
     return True, hints, reason
 
 
@@ -237,20 +264,24 @@ def _iter_dirs(root: Path, max_depth: int) -> Iterable[Path]:
             stack.append((child, depth + 1))
 
 
-def _version_children(path: Path) -> list[Path]:
+def _version_children_with_hints(path: Path) -> list[tuple[Path, set[str]]]:
     children = _direct_dirs(path)
-    instances = []
+    instances: list[tuple[Path, set[str]]] = []
     for child in children:
-        ok, _hints, _reason = _delivery_instance_from_child(child)
+        ok, hints, _reason = _delivery_instance_from_child(child)
         if ok:
-            instances.append(child)
+            instances.append((child, hints))
     return instances
 
 
-def _key_file_hint(path: Path, sample_versions: list[Path]) -> tuple[int, list[str]]:
+def _version_children(path: Path) -> list[Path]:
+    return [child for child, _hints in _version_children_with_hints(path)]
+
+
+def _key_file_hint(path: Path, sample_versions: list[tuple[Path, set[str]]]) -> tuple[int, list[str]]:
     hits: list[str] = []
-    for version in sample_versions[:3]:
-        for suffix in sorted(_bounded_hint_scan(version)):
+    for version, hints in sample_versions[:3]:
+        for suffix in sorted(hints):
             hits.append(f"{version.name}/**/*{suffix}")
             if len(hits) >= 5:
                 return len(hits), hits
@@ -260,8 +291,12 @@ def _key_file_hint(path: Path, sample_versions: list[Path]) -> tuple[int, list[s
 def _candidate_from_path(raw_root: Path, path: Path, *, min_versions: int) -> LibraryCandidate | None:
     if _is_negative_candidate_dir_name(path.name):
         return None
-    versions = _version_children(path)
-    coherent, cohort_reason = _cohort_reason([_bounded_hint_scan(version) for version in versions], min_versions)
+    if _is_top_level_vendor_dir(raw_root, path):
+        return None
+    if _has_version_like_ancestor(raw_root, path):
+        return None
+    versions = _version_children_with_hints(path)
+    coherent, cohort_reason = _cohort_reason([hints for _version, hints in versions], min_versions)
     if not coherent:
         return None
     key_count, key_examples = _key_file_hint(path, versions)
@@ -283,7 +318,7 @@ def _candidate_from_path(raw_root: Path, path: Path, *, min_versions: int) -> Li
         vendor=vendor,
         middle_path=middle_path,
         version_count=len(versions),
-        example_versions=[p.name for p in versions[:5]],
+        example_versions=[p.name for p, _hints in versions[:5]],
         confidence=round(min(confidence, 0.98), 2),
         reason="+".join(reason_parts),
     )
@@ -298,50 +333,77 @@ def _is_descendant(child: Path, parent: Path) -> bool:
 
 
 def _suppress_ancestor_candidates(candidates: list[LibraryCandidate]) -> list[LibraryCandidate]:
-    by_path = {Path(item.root_abs): item for item in candidates}
+    by_path: dict[Path, LibraryCandidate] = {}
+    for item in candidates:
+        path = Path(item.root_abs).resolve()
+        existing = by_path.get(path)
+        if existing is None or item.confidence > existing.confidence:
+            by_path[path] = item
+    unique_candidates = list(by_path.values())
     kept: list[LibraryCandidate] = []
-    suppressed: list[LibraryCandidate] = []
-    for candidate in sorted(candidates, key=lambda item: len(Path(item.root_abs).parts), reverse=True):
-        path = Path(candidate.root_abs)
+    for candidate in sorted(unique_candidates, key=lambda item: len(Path(item.root_abs).parts), reverse=True):
+        path = Path(candidate.root_abs).resolve()
         if any(_is_descendant(Path(item.root_abs), path) for item in kept):
-            suppressed.append(
-                LibraryCandidate(
-                    status="IGNORE",
-                    library_id=candidate.library_id,
-                    root_abs=candidate.root_abs,
-                    display_name=candidate.display_name,
-                    vendor=candidate.vendor,
-                    middle_path=candidate.middle_path,
-                    version_count=candidate.version_count,
-                    example_versions=candidate.example_versions,
-                    confidence=candidate.confidence,
-                    reason=f"{candidate.reason}+suppressed_by_child",
-                )
-            )
+            continue
         else:
             kept.append(by_path[path])
-    combined = kept + suppressed
-    combined.sort(key=lambda x: (0 if x.status == "REVIEW" else 1, x.vendor, x.middle_path, x.display_name, x.root_abs))
-    return combined
+    kept.sort(key=lambda x: (x.vendor, x.middle_path, x.display_name, x.root_abs))
+    return kept
 
 
 def discover_library_candidates(
     raw_root: str | Path,
     *,
-    max_depth: int = 8,
+    max_depth: int = DEFAULT_DISCOVER_MAX_DEPTH,
     min_versions: int = 2,
     default_status: str = "REVIEW",
+    max_dirs: int = DEFAULT_DISCOVER_MAX_DIRS,
+    max_candidates: int = DEFAULT_DISCOVER_MAX_CANDIDATES,
 ) -> list[LibraryCandidate]:
+    result = _discover_library_candidates_with_stats(
+        raw_root,
+        max_depth=max_depth,
+        min_versions=min_versions,
+        default_status=default_status,
+        max_dirs=max_dirs,
+        max_candidates=max_candidates,
+    )
+    return result["candidates"]
+
+
+def _discover_library_candidates_with_stats(
+    raw_root: str | Path,
+    *,
+    max_depth: int = DEFAULT_DISCOVER_MAX_DEPTH,
+    min_versions: int = 2,
+    default_status: str = "REVIEW",
+    max_dirs: int = DEFAULT_DISCOVER_MAX_DIRS,
+    max_candidates: int = DEFAULT_DISCOVER_MAX_CANDIDATES,
+) -> dict[str, Any]:
     raw = Path(raw_root).resolve()
     if not raw.exists() or not raw.is_dir():
         raise FileNotFoundError(f"raw_root does not exist or is not a directory: {raw}")
     status = default_status.upper()
     if status not in {"REVIEW", "OK"}:
         raise ValueError("default_status must be REVIEW or OK")
+    if max_depth < 1:
+        raise ValueError("max_depth must be >= 1")
+    if max_dirs < 1:
+        raise ValueError("max_dirs must be >= 1")
+    if max_candidates < 1:
+        raise ValueError("max_candidates must be >= 1")
     candidates: list[LibraryCandidate] = []
+    warnings: list[str] = []
+    visited_dirs = 0
+    truncated = False
     stack: list[tuple[Path, int]] = [(raw, 0)]
     while stack:
+        if visited_dirs >= max_dirs:
+            truncated = True
+            warnings.append(f"max_dirs reached: {max_dirs}; discovery truncated")
+            break
         path, depth = stack.pop()
+        visited_dirs += 1
         if depth > 0:
             try:
                 path.resolve().relative_to(raw)
@@ -350,6 +412,10 @@ def discover_library_candidates(
             item = _candidate_from_path(raw, path, min_versions=min_versions)
             if item:
                 candidates.append(item)
+                if len(candidates) >= max_candidates:
+                    truncated = True
+                    warnings.append(f"max_candidates reached: {max_candidates}; discovery truncated")
+                    break
         if depth >= max_depth:
             continue
         try:
@@ -363,8 +429,15 @@ def discover_library_candidates(
                 child.resolve().relative_to(raw)
             except (OSError, ValueError):
                 continue
+            if depth > 0 and _is_version_like_dir_name(child.name):
+                continue
             stack.append((child, depth + 1))
-    return _suppress_ancestor_candidates(candidates)
+    return {
+        "candidates": _suppress_ancestor_candidates(candidates),
+        "visited_dirs": visited_dirs,
+        "truncated": truncated,
+        "warnings": warnings,
+    }
 
 
 def write_library_list(path: str | Path, candidates: list[LibraryCandidate]) -> None:
@@ -372,6 +445,8 @@ def write_library_list(path: str | Path, candidates: list[LibraryCandidate]) -> 
         "# 候选快照。把真实库根标为 OK 后运行：lg.csh library accept",
         "# 稳定人工 registry 位于 config/library_registry.tsv；discover 不会覆盖它。",
         "# status: OK = 合并进 registry；IGNORE = 排除；REVIEW = 暂缓",
+        "# 判定口径：RAW root 第一层 Vendor* 只当供应商分组；候选库根必须直接包含多个版本/交付实例。",
+        "# 版本目录内部的 phys_ver/dft/lef/lib 等目录不会作为库候选；重复 resolved root 和被子候选覆盖的祖先目录不会输出。",
         "# library_id 在这里表示正式库名；若自动路径名不合适，请用：lg.csh library add <formal_id> --root <library_root>",
         "\t".join(LIST_COLUMNS),
     ]
@@ -694,17 +769,50 @@ def discover_to_files(
     list_out: str | Path,
     json_out: str | Path | None = None,
     html_out: str | Path | None = None,
-    max_depth: int = 8,
+    max_depth: int = DEFAULT_DISCOVER_MAX_DEPTH,
     min_versions: int = 2,
     default_status: str = "REVIEW",
+    max_dirs: int = DEFAULT_DISCOVER_MAX_DIRS,
+    max_candidates: int = DEFAULT_DISCOVER_MAX_CANDIDATES,
 ) -> dict[str, Any]:
-    candidates = discover_library_candidates(raw_root, max_depth=max_depth, min_versions=min_versions, default_status=default_status)
+    discovery = _discover_library_candidates_with_stats(
+        raw_root,
+        max_depth=max_depth,
+        min_versions=min_versions,
+        default_status=default_status,
+        max_dirs=max_dirs,
+        max_candidates=max_candidates,
+    )
+    candidates = discovery["candidates"]
     write_library_list(list_out, candidates)
     if json_out:
-        _atomic_write_json(json_out, {"raw_root": str(Path(raw_root).resolve()), "candidates": [asdict(x) for x in candidates]})
+        _atomic_write_json(
+            json_out,
+            {
+                "raw_root": str(Path(raw_root).resolve()),
+                "max_depth": max_depth,
+                "min_versions": min_versions,
+                "max_dirs": max_dirs,
+                "max_candidates": max_candidates,
+                "visited_dirs": discovery["visited_dirs"],
+                "truncated": discovery["truncated"],
+                "warnings": discovery["warnings"],
+                "candidates": [asdict(x) for x in candidates],
+            },
+        )
     if html_out:
         render_discovery_html(html_out, candidates)
-    return {"status": "PASS", "raw_root": str(Path(raw_root).resolve()), "list_out": str(list_out), "json_out": str(json_out) if json_out else None, "html_out": str(html_out) if html_out else None, "candidate_count": len(candidates)}
+    return {
+        "status": "PASS",
+        "raw_root": str(Path(raw_root).resolve()),
+        "list_out": str(list_out),
+        "json_out": str(json_out) if json_out else None,
+        "html_out": str(html_out) if html_out else None,
+        "candidate_count": len(candidates),
+        "visited_dirs": discovery["visited_dirs"],
+        "truncated": discovery["truncated"],
+        "warnings": discovery["warnings"],
+    }
 
 
 def apply_list_to_catalog(

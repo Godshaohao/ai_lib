@@ -15,6 +15,146 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class CatalogTimelineTest(unittest.TestCase):
+    def test_catalog_scan_does_not_promote_adjacent_to_previous_effective(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            old_root = raw / "ucie" / "initial_20250601"
+            new_root = raw / "ucie" / "stable_20250608"
+            old_root.mkdir(parents=True)
+            new_root.mkdir(parents=True)
+            (old_root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            (new_root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+
+            from lib_guard.catalog.index import scan_catalog
+            from lib_guard.render.catalog_render_common import previous_effective_version
+
+            result = scan_catalog(raw, out_dir=out, library_type="ip")
+            versions = {
+                version["version_id"]: version
+                for version in result["catalog"]["libraries"][0]["versions"]
+            }
+            patch = versions["stable_20250608"]
+
+            self.assertEqual((patch.get("diff") or {}).get("adjacent_old_version"), "initial_20250601")
+            self.assertIsNone(patch.get("previous_effective_version"))
+            self.assertIsNone(previous_effective_version(patch))
+            self.assertEqual(patch["compare_default"], "none")
+
+    def test_catalog_list_versions_separates_effective_base_from_adjacent_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = root / "catalog.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/Vendor_A.ucie",
+                                "library_name": "Vendor_A.ucie",
+                                "formal_library_id": "Vendor_A.ucie",
+                                "typed_library_id": "ip/Vendor_A.ucie",
+                                "summary": {"version_count": 3},
+                                "versions": [
+                                    {"version_id": "20260401_UCIe_Final", "stage": "final", "diff": {}},
+                                    {
+                                        "version_id": "20260618_UCIe_Final",
+                                        "stage": "final",
+                                        "diff": {"adjacent_old_version": "20260401_UCIe_Final"},
+                                    },
+                                    {
+                                        "version_id": "20260624_adhoc_ucie_netlists",
+                                        "stage": "ad-hoc",
+                                        "manual_review": True,
+                                        "diff": {
+                                            "adjacent_old_version": "20260618_UCIe_Final",
+                                            "base_version": "20250930_UCIe_Stable",
+                                            "base_source": "previous_effective",
+                                        },
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.cli_commands.catalog import run_catalog_list
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = run_catalog_list(Namespace(catalog=str(catalog), library="Vendor_A.ucie", versions=True))
+            self.assertEqual(rc, 0)
+            rows = {row["版本名"]: row for row in json.loads(out.getvalue())["rows"]}
+
+            self.assertIsNone(rows["20260618_UCIe_Final"]["上一有效版"])
+            self.assertEqual(rows["20260618_UCIe_Final"]["相邻上一版"], "20260401_UCIe_Final")
+            self.assertIsNone(rows["20260618_UCIe_Final"]["已运行Diff来源"])
+            self.assertNotIn("Base来源", rows["20260618_UCIe_Final"])
+
+            self.assertEqual(rows["20260624_adhoc_ucie_netlists"]["相邻上一版"], "20260618_UCIe_Final")
+            self.assertEqual(rows["20260624_adhoc_ucie_netlists"]["已运行Diff来源"], "previous_effective")
+            self.assertEqual(rows["20260624_adhoc_ucie_netlists"]["已运行Diff基准"], "20250930_UCIe_Stable")
+
+    def test_effective_list_reports_delivery_inventory_separately_from_effective(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = root / "catalog.json"
+            html = root / "html"
+            html.mkdir()
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/Vendor_A.ucie",
+                                "library_name": "Vendor_A.ucie",
+                                "formal_library_id": "Vendor_A.ucie",
+                                "typed_library_id": "ip/Vendor_A.ucie",
+                                "summary": {"version_count": 2, "latest_version": "20260624_adhoc_ucie_netlists"},
+                                "versions": [
+                                    {"version_id": "20260618_UCIe_Final"},
+                                    {"version_id": "20260624_adhoc_ucie_netlists"},
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (html / "report_index.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "report_index.v1",
+                        "libraries": {
+                            "ip/Vendor_A.ucie": {
+                                "current_effective": "",
+                                "effective": {},
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.cli_commands.catalog import run_catalog_list
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = run_catalog_list(Namespace(catalog=str(catalog), library="Vendor_A.ucie", versions=False, effective=True, html_out=str(html)))
+            self.assertEqual(rc, 0)
+            row = json.loads(out.getvalue())["rows"][0]
+            self.assertEqual(row["最新交付版本"], "20260624_adhoc_ucie_netlists")
+            self.assertIsNone(row["当前Effective"])
+            self.assertEqual(row["有效状态"], "NEEDS_EFFECTIVE_CONFIRM")
+            self.assertEqual(row["来源"], "report_index_no_effective")
+            self.assertNotIn("最新真实版本", row)
+
     def test_catalog_list_outputs_only_actionable_user_names(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -73,8 +213,51 @@ class CatalogTimelineTest(unittest.TestCase):
             version_rows = json.loads(out.getvalue())["rows"]
             self.assertEqual(version_rows[0]["库名"], "vendor_A.openroad_platform.openroad_asap7")
             self.assertEqual(version_rows[0]["版本名"], "20260624_asap7")
+            self.assertIn("上一有效版", version_rows[0])
+            self.assertIn("相邻上一版", version_rows[0])
             self.assertNotIn("版本UID", version_rows[0])
             self.assertNotIn("类型库名", version_rows[0])
+
+            html = root / "html"
+            html.mkdir()
+            (html / "report_index.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "report_index.v1",
+                        "libraries": {
+                            "ip/vendor_A.openroad_platform.openroad_asap7": {
+                                "current_effective": "E1_20260630",
+                                "effective": {
+                                    "E1_20260630": {
+                                        "manifest": "libraries/ip_vendor_A.openroad_platform.openroad_asap7/effective/E1_20260630/effective_manifest.json",
+                                        "release_preview": "libraries/ip_vendor_A.openroad_platform.openroad_asap7/effective/E1_20260630/release_preview/index.html",
+                                        "summary": {"file_count": 12, "component_count": 2},
+                                    }
+                                },
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = run_catalog_list(
+                    Namespace(
+                        catalog=str(catalog),
+                        library=None,
+                        versions=False,
+                        effective=True,
+                        html_out=str(html),
+                    )
+                )
+            self.assertEqual(rc, 0)
+            effective_rows = json.loads(out.getvalue())["rows"]
+            self.assertEqual(effective_rows[0]["库名"], "vendor_A.openroad_platform.openroad_asap7")
+            self.assertEqual(effective_rows[0]["当前Effective"], "E1_20260630")
+            self.assertEqual(effective_rows[0]["Effective文件数"], 12)
+            self.assertEqual(effective_rows[0]["来源"], "report_index")
 
     def test_ambiguous_library_error_points_to_formal_library_name(self) -> None:
         catalog = {
@@ -844,6 +1027,144 @@ class CatalogTimelineTest(unittest.TestCase):
             )
             self.assertEqual(list_result["rendered_versions"], 1)
 
+    def test_filtered_catalog_render_preserves_existing_unfiltered_state_links(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog_path = root / "catalog.json"
+            raw = root / "raw"
+            for lib, version in [("ucie", "stable_20250608"), ("pcie", "stable_20250608")]:
+                version_root = raw / lib / version
+                version_root.mkdir(parents=True)
+                (version_root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "catalog.v1",
+                        "summary": {"library_count": 2, "version_count": 2},
+                        "recommended_tasks": [],
+                        "libraries": [
+                            {
+                                "library_type": "ip",
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "display_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/ucie/stable_20250608",
+                                        "raw_path": str(raw / "ucie" / "stable_20250608"),
+                                        "stage": "stable",
+                                    }
+                                ],
+                            },
+                            {
+                                "library_type": "ip",
+                                "library_id": "ip/pcie",
+                                "library_name": "pcie",
+                                "display_name": "pcie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/pcie/stable_20250608",
+                                        "raw_path": str(raw / "pcie" / "stable_20250608"),
+                                        "stage": "stable",
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import render_catalog_html
+
+            html_dir = root / "html"
+            full = render_catalog_html(catalog_path, html_dir)
+            self.assertEqual(full["rendered_libraries"], 2)
+
+            filtered = render_catalog_html(catalog_path, html_dir, library_filter="ucie", version_filter="stable_20250608")
+            self.assertEqual(filtered["rendered_libraries"], 1)
+
+            state = json.loads((html_dir / "catalog_state.json").read_text(encoding="utf-8"))
+            libraries = {item["library_name"]: item for item in state["libraries"]}
+            self.assertEqual(set(libraries), {"ucie", "pcie"})
+            pcie_version = libraries["pcie"]["versions"][0]
+            self.assertTrue((pcie_version.get("links") or {}).get("version_review_html"))
+            self.assertTrue(libraries["pcie"].get("library_home_html"))
+
+    def test_catalog_refresh_preserves_legacy_version_embedded_runtime_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            catalog_dir = root / "catalog"
+            version_root = raw / "ucie" / "stable_20250608"
+            version_root.mkdir(parents=True)
+            (version_root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            scan_dir = root / "scan_out" / "ucie" / "stable_20250608" / "scan_1"
+            diff_dir = root / "diff" / "ucie" / "stable_20250608" / "base"
+            release_dir = root / "release" / "ucie"
+            scan_dir.mkdir(parents=True)
+            diff_dir.mkdir(parents=True)
+            release_dir.mkdir(parents=True)
+            catalog_dir.mkdir()
+            catalog_path = catalog_dir / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "catalog.v1",
+                        "root": str(raw),
+                        "runtime_state": {},
+                        "manual_overrides": {},
+                        "_discovered": {
+                            "ip/ucie": [
+                                {
+                                    "library_type": "ip",
+                                    "library_name": "ucie",
+                                    "library_root": str(raw / "ucie"),
+                                    "version_id": "stable_20250608",
+                                    "stage": "stable",
+                                    "raw_path": str(version_root),
+                                    "detected": {},
+                                }
+                            ]
+                        },
+                        "libraries": [
+                            {
+                                "library_type": "ip",
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/ucie/stable_20250608",
+                                        "raw_path": str(version_root),
+                                        "scan": {"status": "SCANNED", "scan_dir": str(scan_dir), "scan_id": "scan_1"},
+                                        "diff": {"base_status": "DIFF_DONE", "base_diff_dir": str(diff_dir)},
+                                        "release": {"status": "READY", "release_dir": str(release_dir)},
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import scan_catalog
+
+            result = scan_catalog(raw, out_dir=catalog_dir, library_type="ip", force=True)
+            version = result["catalog"]["libraries"][0]["versions"][0]
+
+            self.assertEqual(version["scan"]["status"], "SCANNED")
+            self.assertEqual(version["scan"]["scan_dir"], str(scan_dir))
+            self.assertEqual(version["diff"]["base_diff_dir"], str(diff_dir))
+            self.assertEqual(version["release"]["release_dir"], str(release_dir))
+            runtime = result["catalog"]["runtime_state"]["ip/ucie/stable_20250608"]
+            self.assertEqual(runtime["scan"]["scan_id"], "scan_1")
+
     def test_catalog_render_discovers_effective_reports_without_recursive_rglob(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -906,6 +1227,10 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual(result["status"], "PASS")
             library_html = (html_dir / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
             self.assertIn("E1_20260624", library_html)
+            report_index = json.loads((html_dir / "report_index.json").read_text(encoding="utf-8"))
+            lib_index = report_index["libraries"]["ip/ucie"]
+            self.assertEqual(lib_index["current_effective"], "")
+            self.assertEqual(lib_index["latest_effective_ref"], "")
 
     def test_cli_catalog_scan_render_and_override(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -918,6 +1243,9 @@ class CatalogTimelineTest(unittest.TestCase):
 
             self.assertEqual(main(["catalog", "scan", "--root", str(raw), "--out", str(out), "--library-type", "ip"]), 0)
             self.assertTrue((out / "catalog.json").exists())
+            refresh_out = Path(td) / "catalog_refresh"
+            self.assertEqual(main(["catalog", "refresh", "--root", str(raw), "--out", str(refresh_out), "--library-type", "ip"]), 0)
+            self.assertTrue((refresh_out / "catalog.json").exists())
             self.assertEqual(
                 main(
                     [
@@ -1050,9 +1378,118 @@ class CatalogTimelineTest(unittest.TestCase):
             }["stable_20250608"]
             self.assertEqual(new_version["diff"]["base_status"], "DIFF_DONE")
             self.assertEqual(new_version["diff"]["base_version"], "stable_20250601")
+            self.assertEqual(new_version["diff"]["base_source"], "explicit")
+            self.assertEqual(new_version["diff"]["base_version_source"], "explicit")
             self.assertTrue(Path(new_version["diff"]["base_diff_dir"]).exists())
             self.assertTrue(Path(new_version["diff"]["base_diff_html"]).exists())
             self.assertNotEqual(new_version["diff"]["adjacent_diff_html"], new_version["diff"]["base_diff_html"])
+
+    def test_scan_and_adjacent_diff_do_not_create_current_effective(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            work = Path(td) / "work"
+            library_root = raw / "Vendor_A" / "ucie"
+            old = library_root / "20260618_UCIe_UAXI_SP_X16_BE_Final_maintenance"
+            adhoc = library_root / "20260624_adhoc_ucie_netlists_t7_release"
+            old.mkdir(parents=True)
+            adhoc.mkdir(parents=True)
+            (old / "rtl").mkdir()
+            (adhoc / "rtl").mkdir()
+            (old / "rtl" / "ucie_top.v").write_text("module ucie_top(input a, output y); assign y = a; endmodule\n", encoding="utf-8")
+            (adhoc / "rtl" / "ucie_top.v").write_text("module ucie_top(input a, output y); assign y = ~a; endmodule\n", encoding="utf-8")
+
+            library_map = Path(td) / "library_map.yml"
+            library_map.write_text(
+                "\n".join(
+                    [
+                        "libraries:",
+                        "  Vendor_A.ucie:",
+                        "    root: raw/Vendor_A/ucie",
+                        "    display_name: ucie",
+                        "    vendor: Vendor_A",
+                        "    library_type: ip",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            policy = Path(td) / "catalog_policy.json"
+            policy.write_text(
+                json.dumps(
+                    {
+                        "library_type": "ip",
+                        "discovery": {"library_map": str(library_map), "pattern_fallback": False},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.cli import main
+
+            catalog = work / "catalog" / "catalog.json"
+            self.assertEqual(main(["catalog", "refresh", "--root", str(raw), "--out", str(work / "catalog"), "--library-type", "ip", "--policy", str(policy)]), 0)
+            for version in [old.name, adhoc.name]:
+                self.assertEqual(
+                    main(
+                        [
+                            "run",
+                            "--catalog",
+                            str(catalog),
+                            "--library",
+                            "Vendor_A.ucie",
+                            "--version",
+                            version,
+                            "--workdir",
+                            str(work),
+                            "--parse-file-types",
+                            "verilog",
+                            "--parse-jobs",
+                            "1",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(
+                main(
+                    [
+                        "compare",
+                        "--catalog",
+                        str(catalog),
+                        "--library",
+                        "Vendor_A.ucie",
+                        "--new",
+                        adhoc.name,
+                        "--mode",
+                        "adjacent",
+                        "--workdir",
+                        str(work),
+                    ]
+                ),
+                0,
+            )
+
+            data = json.loads(catalog.read_text(encoding="utf-8"))
+            lib = data["libraries"][0]
+            versions = {version["version_id"]: version for version in lib["versions"]}
+            new_version = versions[adhoc.name]
+
+            self.assertIsNone(new_version.get("previous_effective_version"))
+            self.assertEqual(new_version["diff"]["adjacent_status"], "DIFF_DONE")
+            self.assertEqual(new_version["diff"]["adjacent_old_version"], old.name)
+            self.assertNotIn("current_effective_ref", new_version)
+            self.assertNotIn("latest_effective_ref", new_version)
+            self.assertFalse(new_version.get("current_effective"))
+
+            from lib_guard.cli_commands.catalog import run_catalog_list
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = run_catalog_list(Namespace(catalog=str(catalog), library="Vendor_A.ucie", versions=False, effective=True, html_out=str(work / "catalog" / "html")))
+            self.assertEqual(rc, 0)
+            row = json.loads(out.getvalue())["rows"][0]
+            self.assertIsNone(row["当前Effective"])
+            self.assertEqual(row["有效状态"], "NEEDS_EFFECTIVE_CONFIRM")
 
     def test_runtime_state_is_separate_and_catalog_html_links_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:

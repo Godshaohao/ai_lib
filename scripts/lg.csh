@@ -20,6 +20,15 @@ else
 endif
 
 set py = ""
+if ($?LIB_GUARD_PYTHON) then
+  if (-x "$LIB_GUARD_PYTHON") then
+    set py = "$LIB_GUARD_PYTHON"
+  else
+    echo "ERROR: LIB_GUARD_PYTHON is set but not executable: $LIB_GUARD_PYTHON" >&2
+    echo "Hint: setenv LIB_GUARD_PYTHON /path/to/python3.11" >&2
+    exit 127
+  endif
+endif
 if ("$py" == "") then
   set found = `which python3.11`
   if ($status == 0) set py = "$found"
@@ -34,6 +43,7 @@ if ("$py" == "") then
 endif
 if ("$py" == "") then
   echo "ERROR: python3.11, python3, or python is required but was not found in PATH." >&2
+  echo "Hint: setenv LIB_GUARD_PYTHON /path/to/python3.11" >&2
   exit 127
 endif
 

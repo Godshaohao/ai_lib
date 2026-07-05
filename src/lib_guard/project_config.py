@@ -48,7 +48,7 @@ WORKSPACE_CONFIG_FILE_DEFAULTS = {
 }
 
 CONTROL_CONFIG_SPECS = [
-    ("catalog_policy", DEFAULT_CATALOG_POLICY_PATH, True, ["catalog", "discovery"], ["catalog scan"]),
+    ("catalog_policy", DEFAULT_CATALOG_POLICY_PATH, True, ["catalog", "discovery"], ["catalog refresh"]),
     ("release_policy", DEFAULT_RELEASE_POLICY_PATH, True, ["release_check"], ["release check"]),
 ]
 
