@@ -610,6 +610,10 @@ def _build_parser() -> ArgumentParser:
     lg.csh library override ucie stable_20250608 --base initial_20250601 --stage stable
     lg.csh scan ucie stable_20250608
     lg.csh cat ucie --update-detail
+    lg.csh intake ucie --plan-only        # 只生成 review window 和命令计划
+    lg.csh window ucie                    # 查看 old/candidate/scan/compare 组合
+    lg.csh mark ucie stable_20250608 --type FULL
+    lg.csh accept-window ucie --accepted-by lib_owner --note "review passed"
     # 手动 compare/debug 时再显式指定 base 或 adjacent/cumulative
     lg.csh cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
@@ -761,6 +765,33 @@ def _build_parser() -> ArgumentParser:
     p = sub.add_parser("action", help="运行 $WORK/actions/<library>.action 中的人工编排动作")
     p.add_argument("library")
     p.add_argument("--action", help="Explicit action file path. Default: $WORK/actions/<library>.action")
+
+    p = sub.add_parser("intake", help="扫描新版本，构建 review window，并对比 current effective vs candidate effective")
+    p.add_argument("library")
+    p.add_argument("--since", help="从指定 raw version 之后开始构建窗口")
+    p.add_argument("--plan-only", action="store_true", help="只写 pending_window.json 和命令计划，不执行")
+    p.add_argument("--rebuild", action="store_true", help="强制重建 candidate effective 和 compare")
+    p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次 scan hash 策略")
+    p.add_argument("--parse-file-types", help="覆盖本次 scan parser 类型")
+    p.add_argument("--parse-exclude-file-types", help="覆盖本次 scan parser 排除类型")
+    p.add_argument("--parse-jobs", help="覆盖本次 parser worker 数")
+
+    p = sub.add_parser("window", help="查看当前 review window 算法结果")
+    p.add_argument("library")
+    p.add_argument("--since", help="临时从指定 raw version 之后推导窗口")
+    p.add_argument("--parse-jobs", help=SUPPRESS)
+
+    p = sub.add_parser("accept-window", help="接受当前 candidate effective，写 current_effective.json")
+    p.add_argument("library")
+    p.add_argument("--accepted-by", default="manual")
+    p.add_argument("--note")
+
+    p = sub.add_parser("mark", help="修正版本 package_type；FULL/FIX/HOTFIX/UNKNOWN")
+    p.add_argument("library")
+    p.add_argument("version")
+    p.add_argument("--type", required=True, choices=["FULL", "FIX", "HOTFIX", "UNKNOWN"])
+    p.add_argument("--updated-by")
+    p.add_argument("--note")
 
     root_rv = sub.add_parser("rv", help="Review Gate 构建、检查、列表和 owner 决策")
     rvsp = root_rv.add_subparsers(dest="rv_cmd", required=True)
@@ -1102,6 +1133,78 @@ def _compare_dir(cfg: dict[str, str], library: str, compare_id: str) -> Path:
     return Path(cfg["catalog_html"]) / "libraries" / _library_report_key(cfg, library) / "compare" / _safe_path_name(compare_id)
 
 
+def _window_file(cfg: dict[str, str], library: str) -> Path:
+    return Path(cfg["catalog_html"]) / "libraries" / _library_report_key(cfg, library) / "window" / "pending_window.json"
+
+
+def _window_common_command(cfg: dict[str, str], args: Any, subcommand: str) -> list[str]:
+    command = [
+        "window",
+        subcommand,
+        "--catalog",
+        cfg["catalog"],
+        "--library",
+        args.library,
+        "--workdir",
+        cfg["workspace"],
+        "--catalog-html-out",
+        cfg["catalog_html"],
+    ]
+    if getattr(args, "since", None):
+        command.extend(["--since", args.since])
+    if subcommand == "intake":
+        _append_scan_strategy(command, cfg, args)
+        if getattr(args, "plan_only", False):
+            command.append("--plan-only")
+        if getattr(args, "rebuild", False):
+            command.append("--rebuild")
+    return command
+
+
+def _window_accept_command(cfg: dict[str, str], args: Any) -> list[str]:
+    command = [
+        "window",
+        "accept",
+        "--window-file",
+        str(_window_file(cfg, args.library)),
+        "--accepted-by",
+        args.accepted_by,
+    ]
+    if getattr(args, "note", None):
+        command.extend(["--note", args.note])
+    return command
+
+
+def _mark_command(cfg: dict[str, str], args: Any) -> list[str]:
+    type_map = {
+        "FULL": "FULL_PACKAGE",
+        "FIX": "PARTIAL_UPDATE",
+        "HOTFIX": "HOTFIX",
+        "UNKNOWN": "UNKNOWN_PACKAGE",
+    }
+    data = _catalog_data(cfg)
+    library = _find_library(data, args.library)
+    version = _find_version(library, args.version)
+    version_key = str(version.get("version_key") or "")
+    if not version_key:
+        version_key = f"{library.get('library_type') or cfg['library_type']}/{library.get('library_name')}/{args.version}"
+    command = [
+        "catalog",
+        "override",
+        "--catalog",
+        cfg["catalog"],
+        "--version",
+        version_key,
+        "--package-type",
+        type_map[args.type],
+    ]
+    if getattr(args, "updated_by", None):
+        command.extend(["--updated-by", args.updated_by])
+    if getattr(args, "note", None):
+        command.extend(["--note", args.note])
+    return command
+
+
 def _current_effective_id(cfg: dict[str, str], library: str) -> str | None:
     current_path = Path(cfg["catalog_html"]) / "libraries" / _library_report_key(cfg, library) / "effective" / "current_effective.json"
     if not current_path.exists():
@@ -1293,6 +1396,14 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
                 with_evidence=bool(getattr(args, "with_evidence", False)),
             )
         ]
+    if args.short_command == "intake":
+        return [_window_common_command(cfg, args, "intake")]
+    if args.short_command == "window":
+        return [_window_common_command(cfg, args, "show")]
+    if args.short_command == "accept-window":
+        return [_window_accept_command(cfg, args)]
+    if args.short_command == "mark":
+        return [_mark_command(cfg, args)]
     if args.short_command == "rv":
         review_subcommand = args.rv_cmd
         return [_review_gate_command(cfg, args, review_subcommand)]

@@ -104,6 +104,12 @@ def run_effective_command(args: Namespace) -> int:
     return int(effective_main(list(args.effective_args or [])))
 
 
+def run_window_command(args: Namespace) -> int:
+    from lib_guard.window.cli import main as window_main
+
+    return int(window_main(list(args.window_args or [])))
+
+
 def build_scan_status(*args: Any, **kwargs: Any) -> Any:
     from lib_guard.cli_commands.scan import build_scan_status as _build_scan_status
 
@@ -415,6 +421,12 @@ def add_effective_parser(subparsers: Any) -> None:
     p.set_defaults(func=run_effective_command)
 
 
+def add_window_parser(subparsers: Any) -> None:
+    p = subparsers.add_parser("window", help="Review-window intake operations")
+    p.add_argument("window_args", nargs=REMAINDER)
+    p.set_defaults(func=run_window_command)
+
+
 def add_catalog_parser(subparsers: Any) -> None:
     root = subparsers.add_parser("catalog", help="Discover raw library assets and render catalog HTML")
     sp = root.add_subparsers(dest="catalog_cmd", required=True)
@@ -676,6 +688,7 @@ def build_parser() -> ArgumentParser:
     add_file_diff_parser(subparsers)
     add_library_parser(subparsers)
     add_effective_parser(subparsers)
+    add_window_parser(subparsers)
     add_catalog_parser(subparsers)
     add_workflow_parsers(subparsers)
     add_version_parser(subparsers)

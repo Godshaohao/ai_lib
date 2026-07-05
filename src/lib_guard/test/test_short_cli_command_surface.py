@@ -60,8 +60,8 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             main(["--help"])
         self.assertEqual(cm.exception.code, 0)
         help_text = stdout.getvalue()
-        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,rv}", help_text)
-        for name in ["init", "library", "cat", "scan", "cmp", "fd", "rv", "rel", "action"]:
+        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,intake,window,accept-window,mark,rv}", help_text)
+        for name in ["init", "library", "cat", "scan", "cmp", "fd", "rv", "rel", "action", "intake", "window", "accept-window", "mark"]:
             self.assertIn(name, help_text)
         for old_name in ["catalog,", "diff,", "file-diff", "release,", "override,", "refresh,", "rv-check", "rv-accept"]:
             self.assertNotIn(old_name, help_text)
