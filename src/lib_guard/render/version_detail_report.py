@@ -24,6 +24,7 @@ from lib_guard.render.catalog_workspace_report import catalog_browser_styles
 from lib_guard.render import catalog_render_common as common
 from lib_guard.render import catalog_report as catalog
 from lib_guard.render import product_theme as ui
+from lib_guard.render.version_detail_context import build_version_detail_review_context
 from lib_guard.render.version_review_model import build_version_review_model
 from lib_guard.render.version_review_render import render_ip_user_view, render_version_review_groups
 from lib_guard.view_types import canonical_file_type, package_view_type
@@ -712,6 +713,11 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     )
     scan_context = _as_mapping(scan_evidence.get("context"))
     scan_compatibility = _scan_compatibility(scan_context, comparison_context)
+    review_context = build_version_detail_review_context(
+        catalog_html_out=out_path,
+        library_row=lib,
+        version_row=version,
+    )
     release_notes = _release_notes_from_existing_evidence(version)
     recommended_file_diff, summary_only_reviewed, metadata_only_reviewed = _group_file_changes_by_review_mode(file_changes)
     commands = _file_diff_commands(lib, version, base_version, file_changes)
@@ -774,6 +780,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "markdown_export_path": str(md_path),
         "scan_context": scan_context,
         "comparison_context": comparison_context,
+        "review_context": review_context,
         "scan_compatibility": scan_compatibility,
         "scan_evidence": scan_evidence,
         "diff_meta": diff_meta,
@@ -1160,6 +1167,105 @@ def _management_gate_user_impact(version: Mapping[str, Any]) -> tuple[str, str, 
     return "未建立", "无管理门禁证据", "INFO"
 
 
+def _review_context(model: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _as_mapping(model.get("review_context"))
+
+
+def _review_context_is_active(ctx: Mapping[str, Any]) -> bool:
+    return str(ctx.get("status") or "").upper() == "IN_ACTIVE_WINDOW"
+
+
+def _review_context_role_label(role: Any) -> str:
+    return {
+        "candidate_base": "候选完整基线",
+        "candidate_overlay": "候选叠加版本",
+        "intermediate": "窗口中间版本",
+        "standalone": "独立版本",
+    }.get(str(role or ""), str(role or "独立版本"))
+
+
+def _review_context_compare_label(ctx: Mapping[str, Any], model: Mapping[str, Any]) -> str:
+    if _review_context_is_active(ctx):
+        old = str(ctx.get("compare_old") or ctx.get("old_label") or "-")
+        new = str(ctx.get("compare_new") or "")
+        if not new and ctx.get("candidate_effective_id"):
+            new = f"effective:{ctx.get('candidate_effective_id')}"
+        return f"{old} → {new or '-'}"
+    return f"{model.get('base_ref') or 'NEEDS_BASE_CONFIRM'} / {model.get('base_version') or '-'}"
+
+
+def _review_context_freshness_label(ctx: Mapping[str, Any]) -> str:
+    freshness = _as_mapping(ctx.get("freshness"))
+    return str(freshness.get("status") or "STALE_OR_MISSING")
+
+
+def _review_context_panel(model: Mapping[str, Any]) -> str:
+    ctx = _review_context(model)
+    if not ctx:
+        return ""
+    freshness = _as_mapping(ctx.get("freshness"))
+    items = ctx.get("window_items") if isinstance(ctx.get("window_items"), list) else []
+    item_labels = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        role = _review_context_role_label(item.get("role"))
+        item_labels.append(f"{item.get('version') or item.get('version_id') or '-'} ({role})")
+    overlays = ctx.get("candidate_effective_overlays") if isinstance(ctx.get("candidate_effective_overlays"), list) else []
+    compare_label = _review_context_compare_label(ctx, model)
+    body = ui.kv_table(
+        [
+            ("状态", ctx.get("status") or "STANDALONE"),
+            ("窗口状态", ctx.get("window_state") or "-"),
+            ("目标角色", _review_context_role_label(ctx.get("role_in_window"))),
+            ("窗口成员", ", ".join(item_labels) or "-"),
+            ("上一有效对象", ctx.get("old_label") or "-"),
+            ("候选 Effective", ctx.get("candidate_effective_id") or "-"),
+            ("候选完整基线", ctx.get("candidate_effective_base_full") or "-"),
+            ("候选叠加版本", ", ".join(str(item) for item in overlays) or "-"),
+            ("对比范围", compare_label),
+            ("证据状态", _review_context_freshness_label(ctx)),
+            ("窗口文件", ctx.get("window_file") or "-"),
+            ("Effective Manifest", ctx.get("candidate_effective_manifest") or "-"),
+            ("Compare Manifest", ctx.get("compare_manifest") or "-"),
+            ("Compare HTML", ctx.get("compare_html") or "-"),
+        ]
+    )
+    checks = ui.metric_grid(
+        [
+            ("窗口", "存在" if freshness.get("window_exists") else "缺失", "pending_window.json", "PASS" if freshness.get("window_exists") else "WARNING"),
+            (
+                "Effective",
+                "存在" if freshness.get("candidate_manifest_exists") else "缺失",
+                "candidate manifest",
+                "PASS" if freshness.get("candidate_manifest_exists") else "WARNING",
+            ),
+            (
+                "Compare",
+                "存在" if freshness.get("compare_manifest_exists") else "缺失",
+                "compare manifest/html",
+                "PASS" if freshness.get("compare_manifest_exists") and freshness.get("compare_html_exists") else "WARNING",
+            ),
+            (
+                "Scan",
+                "存在" if freshness.get("scan_evidence_exists") else "缺失",
+                "目标版本 scan evidence",
+                "PASS" if freshness.get("scan_evidence_exists") else "WARNING",
+            ),
+        ]
+    )
+    warnings = ctx.get("warnings") if isinstance(ctx.get("warnings"), list) else []
+    warning_html = ""
+    if warnings:
+        warning_html = "<div class='quality-note'><b>窗口提示</b><br>" + "<br>".join(ui.esc(item) for item in warnings) + "</div>"
+    return ui.collapsible_panel(
+        "当前审查窗口 / Effective 证据",
+        "Version Detail 的投影上下文：窗口、候选 effective、compare 和 freshness 只用于解释当前页面是否陈旧。",
+        checks + body + warning_html,
+        open=True,
+    )
+
+
 def _version_overview_panel(
     out_path: Path,
     safe_lib: str,
@@ -1178,16 +1284,28 @@ def _version_overview_panel(
         + _summary_value(model, "changed_files")
     )
     base_status = model.get("base_trust_status") or "WARNING"
-    delivery_status = required_view_status or "UNKNOWN"
     base_label = "已确认" if str(base_status).upper() == "PASS" else "待确认"
     delta_text = ip_model.get("delta_summary") or f"{file_change_total} 个变化"
     top_view_delta = ip_model.get("top_view_delta") or _top_file_type_text(model, limit=2)
+    ctx = _review_context(model)
+    if _review_context_is_active(ctx):
+        object_value = f"{model.get('version_id') or '-'} / {_review_context_role_label(ctx.get('role_in_window'))}"
+        compare_value = _review_context_compare_label(ctx, model)
+        compare_hint = f"window role={ctx.get('role_in_window') or '-'}"
+        evidence_value = _review_context_freshness_label(ctx)
+        evidence_hint = "窗口 / effective / compare / scan freshness"
+    else:
+        object_value = f"{model.get('version_id') or '-'} / 独立版本"
+        compare_value = f"{base_label}: {model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"
+        compare_hint = "未命中 active window 时回退普通 base 选择"
+        evidence_value = ip_model.get("evidence_summary") or _review_context_freshness_label(ctx)
+        evidence_hint = "轻量证据不自动代表不完整"
     overview_items = [
         ("接入判断", review_text, ip_model.get("main_reason") or ui.status_label(decision)),
-        ("对比 Base", base_label, f"{model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"),
+        ("审查对象", object_value, "Version Detail 是唯一审查投影"),
+        ("对比上下文", compare_value, compare_hint),
         ("View 变化", delta_text, top_view_delta),
-        ("必需 View", ui.status_label(delivery_status), "覆盖满足不等于全文 Parser 通过"),
-        ("证据等级", ip_model.get("evidence_summary") or "-", "轻量证据不自动代表不完整"),
+        ("证据状态", evidence_value, evidence_hint),
     ]
     overview_cells = "".join(
         "<div class='overview-cell'><b>{label}</b><em title='{value}'>{value}</em><span title='{hint}'>{hint}</span></div>".format(
@@ -1774,6 +1892,7 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
         )
         + "<div class='version-dashboard'><main class='version-main'>"
         + render_version_update_detail_panel(model)
+        + _review_context_panel(model)
         + _raw_scan_scope_note(model, parser_task_count=parser_task_count, count_only_total=count_only_total)
         + _view_coverage_panel(inventory, parser_manifest, release_readiness, counts)
         + _count_only_panel(counts, corner_summary, count_only_total)

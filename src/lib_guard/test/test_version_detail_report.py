@@ -48,6 +48,74 @@ def _write_version_detail_lane_fixture(root: Path) -> tuple[dict[str, str], dict
 
 
 class VersionDetailReportTest(unittest.TestCase):
+    def test_version_detail_model_and_first_screen_include_active_window_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            html_root = root / "html"
+            lib_dir = html_root / "libraries" / "ip_window_demo"
+            scan_dir = root / "scan" / "fix2"
+            scan_dir.mkdir(parents=True)
+            effective_dir = lib_dir / "effective" / "candidate_fix2"
+            compare_dir = lib_dir / "compare" / "raw_full1_to_candidate_fix2"
+            effective_dir.mkdir(parents=True)
+            compare_dir.mkdir(parents=True)
+            candidate_manifest = effective_dir / "effective_manifest.json"
+            candidate_manifest.write_text("{}", encoding="utf-8")
+            (effective_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+            compare_manifest = compare_dir / "compare_manifest.json"
+            compare_manifest.write_text("{}", encoding="utf-8")
+            (compare_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+            window_file = lib_dir / "window" / "pending_window.json"
+            window_file.parent.mkdir(parents=True)
+            window_file.write_text(
+                json.dumps(
+                    {
+                        "state": "COMPARED",
+                        "library": "window_demo",
+                        "library_id": "ip/window_demo",
+                        "items": [
+                            {"version": "full2", "role": "candidate_base"},
+                            {"version": "fix2", "role": "candidate_overlay"},
+                        ],
+                        "base_effective": {"target": "raw:full1"},
+                        "candidate_effective": {
+                            "effective_id": "candidate_fix2",
+                            "base_full": "full2",
+                            "overlays": ["fix2"],
+                            "manifest": str(candidate_manifest),
+                        },
+                        "compare": {
+                            "compare_id": "raw_full1_to_candidate_fix2",
+                            "old": "raw:full1",
+                            "new": "effective:candidate_fix2",
+                            "out_dir": str(compare_dir),
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            lib = {"library_id": "ip/window_demo", "library_name": "window_demo", "report_slug": "ip_window_demo"}
+            version = {
+                "version_id": "fix2",
+                "scan": {"status": "PASS", "scan_dir": str(scan_dir)},
+                "current_effective_ref": "full1",
+            }
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model, render_version_detail_page
+
+            model = build_version_update_detail_model(html_root, lib, version)
+            page = Path(render_version_detail_page(html_root, lib, version))
+            rendered = page.read_text(encoding="utf-8")
+
+            self.assertEqual(model["review_context"]["status"], "IN_ACTIVE_WINDOW")
+            self.assertEqual(model["review_context"]["role_in_window"], "candidate_overlay")
+            self.assertIn("当前审查窗口 / Effective 证据", rendered)
+            self.assertIn("候选叠加版本", rendered)
+            self.assertIn("raw:full1 → effective:candidate_fix2", rendered)
+            self.assertIn("candidate_fix2", rendered)
+            self.assertIn("FRESH", rendered)
+
     def test_review_model_rules_are_available_outside_renderer(self) -> None:
         from lib_guard.review.model_rules import (
             classify_review_lane,

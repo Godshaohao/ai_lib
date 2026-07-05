@@ -483,6 +483,9 @@ def add_catalog_parser(subparsers: Any) -> None:
     p.add_argument("--manual-review", action="store_true", default=None)
     p.add_argument("--note")
     p.add_argument("--updated-by")
+    p.add_argument("--catalog-html-out")
+    p.add_argument("--workdir", default="work")
+    p.add_argument("--no-catalog-render", action="store_true")
     p.set_defaults(func=run_catalog_override)
 
     p = sp.add_parser("release-check", help="Run release check from a catalog version")

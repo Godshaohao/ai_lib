@@ -1165,6 +1165,14 @@ def _window_accept_command(cfg: dict[str, str], args: Any) -> list[str]:
     command = [
         "window",
         "accept",
+        "--catalog",
+        cfg["catalog"],
+        "--library",
+        args.library,
+        "--workdir",
+        cfg["workspace"],
+        "--catalog-html-out",
+        cfg["catalog_html"],
         "--window-file",
         str(_window_file(cfg, args.library)),
         "--accepted-by",
@@ -1197,6 +1205,10 @@ def _mark_command(cfg: dict[str, str], args: Any) -> list[str]:
         version_key,
         "--package-type",
         type_map[args.type],
+        "--catalog-html-out",
+        cfg["catalog_html"],
+        "--workdir",
+        cfg["workspace"],
     ]
     if getattr(args, "updated_by", None):
         command.extend(["--updated-by", args.updated_by])

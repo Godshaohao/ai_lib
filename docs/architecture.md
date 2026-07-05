@@ -36,10 +36,26 @@ raw delivery
 | Catalog 渲染编排 | `src/lib_guard/render/catalog_report.py::render_catalog_html` |
 | Catalog Browser / Library Workspace | `src/lib_guard/render/catalog_workspace_report.py` |
 | Version Detail / update detail model | `src/lib_guard/render/version_detail_report.py` |
+| Version Detail 审查上下文 | `src/lib_guard/render/version_detail_context.py` |
+| 局部渲染影响模型 | `src/lib_guard/render/impact.py` |
 | 共享视觉组件 | `src/lib_guard/render/product_theme.py` |
 
 `catalog_report.py` 是 catalog render facade 和 state/task adapter，不应继续吸收
 Version Detail、manual compare 或 release 逻辑。
+
+Version Detail 是唯一审查投影。`window`、`effective`、`compare` 只是它的证据来源
+和上下文，不应新增平行主审查页面。页面第一屏只回答：
+
+- IP 使用判断。
+- 当前审查对象。
+- 对比上下文。
+- View 变化。
+- 证据 freshness。
+
+`RenderImpact` 只负责避免投影 stale。scan、batch scan、compare、batch compare、
+intake、accept-window、mark 会声明受影响的库/版本，再由 finalizer 局部刷新对应
+Version Detail、库工作台和目录索引。它不负责重新发现库，也不改变 scan、diff、
+release 的业务规则。
 
 ## 生成物边界
 

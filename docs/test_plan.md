@@ -25,6 +25,35 @@ scripts/lg.csh --help
 | Diff/lane | 跑 scan diff、pairwise 和 Version Detail 相关测试 |
 | 文档整理 | 跑 repository cleanup 测试，确认没有旧流程入口 |
 
+## Version Detail 投影回归
+
+Version Detail 是唯一审查投影。涉及 scan、compare、intake、accept-window、
+mark 或 update-detail 的修改，必须额外跑：
+
+```bash
+PYTHONPATH=src python3 -m unittest \
+  src.lib_guard.test.test_version_detail_review_context \
+  src.lib_guard.test.test_render_impact \
+  src.lib_guard.test.test_window_intake \
+  src.lib_guard.test.test_version_detail_report -q
+```
+
+这组测试锁定：
+
+- `VersionDetailReviewContext` 是否正确识别 pending window、candidate effective、
+  compare manifest 和 freshness。
+- scan、batch scan、compare、batch compare、intake、accept-window、mark 是否通过
+  Render Impact 刷新受影响的 Version Detail，而不是全量或裸刷新。
+- Version Detail 第一屏是否仍按“接入判断、审查对象、对比上下文、View 变化、证据状态”
+  五组信息展示。
+
+复杂度边界：
+
+- 单版本 scan / compare 只刷新当前库当前版本投影。
+- batch scan / compare 按成功版本集合刷新，复杂度为 O(K)。
+- intake / accept-window 按 review window 内版本集合刷新，复杂度为 O(W)。
+- 全 catalog render 只作为显式 catalog 页面刷新或低频重建动作。
+
 ## 文档守卫
 
 `src/lib_guard/test/test_repository_cleanup.py` 会检查：

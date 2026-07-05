@@ -92,6 +92,22 @@ lg.csh cmp ucie stable_20250608 --mode adjacent --scan-if-missing
 `cmp` 是手动比较工具，适合指定 `--base`、调试 adjacent/cumulative，或生成独立
 Comparison Review。
 
+scan、batch scan、cmp、batch compare、intake、accept-window 和 mark 会声明
+Render Impact，并刷新受影响的 Version Detail、库工作台和目录索引。日常不要用
+全量 catalog render 代替单版本投影刷新：
+
+```csh
+lg.csh cat ucie stable_20250608
+lg.csh scan ucie stable_20250608
+lg.csh cmp ucie stable_20250608 --base stable_20250601 --scan-if-missing
+lg.csh intake ucie
+lg.csh accept-window ucie --accepted-by lib_owner
+lg.csh mark ucie stable_20250608 --type FULL
+```
+
+这些命令更新的是 Version Detail 这个唯一审查投影；`window`、`effective`、`compare`
+不是新的主审查入口。
+
 ## `scan`
 
 `scan` 只有一种用户态动作：生成当前版本的 scan evidence。扫描深度由策略参数控制，

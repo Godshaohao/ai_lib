@@ -8,8 +8,9 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 import json
 
-from .common import auto_scan_id, default_cache_dir, default_state_dir, print_json, refresh_catalog_html
+from .common import auto_scan_id, default_cache_dir, default_state_dir, print_json, refresh_catalog_html, render_impacted_catalog_html
 from .scan import split_strategy_list
+from lib_guard.render.impact import impacts_for_versions
 
 
 def run_catalog_scan(args: Namespace) -> int:
@@ -188,6 +189,27 @@ def run_catalog_render(args: Namespace) -> int:
     return 0 if result.get("status") == "PASS" else 2
 
 
+def _attach_render_output(output: dict[str, Any], render_impact: dict[str, Any]) -> None:
+    output["render_impact"] = render_impact
+    output["rendered_pages"] = render_impact.get("affected_pages", [])
+    output["catalog_html_out"] = render_impact.get("catalog_html_out")
+    render_result = render_impact.get("render_result")
+    if render_result:
+        output["catalog_html"] = render_result
+
+
+def _version_ref_from_catalog_key(catalog: Mapping[str, Any], version_key: str) -> tuple[str, str] | None:
+    for lib in catalog.get("libraries", []) or []:
+        if not isinstance(lib, Mapping):
+            continue
+        for version in lib.get("versions", []) or []:
+            if not isinstance(version, Mapping):
+                continue
+            if str(version.get("version_key") or "") == str(version_key):
+                return str(lib.get("library_name") or lib.get("formal_library_id") or lib.get("library_id") or ""), str(version.get("version_id") or "")
+    return None
+
+
 def run_catalog_override(args: Namespace) -> int:
     from lib_guard.catalog.index import apply_catalog_override
 
@@ -211,7 +233,17 @@ def run_catalog_override(args: Namespace) -> int:
         note=args.note,
         updated_by=args.updated_by,
     )
-    print_json({k: v for k, v in result.items() if k != "catalog"})
+    output = {k: v for k, v in result.items() if k != "catalog"}
+    version_ref = _version_ref_from_catalog_key(result.get("catalog", {}) if isinstance(result.get("catalog"), Mapping) else {}, args.version)
+    impacts = impacts_for_versions(version_ref[0], [version_ref[1]], "catalog_override_updated") if version_ref else []
+    render_impact = render_impacted_catalog_html(args, impacts)
+    _attach_render_output(output, render_impact)
+    if version_ref and any(
+        getattr(args, name, None)
+        for name in ["package_type", "base", "base_full_version", "previous_effective_version", "current_effective", "compare_default"]
+    ):
+        output["recommended_next"] = f"lg.csh intake {version_ref[0]} --rebuild"
+    print_json(output)
     return 0 if result.get("status") == "PASS" else 2
 
 
@@ -269,7 +301,6 @@ def run_catalog_workflow(args: Namespace) -> int:
         scan_html=scan_html.get("index_html"),
         input_fingerprint=(scan_result.bundle.scan_meta.get("input_fingerprint") if getattr(scan_result, "bundle", None) else None),
     )
-    catalog_html = refresh_catalog_html(args)
     result = {
         "status": scan_result.status,
         "catalog": args.catalog,
@@ -278,8 +309,8 @@ def run_catalog_workflow(args: Namespace) -> int:
         "scan_dir": scan_result.out_dir,
         "scan_html": scan_html,
     }
-    if catalog_html:
-        result["catalog_html"] = catalog_html
+    render_impact = render_impacted_catalog_html(args, impacts_for_versions(item["library_name"], [item["version_id"]], "scan_updated"))
+    _attach_render_output(result, render_impact)
     print_json(result)
     return 0 if scan_result.status not in {"FAILED", "BLOCK"} else 2
 
@@ -419,7 +450,6 @@ def run_catalog_compare(args: Namespace) -> int:
         diff_html=html_result.get("index_html"),
         base_source=getattr(args, "base_source", None) or ("explicit" if explicit_base else None),
     )
-    catalog_html = refresh_catalog_html(args)
     result = {
         "status": diff_result.get("status"),
         "catalog": args.catalog,
@@ -432,8 +462,10 @@ def run_catalog_compare(args: Namespace) -> int:
         "diff_dir": str(diff_dir),
         "diff_html": html_result,
     }
-    if catalog_html:
-        result["catalog_html"] = catalog_html
+    impacted_versions = set(str(item) for item in scan_precheck.get("scanned_versions", []) or [] if item)
+    impacted_versions.add(str(new["version_id"]))
+    render_impact = render_impacted_catalog_html(args, impacts_for_versions(new["library_name"], sorted(impacted_versions), "compare_updated"))
+    _attach_render_output(result, render_impact)
     print_json(result)
     return 0 if diff_result.get("status") in {"SAME", "DIFF", "PASS_WITH_WARNING", "BLOCK"} else 2
 
@@ -556,6 +588,7 @@ def run_catalog_batch(args: Namespace) -> int:
         print_json(result)
         return 0
     init_progress(run_dir, len(selected), run_id)
+    completed_by_library: dict[str, list[str]] = {}
     for item in selected:
         child = Namespace(**vars(args))
         child.library = item["library_name"]
@@ -569,13 +602,18 @@ def run_catalog_batch(args: Namespace) -> int:
             row = {**_batch_manifest_item(item, "executed"), "status": "PASS" if code == 0 else "FAILED", "exit_code": code, "started_at": started_at, "finished_at": auto_scan_id()}
             results.append(row)
             update_progress(run_dir, row)
+            if code == 0:
+                completed_by_library.setdefault(str(item.get("library_name") or ""), []).append(str(item.get("version_id") or ""))
             if code != 0:
                 failures.append(row)
         except Exception as exc:
             row = {**_batch_manifest_item(item, "executed"), "status": "FAILED", "exit_code": 2, "error": str(exc), "finished_at": auto_scan_id()}
             failures.append(row)
             update_progress(run_dir, row)
-    catalog_html = refresh_catalog_html(args)
+    impacts = []
+    for library_name, versions in completed_by_library.items():
+        impacts.extend(impacts_for_versions(library_name, versions, "batch_scan_updated"))
+    render_impact = render_impacted_catalog_html(args, impacts)
     output = {
         "status": "PASS" if not failures else "FAILED",
         "run_id": run_id,
@@ -588,8 +626,7 @@ def run_catalog_batch(args: Namespace) -> int:
         "results": results,
         "failures": failures,
     }
-    if catalog_html:
-        output["catalog_html"] = catalog_html
+    _attach_render_output(output, render_impact)
     write_failed(run_dir, failures)
     write_rerun_failed_csh(run_dir, failures, "scan")
     write_result(run_dir, output)
@@ -655,6 +692,7 @@ def run_catalog_compare_batch(args: Namespace) -> int:
         print_json(result)
         return 0
     init_progress(run_dir, len(selected), run_id)
+    completed_by_library: dict[str, list[str]] = {}
     for item in selected:
         child = Namespace(**vars(args))
         child.library = item["library_name"]
@@ -669,13 +707,18 @@ def run_catalog_compare_batch(args: Namespace) -> int:
             row = {**_batch_manifest_item(item, "executed"), "status": "PASS" if code == 0 else "FAILED", "exit_code": code, "started_at": started_at, "finished_at": auto_scan_id()}
             results.append(row)
             update_progress(run_dir, row)
+            if code == 0:
+                completed_by_library.setdefault(str(item.get("library_name") or ""), []).append(str(item.get("version_id") or ""))
             if code != 0:
                 failures.append(row)
         except Exception as exc:
             row = {**_batch_manifest_item(item, "executed"), "status": "FAILED", "exit_code": 2, "error": str(exc), "finished_at": auto_scan_id()}
             failures.append(row)
             update_progress(run_dir, row)
-    catalog_html = refresh_catalog_html(args)
+    impacts = []
+    for library_name, versions in completed_by_library.items():
+        impacts.extend(impacts_for_versions(library_name, versions, "batch_compare_updated"))
+    render_impact = render_impacted_catalog_html(args, impacts)
     output = {
         "status": "PASS" if not failures else "FAILED",
         "run_id": run_id,
@@ -689,8 +732,7 @@ def run_catalog_compare_batch(args: Namespace) -> int:
         "results": results,
         "failures": failures,
     }
-    if catalog_html:
-        output["catalog_html"] = catalog_html
+    _attach_render_output(output, render_impact)
     write_failed(run_dir, failures)
     write_rerun_failed_csh(run_dir, failures, "compare")
     write_result(run_dir, output)

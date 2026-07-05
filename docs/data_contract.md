@@ -85,6 +85,7 @@ The model aggregates:
 
 | Field | Source |
 | --- | --- |
+| `review_context` | pending review window, candidate effective manifest, compare manifest, and scan evidence freshness |
 | `diff_summary` | `diff_summary.json` |
 | `view_diff` | `view_diff.json` |
 | `type_diff` | `type_diff.json` |
@@ -120,11 +121,20 @@ reviewer's source of truth:
 | `status_message` | Actionable copy for the current update-detail status |
 | `usage_decision` | Single user-facing decision: `READY`, `USAGE_REVIEW_REQUIRED`, or `BLOCKED` |
 | `usage_decision_reasons` | Machine-readable reasons behind `usage_decision`, for example `diff_changed`, `recommended_file_diff`, `release_note_missing`, or `base_not_confirmed` |
+| `review_context.status` | `IN_ACTIVE_WINDOW` when the version belongs to the active pending window; otherwise `STANDALONE` |
+| `review_context.role_in_window` | `candidate_base`, `candidate_overlay`, `intermediate`, or `standalone` |
+| `review_context.freshness` | Existence checks for window, candidate effective manifest, compare manifest/html, and scan evidence |
 | `file_changes[].identity` | Lightweight file identity hints: basename, suffix, size, sha/hash, parser signature, and deterministic match key |
 | `path_restructure` | Heuristic review hint for likely repackaging or root-path movement; it must not claim content equivalence by itself |
 
 HTML renders from this model directly. Markdown export is optional evidence
 generated from the same model and is never an HTML input.
+
+`review_context` is projection context, not a new workflow entry. It lets Version
+Detail explain whether the current page is showing a standalone version or an
+active review window member, and whether candidate effective / compare evidence
+is fresh enough to trust. Missing freshness must be shown as stale or partial;
+it must not be silently replaced with adjacent comparison output.
 
 Path movement has two separate meanings. `file_diff.renamed_or_moved` is a
 file-level match list and may be small when hashes are missing, duplicated, or

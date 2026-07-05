@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -123,6 +124,20 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertEqual(mark[:2], ["catalog", "override"])
             self.assertEqual(mark[mark.index("--version") + 1], "ip/ucie/custom_fix_key")
             self.assertEqual(mark[mark.index("--package-type") + 1], "PARTIAL_UPDATE")
+            self.assertIn("--catalog-html-out", mark)
+
+            accept = build_cli_commands(["accept-window", "ucie", "--accepted-by", "owner"], cwd=root)[0]
+            self.assertEqual(accept[:2], ["window", "accept"])
+            self.assertIn("--catalog", accept)
+            self.assertIn("--library", accept)
+            self.assertIn("--catalog-html-out", accept)
+            self.assertEqual(accept[accept.index("--library") + 1], "ucie")
+
+    def test_window_intake_and_accept_refresh_version_detail_projection(self) -> None:
+        from lib_guard.window.cli import cmd_accept, cmd_intake
+
+        self.assertIn("_attach_render_impact", inspect.getsource(cmd_intake))
+        self.assertIn("_attach_render_impact", inspect.getsource(cmd_accept))
 
 
 if __name__ == "__main__":

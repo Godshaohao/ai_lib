@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from lib_guard.effective.pointer import write_current_pointer
+from lib_guard.cli_commands.common import render_impacted_catalog_html
+from lib_guard.render.impact import impacts_for_versions
 from lib_guard.window.resolver import read_json, resolve_review_window, write_json
 
 
@@ -31,6 +33,26 @@ def _run_commands(commands: list[list[str]]) -> int:
     return 0
 
 
+def _window_versions(window: dict[str, Any]) -> list[str]:
+    versions: list[str] = []
+    for item in window.get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        version = str(item.get("version") or item.get("version_id") or "")
+        if version and version not in versions:
+            versions.append(version)
+    return versions
+
+
+def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], window: dict[str, Any], reason: str) -> None:
+    if not getattr(args, "catalog", None) or not getattr(args, "library", None) or not getattr(args, "catalog_html_out", None):
+        return
+    render_impact = render_impacted_catalog_html(args, impacts_for_versions(args.library, _window_versions(window), reason))
+    output["render_impact"] = render_impact
+    output["rendered_pages"] = render_impact.get("affected_pages", [])
+    output["catalog_html_out"] = render_impact.get("catalog_html_out")
+
+
 def cmd_intake(args: argparse.Namespace) -> int:
     window = resolve_review_window(
         catalog_path=args.catalog,
@@ -47,23 +69,26 @@ def cmd_intake(args: argparse.Namespace) -> int:
     )
     if window.get("state") != "EMPTY":
         write_json(window["pending_window_path"], window)
-    _print_json(
-        {
-            "status": "PASS",
-            "window": window.get("pending_window_path"),
-            "state": window.get("state"),
-            "base": window.get("base_effective"),
-            "candidate_effective": window.get("candidate_effective"),
-            "compare": window.get("compare"),
-            "scan_versions": window.get("scan_versions", []),
-            "warnings": window.get("warnings", []),
-            "command_count": len(window.get("commands", []) or []),
-            "message": window.get("message", ""),
-        }
-    )
+    output = {
+        "status": "PASS",
+        "window": window.get("pending_window_path"),
+        "state": window.get("state"),
+        "base": window.get("base_effective"),
+        "candidate_effective": window.get("candidate_effective"),
+        "compare": window.get("compare"),
+        "scan_versions": window.get("scan_versions", []),
+        "warnings": window.get("warnings", []),
+        "command_count": len(window.get("commands", []) or []),
+        "message": window.get("message", ""),
+    }
     if args.plan_only or window.get("state") == "EMPTY":
+        _print_json(output)
         return 0
-    return _run_commands(list(window.get("commands", []) or []))
+    code = _run_commands(list(window.get("commands", []) or []))
+    output["command_exit_code"] = code
+    _attach_render_impact(args, output, window, "window_intake_updated")
+    _print_json(output)
+    return code
 
 
 def cmd_show(args: argparse.Namespace) -> int:
@@ -103,7 +128,9 @@ def cmd_accept(args: argparse.Namespace) -> int:
     data["accepted_by"] = args.accepted_by
     data["current_effective_pointer"] = str(pointer)
     write_json(args.window_file, data)
-    _print_json({"status": "PASS", "current_effective": str(pointer), "window": args.window_file})
+    output = {"status": "PASS", "current_effective": str(pointer), "window": args.window_file}
+    _attach_render_impact(args, output, data, "window_accept_updated")
+    _print_json(output)
     return 0
 
 
@@ -134,6 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_show)
 
     p = sub.add_parser("accept")
+    p.add_argument("--catalog")
+    p.add_argument("--library")
+    p.add_argument("--workdir", default="work")
+    p.add_argument("--catalog-html-out")
     p.add_argument("--window-file", required=True)
     p.add_argument("--accepted-by", default="manual")
     p.add_argument("--note")

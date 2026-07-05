@@ -154,6 +154,18 @@ $PROJ/scripts/lg.csh cat <LIBRARY> --update-detail
 `current_effective`，没有当前有效库时退到 `previous_effective`。找不到可信 base
 时页面会要求人工确认。
 
+scan、cmp、intake、accept-window 和 mark 会通过 Render Impact 自动刷新受影响的
+Version Detail 投影；不需要为了一个版本每次手动全量 `cat --full`。如果只想重新
+打开某一个版本详情页，使用：
+
+```csh
+$PROJ/scripts/lg.csh cat <LIBRARY> <VERSION>
+```
+
+Version Detail 第一屏固定看五件事：接入判断、审查对象、对比上下文、View 变化、
+证据状态。review window、candidate effective、compare manifest 只作为这个页面的
+上下文证据，不是新的审查入口。
+
 ## 7. 结构对比
 
 普通更新详情优先看版本详情页。需要手动 compare/debug 时再运行：
