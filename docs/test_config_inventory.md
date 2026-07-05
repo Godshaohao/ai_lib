@@ -60,7 +60,7 @@ parse_exclude_file_types: verilog,liberty,spef
 supported. When `config_dir` is customized, the derived workspace files follow
 that directory unless explicitly overridden.
 
-`mode` 仍然保留在 workspace 配置里，目的是让旧脚本和历史 scan evidence 能被识别；当前用户态只使用 `scan`。扫描深度不再通过多个 mode 选择，而是通过策略字段控制，例如 `hash_policy`、`parse_file_types`、`parse_exclude_file_types`、`parse_jobs`。短命令会读取这些字段并传给底层 `run` / `run-batch` / compare 预扫描。历史兼容值只用于读取旧产物或内部测试，不作为推荐命令面。
+`mode` 仍然保留在 workspace 配置里，目的是让旧脚本和历史 scan evidence 能被识别；当前用户态只使用 `scan`。扫描深度不再通过多个 mode 选择，而是通过策略字段控制，例如 `hash_policy`、`parse_file_types`、`parse_exclude_file_types`、`parse_jobs`。短命令会读取这些字段并传给底层 `run` / `run-batch` / compare 预扫描；`lg scan` 命令行上的同名策略参数只覆盖本次扫描。历史兼容值只用于读取旧产物或内部测试，不作为推荐命令面。
 
 Version Review reads parser evidence from:
 

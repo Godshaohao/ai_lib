@@ -101,7 +101,7 @@ class RepositoryCleanupTest(unittest.TestCase):
                 if not path.is_file():
                     continue
                 rel = path.relative_to(ROOT).as_posix()
-                if rel.startswith("docs/archive/") or "/test/" in rel:
+                if "/test/" in rel:
                     continue
                 if path.suffix.lower() not in {".py", ".md", ".csh", ".ps1", ".cmd"}:
                     continue
@@ -133,8 +133,6 @@ class RepositoryCleanupTest(unittest.TestCase):
                 if not path.is_file():
                     continue
                 rel = path.relative_to(ROOT).as_posix()
-                if rel.startswith("docs/archive/"):
-                    continue
                 if path.suffix.lower() not in {".md", ".csh", ".ps1", ".cmd"}:
                     continue
                 text = path.read_text(encoding="utf-8", errors="ignore")
@@ -170,6 +168,25 @@ class RepositoryCleanupTest(unittest.TestCase):
                 if pattern.search(text):
                     hits.append(f"{rel}: {pattern.pattern}")
         self.assertFalse(hits, "stable user docs still carry deprecation tables/copy:\n" + "\n".join(hits))
+
+    def test_archive_workflow_pack_is_not_part_of_current_repository(self) -> None:
+        self.assertFalse((ROOT / "docs" / "archive").exists(), "docs/archive should not be part of the current repository")
+        current_text_roots = [ROOT / "README.md", ROOT / "AGENT.md", ROOT / "docs", ROOT / "scripts", ROOT / "src" / "lib_guard"]
+        forbidden = ["docs/archive", "workflow_pack", "v5_v6_migration"]
+        hits: list[str] = []
+        for root in current_text_roots:
+            paths = [root] if root.is_file() else list(root.rglob("*"))
+            for path in paths:
+                if not path.is_file() or "/test/" in path.as_posix():
+                    continue
+                rel = path.relative_to(ROOT).as_posix()
+                if path.suffix.lower() not in {".py", ".md", ".csh", ".ps1", ".cmd"}:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                for token in forbidden:
+                    if token in text:
+                        hits.append(f"{rel}: {token}")
+        self.assertFalse(hits, "current repository still references removed archive/workflow-pack material:\n" + "\n".join(hits))
 
     def test_repository_has_no_editor_swap_files(self) -> None:
         swap_files = sorted(

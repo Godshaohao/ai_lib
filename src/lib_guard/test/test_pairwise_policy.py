@@ -125,12 +125,7 @@ class PairwisePolicyTest(unittest.TestCase):
 
         self.assertEqual(DEFAULT_PAIRWISE_FILE_DIFF_TYPES, DEFAULT_FILE_DIFF_TYPES)
 
-    def test_short_cli_file_diff_type_choices_include_expert_manual_types(self) -> None:
-        from lib_guard.project_config import (
-            BINARY_METADATA_ONLY_TYPES,
-            DEFAULT_FILE_DIFF_TYPES,
-            SUMMARY_ONLY_TYPES,
-        )
+    def test_short_cli_file_diff_type_argument_accepts_expert_manual_types_without_help_noise(self) -> None:
         from lib_guard.short_cli import _build_parser
 
         parser = _build_parser()
@@ -143,10 +138,10 @@ class PairwisePolicyTest(unittest.TestCase):
             for action in parser._subparsers._group_actions[0].choices["fd"]._actions
             if action.dest == "type"
         )
-        self.assertEqual(
-            set(file_diff_parser.choices),
-            DEFAULT_FILE_DIFF_TYPES | SUMMARY_ONLY_TYPES | BINARY_METADATA_ONLY_TYPES,
-        )
+        self.assertIsNone(file_diff_parser.choices)
+        help_text = parser._subparsers._group_actions[0].choices["fd"].format_help()
+        self.assertIn("FILE_TYPE", help_text)
+        self.assertNotIn("systemverilog", help_text)
 
     def test_summary_only_types_include_text_summary_lanes(self) -> None:
         from lib_guard.project_config import SUMMARY_ONLY_TYPES
@@ -198,8 +193,16 @@ class PairwisePolicyTest(unittest.TestCase):
                 build_cli_commands(["fd", "ucie", "patch", "top.v", "--type", "verilog"], cwd=workspace)
         self.assertEqual(
             str(cm.exception),
-            "verilog is summary-only; pass --force-large only for expert manual review.",
-        )
+                "verilog is summary-only; pass --force-large only for expert manual review.",
+            )
+
+    def test_fd_unsupported_type_fails_in_command_expansion(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._fd_workspace(Path(td), "top.foo")
+            with self.assertRaisesRegex(ValueError, "unsupported file type for lg fd: unknown_view"):
+                build_cli_commands(["fd", "ucie", "patch", "top.foo", "--type", "unknown_view"], cwd=workspace)
 
     def test_fd_summary_only_with_force_large_generates_command(self) -> None:
         from lib_guard.short_cli import build_cli_commands

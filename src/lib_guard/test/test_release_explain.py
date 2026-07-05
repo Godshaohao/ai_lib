@@ -83,6 +83,23 @@ class ReleaseExplainTest(unittest.TestCase):
             self.assertIn("--policy", commands[0])
             self.assertTrue(commands[0][commands[0].index("--policy") + 1].endswith("configs/release_policy.json"))
 
+    def test_short_cli_rel_defaults_to_check_then_release_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True)
+            catalog.write_text(json.dumps({"libraries": []}), encoding="utf-8")
+
+            from lib_guard.short_cli import build_cli_commands, write_default_config
+
+            write_default_config(workspace, raw_root=raw)
+            commands = build_cli_commands(["rel", "ucie", "stable_20250608"], cwd=workspace)
+
+            self.assertEqual([cmd[0:2] for cmd in commands], [["catalog", "release-check"], ["release-batch", "--catalog"]])
+            self.assertIn("--link-mode", commands[-1])
+            self.assertEqual(commands[-1][commands[-1].index("--link-mode") + 1], "symlink")
+
     def test_catalog_release_check_parser_accepts_explain(self) -> None:
         from lib_guard.cli import build_parser
 

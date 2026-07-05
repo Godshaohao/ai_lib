@@ -40,4 +40,4 @@ Catalog HTML -> Library Workspace -> Version Review
 
 ## 历史说明
 
-历史迁移文档保留在 `docs/archive/`。当前文档不应依赖 archive 里的旧指令。
+历史迁移文档不再作为当前仓库内容维护。当前文档不应依赖旧迁移说明里的指令。

@@ -43,7 +43,7 @@ lg.csh fd ucie stable_20250608 lef/ucie.lef --base stable_20250601 --type lef
 lg.csh rv check ucie stable_20250608 --gate current
 lg.csh rv accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason "DB hash change accepted for current."
 lg.csh action ucie
-lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
+lg.csh rel ucie stable_20250608
 ```
 
 ## `cat --update-detail` 和 `cmp` 的边界

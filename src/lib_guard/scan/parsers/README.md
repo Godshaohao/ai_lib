@@ -46,6 +46,4 @@ METADATA_ONLY
 5. Add summary or diff support only when the extracted fields are meaningful
    for review.
 
-The historical parser refactor notes are archived at
-`docs/archive/v5_v6_migration/parsers_refactor.md`.
-
+Parser behavior is governed by this contract and the active parser tests.

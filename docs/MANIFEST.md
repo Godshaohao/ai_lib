@@ -15,5 +15,3 @@ Status: current
 | `docs/test_plan.md` | current | Verification commands |
 | `docs/compatibility.md` | current | Compatibility lifecycle rule and wrapper inventory |
 | `docs/test_config_inventory.md` | current | Config/workspace inventory |
-| `docs/archive/v5_v6_migration/` | archived | Historical migration notes |
-| `docs/archive/workflow_pack/` | archived | Workflow-pack material separated from product docs |

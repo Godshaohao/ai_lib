@@ -15,5 +15,4 @@ Status: current
 - [测试计划](test_plan.md)
 - [兼容层说明](compatibility.md)
 
-历史迁移说明和 workflow-pack 材料保留在 `archive/`。它们只用于追溯历史，
-当前行为以本索引列出的文档为准。
+历史迁移说明和 workflow-pack 材料不再作为当前仓库内容维护；当前行为以本索引列出的文档为准。

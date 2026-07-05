@@ -20,8 +20,8 @@ $PROJ/scripts/lg.csh init $WORK --raw-root $RAW --library-type ip
 $PROJ/scripts/lg.csh library add vendor_A.openroad_platform.openroad_asap7 \
   --root /path/to/vendor_A/openroad_asap7 \
   --vendor vendor_A \
-  --display-name openroad_asap7
-$PROJ/scripts/lg.csh library apply
+  --display-name openroad_asap7 \
+  --apply
 ```
 
 如果不知道库根，先生成候选快照，再只把人工确认 OK 的候选合并进 registry：
@@ -89,6 +89,7 @@ $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-mis
 - `scan`：只有一种用户态动作。扫描深度通过策略配置，不再选择多个 mode。
 - 常用策略：`--parse-file-types lef,cdl`、`--parse-exclude-file-types verilog,liberty,spef`、
   `--hash-policy smart/full`、`--parse-jobs 8`。
+- `$WORK/lib_guard.yml` 中的策略是默认值；短命令上的同名策略参数只覆盖本次扫描。
 - `cat <LIBRARY> --update-detail`：刷新 Version Review 的日常更新详情，默认先使用 `current_effective`，
   没有当前有效库时再使用 `previous_effective`。
 - `cmp`：手动 structural compare/debug，适合显式指定 base 或 adjacent/cumulative。
@@ -150,11 +151,12 @@ Action 文件是当前人工编排入口。详见
 ## 8. Release
 
 ```csh
-$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
-$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION>
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --explain
 ```
 
-Release 使用 manifest-driven file-level symlink/copy 规划，正式目录是扁平大写
+`rel <LIBRARY> <VERSION>` 默认先执行 release-check，再生成 symlink release 规划；
+不会自动 apply。Release 使用 manifest-driven file-level symlink/copy 规划，正式目录是扁平大写
 View 目录，例如 `LEF/`、`LIB/`、`RTL/`、`GDS/`。raw 包里的
 `upstream_xxx/lef/...`、`source_package/lef/...` 这类包装目录不会进入正式
 release 路径。

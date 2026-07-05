@@ -36,8 +36,8 @@ exposed.
 ## Documentation Rule
 
 Update current docs when workflow, command behavior, data contracts, or
-repository structure changes. Archive migration notes under `docs/archive/`
-instead of keeping them beside current docs.
+repository structure changes. Do not add historical migration bundles or
+workflow-pack copies to the current repository path.
 
 ## Verification
 
@@ -52,4 +52,3 @@ PYTHONPATH=src python -m lib_guard.short_cli --help
 
 For UI/report changes, regenerate a demo HTML under `work/` and inspect the
 resulting path.
-

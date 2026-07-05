@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from argparse import ArgumentParser, Namespace, RawDescriptionHelpFormatter
+from argparse import ArgumentParser, Namespace, RawDescriptionHelpFormatter, SUPPRESS
 from pathlib import Path
 from typing import Any
 import json
@@ -503,7 +503,8 @@ def _validate_manual_file_diff_type(file_type: str, *, force_large: bool) -> Non
         raise ValueError(
             f"{file_type} is {lane}; pass --force-large only for expert manual review."
         )
-    raise ValueError(f"file type {file_type!r} is not supported by pairwise file-diff")
+    supported = ", ".join(sorted(MANUAL_FILE_DIFF_TYPES))
+    raise ValueError(f"unsupported file type for lg fd: {file_type}. Supported types: {supported}")
 
 
 def _canonical_command(name: str | None) -> str | None:
@@ -560,7 +561,6 @@ def _file_diff_out_dir(cfg: dict[str, str], library: str, version: str, relpath:
 
 def _build_parser() -> ArgumentParser:
     file_diff_types = " ".join(sorted(PAIRWISE_FILE_DIFF_TYPES))
-    manual_file_diff_types = " ".join(sorted(MANUAL_FILE_DIFF_TYPES))
     parser = ArgumentParser(
         prog="lg",
         description="lib_guard 日常短命令入口",
@@ -569,7 +569,7 @@ def _build_parser() -> ArgumentParser:
   日常流程:
     lg.csh init $WORK --raw-root $RAW --library-type ip
     cd $WORK
-    lg.csh library add <正式库名> --root <库根目录>
+    lg.csh library add <正式库名> --root <库根目录> --apply
     lg.csh library discover             # 只生成候选快照，不覆盖人工 registry
     vi $WORK/config/library_candidates/latest.tsv
     lg.csh library accept
@@ -586,7 +586,7 @@ def _build_parser() -> ArgumentParser:
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
     lg.csh rv check ucie stable_20250608 --gate current
     lg.csh rv accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason accepted
-    lg.csh rel ucie stable_20250608 --check-first --link-mode symlink
+    lg.csh rel ucie stable_20250608       # 默认先 release-check，再生成 symlink release 规划
 
   Action 文件批处理:
     lg.csh scan ucie --missing
@@ -602,8 +602,8 @@ def _build_parser() -> ArgumentParser:
   支持的两两文件 diff 类型:
     {file_diff_types}
 
-  专家手动 fd 可显式 --force-large 选择:
-    {manual_file_diff_types}
+  专家手动 fd:
+    需要下钻 summary-only / metadata-only 视图时显式传 --type FILE_TYPE --force-large。
 """,
     )
     parser.add_argument("--config", help=f"{CONFIG_NAME} 路径")
@@ -623,6 +623,10 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--limit", type=int, help="限制批量扫描数量，便于试跑")
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="只扫描某个 catalog stage")
     p.add_argument("--with-evidence", action="store_true", help="扫描前刷新带文件类型 evidence 的 catalog")
+    p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次扫描的内容 hash 策略")
+    p.add_argument("--parse-file-types", help="覆盖本次扫描进入 parser 的文件类型，例如 lef,cdl")
+    p.add_argument("--parse-exclude-file-types", help="覆盖本次扫描不进入 parser 的文件类型，例如 verilog,liberty,spef")
+    p.add_argument("--parse-jobs", help="覆盖本次扫描 parser 并发数")
 
     p = sub.add_parser("cat", help="刷新 catalog/HTML，或刷新版本详情更新证据")
     p.add_argument("library", nargs="?")
@@ -661,6 +665,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--vendor")
     p.add_argument("--middle-path")
     p.add_argument("--registry", help="人工确认 registry，默认 $WORK/config/library_registry.tsv")
+    p.add_argument("--apply", action="store_true", help="加入 registry 后立即生成正式 library_catalog.yml")
 
     p = lsp.add_parser("apply", help="把人工确认后的 registry 转成正式 library_catalog.yml")
     p.add_argument("--input", help="输入 registry，默认 $WORK/config/library_registry.tsv")
@@ -691,7 +696,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--base", help="显式指定 base version；catalog 无法可靠推断时必须传入")
     p.add_argument("--scan-if-missing", action="store_true", help="compare 前只扫描缺少或已过期 evidence 的 old/new 版本")
     p.add_argument("--rescan", action="store_true", help="compare 前强制重扫 old/new 版本")
-    p.add_argument("--auto-scan", action="store_true", help="已废弃的 --scan-if-missing 兼容别名；不会强制重扫")
+    p.add_argument("--auto-scan", action="store_true", help=SUPPRESS)
     p.add_argument("--refresh-catalog", action="store_true", help="compare 前刷新该 library catalog；默认使用已有 catalog.json")
     p.add_argument("--with-evidence", action="store_true", help="配合 --refresh-catalog 收集文件类型 evidence")
 
@@ -700,7 +705,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("version")
     p.add_argument("relpath")
     p.add_argument("--base")
-    p.add_argument("--type", choices=sorted(MANUAL_FILE_DIFF_TYPES), help="Override inferred file type")
+    p.add_argument("--type", metavar="FILE_TYPE", help="覆盖自动推断的文件类型；专家入口，具体类型按策略校验")
     p.add_argument("--force-large", action="store_true", help="Expert opt-in: allow summary-only or metadata-only file types to run manual file diff")
 
     p = sub.add_parser("rel", help="对已扫描版本执行 release check/link/verify 规划；不会运行 scan")
@@ -711,7 +716,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--link-mode", default="symlink", choices=["copy", "symlink"])
     p.add_argument("--check-only", action="store_true", help="Only run release-check for this catalog version")
-    p.add_argument("--check-first", action="store_true", help="Run release-check before release-batch")
+    p.add_argument("--check-first", action="store_true", help="兼容显式写法；rel 默认已先运行 release-check")
     p.add_argument("--explain", action="store_true", help="Print release-check explanation JSON without applying release")
     p.add_argument("--only-checked", action="store_true", help="Release only if prior/latest release-check is PASS/PASS_WITH_WARNING")
     p.add_argument("--only-ready", action="store_true", help="Skip manual-review or blocked versions")
@@ -800,7 +805,7 @@ def _catalog_render_command(cfg: dict[str, str], library: str | None = None, ver
     return command
 
 
-def _scan_run_command(cfg: dict[str, str], library: str, version: str) -> list[str]:
+def _scan_run_command(cfg: dict[str, str], library: str, version: str, args: Any | None = None) -> list[str]:
     command = [
         "run",
         "--catalog",
@@ -817,14 +822,21 @@ def _scan_run_command(cfg: dict[str, str], library: str, version: str) -> list[s
         "--catalog-html-out",
         cfg["catalog_html"],
     ]
-    _append_scan_strategy(command, cfg)
+    _append_scan_strategy(command, cfg, args)
     return command
 
 
-def _append_scan_strategy(command: list[str], cfg: dict[str, str]) -> None:
-    command.extend(["--parse-jobs", cfg["parse_jobs"]])
+def _scan_strategy_value(cfg: dict[str, str], args: Any | None, key: str) -> str:
+    override = getattr(args, key, None) if args is not None else None
+    value = override if override not in {None, ""} else cfg.get(key)
+    return str(value or "")
+
+
+def _append_scan_strategy(command: list[str], cfg: dict[str, str], args: Any | None = None) -> None:
+    parse_jobs = _scan_strategy_value(cfg, args, "parse_jobs") or cfg["parse_jobs"]
+    command.extend(["--parse-jobs", parse_jobs])
     for key in SCAN_STRATEGY_CONFIG_KEYS:
-        value = cfg.get(key)
+        value = _scan_strategy_value(cfg, args, key)
         if value:
             command.extend([f"--{key.replace('_', '-')}", value])
 
@@ -979,6 +991,7 @@ def _scan_batch_command(
     only_missing: bool = False,
     limit: int | None = None,
     stage: str | None = None,
+    strategy_args: Any | None = None,
 ) -> list[str]:
     command = [
         "run-batch",
@@ -992,7 +1005,7 @@ def _scan_batch_command(
         "--catalog-html-out",
         cfg["catalog_html"],
     ]
-    _append_scan_strategy(command, cfg)
+    _append_scan_strategy(command, cfg, strategy_args)
     if library:
         command.extend(["--library", library])
     if only_missing:
@@ -1219,7 +1232,10 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         if args.library_cmd == "list":
             return [_library_list_command(cfg, args)]
         if args.library_cmd == "add":
-            return [_library_add_command(cfg, args)]
+            commands = [_library_add_command(cfg, args)]
+            if getattr(args, "apply", False):
+                commands.append(_library_apply_command(cfg, Namespace(input=args.registry, out=None)))
+            return commands
         if args.library_cmd == "apply":
             return [_library_apply_command(cfg, args)]
         if args.library_cmd == "override":
@@ -1250,7 +1266,7 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             commands: list[list[str]] = []
             if with_evidence or not _find_version_in_catalog(cfg, args.library, args.version):
                 commands.append(_catalog_scan_command(cfg, args.library, with_evidence=with_evidence))
-            commands.append(_scan_run_command(cfg, args.library, args.version))
+            commands.append(_scan_run_command(cfg, args.library, args.version, args))
             return commands
         if args.library:
             has_batch_intent = bool(
@@ -1269,6 +1285,7 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
                     only_missing=bool(getattr(args, "missing", False)),
                     limit=getattr(args, "limit", None),
                     stage=getattr(args, "stage", None),
+                    strategy_args=args,
                 ),
             ]
         raise ValueError("lg scan requires <library> <version> or <library> --missing/--all-versions. Use lg cat to refresh catalog/HTML.")
@@ -1355,8 +1372,7 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             return [check_cmd]
         if args.check_only:
             return [check_cmd]
-        if args.check_first:
-            commands.append(check_cmd)
+        commands.append(check_cmd)
         command = [
             "release-batch",
             "--catalog",

@@ -38,8 +38,8 @@ tests/                   Integration fixtures and repository-level notes
 work/                    Generated local output, not source of truth
 ```
 
-Historical migration notes and workflow-pack material live under
-`docs/archive/`. They are not part of the current operating path.
+Historical migration notes and workflow-pack material are not kept in the
+current repository path. Current behavior is defined by the docs listed above.
 
 ## 常用 csh 命令
 
@@ -57,8 +57,8 @@ $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --rescan
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> --base <BASE_VERSION> --type <FILE_TYPE>
 $PROJ/scripts/lg.csh rv check <LIBRARY> <VERSION> --gate current
 $PROJ/scripts/lg.csh rv accept <LIBRARY> <VERSION> --item <ITEM_ID> --by <USER> --reason "..."
-$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
-$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION>
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --explain
 ```
 
 `cat <LIBRARY> --update-detail` 用于刷新 Version Review 的更新详情，默认选择 `current_effective` 或
@@ -74,7 +74,8 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
 或生成独立 Comparison Review。`fd` 是手动 file drill-down，只用于 reviewer 或 owner
 确认需要逐文件查看的重点文件。
 
-`rel --explain` 只解释 release check 为什么 blocked，不执行 link/apply。
+`rel <LIBRARY> <VERSION>` 默认先执行 release check，再生成 symlink release 规划；
+不会自动 apply。`rel --explain` 只解释 release check 为什么 blocked，不执行 link/apply。
 
 File Diff lane 的含义是审查方式，不是漏跑检查。`summary-only` 表示大型逻辑视图已经
 通过 summary/count/corner 等证据审查；`metadata-only` 表示二进制、layout 或 database

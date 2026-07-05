@@ -1684,6 +1684,21 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("--registry", library_add_cmds[0])
             self.assertIn(str(workspace / "config" / "library_registry.tsv"), library_add_cmds[0])
 
+            library_add_apply_cmds = build_cli_commands(
+                [
+                    "library",
+                    "add",
+                    "vendor_A.openroad_platform.openroad_asap7",
+                    "--root",
+                    str(raw / "vendor_A" / "openroad_asap7"),
+                    "--apply",
+                ],
+                cwd=workspace,
+            )
+            self.assertEqual([cmd[0:2] for cmd in library_add_apply_cmds], [["library", "add"], ["library", "apply"]])
+            self.assertIn(str(workspace / "config" / "library_registry.tsv"), library_add_apply_cmds[1])
+            self.assertIn(str(workspace / "config" / "library_catalog.yml"), library_add_apply_cmds[1])
+
             library_accept_cmds = build_cli_commands(["library", "accept"], cwd=workspace)
             self.assertEqual(library_accept_cmds[0][0:2], ["library", "accept"])
             self.assertIn(str(workspace / "config" / "library_candidates" / "latest.tsv"), library_accept_cmds[0])
@@ -1943,6 +1958,9 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertIn("lg.csh rv accept", help_text)
         for token in ["waiver", "ibis", "pwl", "snp", "cpm"]:
             self.assertIn(token, supported_types)
+        expert_section = help_text.split("专家手动 fd:", 1)[1]
+        self.assertIn("FILE_TYPE", expert_section)
+        self.assertNotIn("systemverilog", expert_section)
         self.assertNotIn("filediff", help_text)
         self.assertNotIn("refresh-diff", help_text)
 
@@ -1957,6 +1975,23 @@ class ScanPipelineTest(unittest.TestCase):
 
         self.assertIn("--force-large", help_text)
         self.assertIn("Expert opt-in", help_text)
+        self.assertIn("FILE_TYPE", help_text)
+        self.assertNotIn("systemverilog", help_text)
+        self.assertNotIn("verilog,", help_text)
+        self.assertNotIn("liberty", help_text)
+        self.assertNotIn("db,", help_text)
+
+    def test_short_cli_compare_help_hides_deprecated_auto_scan(self) -> None:
+        from lib_guard.short_cli import _build_parser
+
+        parser = _build_parser()
+        subparsers = [action for action in parser._actions if isinstance(action, argparse._SubParsersAction)]
+        self.assertEqual(1, len(subparsers))
+        compare_parser = subparsers[0].choices["cmp"]
+        help_text = compare_parser.format_help()
+
+        self.assertIn("--scan-if-missing", help_text)
+        self.assertNotIn("--auto-scan", help_text)
 
     def test_short_cli_rejects_removed_legacy_aliases(self) -> None:
         from lib_guard.short_cli import _build_parser
@@ -2280,6 +2315,122 @@ class ScanPipelineTest(unittest.TestCase):
                 self.assertIn("lef,cdl", command)
                 self.assertIn("--parse-exclude-file-types", command)
                 self.assertIn("verilog,liberty", command)
+
+    def test_short_cli_scan_accepts_inline_strategy_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/ucie/stable_20250608",
+                                        "raw_path": str(raw / "ucie" / "stable_20250608"),
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.short_cli import build_cli_commands, write_default_config
+
+            write_default_config(workspace, raw_root=raw)
+
+            command = build_cli_commands(
+                [
+                    "scan",
+                    "ucie",
+                    "stable_20250608",
+                    "--hash-policy",
+                    "full",
+                    "--parse-file-types",
+                    "lef,cdl",
+                    "--parse-exclude-file-types",
+                    "verilog,liberty",
+                    "--parse-jobs",
+                    "4",
+                ],
+                cwd=workspace,
+            )[0]
+
+            self.assertNotIn("--mode", command)
+            self.assertIn("--hash-policy", command)
+            self.assertEqual(command[command.index("--hash-policy") + 1], "full")
+            self.assertIn("--parse-file-types", command)
+            self.assertEqual(command[command.index("--parse-file-types") + 1], "lef,cdl")
+            self.assertIn("--parse-exclude-file-types", command)
+            self.assertEqual(command[command.index("--parse-exclude-file-types") + 1], "verilog,liberty")
+            self.assertIn("--parse-jobs", command)
+            self.assertEqual(command[command.index("--parse-jobs") + 1], "4")
+
+    def test_short_cli_scan_batch_accepts_inline_strategy_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/ucie/stable_20250608",
+                                        "raw_path": str(raw / "ucie" / "stable_20250608"),
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.short_cli import build_cli_commands, write_default_config
+
+            write_default_config(workspace, raw_root=raw)
+
+            command = build_cli_commands(
+                [
+                    "scan",
+                    "ucie",
+                    "--missing",
+                    "--hash-policy",
+                    "smart",
+                    "--parse-exclude-file-types",
+                    "verilog,liberty",
+                    "--parse-jobs",
+                    "2",
+                ],
+                cwd=workspace,
+            )[1]
+
+            self.assertNotIn("--mode", command)
+            self.assertIn("--hash-policy", command)
+            self.assertEqual(command[command.index("--hash-policy") + 1], "smart")
+            self.assertIn("--parse-exclude-file-types", command)
+            self.assertEqual(command[command.index("--parse-exclude-file-types") + 1], "verilog,liberty")
+            self.assertIn("--parse-jobs", command)
+            self.assertEqual(command[command.index("--parse-jobs") + 1], "2")
 
     def test_short_cli_config_paths_follow_project_config_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as td:

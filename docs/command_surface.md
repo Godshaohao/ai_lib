@@ -50,8 +50,8 @@ $PROJ/scripts/lg.csh cat <LIBRARY> --update-detail
 $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
 $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> --base <BASE_VERSION> --type <FILE_TYPE>
 $PROJ/scripts/lg.csh rv check <LIBRARY> <VERSION> --gate current
-$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --link-mode symlink
-$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION>
+$PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --explain
 ```
 
 `scan` 只有一种用户态动作：扫描当前版本并生成 evidence。不要再选择
