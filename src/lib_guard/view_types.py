@@ -46,19 +46,19 @@ RAW_TYPE_TO_VIEW = {
 }
 
 VIEW_LABELS = {
-    "timing_lib": "Liberty / Timing",
-    "rtl_model": "RTL model",
-    "physical_abstract": "LEF / Physical abstract",
-    "layout": "GDS/OAS / Layout",
-    "constraint": "SDC / Constraint",
-    "power_intent": "UPF/CPF / Power intent",
-    "parasitic_compiled": "SPEF/DB/NDM / Parasitic & compiled",
-    "netlist": "CDL/SPICE / Netlist",
-    "tech_flow_config": "Tech/Flow config",
-    "doc_evidence": "Doc / Release evidence",
-    "waiver": "Waiver / Signoff evidence",
+    "timing_lib": "Liberty / 时序",
+    "rtl_model": "RTL 模型",
+    "physical_abstract": "LEF / 物理抽象",
+    "layout": "GDS/OAS / 版图",
+    "constraint": "SDC / 约束",
+    "power_intent": "UPF/CPF / 电源意图",
+    "parasitic_compiled": "SPEF/DB/NDM / 寄生与编译库",
+    "netlist": "CDL/SPICE / 网表",
+    "tech_flow_config": "工艺与流程配置",
+    "doc_evidence": "文档与发布证据",
+    "waiver": "豁免与签核证据",
     "unknown": "Unknown / 待分类",
-    "other": "Other / Evidence",
+    "other": "其他 / 证据",
 }
 
 VIEW_ORDER = [
@@ -78,12 +78,12 @@ VIEW_ORDER = [
 ]
 
 USAGE_AREAS = {
-    "Timing / STA": {"timing_lib", "parasitic_compiled"},
-    "Physical / PD": {"physical_abstract", "layout", "tech_flow_config"},
-    "RTL / Integration": {"rtl_model"},
-    "Constraint / Intent": {"constraint", "power_intent"},
-    "Netlist / LVS": {"netlist"},
-    "Evidence / Waiver": {"waiver", "doc_evidence", "unknown", "other"},
+    "时序分析 / STA": {"timing_lib", "parasitic_compiled"},
+    "物理实现 / PD": {"physical_abstract", "layout", "tech_flow_config"},
+    "RTL 集成": {"rtl_model"},
+    "约束与意图": {"constraint", "power_intent"},
+    "网表与 LVS": {"netlist"},
+    "证据与豁免": {"waiver", "doc_evidence", "unknown", "other"},
 }
 
 RELEASE_VIEW_DIR_ALIASES = {
@@ -168,7 +168,7 @@ def usage_area_for_view(view_type: Any) -> str:
     for area, view_types in USAGE_AREAS.items():
         if key in view_types:
             return area
-    return "Other / Evidence"
+    return "其他 / 证据"
 
 
 def release_view_dir(value: Any) -> str:

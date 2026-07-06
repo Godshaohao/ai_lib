@@ -112,11 +112,11 @@ class EffectiveManifestTest(unittest.TestCase):
             self.assertNotIn("/ucie/R_LONG_20260624/", preview["release_files"]["RTL/top.v"]["release_path"])
             self.assertTrue((preview_dir / "release_delta.json").exists())
             self.assertTrue((preview_dir / "release_preview.csh").exists())
-            self.assertIn("Effective Stack", html)
-            self.assertIn("Version Evidence", html)
+            self.assertIn("有效版组成", html)
+            self.assertIn("来源版本证据", html)
             self.assertIn("parser_tasks", html)
-            self.assertIn("adjacent_old_version", html)
-            self.assertIn("Release Delta Preview", html)
+            self.assertIn("相邻上一版", html)
+            self.assertIn("发布变化预览", html)
             self.assertIn("stable_20250601_base", html)
             self.assertNotIn("鍩", html)
 
@@ -177,19 +177,21 @@ class EffectiveManifestTest(unittest.TestCase):
             self.assertTrue(lib_entry["effective"]["E1_20260624"]["release_preview"].endswith("release_preview/index.html"))
 
             index_html = Path(result["index_html"]).read_text(encoding="utf-8")
-            self.assertIn("report_index.json", index_html)
+            self.assertNotIn("report_index.json", index_html)
             self.assertIn("进入库工作台", index_html)
             self.assertNotIn("<iframe", index_html.lower())
 
             library_home = catalog_dir / "html" / "libraries" / "ip_ucie" / "index.html"
             self.assertTrue(library_home.exists())
             library_html = library_home.read_text(encoding="utf-8")
-            self.assertIn("版本时间线", library_html)
-            self.assertIn("latest_effective_ref", library_html)
+            self.assertIn("库入口", library_html)
+            self.assertIn("当前有效版", library_html)
+            self.assertIn("最新待审版", library_html)
             self.assertNotIn("Current Effective Detail", library_html)
             self.assertNotIn("Version Evidence", library_html)
-            self.assertIn("Compare 索引", library_html)
-            self.assertIn("Release Preview", library_html)
+            self.assertNotIn("历史对比记录", library_html)
+            self.assertNotIn("Compare 索引", library_html)
+            self.assertIn("正式发布", library_html)
             self.assertNotIn("<iframe", library_html.lower())
 
     def test_catalog_indexes_current_effective_and_compare_report(self) -> None:
@@ -306,7 +308,7 @@ class EffectiveManifestTest(unittest.TestCase):
             )
 
             compare_html = (compare_dir / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Compare Report", compare_html)
+            self.assertIn("对比审查报告", compare_html)
             self.assertIn("变化文件", compare_html)
             self.assertIn("风险复核", compare_html)
             self.assertIn("$PROJ/scripts/lg.csh fd", compare_html)
@@ -324,9 +326,10 @@ class EffectiveManifestTest(unittest.TestCase):
 
             library_html = (html_dir / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
             self.assertIn("E3_20260624", library_html)
-            self.assertIn("版本时间线", library_html)
-            self.assertIn("E2_vs_E3", library_html)
-            self.assertIn("打开报告", library_html)
+            self.assertIn("库入口", library_html)
+            self.assertIn("历史版本", library_html)
+            self.assertNotIn("E2_vs_E3", library_html)
+            self.assertNotIn("打开报告", library_html)
             self.assertNotIn("<iframe", library_html.lower())
 
     def test_timeline_keeps_generated_effective_as_candidate_until_current_pointer_exists(self) -> None:
@@ -391,8 +394,8 @@ class EffectiveManifestTest(unittest.TestCase):
             self.assertNotEqual(nodes["effective_20260624"]["usage_status"], "current")
 
             library_html = (html_dir / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("当前有效", library_html)
-            self.assertIn("版本时间线", library_html)
+            self.assertIn("当前有效版", library_html)
+            self.assertIn("库入口", library_html)
             self.assertNotIn("Current Effective Detail", library_html)
             self.assertNotIn("Current raw", library_html)
             self.assertNotIn("Version Evidence", library_html)

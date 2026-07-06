@@ -54,9 +54,10 @@ def write_default_config(
     raw_root: str | Path | None = None,
     library_type: str = DEFAULT_LIBRARY_TYPE,
 ) -> Path:
-    root = Path(workspace)
+    root = Path(workspace).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
-    cfg = workspace_defaults(root, raw_root=raw_root, library_type=library_type)
+    raw = Path(raw_root).expanduser().resolve() if raw_root is not None else None
+    cfg = workspace_defaults(root, raw_root=raw, library_type=library_type)
     ordered_keys = [
         "workspace",
         "raw_root",
@@ -113,7 +114,20 @@ def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[st
     project_root = os.environ.get("LIB_GUARD_PROJECT_ROOT") or Path(__file__).resolve().parents[2]
     default_catalog_policy = project_policy_path(project_root, CATALOG_POLICY_FILE)
     default_release_policy = project_policy_path(project_root, RELEASE_POLICY_FILE)
-    workspace_root = Path(cfg.get("workspace") or path.parent)
+    cwd_root = Path(cwd).resolve()
+    workspace_text = cfg.get("workspace") or ""
+    workspace_value = Path(workspace_text).expanduser() if workspace_text else path.parent
+    if workspace_value.is_absolute():
+        workspace_root = workspace_value.resolve()
+    else:
+        cwd_candidate = (cwd_root / workspace_value).resolve()
+        if (cwd_candidate / CONFIG_NAME) == path.resolve():
+            workspace_root = cwd_candidate
+        elif path.parent.name == workspace_value.name:
+            workspace_root = path.parent.resolve()
+        else:
+            workspace_root = (path.parent / workspace_value).resolve()
+    cfg["workspace"] = str(workspace_root)
     defaults = workspace_defaults(workspace_root, library_type=cfg.get("library_type", DEFAULT_LIBRARY_TYPE))
     derived_config_keys = {"config_dir", "library_list", "library_registry", "library_candidates", "library_catalog", "library_versions", "versions"}
     for key, value in defaults.items():
@@ -128,6 +142,58 @@ def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[st
     else:
         cfg.setdefault("library_versions", config_defaults["library_versions"])
     cfg.setdefault("versions", cfg["library_versions"])
+    workspace_prefix = Path(workspace_text).expanduser() if workspace_text else None
+
+    def normalize_workspace_path(key: str) -> None:
+        value = cfg.get(key)
+        if not value:
+            return
+        p = Path(value).expanduser()
+        if p.is_absolute():
+            cfg[key] = str(p.resolve())
+            return
+        if workspace_prefix and not workspace_prefix.is_absolute():
+            try:
+                rel = p.relative_to(workspace_prefix)
+                cfg[key] = str((workspace_root / rel).resolve())
+                return
+            except ValueError:
+                pass
+        cfg[key] = str((workspace_root / p).resolve())
+
+    def normalize_existing_or_cwd_path(key: str) -> None:
+        value = cfg.get(key)
+        if not value:
+            return
+        p = Path(value).expanduser()
+        if p.is_absolute():
+            cfg[key] = str(p.resolve())
+            return
+        for base in [cwd_root, Path(project_root).resolve(), path.parent.resolve()]:
+            candidate = (base / p).resolve()
+            if candidate.exists():
+                cfg[key] = str(candidate)
+                return
+        cfg[key] = str((cwd_root / p).resolve())
+
+    for key in [
+        "catalog",
+        "catalog_html",
+        "reports",
+        "diff",
+        "file_diff",
+        "release_root",
+        "versions",
+        "actions_dir",
+        "config_dir",
+        "library_list",
+        "library_registry",
+        "library_candidates",
+        "library_catalog",
+        "library_versions",
+    ]:
+        normalize_workspace_path(key)
+    normalize_existing_or_cwd_path("raw_root")
     if "catalog_policy" not in cfg:
         library_catalog = Path(cfg["library_catalog"])
         if library_catalog.exists():
@@ -265,8 +331,9 @@ def _catalog_data(cfg: dict[str, str]) -> dict[str, Any]:
     path = Path(cfg["catalog"])
     if not path.exists():
         raise FileNotFoundError(
-            f"catalog 尚未生成: {path}. 先运行 `$PROJ/scripts/lg.csh cat --refresh-catalog --with-evidence` "
-            "生成 catalog 投影；`library add --apply` 只更新 registry/library_catalog.yml。"
+            f"catalog 尚未生成: {path}. 已知库根时优先运行 "
+            "`$PROJ/scripts/lg.csh library add <LIBRARY> --root <ROOT> --apply --refresh-catalog`；"
+            "已有 library_catalog.yml 时运行 `$PROJ/scripts/lg.csh cat --refresh-catalog` 生成 catalog 投影。"
         )
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -357,6 +424,50 @@ def _manual_lineage_parent(version: dict[str, Any]) -> str | None:
     return None
 
 
+def _version_package_type(version: dict[str, Any]) -> str:
+    return str(version.get("package_type") or version.get("version_type") or "").upper()
+
+
+def _is_full_package(version: dict[str, Any]) -> bool:
+    package_type = _version_package_type(version)
+    if package_type in {"FULL_PACKAGE", "FULL"}:
+        return True
+    return bool(version.get("standalone")) and not bool(version.get("base_required"))
+
+
+def _full_baseline_for_update(version: dict[str, Any]) -> str | None:
+    package_type = _version_package_type(version)
+    if package_type not in {"PARTIAL_UPDATE", "PARTIAL", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"} and not bool(version.get("base_required")):
+        return None
+    target = str(version.get("version_id") or "")
+    diff = version.get("diff", {}) or {}
+    lineage = version.get("lineage", {}) or {}
+    for value in [
+        version.get("base_full_version"),
+        version.get("base_version"),
+        diff.get("cumulative_base_version"),
+        lineage.get("base_candidate"),
+    ]:
+        base = _version_ref(value, target)
+        if base:
+            return base
+    return None
+
+
+def _previous_full_package_version(library: dict[str, Any], version: dict[str, Any]) -> str | None:
+    target = str(version.get("version_id") or "")
+    previous_full: str | None = None
+    for item in library.get("versions", []) or []:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("version_id") or "")
+        if item_id == target:
+            break
+        if item_id and _is_full_package(item):
+            previous_full = item_id
+    return previous_full
+
+
 def _refresh_base_version(library: dict[str, Any], version: dict[str, Any], mode: str) -> str | None:
     base, _source = _refresh_base_version_with_source(library, version, mode)
     return base
@@ -378,9 +489,18 @@ def _refresh_base_version_with_source(library: dict[str, Any], version: dict[str
         )
         if current:
             return current, "current_effective"
-        return _version_ref(version.get("previous_effective_version") or version.get("parent_version"), target) or _manual_lineage_parent(version), "previous_effective"
+        previous = _version_ref(version.get("previous_effective_version"), target) or _manual_lineage_parent(version)
+        if previous:
+            return previous, "previous_effective"
+        full_baseline = _full_baseline_for_update(version)
+        if full_baseline:
+            return full_baseline, "full_baseline"
+        previous_full = _previous_full_package_version(library, version)
+        if _is_full_package(version) and previous_full:
+            return previous_full, "previous_full"
+        return None, None
     previous = (
-        _version_ref(version.get("previous_effective_version") or version.get("parent_version"), target)
+        _version_ref(version.get("previous_effective_version"), target)
         or _manual_lineage_parent(version)
     )
     if previous:
@@ -600,20 +720,20 @@ def _build_parser() -> ArgumentParser:
   日常流程:
     lg.csh init $WORK --raw-root $RAW --library-type ip
     cd $WORK
-    lg.csh library add <正式库名> --root <库根目录> --apply
+    lg.csh library add <正式库名> --root <库根目录> --apply --refresh-catalog
     lg.csh library discover             # 只生成候选快照，不覆盖人工 registry
     lg.csh library discover --max-depth 4 --max-dirs 5000 --max-candidates 200
     vi $WORK/config/library_candidates/latest.tsv
     lg.csh library accept
     lg.csh library apply
     lg.csh library list                 # 查看命令应使用的正式库名
+    lg.csh library list --plain         # 只输出正式库名，便于复制
     lg.csh library list <正式库名> --versions
-    lg.csh cat --refresh-catalog --with-evidence
+    lg.csh library list <正式库名> --versions --plain
     lg.csh cat ucie stable_20250608     # 只重渲染一个版本详情页，不重新 scan
     lg.csh library override ucie stable_20250608 --base initial_20250601 --stage stable
-    lg.csh scan ucie stable_20250608
-    lg.csh cat ucie --update-detail
     lg.csh intake ucie --plan-only        # 只生成 review window 和命令计划
+    lg.csh intake ucie                    # 确认计划后执行 scan/effective compare/render
     lg.csh window ucie                    # 查看 old/candidate/scan/compare 组合
     lg.csh mark ucie stable_20250608 --type FULL
     lg.csh accept-window ucie --accepted-by lib_owner --note "review passed"
@@ -639,7 +759,7 @@ def _build_parser() -> ArgumentParser:
     {file_diff_types}
 
   专家手动 fd:
-    需要下钻 summary-only / metadata-only 视图时显式传 --type FILE_TYPE --force-large。
+    需要下钻摘要级/元数据级证据视图时显式传 --type FILE_TYPE --force-large。
 """,
     )
     parser.add_argument("--config", help=f"{CONFIG_NAME} 路径")
@@ -658,7 +778,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--all-versions", action="store_true", help="扫描选中 library 的全部版本")
     p.add_argument("--limit", type=int, help="限制批量扫描数量，便于试跑")
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="只扫描某个 catalog stage")
-    p.add_argument("--with-evidence", action="store_true", help="不再由 scan 触发 catalog 刷新；请改用 cat --refresh-catalog --with-evidence")
+    p.add_argument("--with-evidence", action="store_true", help="不再由 scan 触发 catalog 刷新；请改用 cat --refresh-catalog，确需轻量文件 evidence 时再加 --with-evidence")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次扫描的内容 hash 策略")
     p.add_argument("--parse-file-types", help="覆盖本次扫描进入 parser 的文件类型，例如 lef,cdl")
     p.add_argument("--parse-exclude-file-types", help="覆盖本次扫描不进入 parser 的文件类型，例如 verilog,liberty,spef")
@@ -696,6 +816,7 @@ def _build_parser() -> ArgumentParser:
     p = lsp.add_parser("list", help="列出 catalog 中可直接用于命令的正式库名和版本名")
     p.add_argument("library", nargs="?", help="正式库名；传入后可配合 --versions 列版本")
     p.add_argument("--versions", action="store_true", help="列出该库的版本名")
+    p.add_argument("--plain", action="store_true", help="只输出正式库名或版本名，每行一个，便于复制和 shell completion")
     p.add_argument("--effective", action="store_true", help="并排列出交付库库存和当前 Effective 有效组合")
 
     p = lsp.add_parser("add", help="已知库根时直接加入人工 registry，不做 discover")
@@ -706,6 +827,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--middle-path")
     p.add_argument("--registry", help="人工确认 registry，默认 $WORK/config/library_registry.tsv")
     p.add_argument("--apply", action="store_true", help="加入 registry 后立即生成正式 library_catalog.yml")
+    p.add_argument("--refresh-catalog", action="store_true", help="配合 --apply 立即把该库局部投影进 catalog.json/HTML")
 
     p = lsp.add_parser("apply", help="把人工确认后的 registry 转成正式 library_catalog.yml")
     p.add_argument("--input", help="输入 registry，默认 $WORK/config/library_registry.tsv")
@@ -746,7 +868,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("relpath")
     p.add_argument("--base")
     p.add_argument("--type", metavar="FILE_TYPE", help="覆盖自动推断的文件类型；专家入口，具体类型按策略校验")
-    p.add_argument("--force-large", action="store_true", help="Expert opt-in: allow summary-only or metadata-only file types to run manual file diff")
+    p.add_argument("--force-large", action="store_true", help="专家入口：允许摘要级/元数据级证据文件类型运行手动文件深度对比")
 
     p = sub.add_parser("rel", help="对已扫描版本执行 release check/link/verify 规划；不会运行 scan")
     p.add_argument("library")
@@ -755,11 +877,11 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--apply", action="store_true")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--link-mode", default="symlink", choices=["copy", "symlink"])
-    p.add_argument("--check-only", action="store_true", help="Only run release-check for this catalog version")
+    p.add_argument("--check-only", action="store_true", help="只对该 catalog 版本运行发布检查")
     p.add_argument("--check-first", action="store_true", help="兼容显式写法；rel 默认已先运行 release-check")
-    p.add_argument("--explain", action="store_true", help="Print release-check explanation JSON without applying release")
-    p.add_argument("--only-checked", action="store_true", help="Release only if prior/latest release-check is PASS/PASS_WITH_WARNING")
-    p.add_argument("--only-ready", action="store_true", help="Skip manual-review or blocked versions")
+    p.add_argument("--explain", action="store_true", help="只打印发布检查解释 JSON，不执行发布写入")
+    p.add_argument("--only-checked", action="store_true", help="仅在已有/最新发布检查为 PASS/PASS_WITH_WARNING 时发布")
+    p.add_argument("--only-ready", action="store_true", help="跳过需要人工复核或已阻塞的版本")
     p.add_argument("--force", action="store_true")
     p.add_argument("--force-reason")
     p.add_argument("--force-by")
@@ -979,6 +1101,8 @@ def _library_list_command(cfg: dict[str, str], args: Any) -> list[str]:
         command.extend(["--library", args.library])
     if getattr(args, "versions", False):
         command.append("--versions")
+    if getattr(args, "plain", False):
+        command.append("--plain")
     if getattr(args, "effective", False):
         command.extend(["--effective", "--html-out", cfg["catalog_html"]])
     return command
@@ -1411,8 +1535,12 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             return [_library_list_command(cfg, args)]
         if args.library_cmd == "add":
             commands = [_library_add_command(cfg, args)]
+            if getattr(args, "refresh_catalog", False) and not getattr(args, "apply", False):
+                raise ValueError("library add --refresh-catalog requires --apply so library_catalog.yml is updated first")
             if getattr(args, "apply", False):
                 commands.append(_library_apply_command(cfg, Namespace(input=args.registry, out=None)))
+            if getattr(args, "refresh_catalog", False):
+                commands.append(_catalog_scan_command(cfg, args.library_id))
             return commands
         if args.library_cmd == "apply":
             return [_library_apply_command(cfg, args)]
@@ -1457,7 +1585,7 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         with_evidence = bool(getattr(args, "with_evidence", False))
         if with_evidence:
             raise ValueError(
-                "lg scan 不刷新 catalog；请先运行 `$PROJ/scripts/lg.csh cat --refresh-catalog --with-evidence`，"
+                "lg scan 不刷新 catalog；请先运行 `$PROJ/scripts/lg.csh cat --refresh-catalog`，"
                 "再运行 `lg scan <library> <version>`。"
             )
         if args.library and args.version:
@@ -1619,6 +1747,42 @@ def _command_for_execution(command: list[str]) -> list[str]:
     return [item for item in command if item != "--manual-large-file-opt-in"]
 
 
+def _should_echo_commands(args: Any) -> bool:
+    if getattr(args, "dry_run", False):
+        return True
+    return not (
+        getattr(args, "short_command", "") == "library"
+        and getattr(args, "library_cmd", "") == "list"
+        and bool(getattr(args, "plain", False))
+    )
+
+
+def _print_post_command_hint(args: Any) -> None:
+    if getattr(args, "short_command", "") != "library":
+        return
+    if getattr(args, "library_cmd", "") == "add" and bool(getattr(args, "apply", False)):
+        if bool(getattr(args, "refresh_catalog", False)):
+            print(
+                "[NEXT] registry/library_catalog.yml 和 catalog 投影已更新；运行 "
+                f"`lg intake {args.library_id} --plan-only` 预演新版本接入窗口。",
+                file=sys.stderr,
+            )
+            return
+        print(
+            "[NEXT] registry/library_catalog.yml 已更新；运行 "
+            f"`lg cat {args.library_id} --refresh-catalog` "
+            "把新库投影进 catalog.json 和 HTML。",
+            file=sys.stderr,
+        )
+        return
+    if getattr(args, "library_cmd", "") == "apply":
+        print(
+            "[NEXT] library_catalog.yml 已更新；运行 `lg cat --refresh-catalog` "
+            "刷新 catalog.json。已有明确新库时可用 `lg cat <LIBRARY> --refresh-catalog` 做局部刷新。",
+            file=sys.stderr,
+        )
+
+
 def run_init(args: Namespace) -> int:
     path = write_default_config(args.workspace, raw_root=args.raw_root, library_type=args.library_type)
     print(json.dumps({"status": "PASS", "config": _norm(path)}, ensure_ascii=False, indent=2))
@@ -1641,8 +1805,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.short_command == "cmp" and getattr(args, "auto_scan", False):
         print("[WARN] 'lg cmp --auto-scan' is deprecated and now means --scan-if-missing, not forced rescan.", file=sys.stderr)
         print("[INFO] Use --rescan only when you intentionally want to rebuild both scan outputs.", file=sys.stderr)
-    for command in commands:
-        print("python -m lib_guard.cli " + shlex.join(_command_for_execution(command)))
+    if _should_echo_commands(args):
+        for command in commands:
+            print("python -m lib_guard.cli " + shlex.join(_command_for_execution(command)))
     if args.dry_run:
         return 0
     from lib_guard.cli import main as cli_main
@@ -1651,6 +1816,7 @@ def main(argv: list[str] | None = None) -> int:
         code = cli_main(_command_for_execution(command))
         if code != 0:
             return int(code)
+    _print_post_command_hint(args)
     return 0
 
 

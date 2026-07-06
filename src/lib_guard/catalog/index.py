@@ -360,8 +360,17 @@ def _item_looks_like_version(item: Mapping[str, Any]) -> bool:
 
 
 def _fingerprint_payload(entries: list[Mapping[str, Any]], *, mode: str, truncated: bool = False) -> dict[str, Any]:
+    normalized_entries = sorted(
+        (dict(entry) for entry in entries),
+        key=lambda item: (
+            str(item.get("path") or ""),
+            str(item.get("file_type") or ""),
+            str(item.get("size_bytes") or ""),
+            str(item.get("mtime_ns") or ""),
+        ),
+    )
     digest = hashlib.sha256(
-        json.dumps(entries, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+        json.dumps(normalized_entries, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()
     return {
         "schema_version": "version_input_fingerprint.v1",
@@ -1361,6 +1370,19 @@ def scan_catalog(
         catalog["recommended_tasks"] = _build_tasks(catalog)
         catalog["summary"] = _summary(merged_libraries, catalog["recommended_tasks"])
         catalog["partial_refresh"] = {"library": library_filter, "refreshed_library_count": len(refreshed_names)}
+        previous_discovered = previous.get("_discovered", {}) if isinstance(previous.get("_discovered"), Mapping) else {}
+        refreshed_discovered = catalog.get("_discovered", {}) if isinstance(catalog.get("_discovered"), Mapping) else {}
+        refreshed_discovered_names = {str(key).split("/", 1)[-1] for key in refreshed_discovered}
+        merged_discovered = {
+            str(key): value
+            for key, value in previous_discovered.items()
+            if library_filter not in {str(key), str(key).split("/", 1)[-1]}
+            and str(key).split("/", 1)[-1] not in refreshed_names
+            and str(key) not in refreshed_ids
+            and str(key).split("/", 1)[-1] not in refreshed_discovered_names
+        }
+        merged_discovered.update({str(key): value for key, value in refreshed_discovered.items()})
+        catalog["_discovered"] = merged_discovered
     if not library_filter and isinstance(previous, Mapping):
         previous_libraries = previous.get("libraries", []) or []
         previous_count = len(previous_libraries) if isinstance(previous_libraries, list) else 0

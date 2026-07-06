@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Mapping
 import hashlib
@@ -67,6 +67,15 @@ def _input_fingerprint(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "file_type": str(record.get("file_type") or "unknown"),
             }
         )
+    entries = sorted(
+        entries,
+        key=lambda item: (
+            str(item.get("path") or ""),
+            str(item.get("file_type") or ""),
+            str(item.get("size_bytes") or ""),
+            str(item.get("mtime_ns") or ""),
+        ),
+    )
     raw = json.dumps(entries, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
     return {
         "schema_version": "version_input_fingerprint.v1",
@@ -373,20 +382,35 @@ class ScanRunner:
         max_workers = min(parse_jobs, len(misses))
         future_to_plan: dict[Any, tuple[dict[str, Any], Any]] = {}
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="lib_guard_parser") as pool:
-            for index, (plan, record) in enumerate(misses, start=1):
-                worker_id = f"parser-{((index - 1) % max_workers) + 1}"
+            pending = iter(enumerate(misses, start=1))
+
+            def submit_next() -> bool:
+                try:
+                    index, (plan, record) = next(pending)
+                except StopIteration:
+                    return False
+                worker_id = f"parser-{((len(future_to_plan)) % max_workers) + 1}"
                 self._parse_progress_task_start(plan, progress_state, worker_id=worker_id)
                 future = pool.submit(executor.execute, plan, record, context)
                 future_to_plan[future] = (plan, record)
-            for future in as_completed(future_to_plan):
-                plan, record = future_to_plan[future]
-                try:
-                    execution = future.result()
-                except Exception as exc:
-                    execution = self._failed_execution(plan, record, exc)
-                outcomes[str(plan["task_id"])] = execution
-                self._commit_execution(plan, record, execution, context)
-                self._parse_progress_task_finish(plan, execution.entry, progress_state)
+                return True
+
+            for _ in range(max_workers):
+                if not submit_next():
+                    break
+
+            while future_to_plan:
+                done, _pending = wait(future_to_plan, return_when=FIRST_COMPLETED)
+                for future in done:
+                    plan, record = future_to_plan.pop(future)
+                    try:
+                        execution = future.result()
+                    except Exception as exc:
+                        execution = self._failed_execution(plan, record, exc)
+                    outcomes[str(plan["task_id"])] = execution
+                    self._commit_execution(plan, record, execution, context)
+                    self._parse_progress_task_finish(plan, execution.entry, progress_state)
+                    submit_next()
         return outcomes
 
     def _cached_execution(self, plan: dict[str, Any], record: Any, cached: dict[str, Any]) -> Any:

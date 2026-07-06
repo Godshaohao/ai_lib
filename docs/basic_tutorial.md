@@ -11,6 +11,21 @@ Status: current
 底层 `python -m lib_guard.cli` 是自动化和调试入口；日常使用优先用
 `$PROJ/scripts/lg.csh`。
 
+如果在 csh/tcsh 里长期手动操作，先开启短命令补全和 `lg` alias：
+
+```csh
+source $PROJ/scripts/lg_complete.csh
+```
+
+之后可以用 `lg <TAB>`、`lg library <TAB>` 补全短命令、子命令和常用参数。
+库名和版本名来自运行时 catalog，不建议每次 Tab 都触发 Python 读取大 workspace；
+需要复制正式名字时用：
+
+```csh
+lg library list --plain
+lg library list <LIBRARY> --versions --plain
+```
+
 ## 0. 初始化 Workspace
 
 ```csh
@@ -31,18 +46,20 @@ setenv LIB_GUARD_CONFIG $WORK/lib_guard.yml
 ## 1. 新库入库
 
 如果已经知道库根目录，直接写入人工确认 registry，并立即生成正式
-`library_catalog.yml`：
+`library_catalog.yml` 和局部 catalog 投影：
 
 ```csh
 $PROJ/scripts/lg.csh library add vendor_A.openroad_platform.openroad_asap7 \
   --root /path/to/vendor_A/openroad_asap7 \
   --vendor vendor_A \
   --display-name openroad_asap7 \
-  --apply
+  --apply \
+  --refresh-catalog
 ```
 
-注意：`library add --apply` 只更新人工确认 registry 和正式 `library_catalog.yml`，
-还不会生成 `$WORK/catalog/catalog.json`。第一次入库后必须先生成 catalog 投影：
+如果不加 `--refresh-catalog`，`library add --apply` 只更新人工确认 registry 和正式
+`library_catalog.yml`，还不会生成 `$WORK/catalog/catalog.json`。第一次入库后必须再生成
+catalog 投影：
 
 ```csh
 $PROJ/scripts/lg.csh cat --refresh-catalog --with-evidence
@@ -76,7 +93,7 @@ $WORK/config/library_catalog.yml
 $PROJ/scripts/lg.csh library discover --max-depth 4 --max-dirs 5000 --max-candidates 200
 ```
 
-如果已经知道库根，优先用 `library add ... --apply`，不要递归扫整棵树。
+如果已经知道库根，优先用 `library add ... --apply --refresh-catalog`，不要递归扫整棵树。
 
 discover 的最小规则是：
 
@@ -86,7 +103,45 @@ discover 的最小规则是：
 - `phys_ver`、`dft`、`lef`、`lib` 等版本内部 view/实现目录不会作为库候选。
 - 同一个 resolved root 只输出一次；被更深层候选覆盖的祖先目录不会写进候选 TSV。
 - 如果真实库结构是“版本目录在上、IP block 在下”的倒置结构，自动 discover 只能给出上层候选；
-  具体 IP block 应通过 `library add <LIBRARY> --root <LIBRARY_ROOT> --apply` 人工确认。
+  具体 IP block 应通过 `library add <LIBRARY> --root <LIBRARY_ROOT> --apply --refresh-catalog` 人工确认。
+
+### 已有很多库时新增一个库
+
+已有 20/100/500 个库时，不要重新 discover 整棵 RAW，也不要全量 scan。最小闭环是：
+
+```csh
+# 1. 只把新库写进人工 registry 和正式 library_catalog.yml
+lg library add Vendor_Z.npu --root /path/to/Vendor_Z/npu --vendor Vendor_Z --display-name npu --apply --refresh-catalog
+
+# 2. 确认正式库名和版本名
+lg library list --plain
+lg library list Vendor_Z.npu --versions --plain
+
+# 3. 先看系统推导的窗口，不执行 scan/diff
+lg intake Vendor_Z.npu --plan-only
+
+# 4. 确认计划后执行 scan/effective compare/render
+lg intake Vendor_Z.npu
+```
+
+注意：如果只用了 `library add --apply`，`library list` 仍读取旧的
+`$WORK/catalog/catalog.json`，新库可能暂时看不到。这不是入库失败，而是 catalog
+投影尚未刷新。补跑 `lg cat <LIBRARY> --refresh-catalog` 后再查。
+
+安全检查：
+
+```csh
+lg library list --plain
+lg library list <LIBRARY> --versions --plain
+```
+
+如果新增库后旧库数量变少，先不要继续 scan。检查：
+
+```text
+$WORK/config/library_registry.tsv
+$WORK/config/library_catalog.yml
+$WORK/catalog/catalog.json
+```
 
 ## 2. 获取正式库名和版本名
 
@@ -107,6 +162,13 @@ $PROJ/scripts/lg.csh library list vendor_A.openroad_platform.openroad_asap7 --ve
 
 - `LIBRARY`：例如 `vendor_A.openroad_platform.openroad_asap7`
 - `VERSION`：例如 `20260627_asap7`
+
+如果只想复制名字，不要看 JSON：
+
+```csh
+$PROJ/scripts/lg.csh library list --plain
+$PROJ/scripts/lg.csh library list <LIBRARY> --versions --plain
+```
 
 ## 2.1 手动测试最小闭环
 
@@ -152,7 +214,9 @@ firefox <render_summary.open_first>
 | 短命令 | 会 scan | 会 diff | 会刷新 Version Detail | 用途 |
 | --- | --- | --- | --- | --- |
 | `library list` | 否 | 否 | 否 | 找正式库名/版本名 |
-| `cat <LIBRARY> <VERSION>` | 否 | 否 | 是，仅该版本 | 重新打开/刷新详情页 |
+| `cat` | 否 | 否 | 否 | 只用已有 `catalog.json` 重渲染 Catalog 导航页 |
+| `cat <LIBRARY>` | 否 | 否 | 是，最新版本 | 只用已有证据重新投影该库最新版本详情页，不覆盖 Catalog 首页 |
+| `cat <LIBRARY> <VERSION>` | 否 | 否 | 是，仅该版本 | 只用已有证据重新投影详情页 |
 | `cat <LIBRARY> --update-detail` | 按需 | 是 | 是，按 update-detail 目标 | 刷新日常更新证据 |
 | `scan <LIBRARY> <VERSION>` | 是 | 否 | 是，仅该版本 | 生成 scan evidence |
 | `scan <LIBRARY> --missing` | 是，批量缺失项 | 否 | 是，成功版本集合 | 补齐 scan evidence |
@@ -163,6 +227,77 @@ firefox <render_summary.open_first>
 | `mark <LIBRARY> <VERSION>` | 否 | 否 | 是，该版本 | 修正 package type |
 | `rv ...` | 否 | 否 | 否 | Review Gate 决策 |
 | `rel ...` | 否 | 否 | 否 | release check/link/verify |
+
+## 2.2 单库新版本：FIX 和 FULL 怎么走
+
+单个库有新版本时，先不要急着全量刷新。核心问题只有两个：
+
+- 这是依附旧有效版的 `FIX/HOTFIX/PARTIAL_UPDATE`，还是新的完整交付 `FULL_PACKAGE`？
+- 本次详情页应该和哪个基准比？
+
+### FIX / HOTFIX 更新
+
+FIX 不是独立交付，它需要基准完整包或当前 effective。日常最小流程是先预演，
+确认后执行：
+
+```csh
+# 1. 局部刷新该库目录投影
+lg cat <LIBRARY> --refresh-catalog
+
+# 2. 看版本名和自动识别的 package_type
+lg library list <LIBRARY> --versions
+
+# 3. 如果自动识别不对，先修正类型和关系
+lg library override <LIBRARY> <FIX_VERSION> \
+  --package-type PARTIAL_UPDATE \
+  --base-full <BASE_FULL_VERSION> \
+  --compare-default full_baseline \
+  --note "manual confirmed fix package"
+
+# 4. 预演：确认 candidate/base/scan_versions
+lg intake <LIBRARY> --plan-only
+
+# 5. 执行：自动 scan、构建 candidate effective、对比并刷新 Version Detail
+lg intake <LIBRARY>
+```
+
+如果已经有 `current effective`，`cat --update-detail` 优先用 current/previous
+effective；如果没有 effective 指针，但版本是 FIX/HOTFIX 并记录了
+`base_full_version`，会回退到完整包基线，页面显示为“完整包基线”，不会伪装成
+“上一有效版”。
+
+### FULL 更新
+
+FULL 是新的完整交付候选，不应该和前一个 FIX 目录做默认相邻对比。日常最小流程：
+
+```csh
+# 1. 局部刷新该库目录投影
+lg cat <LIBRARY> --refresh-catalog
+
+# 2. 确认最新版本被识别为 FULL_PACKAGE
+lg library list <LIBRARY> --versions
+
+# 3. 如果识别不对，修正为完整包
+lg mark <LIBRARY> <FULL_VERSION> --type FULL --note "manual confirmed full package"
+
+# 4. 预演，再执行
+lg intake <LIBRARY> --plan-only
+lg intake <LIBRARY>
+```
+
+当没有 current effective 指针时，FULL 默认和上一完整包比较，页面显示为
+“完整包基线 / 上一完整包”。如果中间有 FIX，它会作为窗口证据，不会被当成
+FULL 的默认 base。
+
+如果你要审查一个窗口内“旧 full + 若干 fix + 新 full”的组合关系，优先用：
+
+```csh
+lg intake <LIBRARY> --plan-only
+lg intake <LIBRARY>
+```
+
+`intake` 会给出 candidate effective：FIX 场景会把 FIX 叠加到基线；FULL 场景会把
+最新 FULL 作为候选完整基线，并把它之前的 FIX 作为证据说明。
 
 ## 3. 生成 Catalog 页面
 
@@ -175,6 +310,31 @@ $PROJ/scripts/lg.csh cat --refresh-catalog --with-evidence
 ```text
 $WORK/catalog/html/index.html
 ```
+
+Catalog 首页只负责“找库”和进入库工作台。普通 `cat` 不重新 discover、不改
+`catalog.json`；只有显式 `cat --refresh-catalog ...` / `cat --with-evidence ...`
+才会重建 catalog 投影。
+
+进入某个库后，二级库页默认只展示：
+
+- 当前有效版：当前建议使用/已接受的版本或 effective 组合。
+- 最新待审版：最新 raw 交付或候选版本。
+- 本次审查：最新待审版相对当前/上一有效版的 scan/diff 状态。
+- 证据入口：进入 Version Detail、Effective、Release Preview。
+
+历史版本、历史 scan/diff 和 compare 记录默认折叠。不要把库工作台当成全版本
+scan/diff 仪表盘；详细 View Delta、文件变化、parser evidence 仍以 Version Detail 为准。
+
+库工作台的数据口径固定为三类，不能混：
+
+| 字段 | 含义 | 典型来源 |
+| --- | --- | --- |
+| 当前有效版 | 当前建议接入/已接受的 raw 版本或 effective 组合 | `current_effective.json`、catalog current 指针、版本 `current_effective` 标记 |
+| 最新待审版 | 最新 raw 交付或候选版本 | `latest_version`，否则取非当前有效版的最新版本 |
+| Effective 证据 | 已生成的 effective manifest/release preview 证据入口 | `$WORK/catalog/html/libraries/.../effective/...` |
+
+Effective 证据存在不等于它一定是当前有效版；只有被 current 指针或 manifest 标记为
+current 时，才会升级为“当前有效版”。
 
 `cat --refresh-catalog --with-evidence` 的作用是从正式 `library_catalog.yml` 重新生成
 `$WORK/catalog/catalog.json` 和 Catalog HTML，并顺手收集轻量文件类型 evidence。
@@ -205,7 +365,7 @@ $WORK/catalog/html/index.html
 $PROJ/scripts/lg.csh cat --refresh-catalog <LIBRARY> --with-evidence
 ```
 
-第一次入库、registry/apply 后，需要提前跑一次 `cat --refresh-catalog --with-evidence`，否则
+第一次入库、registry/apply 后，需要提前跑一次 `cat --refresh-catalog`，否则
 `library list` 没有 `$WORK/catalog/catalog.json` 可读。
 
 如果 `cat` 后库数量从很多个突然变成 1 个，先不要继续扫描。真实来源通常不是 HTML，
@@ -225,8 +385,10 @@ python3 -c "import json; d=json.load(open('$WORK/catalog/catalog.json')); print(
 
 | 操作 | 会覆盖哪些页面 | 是否重跑 scan | 是否重跑 diff | 备注 |
 | --- | --- | --- | --- | --- |
+| `cat` | Catalog 首页和导航状态 | 否 | 否 | 只 render 已有 `catalog.json`；不会 discover，不会减少库 |
+| `cat <LIBRARY>` | 该库最新版本的 Version Detail | 否 | 否 | 不覆盖 Catalog 首页；不会 discover，不会减少库 |
 | `cat --refresh-catalog --with-evidence` | Catalog 首页、library 页、version 页投影 | 否 | 否 | 低频全局 catalog 重建 |
-| `cat --refresh-catalog <LIBRARY> --with-evidence` | 指定库相关页面投影 | 否 | 否 | 推荐用于大库日常局部刷新 |
+| `cat --refresh-catalog <LIBRARY> --with-evidence` | 指定库相关页面投影 | 否 | 否 | 推荐用于大库日常局部刷新；仍受 shrink guard 保护 |
 | `cat <LIBRARY> <VERSION>` | 指定 Version Detail | 否 | 否 | 只重新投影页面，不更新证据 |
 | `cat <LIBRARY> --update-detail` | update-detail 目标版本 | 按需 | 是 | 用上一有效版/当前有效版生成更新详情 |
 | `scan <LIBRARY> <VERSION>` | 该版本 Version Detail、scan HTML | 是 | 否 | Catalog 导航页可能延迟刷新 |
@@ -247,6 +409,14 @@ render_summary.deferred_file
 如果 `message` 是 `版本详情已刷新 ...；Catalog 导航页延迟刷新`，说明 Version Detail
 已经更新；首页导航可由下一次普通 `cat` 基于已有 catalog 重渲染，或由显式
 `cat --refresh-catalog ...` 重建 catalog 后再渲染。
+
+库工作台如果看起来没有最新 scan/diff，不要先怀疑 scan 丢了。先检查：
+
+```text
+Version Detail 是否已刷新：render_summary.open_first
+库工作台是否只是导航延迟：render_summary.deferred_file
+当前有效版/最新待审版是否选择正确：库工作台第一屏
+```
 
 ## 4. 人工确认版本关系
 
@@ -327,9 +497,10 @@ $PROJ/scripts/lg.csh cat <LIBRARY> <VERSION>
 $PROJ/scripts/lg.csh cat <LIBRARY> --update-detail
 ```
 
-`cat <LIBRARY>` 只基于已有 `catalog.json` 重渲染这个库的页面，不重新 discover，
-也不写 `catalog.json`。如果你确实需要重新读取 `library_catalog.yml` 和 RAW 目录，
-使用：
+`cat <LIBRARY>` 只基于已有 `catalog.json` 刷新该库最新版本的 Version Detail，
+不重新 discover，不写 `catalog.json`，也不覆盖 Catalog 首页。需要刷新 Catalog
+首页导航时运行不带库名的 `cat`；如果你确实需要重新读取 `library_catalog.yml` 和
+RAW 目录，使用：
 
 ```csh
 $PROJ/scripts/lg.csh cat --refresh-catalog <LIBRARY>

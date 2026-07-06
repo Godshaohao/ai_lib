@@ -14,6 +14,14 @@ from .scan import split_strategy_list
 from lib_guard.render.impact import impacts_for_versions
 
 
+def _read_json(path: str | Path) -> dict[str, Any]:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def run_catalog_scan(args: Namespace) -> int:
     from lib_guard.catalog.index import render_catalog_html, scan_catalog
 
@@ -53,6 +61,22 @@ def _library_match_names(lib: dict[str, Any]) -> set[str]:
     }
     names.update(str(a) for a in lib.get("aliases", []) or [] if str(a))
     return {name for name in names if name}
+
+
+def _latest_version_for_library(catalog_path: str | Path, library: str) -> str:
+    data = _read_json(catalog_path)
+    for lib in data.get("libraries", []) or []:
+        if not isinstance(lib, dict):
+            continue
+        if library not in _library_match_names(lib):
+            continue
+        versions = [item for item in lib.get("versions", []) or [] if isinstance(item, dict)]
+        summary = lib.get("summary", {}) if isinstance(lib.get("summary"), Mapping) else {}
+        latest = summary.get("latest_version") or (versions[-1].get("version_id") if versions else None)
+        if latest:
+            return str(latest)
+        break
+    raise ValueError(f"catalog library not found or has no versions: {library}")
 
 
 def _report_index_path(args: Namespace) -> Path:
@@ -127,6 +151,17 @@ def _effective_list_rows(data: dict[str, Any], args: Namespace) -> list[dict[str
 
 def run_catalog_list(args: Namespace) -> int:
     data = json.loads(Path(args.catalog).read_text(encoding="utf-8"))
+    if getattr(args, "plain", False) and not getattr(args, "effective", False):
+        names: list[str] = []
+        for lib in data.get("libraries", []) or []:
+            if args.library and args.library not in _library_match_names(lib):
+                continue
+            if args.versions:
+                names.extend(str(version.get("version_id") or "") for version in lib.get("versions", []) or [])
+            else:
+                names.append(str(lib.get("formal_library_id") or lib.get("library_name") or ""))
+        print("\n".join(name for name in names if name))
+        return 0
     if getattr(args, "effective", False):
         print_json({"status": "PASS", "rows": _effective_list_rows(data, args), "report_index": str(_report_index_path(args))})
         return 0
@@ -138,7 +173,7 @@ def run_catalog_list(args: Namespace) -> int:
             for version in lib.get("versions", []) or []:
                 diff = version.get("diff", {}) or {}
                 lineage = version.get("lineage", {}) or {}
-                previous_effective = version.get("previous_effective_version") or version.get("parent_version")
+                previous_effective = version.get("previous_effective_version")
                 if not previous_effective and str(lineage.get("source") or "").lower() == "manual":
                     previous_effective = lineage.get("parent_candidate")
                 diff_source = diff.get("base_source") or diff.get("base_version_source")
@@ -178,13 +213,36 @@ def run_catalog_list(args: Namespace) -> int:
 
 
 def run_catalog_render(args: Namespace) -> int:
-    from lib_guard.catalog.index import render_catalog_html
+    library_filter = getattr(args, "library", None)
+    version_filter = getattr(args, "version", None)
+    if library_filter:
+        from lib_guard.render.version_detail_fast import render_version_detail_only
 
+        version = str(version_filter or _latest_version_for_library(args.catalog, str(library_filter)))
+        page = render_version_detail_only(
+            catalog_path=args.catalog,
+            out_dir=args.out,
+            library=str(library_filter),
+            version=version,
+        )
+        result = {
+            "status": page.get("status", "PASS"),
+            "mode": "version_detail_direct",
+            "rendered_libraries": 0,
+            "rendered_versions": 1 if page.get("status") == "PASS" else 0,
+            "version_detail_pages": [page],
+            "open_first": page.get("version_detail_html"),
+            "library_filter": library_filter,
+            "version_filter": version,
+            "note": "带 library/version 过滤的 catalog render 只刷新 Version Detail，不覆盖 catalog/index 导航页。",
+        }
+        print_json(result)
+        return 0 if result.get("status") == "PASS" else 2
+
+    from lib_guard.catalog.index import render_catalog_html
     result = render_catalog_html(
         args.catalog,
         args.out,
-        library_filter=getattr(args, "library", None),
-        version_filter=getattr(args, "version", None),
     )
     print_json(result)
     return 0 if result.get("status") == "PASS" else 2
@@ -501,6 +559,9 @@ def run_catalog_compare(args: Namespace) -> int:
     scan_precheck = _ensure_compare_scan_evidence(args)
     explicit_base = getattr(args, "base", None)
     pair = resolve_catalog_pair(args.catalog, args.library, args.new, mode=args.mode, base=explicit_base)
+    requested_base_source = getattr(args, "base_source", None)
+    if explicit_base and requested_base_source:
+        pair["version_relation"]["base_version_source"] = requested_base_source
     new = pair["new"]
     old = pair["old"]
     relation_mode = pair["version_relation"].get("mode") or args.mode
@@ -517,7 +578,7 @@ def run_catalog_compare(args: Namespace) -> int:
         diff_dir=diff_dir,
         status=diff_result.get("status", "DIFF"),
         diff_html=html_result.get("index_html"),
-        base_source=getattr(args, "base_source", None) or ("explicit" if explicit_base else None),
+        base_source=requested_base_source or ("explicit" if explicit_base else None),
     )
     result = {
         "status": diff_result.get("status"),
@@ -531,9 +592,12 @@ def run_catalog_compare(args: Namespace) -> int:
         "diff_dir": str(diff_dir),
         "diff_html": html_result,
     }
-    impacted_versions = set(str(item) for item in scan_precheck.get("scanned_versions", []) or [] if item)
-    impacted_versions.add(str(new["version_id"]))
-    render_impact = render_impacted_catalog_html(args, impacts_for_versions(new["library_name"], sorted(impacted_versions), "compare_updated"))
+    impacted_versions = [str(new["version_id"])]
+    for item in scan_precheck.get("scanned_versions", []) or []:
+        version_id = str(item or "")
+        if version_id and version_id not in impacted_versions:
+            impacted_versions.append(version_id)
+    render_impact = render_impacted_catalog_html(args, impacts_for_versions(new["library_name"], impacted_versions, "compare_updated"))
     _attach_render_output(result, render_impact)
     print_json(result)
     return 0 if diff_result.get("status") in {"SAME", "DIFF", "PASS_WITH_WARNING", "BLOCK"} else 2

@@ -79,12 +79,12 @@ def _version_evidence_panel(manifest: Mapping[str, Any]) -> str:
     evidence = manifest.get("version_evidence", {}) or {}
     rows = evidence.get("components", []) or []
     if not rows:
-        return '<div class="empty-note">No source version evidence has been attached to this effective manifest.</div>'
+        return '<div class="empty-note">当前有效版 manifest 未附加来源版本证据。</div>'
     body = []
     for row in rows:
         diff_html = str(row.get("adjacent_diff_html") or "")
         diff_cell = (
-            f'<a class="link-pill" href="{esc(diff_html)}">diff html</a>'
+            f'<a class="link-pill" href="{esc(diff_html)}">对比页面</a>'
             if diff_html
             else _badge(row.get("diff_status") or "-", "soft")
         )
@@ -92,7 +92,7 @@ def _version_evidence_panel(manifest: Mapping[str, Any]) -> str:
         <tr data-search="{esc(str(row.get('version_id')).lower())} {esc(str(row.get('scan_status')).lower())} {esc(str(row.get('diff_status')).lower())}">
           <td>{_long(row.get('version_id'))}<div class="muted mini">{esc(row.get('role') or '')}</div></td>
           <td>{_badge(row.get('scan_status') or '-', 'soft')}<div class="muted mini">{esc(row.get('scan_mode') or '')}</div></td>
-          <td>{diff_cell}<div class="muted mini">adjacent_old_version: {esc(row.get('adjacent_old_version') or '-')}</div></td>
+          <td>{diff_cell}<div class="muted mini">相邻上一版：{esc(row.get('adjacent_old_version') or '-')}</div></td>
           <td>{_summary_tags(row.get('parser_summary') or {})}</td>
           <td>{_summary_tags(row.get('diff_summary') or {})}</td>
           <td class="path-cell muted" title="{esc(row.get('raw_path'))}">{esc(short_name(str(row.get('raw_path') or ''), 34, 20))}</td>
@@ -101,12 +101,12 @@ def _version_evidence_panel(manifest: Mapping[str, Any]) -> str:
     summary = evidence.get("summary", {}) or {}
     return f"""
     <div class="table-toolbar">
-      <span class="muted">scanned {esc(summary.get('scanned_components', 0))} / diff-ready {esc(summary.get('diff_ready_components', 0))} / parser {esc(summary.get('parser_components', 0))}</span>
-      <input class="table-filter" data-target="version-evidence" placeholder="Filter version evidence..." />
+      <span class="muted">已扫描 {esc(summary.get('scanned_components', 0))} / 可对比 {esc(summary.get('diff_ready_components', 0))} / 解析器 {esc(summary.get('parser_components', 0))}</span>
+      <input class="table-filter" data-target="version-evidence" placeholder="筛选来源版本证据..." />
     </div>
     <div class="table-scroll compact-scroll">
       <table class="data-table" id="version-evidence">
-        <thead><tr><th>source version</th><th>scan</th><th>update detail</th><th>parser_summary</th><th>diff_summary</th><th>raw path</th></tr></thead>
+        <thead><tr><th>来源版本</th><th>扫描</th><th>更新详情</th><th>解析摘要</th><th>对比摘要</th><th>原始路径</th></tr></thead>
         <tbody>{''.join(body)}</tbody>
       </table>
     </div>
@@ -118,7 +118,7 @@ def _scope_heatmap(manifest: Mapping[str, Any]) -> str:
     views = data.get("views", []) or []
     rows = data.get("rows", []) or []
     if not views or not rows:
-        return '<div class="empty-note">无 scope heatmap 数据</div>'
+        return '<div class="empty-note">无范围热力图数据</div>'
     head = ''.join(f'<th>{esc(v)}</th>' for v in views)
     body = []
     max_count = 1
@@ -150,7 +150,7 @@ def _compare_matrix(manifest: Mapping[str, Any]) -> str:
     data = compare_matrix(manifest) if compare_matrix else {"rows": []}
     rows = data.get("rows", []) or []
     if not rows:
-        return '<div class="empty-note">无 Compare Matrix 数据</div>'
+        return '<div class="empty-note">无对比矩阵数据</div>'
     body = []
     for row in rows:
         by_type = row.get("by_type", {}) or {}
@@ -169,7 +169,7 @@ def _compare_matrix(manifest: Mapping[str, Any]) -> str:
     return f"""
     <div class="table-scroll compact-scroll">
       <table class="data-table">
-        <thead><tr><th>组件版本</th><th>base</th><th>add</th><th>replace</th><th>delete</th><th>按类型</th></tr></thead>
+        <thead><tr><th>组件版本</th><th>基准</th><th>新增</th><th>替换</th><th>删除</th><th>按类型</th></tr></thead>
         <tbody>{''.join(body)}</tbody>
       </table>
     </div>
@@ -198,7 +198,7 @@ def _effective_file_table(manifest: Mapping[str, Any]) -> str:
     </div>
     <div class="table-scroll tall-scroll">
       <table class="data-table" id="effective-files">
-        <thead><tr><th>有效文件</th><th>类型</th><th>来源版本</th><th>操作</th><th>替换自</th><th>source path</th></tr></thead>
+        <thead><tr><th>有效文件</th><th>类型</th><th>来源版本</th><th>操作</th><th>替换自</th><th>来源路径</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
     </div>
@@ -207,7 +207,7 @@ def _effective_file_table(manifest: Mapping[str, Any]) -> str:
 
 def _release_delta_table(preview: Mapping[str, Any] | None) -> str:
     if not preview:
-        return '<div class="empty-note">未生成 Release Delta Preview</div>'
+        return '<div class="empty-note">未生成发布变化预览</div>'
     delta = preview.get("delta", []) or []
     rows = []
     for row in delta:
@@ -223,12 +223,12 @@ def _release_delta_table(preview: Mapping[str, Any] | None) -> str:
         """)
     return f"""
     <div class="table-toolbar">
-      <input class="table-filter" data-target="release-delta" placeholder="搜索 release delta..." />
+      <input class="table-filter" data-target="release-delta" placeholder="搜索发布变化..." />
       <span class="muted">本次变化 {len(rows)} 个文件；keep 文件默认不列出。</span>
     </div>
     <div class="table-scroll tall-scroll">
       <table class="data-table" id="release-delta">
-        <thead><tr><th>动作</th><th>release 文件</th><th>类型</th><th>来源版本</th><th>release path</th></tr></thead>
+        <thead><tr><th>动作</th><th>发布文件</th><th>类型</th><th>来源版本</th><th>发布路径</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
     </div>
@@ -238,12 +238,12 @@ def _release_delta_table(preview: Mapping[str, Any] | None) -> str:
 def _conflicts(manifest: Mapping[str, Any]) -> str:
     conflicts = manifest.get("conflicts", []) or []
     if not conflicts:
-        return '<div class="ok-panel">无冲突。partial 缺文件不会被视为删除；删除只接受显式 tombstone。</div>'
+        return '<div class="ok-panel">无冲突。局部更新缺文件不会被视为删除；删除只接受显式 tombstone。</div>'
     rows = []
     for c in conflicts:
         rows.append(f"<tr><td>{esc(c.get('type'))}</td><td>{_long(c.get('version_id') or c.get('file') or '-')}</td><td>{esc(c.get('message'))}</td></tr>")
     return f"""
-    <div class="alert-panel">检测到 {len(conflicts)} 个需要确认的问题。release apply 前建议先处理。</div>
+    <div class="alert-panel">检测到 {len(conflicts)} 个需要确认的问题。执行发布写入前建议先处理。</div>
     <div class="table-scroll compact-scroll"><table class="data-table"><thead><tr><th>类型</th><th>对象</th><th>说明</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
     """
 
@@ -266,7 +266,7 @@ def render_effective_report(manifest: Mapping[str, Any], release_preview: Mappin
     kpis = ''.join([
         _kpi("有效文件", summary.get("file_count", len(manifest.get("effective_files", {}) or {})), "effective_files"),
         _kpi("组件数", summary.get("component_count", len(manifest.get("components", []) or [])), "base + updates"),
-        _kpi("Release Delta", preview_summary.get("delta_files", "-"), "相对上次发布变化"),
+        _kpi("发布变化", preview_summary.get("delta_files", "-"), "相对上次发布变化"),
         _kpi("冲突", len(conflicts), "scope / repeated replace"),
     ])
     html_doc = f"""<!doctype html>
@@ -274,7 +274,7 @@ def render_effective_report(manifest: Mapping[str, Any], release_preview: Mappin
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Effective Release Preview · {esc(manifest.get('library_name') or manifest.get('library_id'))}</title>
+<title>有效版发布预览 · {esc(manifest.get('library_name') or manifest.get('library_id'))}</title>
 <style>
 :root {{ --bg:#f5f7fb; --panel:#fff; --text:#172033; --muted:#667085; --line:#d9e0ea; --blue:#2563eb; --purple:#7c3aed; --green:#0f8a5f; --orange:#c76a00; --red:#b42318; --chip:#eef2ff; }}
 * {{ box-sizing:border-box; }}
@@ -351,15 +351,15 @@ pre {{ white-space:pre-wrap; overflow:auto; margin:12px 0 0; }}
     </div>
   </section>
   <section class="kpi-grid">{kpis}</section>
-  <section class="card"><h2>Effective Stack</h2>{_component_stack(manifest)}</section>
-  <section class="card"><h2>Version Evidence</h2>{_version_evidence_panel(manifest)}</section>
+  <section class="card"><h2>有效版组成</h2>{_component_stack(manifest)}</section>
+  <section class="card"><h2>来源版本证据</h2>{_version_evidence_panel(manifest)}</section>
   <section class="grid-2">
-    <div class="card"><h2>Update Scope Heatmap</h2>{_scope_heatmap(manifest)}</div>
-    <div class="card"><h2>Compare Matrix</h2>{_compare_matrix(manifest)}</div>
+    <div class="card"><h2>更新范围热力图</h2>{_scope_heatmap(manifest)}</div>
+    <div class="card"><h2>对比矩阵</h2>{_compare_matrix(manifest)}</div>
   </section>
   <section class="card"><h2>风险与冲突</h2>{_conflicts(manifest)}</section>
   <section class="card"><h2>有效文件来源表</h2>{_effective_file_table(manifest)}</section>
-  <section class="card"><h2>Release Delta Preview</h2>{_release_delta_table(release_preview)}</section>
+  <section class="card"><h2>发布变化预览</h2>{_release_delta_table(release_preview)}</section>
   {_command_examples(manifest, release_preview)}
 </div>
 {_json_script('effective-manifest-json', manifest)}

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import inspect
+import argparse
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -138,6 +141,44 @@ class WindowIntakeTest(unittest.TestCase):
 
         self.assertIn("_attach_render_impact", inspect.getsource(cmd_intake))
         self.assertIn("_attach_render_impact", inspect.getsource(cmd_accept))
+
+    def test_intake_plan_only_prints_confirm_and_relation_fix_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(
+                root,
+                [
+                    {"version_id": "full1", "version_key": "ip/ucie/full1", "package_type": "FULL_PACKAGE"},
+                    {"version_id": "fix1", "version_key": "ip/ucie/fix1", "package_type": "HOTFIX"},
+                ],
+            )
+            from lib_guard.window.cli import cmd_intake
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = cmd_intake(
+                    argparse.Namespace(
+                        catalog=str(catalog),
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        since=None,
+                        window_file=None,
+                        rebuild=False,
+                        parse_jobs="",
+                        hash_policy="",
+                        parse_file_types="",
+                        parse_exclude_file_types="",
+                        plan_only=True,
+                    )
+                )
+
+            self.assertEqual(code, 0)
+            output = json.loads(stdout.getvalue())
+            self.assertEqual(output["confirm_command"], "lg intake ucie")
+            self.assertIn("lg mark ucie <VERSION> --type FULL", output["relation_fix_commands"])
+            self.assertIn("lg library override ucie <FIX_VERSION>", output["relation_fix_commands"][1])
+            self.assertIn("lg accept-window ucie", output["accept_command"])
 
 
 if __name__ == "__main__":

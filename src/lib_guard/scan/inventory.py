@@ -142,7 +142,7 @@ class FileWalker:
         root = Path(root_path).resolve()
         ignore_dirs = _scan_ignore_dirs(self.config, context)
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d.lower() not in ignore_dirs]
+            dirnames[:] = sorted(d for d in dirnames if d.lower() not in ignore_dirs)
             for name in sorted(filenames):
                 abs_path = Path(dirpath) / name
                 try:

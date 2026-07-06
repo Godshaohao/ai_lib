@@ -201,7 +201,7 @@ def _scan_review_model(
         warnings.append({"level": "WARNING", "category": "unknown_files", "message": f"{unknown} 个文件未识别，需要确认是否可忽略。"})
     for item in issue_items:
         sev = str(item.get("severity") or item.get("level") or "WARNING").upper()
-        msg = str(item.get("message") or item.get("title") or item.get("category") or "Scan issue")
+        msg = str(item.get("message") or item.get("title") or item.get("category") or "扫描问题")
         row = {"level": sev, "category": item.get("category") or "scan_issue", "message": msg}
         if sev in {"ERROR", "BLOCK", "BLOCKER", "FAILED"}:
             blockers.append(row)
@@ -209,13 +209,13 @@ def _scan_review_model(
             warnings.append(row)
     if blockers:
         decision = "SCAN_BLOCKED"
-        headline = f"发现 {len(blockers)} 个阻塞项，先处理 scan 证据。"
+        headline = f"发现 {len(blockers)} 个阻塞项，先处理扫描证据。"
     elif warnings:
         decision = "SCAN_NEEDS_REVIEW"
-        headline = f"Scan 证据可用，但有 {len(warnings)} 个注意项。"
+        headline = f"扫描证据可用，但有 {len(warnings)} 个注意项。"
     else:
         decision = "READY_FOR_DIFF"
-        headline = "核心 scan 证据已具备，可进入 Diff。"
+        headline = "核心扫描证据已具备，可进入对比。"
     library = _library_name(meta)
     version = _version_name(meta)
     base = str(meta.get("base_version") or "<base_version>")
@@ -236,9 +236,9 @@ def _scan_review_model(
         "blockers": blockers,
         "warnings": warnings[:50],
         "next_action": {
-            "label": "运行 Diff" if next_command else "补齐 Scan 证据",
+            "label": "运行对比" if next_command else "补齐扫描证据",
             "command": next_command,
-            "reason": "Scan 只确认版本交付证据。版本变化需要进入 Diff / File Diff 查看。" if next_command else "存在阻塞项，暂不建议继续 Diff。",
+            "reason": "扫描只确认版本交付证据。版本变化需要进入对比 / 文件深度对比查看。" if next_command else "存在阻塞项，暂不建议继续对比。",
         },
         "evidence": {
             "scan_dir": str(scan),
@@ -352,41 +352,41 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
 
     attention = [(x.get("level"), x.get("category"), x.get("message"), "scan_review.json") for x in (review.get("blockers") or []) + (review.get("warnings") or [])]
     rail = ui.status_rail([
-        ("Catalog", "DISCOVERED", "版本已进入 catalog"),
-        ("Scan", review["decision"], review["headline"]),
-        ("Diff", "COMPARE_READY" if review["decision"] != "SCAN_BLOCKED" else "NOT_READY", "下一步进入版本对比"),
-        ("File Diff", "PAIRWISE_EMPTY", "由 Diff 发现变化后生成"),
-        ("Release", "RELEASE_CHECK_REQUIRED", "发布前再检查"),
+        ("库目录", "DISCOVERED", "版本已进入库目录"),
+        ("扫描", review["decision"], review["headline"]),
+        ("对比", "COMPARE_READY" if review["decision"] != "SCAN_BLOCKED" else "NOT_READY", "下一步进入版本对比"),
+        ("文件深度对比", "PAIRWISE_EMPTY", "由对比发现变化后生成"),
+        ("发布", "RELEASE_CHECK_REQUIRED", "发布前再检查"),
     ])
     body = (
         ui.panel(
-            "Scan 结论",
+            "扫描结论",
             "只保留是否可继续审阅、缺失视图、注意项和下一步。数量明细放在证据区。",
             ui.metric_grid([
                 ("Package", review.get("package_type"), "交付类型", "PASS" if review.get("package_type") != "UNKNOWN" else "WARNING"),
                 ("核心视图缺失", len(review["required_views"]["missing"]), "LEF / Liberty / Verilog", "WARNING" if review["required_views"]["missing"] else "PASS"),
-                ("metadata-only", len(review.get("metadata_only") or []), "DB / GDS / OAS 等", "METADATA_ONLY" if review.get("metadata_only") else "PASS"),
+                ("元数据级证据", len(review.get("metadata_only") or []), "DB / GDS / OAS 等", "METADATA_ONLY" if review.get("metadata_only") else "PASS"),
                 ("注意项", len(attention), review["headline"], review["decision"]),
             ])
             + ui.compact_meta([
-                ("Library", review.get("library")), ("Version", review.get("version")), ("Raw Root", meta.get("root_path") or meta.get("root")), ("Scan Dir", scan),
+                ("库", review.get("library")), ("版本", review.get("version")), ("原始根目录", meta.get("root_path") or meta.get("root")), ("扫描目录", scan),
             ]),
         )
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["decision"])
-        + ui.panel("核心视图", "面向使用者的视图存在性检查。是否 required 仍以项目 policy 为准。", ui.table(["View", "状态", "数量", "领域", "说明"], _scan_view_rows(counts), "暂无视图信息"))
-        + ui.panel("优先关注", "只显示会影响继续 Diff / 使用判断的注意项。", ui.attention_items(attention))
+        + ui.panel("核心视图", "面向使用者的视图存在性检查。是否 required 仍以项目 policy 为准。", ui.table(["视图", "状态", "数量", "领域", "说明"], _scan_view_rows(counts), "暂无视图信息"))
+        + ui.panel("优先关注", "只显示会影响继续对比 / 使用判断的注意项。", ui.attention_items(attention))
         + ui.collapsible_panel(
             "证据区",
-            "原始 JSON、完整文件类型和文件列表只作为 trace evidence。",
+            "原始 JSON、完整文件类型和文件列表只作为追溯证据。",
             ui.trace_link_list([
                 ("scan_review.json", _file_href(out / "scan_review.json"), "本页面使用的审阅导航模型"),
-                ("scan_meta.json", _file_href(scan / "scan_meta.json"), "版本和 raw root 上下文"),
+                ("scan_meta.json", _file_href(scan / "scan_meta.json"), "版本和原始根目录上下文"),
                 ("file_inventory.json", _file_href(scan / "file_inventory.json"), "完整文件清单"),
-                ("scan_issues.json", _file_href(scan / "scan_issues.json"), "scan 原始问题"),
-                ("release_readiness.json", _file_href(scan / "summary" / "release_readiness.json"), "后续 release-check 参考"),
+                ("scan_issues.json", _file_href(scan / "scan_issues.json"), "扫描原始问题"),
+                ("release_readiness.json", _file_href(scan / "summary" / "release_readiness.json"), "后续发布检查参考"),
             ])
             + ui.filterable_table("file-type-table", ["领域", "file_type", "数量", "说明"], _file_type_rows(counts), "暂无 file_type", "筛选 file_type / 领域")
-            + ui.collapsible_panel("完整文件列表", "默认折叠，避免 scan 页面变成 raw folder。", ui.filterable_table("file-list", ["file_type", "role", "size", "path"], _file_rows(files), "暂无文件", "筛选文件路径"), open=False),
+            + ui.collapsible_panel("完整文件列表", "默认折叠，避免扫描页面变成原始目录浏览器。", ui.filterable_table("file-list", ["file_type", "role", "size", "path"], _file_rows(files), "暂无文件", "筛选文件路径"), open=False),
             open=False,
         )
     )
@@ -395,10 +395,10 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     parser = review.get("parser_summary") or {}
     body += (
         ui.panel(
-            "Count-only + Corner Summary",
+            "大文件计数与 Corner 摘要",
             "大体量时序、寄生和二进制视图只按路径/文件名计数和归类；普通 scan 不读取它们的内容。",
             ui.metric_grid([
-                ("Count-only files", count_only.get("total_files", 0), ", ".join(f"{k}:{v}" for k, v in (count_only.get("file_type_counts") or {}).items()) or "none", "INFO" if count_only.get("total_files") else "PASS"),
+                ("计数文件", count_only.get("total_files", 0), ", ".join(f"{k}:{v}" for k, v in (count_only.get("file_type_counts") or {}).items()) or "无", "INFO" if count_only.get("total_files") else "PASS"),
                 ("Process corners", len(corner.get("process_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("process_counts") or {}).items()) or "none", "PASS" if corner.get("process_counts") else "INFO"),
                 ("Voltage corners", len(corner.get("voltage_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("voltage_counts") or {}).items()) or "none", "PASS" if corner.get("voltage_counts") else "INFO"),
                 ("Temperature corners", len(corner.get("temperature_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("temperature_counts") or {}).items()) or "none", "PASS" if corner.get("temperature_counts") else "INFO"),
@@ -406,20 +406,20 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             + ui.table(["file_type", "Process", "Voltage", "Temp", "Path"], _corner_rows(corner), "没有文件名 corner 线索"),
         )
         + ui.panel(
-            "Parser Summary",
-            "默认运行的轻量 parser 只提供结构摘要，作为版本审查证据。",
-            ui.table(["file_type", "Status", "Tasks", "Parsed", "Empty", "Failed"], _parser_summary_rows(parser), "没有 parser task"),
+            "解析器摘要",
+            "默认运行的轻量解析器只提供结构摘要，作为版本审查证据。",
+            ui.table(["file_type", "状态", "任务", "已解析", "空结果", "失败"], _parser_summary_rows(parser), "没有解析器任务"),
         )
     )
     html_text = ui.review_page_shell(
-        f"{review.get('library')} / {review.get('version')} / Scan",
-        "SCAN REVIEW",
+        f"{review.get('library')} / {review.get('version')} / 扫描",
+        "扫描审查",
         review["headline"],
         body,
         decision=review["decision"],
         rail=rail,
-        nav="<a class='active' href='#'>Scan</a><a href='#'>Diff</a><a href='#'>File Diff</a><a href='#'>Release</a>",
-        meta=ui.compact_meta([("Package", review.get("package_type")), ("Total Files", review.get("total_files")), ("Unknown", review.get("unknown_files"))]),
+        nav="<a class='active' href='#'>扫描</a><a href='#'>对比</a><a href='#'>文件深度对比</a><a href='#'>发布</a>",
+        meta=ui.compact_meta([("包类型", review.get("package_type")), ("文件总数", review.get("total_files")), ("未知", review.get("unknown_files"))]),
     )
     atomic_write_text(out / "index.html", html_text)
     atomic_write_text(out / "scan_report.html", html_text)
@@ -493,9 +493,9 @@ def _domain_impact(type_diff: Mapping[str, Any], release_evidence: Mapping[str, 
         for item in (release_evidence.get("by_role") or {}).values():
             if str(item.get("status") or "").upper() not in {"", "SAME", "PASS"}:
                 ev_count += 1
-    items.append({"domain": "Release Evidence", "status": "CHANGED" if ev_count else "SAME", "label": "changed" if ev_count else "same", "count": ev_count, "hint": "release note / waiver / README"})
+    items.append({"domain": "发布证据", "status": "CHANGED" if ev_count else "SAME", "label": "changed" if ev_count else "same", "count": ev_count, "hint": "release note / waiver / README"})
     meta_count = len(metadata_tasks.get("tasks", []) or [])
-    items.append({"domain": "Metadata-only", "status": "METADATA_ONLY" if meta_count else "SAME", "label": "metadata" if meta_count else "same", "count": meta_count, "hint": "DB / GDS / OAS 等二进制证据"})
+    items.append({"domain": "元数据级证据", "status": "METADATA_ONLY" if meta_count else "SAME", "label": "metadata" if meta_count else "same", "count": meta_count, "hint": "DB / GDS / OAS 等二进制证据"})
     return items
 
 
@@ -617,7 +617,7 @@ def _file_diff_recommendation(
             "file_type": item.get("file_type") or "-",
             "old_path": item.get("old_path") or item.get("old_file") or "-",
             "new_path": item.get("new_path") or item.get("new_file") or "-",
-            "reason": item.get("reason") or item.get("review_reason") or "关键视图变化，建议打开 File Diff。",
+            "reason": item.get("reason") or item.get("review_reason") or "关键视图变化，建议打开文件深度对比。",
             "status": status,
             "note": note,
             "result_html": href,
@@ -657,7 +657,7 @@ def _recommendation_rows(recommendation: Mapping[str, Any]) -> list[str]:
             f"<td><code>{ui.esc(item.get('new_path') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('reason') or '')}</td>"
             f"<td>{ui.badge(item.get('status') or 'FILE_DIFF_RECOMMENDED')}<div class='muted'>{ui.esc(item.get('note') or '')}</div></td>"
-            f"<td>{ui.button('打开 File Diff', item.get('result_html') or '', 'primary', disabled=not bool(item.get('result_html')))}</td>"
+            f"<td>{ui.button('打开文件深度对比', item.get('result_html') or '', 'primary', disabled=not bool(item.get('result_html')))}</td>"
             "</tr>"
         )
     return rows
@@ -676,10 +676,10 @@ def _diff_review_model(diff: Path, meta: Mapping[str, Any], summary: Mapping[str
     quality = recommendation["comparison_quality"]
     if blockers:
         review_level = "DIFF_BLOCKED"
-        headline = f"发现 {len(blockers)} 个 Diff 阻塞项。"
+        headline = f"发现 {len(blockers)} 个对比阻塞项。"
     elif quality != "NORMAL":
         review_level = quality
-        headline = f"Comparison 需确认：{'; '.join(recommendation.get('quality_reasons') or [quality])}。系统只保留重点文件确认项。"
+        headline = f"对比需确认：{'; '.join(recommendation.get('quality_reasons') or [quality])}。系统只保留重点文件确认项。"
     elif recommendation["needs_run"]:
         review_level = "FILE_DIFF_RECOMMENDED"
         headline = f"{len(changed_domains)} 个影响域有变化，建议确认 {recommendation['recommended_total']} 个重点文件。"
@@ -841,12 +841,12 @@ def _structure_overview_panel(view_diff: Mapping[str, Any], type_diff: Mapping[s
         "</style>"
         "<div class='structure-grid'>"
         "<section class='structure-card'>"
-        "<div class='structure-card-head'><div><h3>View 全量状态</h3><p>按变化优先排序；默认露出约 10 行，更多在表内滚动。</p></div>"
-        f"<div class='structure-kpis'><span>{ui.esc(view_summary.get('total', len(view_rows)))} views</span><span>{ui.esc(view_summary.get('changed', 0))} changed</span></div></div>"
-        f"<div class='structure-scroll'>{ui.table(['View', '类型', '状态', '数量', '含义', '判断'], view_rows, '暂无 View 信息')}</div>"
+        "<div class='structure-card-head'><div><h3>视图全量状态</h3><p>按变化优先排序；默认露出约 10 行，更多在表内滚动。</p></div>"
+        f"<div class='structure-kpis'><span>{ui.esc(view_summary.get('total', len(view_rows)))} 个视图</span><span>{ui.esc(view_summary.get('changed', 0))} 个变化</span></div></div>"
+        f"<div class='structure-scroll'>{ui.table(['视图', '类型', '状态', '数量', '含义', '判断'], view_rows, '暂无视图信息')}</div>"
         "</section>"
         "<section class='structure-card'>"
-        "<div class='structure-card-head'><div><h3>File Type 全量变化</h3><p>说明每类文件是结构计数、metadata，还是重点文件证据确认。</p></div>"
+        "<div class='structure-card-head'><div><h3>文件类型全量变化</h3><p>说明每类文件是结构计数、元数据，还是重点文件证据确认。</p></div>"
         f"<div class='structure-kpis'><span>{ui.esc(type_summary.get('new_type_count', len(type_rows)))} types</span><span>{ui.esc(type_summary.get('changed_types', 0))} changed</span></div></div>"
         f"<div class='structure-scroll'>{ui.table(['领域', 'file_type', '数量', '增/删/改', '核查方式', '判断'], type_rows, '暂无 file_type 信息')}</div>"
         "</section>"
@@ -905,63 +905,63 @@ def render_diff_html(diff_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     recommendation = review["file_diff_recommendation"]
     rec_rows = _recommendation_rows(recommendation)
     rail = ui.status_rail([
-        ("Catalog", "DISCOVERED", "版本关系来自 catalog"),
-        ("Scan", "SCAN_READY", "old/new scan 证据已参与比较"),
-        ("Diff", review["review_level"], review["headline"]),
+        ("库目录", "DISCOVERED", "版本关系来自库目录"),
+        ("扫描", "SCAN_READY", "旧版/新版扫描证据已参与比较"),
+        ("对比", review["review_level"], review["headline"]),
         ("重点文件建议", recommendation.get("comparison_quality") or review["review_level"], f"重点 {recommendation.get('recommended_total', 0)} / 候选 {recommendation.get('candidate_total', 0)}"),
-        ("Release", "RELEASE_CHECK_REQUIRED", "发布前需检查 manifest / alias"),
+        ("发布", "RELEASE_CHECK_REQUIRED", "发布前需检查 manifest / alias"),
     ])
     attention = []
     if recommendation.get("comparison_quality") != "NORMAL":
-        attention.append((recommendation.get("comparison_quality"), "Comparison 需确认", "变化规模或版本关系异常；不要执行全量 File Diff。", "comparison_review.json"))
+        attention.append((recommendation.get("comparison_quality"), "对比需确认", "变化规模或版本关系异常；不要执行全量文件深度对比。", "comparison_review.json"))
     if recommendation.get("needs_run"):
         attention.append(("WARNING", "重点文件确认项", f"有 {recommendation.get('needs_run')} 个重点文件需要确认；不自动提供脚本命令。", "manual_pairwise_tasks.json"))
     for item in issues.get("issues", [])[:20]:
-        attention.append((item.get("severity") or "WARNING", item.get("category") or "Diff issue", item.get("message") or item.get("title") or "需确认", "diff_issues.json"))
+        attention.append((item.get("severity") or "WARNING", item.get("category") or "对比问题", item.get("message") or item.get("title") or "需确认", "diff_issues.json"))
     body = (
         ui.panel(
-            "Comparison 结论",
-            "Diff 页面只审阅一次 old → new comparison。库级多版本关系请看 Diff Timeline。",
+            "对比结论",
+            "对比页面只审阅一次旧版 → 新版比较。库级多版本关系请看对比时间线。",
             ui.metric_grid([
-                ("Comparison", f"{review['old_version']} → {review['new_version']}", review.get("mode"), "PASS"),
-                ("影响域", sum(1 for x in review["impact"] if x.get("status") in {"CHANGED", "METADATA_ONLY"}), "changed / metadata-only", review["review_level"]),
+                ("对比对象", f"{review['old_version']} → {review['new_version']}", review.get("mode"), "PASS"),
+                ("影响域", sum(1 for x in review["impact"] if x.get("status") in {"CHANGED", "METADATA_ONLY"}), "变化 / 元数据级", review["review_level"]),
                 ("重点建议", recommendation.get("recommended_total", 0), "不是全量完成度", review["review_level"]),
                 ("候选变化", recommendation.get("candidate_total", 0), "大量候选默认折叠", recommendation.get("comparison_quality")),
                 ("已生成结果", recommendation.get("result_generated", 0), "仅统计推荐队列", "PASS" if recommendation.get("result_generated") else "WARNING"),
                 ("注意项", len(attention), review["headline"], review["review_level"]),
             ])
-            + ui.compact_meta([("Mode", review.get("mode")), ("Diff Dir", diff), ("Review JSON", out / "comparison_review.json")]),
+            + ui.compact_meta([("模式", review.get("mode")), ("对比目录", diff), ("审查 JSON", out / "comparison_review.json")]),
         )
-        + ui.panel("结构概览", "优先看 view 是否齐、file_type 是否异常增长，再决定是否进入 File Diff。View 和 file_type 都显示全量，默认露出 10 行。", _structure_overview_panel(view_diff, type_diff))
+        + ui.panel("结构概览", "优先看视图是否齐、文件类型是否异常增长，再决定是否进入文件深度对比。视图和文件类型都显示全量，默认露出 10 行。", _structure_overview_panel(view_diff, type_diff))
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["review_level"])
-        + ui.panel("变化影响域", "面向使用者：先看变更影响哪个领域，再决定是否打开 File Diff。", ui.impact_grid(review["impact"]))
-        + ui.panel("重点文件确认项", "这里是重点变化证据入口，不是全量差异完成度；页面不再自动给出脚本命令。", ui.filterable_table("recommend-file-diff-table", ["优先级", "Type", "Old", "New", "原因", "状态", "结果"], rec_rows, "暂无重点文件确认项", "筛选 type / file / status"))
+        + ui.panel("变化影响域", "面向使用者：先看变更影响哪个领域，再决定是否打开文件深度对比。", ui.impact_grid(review["impact"]))
+        + ui.panel("重点文件确认项", "这里是重点变化证据入口，不是全量差异完成度；页面不再自动给出脚本命令。", ui.filterable_table("recommend-file-diff-table", ["优先级", "类型", "旧文件", "新文件", "原因", "状态", "结果"], rec_rows, "暂无重点文件确认项", "筛选类型 / 文件 / 状态"))
         + ui.collapsible_panel("候选变化 / 已折叠", "候选变化不默认展开，避免错误 base 或大规模重组导致上千条无效确认项。", ui.metric_grid([("候选变化", recommendation.get("candidate_total", 0), "changed/candidate files", recommendation.get("comparison_quality")), ("已折叠", recommendation.get("suppressed_total", 0), "未进入重点队列", "WARNING" if recommendation.get("suppressed_total") else "PASS"), ("策略", recommendation.get("policy"), "key view first", "INFO")]) + ui.table(["Reason", "Count"], [f"<tr><td>{ui.esc(x.get('reason'))}</td><td>{ui.esc(x.get('count'))}</td></tr>" for x in recommendation.get("suppressed_summary", [])], "暂无折叠项"), open=False)
         + ui.panel("优先关注", "只列出会影响继续审阅的事项。", ui.attention_items(attention))
         + ui.collapsible_panel(
             "补充证据",
-            "Release evidence、diff issue 和原始 JSON 链接默认折叠；结构概览已经前置展示。",
-            ui.collapsible_panel("Release Evidence 变化", "release note / waiver / README", ui.table(["Role", "数量", "变化", "状态"], _release_evidence_rows(release_evidence), "暂无 release evidence 变化"), open=False)
-            + ui.collapsible_panel("Diff Issues", "原始 diff issue", ui.filterable_table("diff-issues", ["Severity", "Category", "Detail"], _issue_rows(list(issues.get("issues") or [])), "暂无 issue", "筛选 issue"), open=False)
+            "发布证据、对比问题和原始 JSON 链接默认折叠；结构概览已经前置展示。",
+            ui.collapsible_panel("发布证据变化", "release note / waiver / README", ui.table(["角色", "数量", "变化", "状态"], _release_evidence_rows(release_evidence), "暂无发布证据变化"), open=False)
+            + ui.collapsible_panel("对比问题", "原始对比问题", ui.filterable_table("diff-issues", ["级别", "类别", "详情"], _issue_rows(list(issues.get("issues") or [])), "暂无问题", "筛选问题"), open=False)
             + ui.trace_link_list([
                 ("comparison_review.json", _file_href(out / "comparison_review.json"), "本页面使用的变化导航模型"),
-                ("diff_summary.json", _file_href(diff / "diff_summary.json"), "Diff 原始摘要"),
+                ("diff_summary.json", _file_href(diff / "diff_summary.json"), "对比原始摘要"),
                 ("type_diff.json", _file_href(diff / "type_diff.json"), "file_type 结构变化"),
-                ("view_diff.json", _file_href(diff / "view_diff.json"), "view 变化"),
-                ("manual_pairwise_tasks.json", _file_href(diff / "manual_pairwise_tasks.json"), "原始 File Diff 候选任务；页面只推荐重点项"),
+                ("view_diff.json", _file_href(diff / "view_diff.json"), "视图变化"),
+                ("manual_pairwise_tasks.json", _file_href(diff / "manual_pairwise_tasks.json"), "原始文件深度对比候选任务；页面只推荐重点项"),
             ]),
             open=False,
         )
     )
     html_text = ui.review_page_shell(
-        f"{review['new_version']} vs {review['old_version']} / Diff",
-        "DIFF REVIEW",
+        f"{review['new_version']} vs {review['old_version']} / 对比",
+        "对比审查",
         review["headline"],
         body,
         decision=review["review_level"],
         rail=rail,
-        nav="<a href='#'>Scan</a><a class='active' href='#'>Selected Diff</a><a href='#'>File Diff 从本页下钻</a><a href='#'>Release</a>",
-        meta=ui.compact_meta([("Old", review["old_version"]), ("New", review["new_version"]), ("Mode", review["mode"]), ("重点建议", recommendation.get("recommended_total", 0)), ("候选", recommendation.get("candidate_total", 0))]),
+        nav="<a href='#'>扫描</a><a class='active' href='#'>选定对比</a><a href='#'>文件深度对比从本页下钻</a><a href='#'>发布</a>",
+        meta=ui.compact_meta([("旧版", review["old_version"]), ("新版", review["new_version"]), ("模式", review["mode"]), ("重点建议", recommendation.get("recommended_total", 0)), ("候选", recommendation.get("candidate_total", 0))]),
     )
     atomic_write_text(out / "index.html", html_text)
     atomic_write_text(out / "diff_report.html", html_text)

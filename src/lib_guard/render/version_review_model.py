@@ -15,26 +15,33 @@ from lib_guard.view_types import (
 GROUP_LABELS = ["对比范围", "包根目录迁移", "文件匹配质量", "内容变化", "原始审计判断"]
 STATUS_COPY = {
     "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg cat <LIB> --update-detail。",
-    "NEEDS_BASE_CONFIRM": "无法确定 Base；请先确认当前有效版本或上一有效版本。",
-    "NO_DIFF_SUMMARY": "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
+    "NEEDS_BASE_CONFIRM": "无法确定基准版；请先确认当前有效版或上一有效版。",
+    "NO_DIFF_SUMMARY": "找到对比输出目录，但缺少 diff_summary.json；请检查对比产物。",
     "CHANGED": "已完成比较，有变化。",
     "SAME": "已完成比较，无变化。",
 }
 BASE_REF_COPY = {
-    "current_effective": "当前有效版本",
-    "previous_effective": "上一有效版本",
-    "latest_effective": "最新有效版本",
+    "current_effective": "当前有效版",
+    "previous_effective": "上一有效版",
+    "latest_effective": "最新有效版",
+    "base_full": "完整包基线",
     "explicit": "手动指定",
     "adjacent": "相邻版本",
-    "NEEDS_BASE_CONFIRM": "待确认 Base",
+    "NEEDS_BASE_CONFIRM": "待确认基准版",
 }
 BASE_SOURCE_COPY = {
-    "current_effective_ref": "当前有效版本引用",
-    "previous_effective_version": "上一有效版本",
-    "latest_effective_ref": "最新有效版本引用",
+    "current_effective_ref": "当前有效版引用",
+    "previous_effective_version": "上一有效版",
+    "base_full_version": "完整包基线",
+    "catalog_recorded_base": "目录记录基线",
+    "full_baseline": "完整包基线",
+    "previous_full": "上一完整包",
+    "latest_effective_ref": "最新有效版引用",
     "explicit": "手动指定",
     "manual": "手动指定",
-    "diff_summary": "Diff 记录",
+    "diff_summary": "对比记录",
+    "diff.base_version:full_baseline": "对比记录：完整包基线",
+    "diff.base_version:previous_full": "对比记录：上一完整包",
 }
 SEMANTICS_COPY = {
     "full": "全量",
@@ -48,8 +55,8 @@ DIFF_STATUS_COPY = {
     "CHANGED": "有变化",
     "SAME": "无变化",
     "DIFF_NOT_RUN": "未生成",
-    "NEEDS_BASE_CONFIRM": "Base 待确认",
-    "NO_DIFF_SUMMARY": "缺少 Diff 摘要",
+    "NEEDS_BASE_CONFIRM": "基准版待确认",
+    "NO_DIFF_SUMMARY": "缺少对比摘要",
 }
 USAGE_COPY = {
     "BLOCKED": "不可直接使用",
@@ -60,17 +67,24 @@ USAGE_COPY = {
 REASON_COPY = {
     "diff_changed": "存在版本变化",
     "recommended_file_diff": "存在 P0/P1 重点文件",
-    "release_note_missing": "缺少 release note",
-    "review_gate_blocking": "Review Gate 有阻塞项",
-    "review_gate_attention": "Review Gate 需关注",
-    "base_not_confirmed": "Base 未确认",
+    "release_note_missing": "缺少发布说明",
+    "review_gate_blocking": "审查门禁有阻塞项",
+    "review_gate_attention": "审查门禁需关注",
+    "base_not_confirmed": "基准版未确认",
     "diff_incomplete": "缺少上一版对比证据",
 }
 ACTION_COPY = {
     "Review focused file evidence": "审查重点文件证据",
     "Open comparison review": "打开对比审查",
-    "Confirm base version": "确认 Base 版本",
+    "Confirm base version": "确认基准版本",
     "No action required": "无需动作",
+}
+EVIDENCE_LEVEL_COPY = {
+    "Focused review": "重点审查",
+    "Manual-review": "人工审查",
+    "Summary-only": "摘要级证据（Summary-only）",
+    "Metadata-only": "元数据级证据（Metadata-only）",
+    "No delta": "无变化",
 }
 def _as_mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
@@ -123,6 +137,10 @@ def _facts(items: list[tuple[str, Any]]) -> list[dict[str, str]]:
 def _copy(mapping: Mapping[str, str], value: Any) -> str:
     text = str(value or "")
     return mapping.get(text, text or "-")
+
+
+def _evidence_copy(value: Any) -> str:
+    return _copy(EVIDENCE_LEVEL_COPY, value)
 
 
 def _base_source_text(base_ref: Any, base_source: Any) -> str:
@@ -223,7 +241,8 @@ def _evidence_levels_for_view(file_changes: list[Mapping[str, Any]], view_type: 
             levels.add("Focused review")
         elif lane:
             levels.add("Manual-review")
-    return sorted(levels, key=lambda item: ["Focused review", "Manual-review", "Summary-only", "Metadata-only"].index(item) if item in {"Focused review", "Manual-review", "Summary-only", "Metadata-only"} else 99)
+    ordered = sorted(levels, key=lambda item: ["Focused review", "Manual-review", "Summary-only", "Metadata-only"].index(item) if item in {"Focused review", "Manual-review", "Summary-only", "Metadata-only"} else 99)
+    return [_evidence_copy(item) for item in ordered]
 
 
 def _usage_area_for_type(file_type: str) -> str:
@@ -266,7 +285,7 @@ def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[
                 "removed": counts["removed"],
                 "changed": counts["changed"],
                 "delta_total": delta_total,
-                "evidence_level": " / ".join(evidence_levels) if evidence_levels else "No delta",
+                "evidence_level": " / ".join(evidence_levels) if evidence_levels else _evidence_copy("No delta"),
                 "raw_types": _raw_type_summary(raw_counts_by_view.get(view_type, {})),
                 "raw_delta_types": _raw_type_summary(_as_mapping(counts.get("raw_delta_counts"))),
                 "status": status,
@@ -278,7 +297,7 @@ def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[
 
 def _build_usage_area_sections(view_rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     sections: list[dict[str, Any]] = []
-    for area in list(USAGE_AREAS) + ["Other / Evidence"]:
+    for area in list(USAGE_AREAS) + ["其他 / 证据"]:
         rows = [row for row in view_rows if row.get("usage_area") == area and _as_int(row.get("delta_total"))]
         if not rows:
             continue
@@ -299,7 +318,7 @@ def _build_usage_area_sections(view_rows: list[Mapping[str, Any]]) -> list[dict[
             {
                 "area": "使用场景影响",
                 "status": "PASS",
-                "summary": "未识别到相对上一有效版的 view 变化。",
+                "summary": "未识别到相对基准版的 view 变化。",
                 "evidence": "-",
                 "rows": [],
             }
@@ -337,6 +356,7 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
     metadata_only = _as_int(lane_counts.get("metadata_only"))
     status_key = str(model.get("status") or "").upper()
     base_key = str(model.get("base_trust_status") or "").upper()
+    base_noun = _copy(BASE_REF_COPY, model.get("base_ref"))
     base_blocked = status_key in {"NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"} or base_key in {"BLOCK", "BLOCKING", "BLOCKED"}
     diff_missing = status_key in {"DIFF_NOT_RUN", "NO_DIFF_SUMMARY"}
     gate_blocking, gate_attention, gate_status = _review_gate_counts(model)
@@ -344,54 +364,54 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
     if base_blocked:
         ip_decision = "BLOCKED"
         ip_label = "不可接入"
-        main_reason = "Base / Scan / Diff 基础证据不可信，不能作为上一版更新判断。"
+        main_reason = "基准版、扫描、对比基础证据不可信，不能作为版本更新判断。"
     elif diff_missing:
         ip_decision = "USAGE_REVIEW_REQUIRED"
-        ip_label = "缺少上一版对比"
-        main_reason = "需要先生成相对上一有效版的更新详情。"
+        ip_label = "缺少基准对比"
+        main_reason = f"需要先生成相对{base_noun}的更新详情。"
     elif added or removed or changed or p0p1 or summary_only or metadata_only:
         ip_decision = "USAGE_REVIEW_REQUIRED"
         ip_label = "需审查更新后使用"
-        main_reason = "相对上一有效版存在 view 更新；按使用场景查看影响。"
+        main_reason = f"相对{base_noun}存在视图更新；按使用场景查看影响。"
     else:
         ip_decision = "READY"
         ip_label = "可接入"
-        main_reason = "未识别到影响使用的上一版更新。"
+        main_reason = f"未识别到相对{base_noun}的使用影响。"
 
     if gate_blocking:
         release_decision = "INFO"
         release_label = "待发布负责人处理"
-        release_reason = f"正式放行有 {gate_blocking} 个管理阻塞项；IP 技术审查仍按 View 变化矩阵判断。"
+        release_reason = f"正式放行有 {gate_blocking} 个管理阻塞项；IP 技术审查仍按视图变化矩阵判断。"
     elif gate_status in {"REVIEW_REQUIRED", "NEEDS_REVIEW", "ATTENTION"} or gate_attention:
         release_decision = "INFO"
         release_label = "正式放行待确认"
-        release_reason = f"Review Gate 有 {gate_attention} 个关注项。"
+        release_reason = f"审查门禁有 {gate_attention} 个关注项。"
     elif gate_status in {"READY", "PASS", "OK"}:
         release_decision = "PASS"
         release_label = "正式放行通过"
-        release_reason = "Review Gate 已关闭。"
+        release_reason = "审查门禁已关闭。"
     else:
         release_decision = "INFO"
         release_label = "正式放行未建立"
-        release_reason = "未发现可展示的 Review Gate 证据。"
+        release_reason = "未发现可展示的审查门禁证据。"
 
     top_views = ", ".join(
         f"{str(row.get('view') or row.get('file_type') or '-').split('/')[0].strip()}:{row.get('delta_total')}"
         for row in sorted(changed_view_rows, key=lambda row: -_as_int(row.get("delta_total")))[:5]
     )
     if not top_views:
-        top_views = "无 view delta"
+        top_views = "无视图变化"
 
     must_check = []
     if changed_view_rows:
-        must_check.append("先看 View 变化矩阵：确认相对上一有效版哪些 view 新增、删除、修改。")
-        must_check.append("按使用场景筛选：Timing 看 Liberty/SPEF/DB，Physical 看 LEF/GDS/OAS/DB，Integration 看 Verilog/SystemVerilog，Constraint 看 SDC/UPF/CPF。")
+        must_check.append(f"先看视图变化矩阵：确认相对{base_noun}，哪些视图新增、删除、修改。")
+        must_check.append("按使用场景筛选：时序看 Liberty/SPEF/DB，物理实现看 LEF/GDS/OAS/DB，RTL 集成看 Verilog/SystemVerilog，约束看 SDC/UPF/CPF。")
     if summary_only or metadata_only:
-        must_check.append("确认轻量证据等级是否满足当前使用场景；Summary-only / Metadata-only 是正常证据策略，不自动代表不完整。")
+        must_check.append("确认轻量证据等级是否满足当前使用场景；摘要级证据（Summary-only）/ 元数据级证据（Metadata-only）是正常证据策略，不自动代表不完整。")
     if p0p1:
-        must_check.append(f"查看 {p0p1} 个重点变化文件，但不要把 P0/P1 自动理解成 blocker。")
+        must_check.append(f"查看 {p0p1} 个重点变化文件，但不要把 P0/P1 自动理解成阻塞项。")
     if not must_check:
-        must_check.append("当前没有必须确认的上一版更新项。")
+        must_check.append("当前没有必须确认的基准差异项。")
 
     return {
         "schema_version": "ip_user_view.v1",
@@ -409,11 +429,11 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         "top_view_delta": top_views,
         "delta_status": "INFO" if (added or removed or changed) else "PASS",
         "delta_label": "有更新" if (added or removed or changed) else "无更新",
-        "evidence_summary": f"Focused {p0p1} / Summary-only {summary_only} / Metadata-only {metadata_only}",
+        "evidence_summary": f"重点审查 {p0p1} / 摘要级 {summary_only} / 元数据级 {metadata_only}",
         "view_delta_rows": view_rows,
         "usage_area_sections": _build_usage_area_sections(view_rows),
         "must_check_items": must_check,
-        "non_blocker_note": "普通增量变化、Summary-only、Metadata-only、P0/P1 不自动构成阻塞；只有 Base/Scan/Diff 基础证据不可信或明确 gate blocker 才升级为阻塞。",
+        "non_blocker_note": "普通增量变化、摘要级证据、元数据级证据、P0/P1 不自动构成阻塞；只有基准版、扫描、对比基础证据不可信或明确门禁阻塞项才升级为阻塞。",
     }
 
 
@@ -449,16 +469,16 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
             "status": str(model.get("base_trust_status") or "WARNING"),
             "summary": (
                 f"{_status_message(model)} "
-                f"{model.get('base_trust_note') or 'Base 和对比口径需要确认。'}"
+                f"{model.get('base_trust_note') or '基准版和对比口径需要确认。'}"
             ).strip(),
             "facts": _facts(
                 [
-                    ("Base 来源", _base_source_text(model.get("base_ref"), model.get("base_source"))),
-                    ("Base 版本", model.get("base_version") or "-"),
-                    ("Target 版本", model.get("target_version") or model.get("version_id") or "-"),
+                    ("基准来源", _base_source_text(model.get("base_ref"), model.get("base_source"))),
+                    ("基准版本", model.get("base_version") or "-"),
+                    ("目标版本", model.get("target_version") or model.get("version_id") or "-"),
                     ("对比语义", _copy(SEMANTICS_COPY, model.get("comparison_semantics"))),
                     ("删除语义", _copy(DELETE_COPY, model.get("delete_semantics"))),
-                    ("Diff 状态", _copy(DIFF_STATUS_COPY, model.get("status"))),
+                    ("对比状态", _copy(DIFF_STATUS_COPY, model.get("status"))),
                 ]
             ),
         },
@@ -473,12 +493,12 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
             ),
             "facts": _facts(
                 [
-                    ("Old root", path_restructure.get("old_root") or "-"),
-                    ("New root", path_restructure.get("new_root") or "-"),
+                    ("旧包根", path_restructure.get("old_root") or "-"),
+                    ("新包根", path_restructure.get("new_root") or "-"),
                     ("逻辑路径匹配", migration_matched),
                     ("文件级一一匹配", moved),
-                    ("Old 包内文件", _as_int(path_restructure.get("old_root_file_count"))),
-                    ("New 包内文件", _as_int(path_restructure.get("new_root_file_count"))),
+                    ("旧包根文件数", _as_int(path_restructure.get("old_root_file_count"))),
+                    ("新包根文件数", _as_int(path_restructure.get("new_root_file_count"))),
                     ("真实修改文件", changed),
                     ("新增/删除", f"{added}/{removed}"),
                 ]
@@ -498,7 +518,7 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
                     ("候选匹配", match_counts["candidate_match"]),
                     ("同路径修改", match_counts["same_path"]),
                     ("未匹配新增/删除", unmatched_added_removed),
-                    ("匹配依据", "basename / hash / parser signature / logical path"),
+                    ("匹配依据", "文件名 / 哈希 / 解析签名 / 逻辑路径"),
                 ]
             ),
         },
@@ -508,7 +528,7 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
             "status": "WARNING" if p0p1 or blocking_issues else "PASS",
             "summary": (
                 f"变化风险：新增 {added} / 删除 {removed} / 修改 {changed}；"
-                f"P0/P1={p0p1}，证据分层：{evidence_label}，Summary-only={summary_only}，Metadata-only={metadata_only}。"
+                f"P0/P1={p0p1}，证据分层：{evidence_label}，摘要级={summary_only}，元数据级={metadata_only}。"
             ),
             "facts": _facts(
                 [
@@ -516,8 +536,8 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
                     ("删除文件", removed),
                     ("修改文件", changed),
                     ("P0/P1", p0p1),
-                    ("证据分层", f"{evidence_label}；摘要级 {summary_only} / metadata-only {metadata_only}"),
-                    ("Unknown 文件", unknown_files),
+                    ("证据分层", f"{evidence_label}；摘要级 {summary_only} / 元数据级 {metadata_only}"),
+                    ("未知文件", unknown_files),
                     ("主要类型", _top_file_types(file_changes)),
                 ]
             ),
@@ -531,7 +551,7 @@ def build_version_review_model(model: Mapping[str, Any]) -> dict[str, Any]:
                 [
                     ("审计决策", usage_text),
                     ("发布说明", "已发现" if release_notes else "缺失"),
-                    ("Diff 阻塞问题", blocking_issues),
+                    ("对比阻塞问题", blocking_issues),
                     ("主动作", _action_text(model.get("primary_next_action"))),
                 ]
             ),

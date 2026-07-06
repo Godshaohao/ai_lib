@@ -470,7 +470,7 @@ class CatalogTimelineTest(unittest.TestCase):
                 path.mkdir(parents=True)
                 (path / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
 
-            from lib_guard.catalog.index import scan_catalog
+            from lib_guard.catalog.index import scan_catalog, update_catalog_scan_status
 
             initial = scan_catalog(raw, out_dir=out, library_type="ip")["catalog"]
             self.assertEqual(initial["summary"]["library_count"], 2)
@@ -485,6 +485,21 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual({v["version_id"] for v in names["pcie"]["versions"]}, {"stable_20250601"})
             self.assertIn("stable_20250608", {v["version_id"] for v in names["ucie"]["versions"]})
             self.assertEqual(refreshed["partial_refresh"]["library"], "ucie")
+
+            update_catalog_scan_status(
+                out / "catalog.json",
+                version_key="ip/ucie/stable_20250608",
+                scan_dir=root / "scan_out" / "ucie" / "stable_20250608",
+                scan_id="scan_1",
+                status="PASS",
+            )
+            after_runtime_write = json.loads((out / "catalog.json").read_text(encoding="utf-8"))
+            after_names = {lib["library_name"]: lib for lib in after_runtime_write["libraries"]}
+            self.assertEqual(set(after_names), {"pcie", "ucie"})
+            self.assertEqual(
+                after_names["ucie"]["versions"][-1]["scan"]["scan_dir"],
+                str(root / "scan_out" / "ucie" / "stable_20250608"),
+            )
 
     def test_catalog_scan_writes_state_and_skips_unchanged_default_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -541,6 +556,75 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual(version_after["scan"]["status"], "STALE_SCAN")
             self.assertEqual(version_after["scan"]["stale_reason"], "version_fingerprint_changed")
             self.assertNotEqual(version_after["scan"]["input_fingerprint"], version_after["detected"]["inventory"]["fingerprint"])
+
+    def test_catalog_and_scan_fingerprint_share_stable_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            version = root / "raw" / "ucie" / "stable_20250608"
+            (version / "z").mkdir(parents=True)
+            (version / "a").mkdir(parents=True)
+            (version / "z" / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            (version / "a" / "macro.lef").write_text("MACRO U\nEND U\n", encoding="utf-8")
+
+            from lib_guard.catalog.index import _inventory_evidence
+            from lib_guard.scan.inventory import FileClassifier, FileWalker
+            from lib_guard.scan.scanner import _input_fingerprint
+
+            classifier = FileClassifier()
+            records = [classifier.classify(dict(record)) for record in FileWalker().walk(version)]
+            scan_fingerprint = _input_fingerprint(records)
+            catalog_fingerprint = _inventory_evidence(version, {})["fingerprint"]
+
+            self.assertEqual(scan_fingerprint, catalog_fingerprint)
+
+    def test_filtered_catalog_render_only_refreshes_version_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = root / "catalog.json"
+            out = root / "html"
+            out.mkdir()
+            (out / "index.html").write_text("GLOBAL INDEX SHOULD STAY", encoding="utf-8")
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_type": "ip",
+                                "library_name": "ucie",
+                                "summary": {"latest_version": "v2"},
+                                "versions": [
+                                    {"version_id": "v1", "version_key": "ip/ucie/v1", "raw_path": str(root / "raw" / "ucie" / "v1")},
+                                    {"version_id": "v2", "version_key": "ip/ucie/v2", "raw_path": str(root / "raw" / "ucie" / "v2")},
+                                ],
+                            },
+                            {
+                                "library_id": "ip/pcie",
+                                "library_type": "ip",
+                                "library_name": "pcie",
+                                "versions": [
+                                    {"version_id": "v1", "version_key": "ip/pcie/v1", "raw_path": str(root / "raw" / "pcie" / "v1")},
+                                ],
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.cli_commands.catalog import run_catalog_render
+
+            args = Namespace(catalog=str(catalog), out=str(out), library="ucie", version=None)
+            with redirect_stdout(io.StringIO()) as stdout:
+                code = run_catalog_render(args)
+
+            self.assertEqual(code, 0)
+            result = json.loads(stdout.getvalue())
+            self.assertEqual(result["mode"], "version_detail_direct")
+            self.assertEqual(result["version_filter"], "v2")
+            self.assertEqual((out / "index.html").read_text(encoding="utf-8"), "GLOBAL INDEX SHOULD STAY")
+            self.assertTrue((out / "libraries" / "ip_ucie" / "versions" / "v2" / "index.html").exists())
 
     def test_catalog_scan_uses_library_map_and_alias_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -995,16 +1079,23 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn("class='library-name-row'", html)
             self.assertIn("class='library-path-row'", html)
             self.assertIn("库目录总览", html)
-            self.assertIn("管理建议", html)
-            self.assertIn("证据索引", html)
+            self.assertNotIn("<div class='metric-label'>管理任务</div>", html)
+            self.assertRegex(html, r"<div class='metric-label'>需审查</div><div class='metric-value'>[1-9][0-9]*</div>")
+            self.assertIn("当前有效</span><br><b title='未确认'>未确认</b>", html)
+            self.assertRegex(html, r"data-tags='[^']*review[^']*'")
+            self.assertIn(">需审查</button>", html)
+            self.assertNotIn(">需管理</button>", html)
+            self.assertNotIn("管理建议", html)
+            self.assertNotIn("证据索引", html)
+            self.assertNotIn("命令示例", html)
             self.assertIn("库名", html)
             self.assertNotIn("类型库名", html)
             self.assertIn("面向 IP 使用者", html)
-            self.assertIn("manager_tasks.json", html)
-            self.assertIn("catalog_state.json", html)
+            self.assertNotIn("manager_tasks.json", html)
+            self.assertNotIn("catalog_state.json", html)
             self.assertNotIn("review_tasks.json", html)
             self.assertNotIn("review_state.json", html)
-            self.assertIn("主流程是获取库更新信息", html)
+            self.assertIn("主流程只保留库定位和审查入口", html)
             self.assertNotIn("基线</b><em title='?'>?", html)
             self.assertNotIn("前版</b><em title='?'>?", html)
             self.assertNotIn("file-diff ", html)
@@ -1017,9 +1108,86 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertTrue((out / "html" / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").exists())
             library_html = (out / "html" / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
             self.assertIn("库工作台", library_html)
-            self.assertIn("Compare 索引", library_html)
+            self.assertIn("库入口", library_html)
+            self.assertIn("本次审查", library_html)
+            self.assertNotIn("历史对比记录", library_html)
+            self.assertNotIn("Compare 索引", library_html)
             self.assertNotIn("diff_timeline.html", html + library_html)
             self.assertNotIn("done / total", library_html)
+
+    def test_library_workspace_defaults_to_current_and_latest_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw" / "ucie"
+            for version in ["stable_20250601", "stable_20250608", "adhoc_20250612"]:
+                path = raw / version
+                path.mkdir(parents=True)
+                (path / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+
+            catalog_path = root / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "catalog.v1",
+                        "summary": {"library_count": 1, "version_count": 3},
+                        "recommended_tasks": [],
+                        "libraries": [
+                            {
+                                "library_type": "ip",
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "display_name": "ucie",
+                                "latest_version": "adhoc_20250612",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20250601",
+                                        "version_key": "ip/ucie/stable_20250601",
+                                        "raw_path": str(raw / "stable_20250601"),
+                                        "stage": "stable",
+                                        "current_effective": True,
+                                        "scan": {"status": "SCANNED"},
+                                    },
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/ucie/stable_20250608",
+                                        "raw_path": str(raw / "stable_20250608"),
+                                        "stage": "stable",
+                                        "scan": {"status": "SCANNED"},
+                                        "diff_status": "DIFF",
+                                    },
+                                    {
+                                        "version_id": "adhoc_20250612",
+                                        "version_key": "ip/ucie/adhoc_20250612",
+                                        "raw_path": str(raw / "adhoc_20250612"),
+                                        "stage": "ad-hoc",
+                                        "previous_effective_version": "stable_20250601",
+                                        "scan": {"status": "NOT_SCANNED"},
+                                        "diff_status": "COMPARE_PENDING",
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import render_catalog_html
+
+            result = render_catalog_html(catalog_path, root / "html")
+
+            self.assertEqual(result["status"], "PASS")
+            library_html = (root / "html" / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("当前有效版", library_html)
+            self.assertIn("最新待审版", library_html)
+            self.assertIn("本次审查", library_html)
+            self.assertIn("adhoc_20250612", library_html)
+            self.assertIn("stable_20250601", library_html)
+            self.assertIn("只显示当前有效版、最新待审版和必要证据入口", library_html)
+            self.assertIn("历史版本", library_html)
+            self.assertNotIn("class='history-ledger'", library_html)
+            self.assertNotIn("Compare 索引", library_html)
 
     def test_catalog_render_can_refresh_one_version_detail_page(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1861,8 +2029,8 @@ class CatalogTimelineTest(unittest.TestCase):
             result = render_catalog_html(catalog_path, out / "html")
             html_out = out / "html"
             html = (html_out / "index.html").read_text(encoding="utf-8")
-            self.assertIn("report_index.json", html)
-            self.assertIn("Release", html)
+            self.assertNotIn("report_index.json", html)
+            self.assertNotIn("Release Preview", html)
             self.assertTrue((html_out / "index.html").exists())
             self.assertTrue((html_out / "libraries" / "ip_ucie" / "index.html").exists())
             self.assertTrue((html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").exists())
@@ -1880,106 +2048,103 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual(review_version["diff_status"], "DIFF_REVIEW")
             self.assertEqual(review_version["release_status"], "RELEASE_READY")
             library_html = (html_out / "libraries" / "ip_ucie" / "index.html").read_text(encoding="utf-8")
-            self.assertIn("版本时间线", library_html)
-            self.assertIn("latest_effective_ref", library_html)
-            self.assertIn("Compare 索引", library_html)
+            self.assertIn("库入口", library_html)
+            self.assertIn("当前有效版", library_html)
+            self.assertIn("最新待审版", library_html)
+            self.assertIn("本次审查", library_html)
+            self.assertNotIn("历史对比记录", library_html)
+            self.assertNotIn("Compare 索引", library_html)
             version_html = (html_out / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html").read_text(encoding="utf-8")
             self.assertIn("版本使用结论", version_html)
             self.assertNotIn("版本坐标", version_html)
             self.assertNotIn("版本上下文", version_html)
             self.assertNotIn("版本事实审查", version_html)
-            self.assertIn("绝对 Raw 路径", version_html)
-            self.assertIn(str(raw / "ucie" / "stable_20250608"), version_html)
-            self.assertLess(version_html.find("<h2>版本使用结论"), version_html.find("<h2>View 变化矩阵"))
+            self.assertLess(version_html.find("<h2>版本使用结论"), version_html.find("<h2>视图变化矩阵"))
+            self.assertNotIn("绝对 Raw 路径", version_html)
+            self.assertNotIn(str(raw / "ucie" / "stable_20250608"), version_html)
             self.assertNotIn(f"<b>Raw Path</b><em>{raw / 'ucie' / 'stable_20250608'}</em>", version_html)
-            self.assertIn("必需 View 覆盖证据", version_html)
-            self.assertIn("大文件与 Corner 线索", version_html)
-            self.assertIn("解析证据", version_html)
+            self.assertNotIn("必需 View 覆盖证据", version_html)
+            self.assertNotIn("大文件与 Corner 线索", version_html)
+            self.assertNotIn("解析证据", version_html)
             self.assertNotIn("对比前检查", version_html)
             self.assertNotIn("原始 JSON、Scan 目录和 Markdown 导出默认折叠", version_html)
-            self.assertLess(version_html.find("<h2>View 变化矩阵"), version_html.find("证据入口 / 调试"))
             self.assertIn("IP 使用者默认视图", version_html)
-            self.assertIn("View 变化矩阵", version_html)
-            self.assertIn("高级审查字段", version_html)
+            self.assertIn("视图变化矩阵", version_html)
+            self.assertIn("各视图影响", version_html)
+            self.assertIn("按使用场景查看影响", version_html)
+            self.assertIn("你需要确认", version_html)
+            self.assertNotIn("高级审查字段", version_html)
             self.assertNotIn("VersionReviewModel", version_html)
             for label in ["对比范围", "包根目录迁移", "文件匹配质量", "内容变化", "原始审计判断"]:
-                self.assertIn(f"<h3>{label}</h3>", version_html)
+                self.assertNotIn(f"<h3>{label}</h3>", version_html)
             self.assertIn("对比口径", version_html)
             self.assertIn("增量", version_html)
             self.assertIn("缺失文件不视为删除", version_html)
-            self.assertIn("正式放行管理", version_html)
-            self.assertIn("审计证据", version_html)
+            self.assertNotIn("正式放行管理", version_html)
+            self.assertNotIn("审计证据", version_html)
             self.assertIn("发布说明", version_html)
-            self.assertIn("Unknown 文件", version_html)
             self.assertNotIn("Unknown / RN", version_html)
-            self.assertIn("Fixed lane reset timing", version_html)
-            self.assertIn("发布说明", version_html)
-            self.assertIn("已发现", version_html)
+            self.assertNotIn("Fixed lane reset timing", version_html)
             self.assertIn("显示范围", version_html)
-            self.assertIn("仅显示 P0/P1/Review 重点变化", version_html)
-            self.assertIn("version-scroll-table metric-scroll", version_html)
             self.assertIn("version-scroll-table focus-change-scroll", version_html)
-            self.assertIn("完整变化文件入口", version_html)
-            self.assertIn("file_diff.json", version_html)
-            self.assertIn("version-scroll-table change-summary-scroll", version_html)
+            self.assertNotIn("完整变化文件入口", version_html)
+            self.assertNotIn("file_diff.json", version_html)
+            self.assertNotIn("version-scroll-table change-summary-scroll", version_html)
             self.assertIn("faceted-table-tools", version_html)
-            self.assertIn("id='tbl-change-summary-scroll'", version_html)
             self.assertIn("id='tbl-focus-change-scroll'", version_html)
             self.assertIn("data-filter-columns=", version_html)
-            self.assertIn("id='parser-aggregate'", version_html)
+            self.assertNotIn("id='parser-aggregate'", version_html)
             self.assertIn("applyTableFilters", version_html)
             self.assertIn("height:420px", version_html)
             self.assertIn("min-width:1780px", version_html)
-            self.assertIn("removed_files", version_html)
-            self.assertIn("parser_regressions", version_html)
-            self.assertIn("changed_files", version_html)
+            self.assertNotIn("removed_files", version_html)
+            self.assertNotIn("parser_regressions", version_html)
+            self.assertNotIn("changed_files", version_html)
             self.assertIn("变化文件", version_html)
-            self.assertIn("建议动作", version_html)
+            self.assertNotIn("建议动作", version_html)
             self.assertNotIn("NO_DIFF_SUMMARY", version_html)
             self.assertNotIn("暂无自动 diff 结果", version_html)
             self.assertNotIn("暂无文件级 diff 明细", version_html)
             self.assertNotIn("暂无推荐动作", version_html)
             self.assertIn("upf/new_domain.upf", version_html)
             self.assertIn("waiver/legacy.waiver", version_html)
-            self.assertIn("db/ucie_tt_0p80v_25c.db", version_html)
+            self.assertNotIn("db/ucie_tt_0p80v_25c.db", version_html)
             self.assertIn("Metadata-only", version_html)
-            self.assertIn("rtl/top.v", version_html)
+            self.assertNotIn("rtl/top.v", version_html)
             self.assertIn("doc/release/deep_change_note_with_long_relative_path.md", version_html)
             self.assertIn("sdc/ucie.sdc", version_html)
-            self.assertIn("Review UPF isolation delta", version_html)
-            self.assertIn("Review removed waiver", version_html)
+            self.assertNotIn("Review UPF isolation delta", version_html)
+            self.assertNotIn("Review removed waiver", version_html)
             self.assertIn("doc/release_note.txt", version_html)
             self.assertNotIn(str(raw / "ucie" / "stable_20250608" / "doc" / "release_note.txt"), version_html)
             self.assertNotIn("summary/dashboard_summary.json", version_html)
             self.assertNotIn("summary rebuild", version_html)
-            self.assertIn("解析对象明细", version_html)
-            self.assertIn("UCIE_MACRO_09", version_html)
+            self.assertNotIn("解析对象明细", version_html)
+            self.assertNotIn("UCIE_MACRO_09", version_html)
             self.assertNotIn("UCIE_MACRO_10", version_html)
             self.assertIn("LEF", version_html)
-            self.assertIn("Macros", version_html)
-            self.assertIn("Used Layers", version_html)
-            self.assertIn("Pin Directions", version_html)
-            self.assertIn("INPUT:1", version_html)
-            self.assertIn("Layer Types", version_html)
-            self.assertIn("ROUTING:1", version_html)
-            self.assertIn("Top Layers", version_html)
-            self.assertIn("M1", version_html)
-            self.assertIn("CDL", version_html)
-            self.assertIn("Subckts", version_html)
-            self.assertIn("Instances", version_html)
-            self.assertIn("UCIE_WRAP", version_html)
-            self.assertIn("XINV", version_html)
+            self.assertNotIn("Macros", version_html)
+            self.assertNotIn("Used Layers", version_html)
+            self.assertNotIn("Pin Directions", version_html)
+            self.assertNotIn("INPUT:1", version_html)
+            self.assertNotIn("Layer Types", version_html)
+            self.assertNotIn("ROUTING:1", version_html)
+            self.assertNotIn("Top Layers", version_html)
+            self.assertNotIn("M1", version_html)
+            self.assertNotIn("Subckts", version_html)
+            self.assertNotIn("Instances", version_html)
+            self.assertNotIn("UCIE_WRAP", version_html)
+            self.assertNotIn("XINV", version_html)
             self.assertIn("SDC", version_html)
-            self.assertIn("Clocks", version_html)
             self.assertIn("UPF", version_html)
-            self.assertIn("Power Domains", version_html)
-            self.assertIn("Waiver", version_html)
-            self.assertIn("Waivers", version_html)
-            self.assertIn("VERILOG", version_html)
-            self.assertIn("Parsed Scope", version_html)
-            self.assertIn("module, port, direction, width, declared_range, module_count, port_count", version_html)
-            self.assertIn("Not Parsed", version_html)
-            self.assertIn("instance, parameter_value, generate_block, gate_netlist_connectivity", version_html)
+            self.assertIn("豁免", version_html)
+            self.assertNotIn("Clocks", version_html)
+            self.assertNotIn("Power Domains", version_html)
+            self.assertNotIn("Waivers", version_html)
+            self.assertNotIn("Parsed Scope", version_html)
+            self.assertNotIn("module, port, direction, width, declared_range, module_count, port_count", version_html)
+            self.assertNotIn("Not Parsed", version_html)
+            self.assertNotIn("instance, parameter_value, generate_block, gate_netlist_connectivity", version_html)
             self.assertNotIn("Defines", version_html)
             self.assertNotIn(str(scan_html).replace("\\", "/"), version_html)
             self.assertNotIn(str(diff_html).replace("\\", "/"), version_html)
@@ -2212,41 +2377,42 @@ class CatalogTimelineTest(unittest.TestCase):
             page = Path(render_version_detail_page(out, lib, version))
             html = page.read_text(encoding="utf-8")
 
-            self.assertIn("必需 View 覆盖", html)
-            self.assertIn("完整性判断", html)
-            self.assertIn("必需", html)
-            self.assertIn("可选", html)
-            self.assertIn("rtl / verilog", html)
-            self.assertIn("lib / liberty", html)
-            self.assertIn("flow / flow_config", html)
-            self.assertIn("tech / tech_config", html)
-            self.assertIn("未知 / 待确认", html)
-            self.assertIn("未知文件细分", html)
-            self.assertIn("无扩展名", html)
-            self.assertIn(".foo", html)
-            self.assertIn("misc/unclassified.foo", html)
-            self.assertIn("LICENSE_BUILD_RUN_SCRIPTS", html)
-            self.assertIn("大文件与 Corner 线索", html)
-            self.assertIn("Liberty、SPEF、DB、GDS、Verilog", html)
-            self.assertIn("PVT Corner 明细", html)
-            self.assertIn("corner-detail-scroll", html)
-            self.assertIn("id='count-only-files'", html)
-            self.assertIn("id='tbl-view-coverage-scroll'", html)
-            self.assertIn("data-filter-columns='0:View / Scope|1:要求|3:状态|4:Parser|5:校验级别'", html)
+            self.assertIn("版本使用结论", html)
+            self.assertIn("视图变化矩阵", html)
+            self.assertIn("IP 使用者默认视图", html)
+            self.assertNotIn("必需视图覆盖", html)
+            self.assertNotIn("完整性判断", html)
+            self.assertNotIn("rtl / verilog", html)
+            self.assertNotIn("lib / liberty", html)
+            self.assertNotIn("flow / flow_config", html)
+            self.assertNotIn("tech / tech_config", html)
+            self.assertIn("Unknown / 待分类", html)
+            self.assertNotIn("未知文件细分", html)
+            self.assertNotIn("无扩展名", html)
+            self.assertNotIn("misc/unclassified.foo", html)
+            self.assertNotIn("LICENSE_BUILD_RUN_SCRIPTS", html)
+            self.assertNotIn("大文件与 Corner 线索", html)
+            self.assertNotIn("Liberty、SPEF、DB、GDS、Verilog", html)
+            self.assertNotIn("PVT Corner 明细", html)
+            self.assertNotIn("id='tbl-corner-detail-scroll'", html)
+            self.assertNotIn("id='count-only-files'", html)
+            self.assertNotIn("id='tbl-view-coverage-scroll'", html)
+            self.assertNotIn("data-filter-columns='0:View / Scope|1:要求|3:状态|4:Parser|5:校验级别'", html)
             self.assertNotIn("只计数视图与 Corner 汇总", html)
             self.assertNotIn("重文件", html)
-            self.assertIn("代表对象", html)
-            self.assertIn("来源文件", html)
+            self.assertNotIn("代表对象", html)
+            self.assertNotIn("来源文件", html)
             self.assertNotIn("审查含义", html)
             self.assertNotIn("<th>Detail</th>", html)
-            self.assertIn("另有 1 个来源", html)
-            self.assertEqual(html.count("<td>_tech_fa</td>"), 1)
-            self.assertIn("fakeram7_128x64", html)
-            self.assertIn("yoSys/cells_adders_L.v", html)
+            self.assertNotIn("另有 1 个来源", html)
+            self.assertEqual(html.count("<td>_tech_fa</td>"), 0)
+            self.assertNotIn("fakeram7_128x64", html)
+            self.assertNotIn("yoSys/cells_adders_L.v", html)
             self.assertNotIn("<td>LVTN</td><td><code>lef/tech.lef</code></td><td>routing_layer</td><td>LVTN</td>", html)
-            self.assertIn("<td>LVTN</td><td><code>lef/tech.lef</code></td>", html)
+            self.assertNotIn("<td>LVTN</td><td><code>lef/tech.lef</code></td>", html)
             self.assertNotIn("type=ROUTING, direction=HORIZONTAL, width=0.02", html)
-            self.assertLess(html.index("<td>M1</td>"), html.index("<td>LVTN</td>"))
+            self.assertNotIn("<td>M1</td>", html)
+            self.assertNotIn("<td>LVTN</td>", html)
 
     def test_version_detail_empty_raw_scan_explains_partial_update_context(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2317,11 +2483,11 @@ class CatalogTimelineTest(unittest.TestCase):
 
             self.assertIn("版本使用结论", html)
             self.assertIn("当前版本是增量包", html)
-            self.assertIn("本页 Raw Scan 只统计本次交付内容", html)
-            self.assertIn("继承文件请查看 effective 或 base 视图", html)
-            self.assertIn("当前 Raw Scan 没有发现大文件计数项", html)
-            self.assertIn("当前 Scan 没有生成可展示的 Parser 结果", html)
-            self.assertIn("scan_empty", html)
+            self.assertIn("本页原始扫描只统计本次交付内容", html)
+            self.assertIn("继承文件请查看有效版或基准版视图", html)
+            self.assertIn("当前原始扫描没有发现大文件计数项", html)
+            self.assertIn("当前扫描没有生成可展示的解析器结果", html)
+            self.assertNotIn("scan_empty", html)
             self.assertNotIn("No parser summary is available for this version", html)
             self.assertNotIn("No count-only views", html)
 

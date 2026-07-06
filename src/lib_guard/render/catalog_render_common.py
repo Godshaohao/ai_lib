@@ -85,7 +85,7 @@ def base_full_version(version: Mapping[str, Any]) -> str | None:
 
 def previous_effective_version(version: Mapping[str, Any]) -> str | None:
     lineage = version.get("lineage") or {}
-    for key in ["previous_effective_version", "parent_version"]:
+    for key in ["previous_effective_version"]:
         value = version.get(key)
         if value:
             return str(value)

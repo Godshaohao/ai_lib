@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from lib_guard.render import catalog_render_common as common
 from lib_guard.render import catalog_report as catalog
+from lib_guard.render import library_workspace_model as workspace_model
 from lib_guard.render import product_theme as ui
 
 
@@ -172,7 +173,7 @@ def _compare_index_rows(lib: Mapping[str, Any], compare_items: list[dict[str, An
             f"<td>{ui.esc(item.get('changed_files', 0))}</td>"
             f"<td>{ui.esc(actions.get('replace', 0))}</td>"
             f"<td><span title='{ui.esc(item.get('owner_target') or '')}'>{ui.esc(common.short_name(item.get('owner_target') or '-'))}</span></td>"
-            f"<td>{ui.action_strip([ui.button('打开报告', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('Manifest', _href(item.get('manifest')), 'secondary', disabled=not bool(item.get('manifest')), target='_blank')])}</td>"
+        f"<td>{ui.action_strip([ui.button('打开报告', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('清单', _href(item.get('manifest')), 'secondary', disabled=not bool(item.get('manifest')), target='_blank')])}</td>"
             "</tr>"
         )
     if rows:
@@ -190,7 +191,152 @@ def _compare_index_rows(lib: Mapping[str, Any], compare_items: list[dict[str, An
             f"<td>{ui.esc(item.get('recommended_total', 0))}</td>"
             f"<td>{ui.esc(item.get('candidate_total', 0))}</td>"
             f"<td>{ui.badge(item.get('comparison_quality') or 'NORMAL')}</td>"
-            f"<td>{ui.button('Diff', diff_html, 'primary', disabled=not bool(diff_html), target='_blank')}</td>"
+            f"<td>{ui.button('对比', diff_html, 'primary', disabled=not bool(diff_html), target='_blank')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _version_id(version: Mapping[str, Any] | None) -> str:
+    return workspace_model.version_id(version)
+
+
+def _diff_label(version: Mapping[str, Any] | None) -> tuple[str, str]:
+    return workspace_model.diff_label(version)
+
+
+def _version_detail_href(version: Mapping[str, Any] | None) -> str:
+    if not isinstance(version, Mapping):
+        return ""
+    links = common.version_links(version)
+    return _href(links.get("version_review_html") or links.get("scan_html") or links.get("diff_html"))
+
+
+def _candidate_action_text(candidate: Mapping[str, Any] | None, current_ref: str) -> str:
+    return workspace_model.candidate_action_text(candidate, current_ref)
+
+
+def _library_entry_summary(
+    lib: Mapping[str, Any],
+    effective_items: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    latest_effective_ref: str,
+) -> dict[str, Any]:
+    model = workspace_model.build_library_workspace_model(
+        lib,
+        effective_items,
+        timeline=timeline,
+        latest_effective_ref=latest_effective_ref,
+    )
+    return {
+        "current_ref": model["current_effective_ref"],
+        "current_source": model["current_effective_source"],
+        "current_confirmed": model["current_effective_confirmed"],
+        "current_version": model["current_effective_version"],
+        "candidate_ref": model["latest_candidate_ref"],
+        "candidate": model["latest_candidate_version"],
+        "candidate_hint": model["candidate_action_text"],
+        "base_ref": model["base_ref"],
+        "scan_status": model["scan_status"],
+        "scan_text": model["scan_text"],
+        "diff_status": model["diff_status"],
+        "diff_text": model["diff_text"],
+        "release_status": model["release_status"],
+        "decision": model["decision"],
+        "needs_review": model["needs_review"],
+        "timeline_count": model["timeline_count"],
+        "version_count": model["version_count"],
+        "effective_ref": model["effective_evidence_ref"],
+        "effective_manifest": _href(model["effective_evidence_manifest"]),
+        "current_effective_html": _href(model["effective_evidence_html"]),
+        "release_preview_html": _href(model["effective_evidence_release_preview"]),
+        "candidate_detail_href": _version_detail_href(model["latest_candidate_version"]),
+    }
+
+
+def _focus_card(label: str, value: Any, hint: str, status: str, href: str = "", action: str = "打开") -> str:
+    button = ui.button(action, href, "primary" if href else "secondary", disabled=not bool(href), target="_blank")
+    return (
+        f"<div class='library-focus-card {ui.esc(status.lower())}'>"
+        f"<div class='focus-label'>{ui.esc(label)}</div>"
+        f"<div class='focus-value long-token' title='{ui.esc(value)}'>{ui.esc(value or '-')}</div>"
+        f"<p>{ui.esc(hint)}</p>"
+        f"<div class='focus-action'>{button}</div>"
+        "</div>"
+    )
+
+
+def _library_focus_panel(summary: Mapping[str, Any]) -> str:
+    candidate = summary.get("candidate") if isinstance(summary.get("candidate"), Mapping) else {}
+    current_hint = {
+        "effective_manifest": "来自当前有效版 manifest",
+        "catalog_current": "来自库目录当前指针",
+        "version_flag": "来自版本 current_effective 标记",
+        "latest_full_fallback": "未设置 effective，退到最新完整包",
+        "latest_version_fallback": "未设置 effective，退到最新版本",
+        "missing": "未找到当前有效版",
+        "unconfirmed": "当前有效版未确认；请先通过库覆盖或审查窗口确认",
+    }.get(str(summary.get("current_source")), str(summary.get("current_source") or "-"))
+    effective_ref = str(summary.get("effective_ref") or "")
+    if effective_ref and summary.get("current_source") != "effective_manifest":
+        current_hint = f"{current_hint}；已发现有效版证据 {effective_ref}"
+    body = (
+        "<div class='library-focus-grid'>"
+        + _focus_card("当前有效版", summary.get("current_ref"), current_hint, "ok" if summary.get("current_confirmed") else "warn", summary.get("current_effective_html") or _version_detail_href(summary.get("current_version") if isinstance(summary.get("current_version"), Mapping) else None))
+        + _focus_card("最新待审版", summary.get("candidate_ref"), summary.get("candidate_hint") or _candidate_action_text(candidate, str(summary.get("current_ref") or "")), "warn" if summary.get("needs_review") else "ok", str(summary.get("candidate_detail_href") or ""))
+        + _focus_card("正式发布", ui.status_label(summary.get("release_status")) or summary.get("release_status"), "正式放行状态只作入口提示，不覆盖 IP 接入判断", "neutral", summary.get("release_preview_html"), "查看发布")
+        + "</div>"
+    )
+    return ui.panel("库入口", "只显示当前有效版、最新待审版和必要证据入口；历史扫描/对比下沉到折叠区。", body)
+
+
+def _review_now_panel(summary: Mapping[str, Any]) -> str:
+    rows = [
+        ("对比范围", f"{summary.get('candidate_ref')} vs {summary.get('base_ref')}", "最新待审版相对当前/上一有效版"),
+        ("扫描", summary.get("scan_text"), summary.get("scan_status")),
+        ("对比", summary.get("diff_text"), summary.get("diff_status")),
+        ("判断", summary.get("decision"), "是否需要进入版本详情审查"),
+    ]
+    row_html = "".join(
+        "<tr>"
+        f"<td>{ui.esc(name)}</td>"
+        f"<td><b>{ui.esc(value)}</b></td>"
+        f"<td>{ui.esc(hint)}</td>"
+        "</tr>"
+        for name, value, hint in rows
+    )
+    actions = ui.action_strip([
+        ui.button("打开最新版本详情", summary.get("candidate_detail_href"), "primary", disabled=not bool(summary.get("candidate_detail_href")), target="_blank"),
+        ui.button("打开当前有效版", summary.get("current_effective_html"), "secondary", disabled=not bool(summary.get("current_effective_html")), target="_blank"),
+    ])
+    return ui.panel(
+        "本次审查",
+        "库页只回答当前该看哪一版；视图变化、文件变化和解析证据留在版本详情。",
+        "<div class='library-review-now'>"
+        f"<div class='table-wrap'><table><thead><tr><th>项目</th><th>值</th><th>说明</th></tr></thead><tbody>{row_html}</tbody></table></div>"
+        f"<div class='review-actions'>{actions}</div>"
+        "</div>",
+    )
+
+
+def _history_version_rows(lib: Mapping[str, Any], versions: list[Mapping[str, Any]]) -> list[str]:
+    rows = []
+    latest = lib.get("latest_version") or (_version_id(versions[-1]) if versions else "")
+    for version in reversed(versions):
+        version_id = _version_id(version)
+        pkg_status, pkg_label = catalog._package_label(version)
+        scan_status, scan_text = catalog._scan_label(version)
+        diff_status, diff_text = _diff_label(version)
+        relation = common.relation_label(common.relation_status(version))
+        action = ui.button("详情", _version_detail_href(version), "secondary", disabled=not bool(_version_detail_href(version)), target="_blank")
+        rows.append(
+            "<tr>"
+            f"<td><b title='{ui.esc(version_id)}'>{ui.esc(common.short_name(version_id))}</b>{' ' + ui.badge('INFO', '最新') if version_id == str(latest) else ''}</td>"
+            f"<td>{ui.badge(pkg_status, pkg_label)}</td>"
+            f"<td>{ui.badge(scan_status, scan_text)}</td>"
+            f"<td>{ui.badge(diff_status, diff_text)}</td>"
+            f"<td>{ui.esc(relation)}</td>"
+            f"<td>{action}</td>"
             "</tr>"
         )
     return rows
@@ -202,67 +348,27 @@ def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: lis
     html_path = out / "libraries" / safe / "index.html"
     versions = list(lib.get("versions", []) or [])
     timeline, latest_effective_ref = catalog._library_timeline(lib, effective_items)
-    latest_effective = catalog._latest_effective_item(effective_items)
-    latest_node = next((node for node in timeline if str(node.get("version_id") or "") == latest_effective_ref), {})
-    not_scanned = sum(1 for v in versions if "not_scanned" in catalog._version_tags(v))
-    diff_pending = sum(1 for v in versions if common.status_key(v.get("diff_status")) in {"DIFF_PENDING", "DIFF_NOT_READY", "COMPARE_PENDING"})
-    need_bind = sum(1 for v in versions if common.relation_status(v) == "NEED_BINDING")
+    summary = _library_entry_summary(lib, effective_items, timeline, latest_effective_ref)
+    del compare_items, versions
     body = (
         _catalog_browser_styles()
-        + ui.panel(
-            "库总览",
-            "单库主页负责串联版本、scan、diff、effective 和 release preview；详情报告保持独立页面。",
-            ui.metric_grid([
-                ("最新完整包", _latest_full_version(versions), "完整基线", "PASS"),
-                ("Current Effective", latest_effective_ref or "未设置", "latest_effective_ref", "PASS" if latest_effective_ref else "WARNING"),
-                ("当前节点类型", f"{latest_node.get('node_kind', '-')}/{latest_node.get('package_type', '-')}", "raw full 或 effective composed", "PASS" if latest_effective_ref else "WARNING"),
-                ("待扫描", not_scanned, "raw 交付证据", "WARNING" if not_scanned else "PASS"),
-                ("需绑定", need_bind, "base_full / previous_effective", "WARNING" if need_bind else "PASS"),
-            ])
-            + ui.compact_meta([
-                ("库名", lib.get("formal_library_id") or lib.get("library_name") or lib_id),
-                ("Vendor", lib.get("vendor") or "-"),
-                ("路径", lib.get("middle_path") or lib.get("library_root") or "-"),
-            ]),
-        )
-        + ui.panel(
-            "版本时间线",
-            "raw、effective 和 release 相关节点按 event_time 混排；node_kind/package_type 区分来源和包类型，latest_effective_ref 指向当前真正可使用的节点。",
-            ui.filterable_table(
-                f"timeline-{safe}",
-                ["时间", "版本", "类型", "状态", "有效库指针", "来源 / 使用", "入口"],
-                _timeline_rows(out, timeline, latest_effective_ref),
-                "暂无 version",
-                "筛选 version / node_kind / package / status",
-            ),
-        )
-        + ui.collapsible_panel(
-            "Compare 索引",
-            "Diff 归属 effective transition，也就是 latest_effective_ref 的变化；没有真实 compare_manifest 时退回 raw diff 入口。",
-            ui.filterable_table(
-                f"compare-{safe}",
-                ["模式", "基准目标", "对比目标", "状态", "变化", "替换", "检查对象 / 质量", "入口"],
-                _compare_index_rows(lib, compare_items),
-                "暂无 comparison",
-                "筛选基准 / 对比 / 模式 / 状态",
-            ),
-            open=True,
-        )
-        + ui.panel("证据入口", "统一证据入口。", ui.action_strip([
-            ui.button("Catalog", _href(out / "index.html"), "secondary", target="_blank"),
-            ui.button("当前 Effective", _href((latest_effective or {}).get("html")), "secondary", disabled=not bool((latest_effective or {}).get("html")), target="_blank"),
-            ui.button("Release Preview", _href((latest_effective or {}).get("release_preview")), "secondary", disabled=not bool((latest_effective or {}).get("release_preview")), target="_blank"),
-        ]))
-        + ui.collapsible_panel("命令示例", "命令集中放置，不挤占版本表。", _command_examples(), open=False)
+        + _library_focus_styles()
+        + _library_focus_panel(summary)
+        + _review_now_panel(summary)
     )
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / 库工作台",
         "库工作台",
-        "Catalog 的下钻主页：先看当前有效组合，再核对版本账本和证据链。",
+        "库目录的下钻主页：先确认当前有效版，再审查最新待审版。",
         body,
-        decision=lib.get("overall_status") or "REVIEW",
+        decision="REVIEW" if summary.get("needs_review") else (lib.get("overall_status") or "PASS"),
         nav="<a href='../../index.html'>库目录</a><a class='active' href='#'>库工作台</a>",
-        meta=ui.compact_meta([("版本节点", len(timeline)), ("latest_effective_ref", latest_effective_ref or "-"), ("待扫描", not_scanned), ("待对比", diff_pending)]),
+        meta=ui.compact_meta([
+            ("库", lib.get("formal_library_id") or lib.get("library_name") or lib_id),
+            ("当前有效版", summary.get("current_ref") or "-"),
+            ("最新待审版", summary.get("candidate_ref") or "-"),
+            ("历史版本", summary.get("version_count")),
+        ]),
     )
     _write_text(html_path, html)
     return str(html_path)
@@ -275,14 +381,11 @@ def _latest_full_version(versions: list[Mapping[str, Any]]) -> str:
     return "-"
 
 
-def _latest_effective_version(lib: Mapping[str, Any], versions: list[Mapping[str, Any]]) -> str:
-    for key in ["current_effective_version", "approved_version", "current_version"]:
-        if lib.get(key):
-            return str(lib.get(key))
-    for version in reversed(versions):
-        if common.truthy(version.get("current_effective")):
-            return str(version.get("version_id") or version.get("version") or "-")
-    return str(versions[-1].get("version_id") or versions[-1].get("version") or "-") if versions else "-"
+def _latest_effective_version(lib: Mapping[str, Any], versions: list[Mapping[str, Any]], effective_items: list[dict[str, Any]]) -> str:
+    current_ref, _current_version, source = workspace_model.current_effective_version(lib, versions, effective_items)
+    if source in {"unconfirmed", "missing"} or not current_ref:
+        return "未确认"
+    return current_ref
 
 
 def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any) -> str:
@@ -327,12 +430,17 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
     versions = list(lib.get("versions", []) or [])
     latest = lib.get("latest_version") or (versions[-1].get("version_id") if versions else "-")
     latest_full = _latest_full_version(versions)
-    latest_effective = _latest_effective_version(lib, versions)
+    latest_effective = _latest_effective_version(lib, versions, effective_items)
+    _current_ref, _current_version, current_source = workspace_model.current_effective_version(lib, versions, effective_items)
+    current_confirmed = bool(versions) and current_source not in {"unconfirmed", "missing"}
     status = lib.get("overall_status") or "UNKNOWN"
     vendor = str(lib.get("vendor") or "Unknown")
     middle = str(lib.get("middle_path") or lib.get("library_root") or "-")
     stages = sorted({str(v.get("stage") or "unknown") for v in versions})
     tags = catalog._library_tags(lib)
+    if versions and not current_confirmed:
+        tags.discard("clear")
+        tags.add("review")
     home_path = str(lib.get("library_home_html") or "")
     latest_effective_item = catalog._latest_effective_item(effective_items)
     changed = sum(1 for v in versions if "changed" in catalog._version_tags(v))
@@ -343,18 +451,19 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
     version_list_html = version_rows or empty_versions
     actions = ui.action_strip([
         ui.button("进入库工作台", _href(home_path), "primary", disabled=not bool(home_path), target="_blank"),
-        ui.button("Effective", _href((latest_effective_item or {}).get("html")), "secondary", disabled=not bool((latest_effective_item or {}).get("html")), target="_blank"),
+        ui.button("有效版", _href((latest_effective_item or {}).get("html")), "secondary", disabled=not bool((latest_effective_item or {}).get("html")), target="_blank"),
     ])
     effective_label = str((latest_effective_item or {}).get("effective_id") or latest_effective)
-    status_badge = "" if common.status_key(status) == "UNKNOWN" else ui.badge(status)
+    status_for_display = "REVIEW" if versions and not current_confirmed and common.status_key(status) == "UNKNOWN" else status
+    status_badge = "" if common.status_key(status_for_display) == "UNKNOWN" else ui.badge(status_for_display)
     changed_badge = ui.quiet_badge("CHANGED", changed) if changed else ""
     return (
-        f"<section class='library-card' data-overall='{ui.esc(status)}' data-vendor='{ui.esc(vendor)}' data-stages='{ui.esc(','.join(stages))}' data-tags='{ui.esc(','.join(sorted(tags)))}'>"
+        f"<section class='library-card' data-overall='{ui.esc(status_for_display)}' data-vendor='{ui.esc(vendor)}' data-stages='{ui.esc(','.join(stages))}' data-tags='{ui.esc(','.join(sorted(tags)))}'>"
         "<div class='library-main'>"
         f"<div class='library-name-row'><div class='library-title long-token' title='{ui.esc(library_label)}'>{ui.esc(library_label)}</div></div>"
         f"<div class='library-path-row'><span class='muted'>库名</span><code title='{ui.esc(user_library_id)}'>{ui.esc(user_library_id or '-')}</code></div>"
         f"<div class='library-path-row'><span class='muted'>路径</span><code title='{ui.esc(middle)}'>{ui.esc(middle)}</code></div>"
-        f"<div><span class='muted'>Vendor</span><br><b>{ui.esc(vendor)}</b></div>"
+        f"<div><span class='muted'>供应方</span><br><b>{ui.esc(vendor)}</b></div>"
         f"<div><span class='muted'>完整基线</span><br><b title='{ui.esc(latest_full)}'>{ui.esc(latest_full)}</b></div>"
         f"<div><span class='muted'>当前有效</span><br><b title='{ui.esc(effective_label)}'>{ui.esc(effective_label)}</b></div>"
         "<div class='library-status'>"
@@ -399,21 +508,21 @@ def _catalog_filter_panel(state: Mapping[str, Any]) -> str:
             if str(v.get("stage") or "unknown").lower() not in {"", "-", "unknown"}
         }
     )
-    vendor_opts = "<option value='all'>全部 Vendor</option>" + "".join(f"<option value='{ui.esc(v)}'>{ui.esc(v)}</option>" for v in vendors)
-    stage_opts = "<option value='all'>全部 Stage</option>" + "".join(f"<option value='{ui.esc(s)}'>{ui.esc(s)}</option>" for s in stages)
-    chips = [("all", "全部"), ("changed", "有更新"), ("file_review_recommended", "重点文件"), ("not_scanned", "待补证据"), ("review", "需管理"), ("block", "阻塞"), ("clear", "正常")]
+    vendor_opts = "<option value='all'>全部供应方</option>" + "".join(f"<option value='{ui.esc(v)}'>{ui.esc(v)}</option>" for v in vendors)
+    stage_opts = "<option value='all'>全部阶段</option>" + "".join(f"<option value='{ui.esc(s)}'>{ui.esc(s)}</option>" for s in stages)
+    chips = [("all", "全部"), ("changed", "有更新"), ("file_review_recommended", "重点文件"), ("not_scanned", "待补证据"), ("review", "需审查"), ("block", "阻塞"), ("clear", "正常")]
     chip_html = "".join(f"<button type='button' class='filter-chip {'active' if k == 'all' else ''}' data-catalog-status-chip='{k}' onclick=\"setCatalogStatusFilter('{k}', this)\">{ui.esc(v)}</button>" for k, v in chips)
     body = (
-        "<div class='search'><span>搜索</span><input id='catalog-search' type='search' placeholder='库 / 版本 / vendor / path' oninput='filterCatalogBrowser()'></div>"
-        "<div class='filter-group-title'>Vendor</div>" + f"<select id='catalog-vendor' onchange='filterCatalogBrowser()'>{vendor_opts}</select>"
-        "<div class='filter-group-title'>Stage</div>" + f"<select id='catalog-stage' onchange='filterCatalogBrowser()'>{stage_opts}</select>"
-        "<label style='display:flex;gap:8px;align-items:center;margin:10px 0;color:#667085;font-size:13px'><input id='catalog-latest' type='checkbox' onchange='filterCatalogBrowser()'> 只看 latest</label>"
+        "<div class='search'><span>搜索</span><input id='catalog-search' type='search' placeholder='库 / 版本 / 供应方 / 路径' oninput='filterCatalogBrowser()'></div>"
+        "<div class='filter-group-title'>供应方</div>" + f"<select id='catalog-vendor' onchange='filterCatalogBrowser()'>{vendor_opts}</select>"
+        "<div class='filter-group-title'>阶段</div>" + f"<select id='catalog-stage' onchange='filterCatalogBrowser()'>{stage_opts}</select>"
+        "<label style='display:flex;gap:8px;align-items:center;margin:10px 0;color:#667085;font-size:13px'><input id='catalog-latest' type='checkbox' onchange='filterCatalogBrowser()'> 只看最新版本</label>"
         "<div class='filter-group-title'>状态</div>" + f"<div class='catalog-chips'>{chip_html}</div>"
         "<div class='filter-group-title'>操作</div>"
         + ui.action_strip(["<button class='btn secondary' type='button' onclick=\"catalogExpand('review')\">展开关注</button>", "<button class='btn secondary' type='button' onclick=\"catalogExpand('collapse')\">折叠</button>", "<button class='btn secondary' type='button' onclick='resetCatalogFilters()'>重置</button>"])
         + "<div id='catalog-visible-count' class='browser-count' style='margin-top:12px'>-</div><script>setTimeout(filterCatalogBrowser,0)</script>"
     )
-    return ui.panel("筛选", "按库、版本、Vendor、Stage、状态快速定位。", body)
+    return ui.panel("筛选", "按库、版本、供应方、阶段、状态快速定位。", body)
 
 
 def _task_rows(tasks: Mapping[str, Any], limit: int = 50) -> list[str]:
@@ -438,7 +547,7 @@ def _task_rows(tasks: Mapping[str, Any], limit: int = 50) -> list[str]:
             f"<td><span class='muted'>按下方命令示例执行</span></td></tr>"
         )
     if skipped_file_diff:
-        rows.append("<tr><td><span class='muted'>-</span></td><td><code>file-diff</code></td><td><b>File Diff 命令已下沉</b></td>" + f"<td>共 {ui.esc(skipped_file_diff)} 条 File Diff 候选命令不在 Catalog 展开；请进入版本更新详情里的重点文件建议。</td><td><span class='muted'>不在 Catalog 生成全量命令</span></td></tr>")
+        rows.append("<tr><td><span class='muted'>-</span></td><td><code>file-diff</code></td><td><b>文件深度对比命令已下沉</b></td>" + f"<td>共 {ui.esc(skipped_file_diff)} 条文件深度对比候选命令不在库目录展开；请进入版本更新详情里的重点文件建议。</td><td><span class='muted'>不在库目录生成全量命令</span></td></tr>")
     return rows
 
 
@@ -446,6 +555,26 @@ def _command_examples() -> str:
     examples = [("刷新目录", "$PROJ/scripts/lg.csh cat"), ("扫描版本", "$PROJ/scripts/lg.csh scan <library> <version>"), ("绑定关系", "$PROJ/scripts/lg.csh library override <library> <version> --package-type PARTIAL_UPDATE --update-scope lib,lef --base-full <full_version> --previous-effective <prev_version> --note \"manual confirmed\""), ("执行对比", "$PROJ/scripts/lg.csh cmp <library> <version> --scan-if-missing"), ("发布检查", "$PROJ/scripts/lg.csh rel <library> <version> --check-first"), ("PowerShell", ".\\scripts\\lg.ps1 cmp <library> <version> --scan-if-missing")]
     boxes = "".join(ui.command_box(command, title=title, note="示例命令。实际执行时替换 <library> / <version> / <relpath>。") for title, command in examples)
     return "<div class='command-example-grid'>" + boxes + "</div>"
+
+
+def _library_focus_styles() -> str:
+    return """
+<style>
+.library-focus-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.library-focus-card{border:1px solid var(--line);border-radius:14px;background:#fff;padding:15px;display:flex;flex-direction:column;gap:8px;min-height:178px}
+.library-focus-card.ok{border-left:4px solid var(--green);background:linear-gradient(180deg,#fff,#fbfffc)}
+.library-focus-card.warn{border-left:4px solid var(--amber);background:linear-gradient(180deg,#fff,#fffaf1)}
+.library-focus-card.neutral{border-left:4px solid var(--line-strong);background:linear-gradient(180deg,#fff,#fbfcff)}
+.focus-label{font-size:12px;color:#667085;font-weight:800;letter-spacing:.02em}
+.focus-value{font-size:19px;line-height:1.25;font-weight:850;color:#172033}
+.library-focus-card p{font-size:12px;color:#667085;min-height:38px}
+.focus-action{margin-top:auto}
+.library-review-now{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.review-actions{display:flex;justify-content:flex-start}
+.history-ledger .panel-head{background:#fbfcff}
+@media(max-width:980px){.library-focus-grid{grid-template-columns:1fr}.library-focus-card{min-height:auto}}
+</style>
+"""
 
 
 def _catalog_browser_styles() -> str:
@@ -470,47 +599,27 @@ def render_catalog_index_page(
     report_index: str | Path | None = None,
     catalog_json: str | Path | None = None,
 ) -> str:
-    del compare_by_lib, max_attention_items, max_report_rows
+    del compare_by_lib, max_attention_items, max_report_rows, report_index, catalog_json
     out_path = Path(out)
     body = (
         _catalog_browser_styles()
         + ui.panel(
             "库目录总览",
-            "面向 IP 使用者：先搜索库，再进入库工作台查看更新文件、影响面和证据入口。库管理者证据放在下方折叠区。",
-            ui.metric_grid(catalog._summary_metrics(state, tasks))
-            + "<p class='catalog-note'>主流程是获取库更新信息、更新文件和证据入口；管理补证据不作为普通使用者的首要任务。</p>",
+            "面向 IP 使用者：先搜索库，再进入库工作台查看当前有效版和最新待审版。",
+            ui.metric_grid(catalog._summary_metrics(state, tasks, effective_by_lib))
+            + "<p class='catalog-note'>主流程只保留库定位和审查入口；管理证据写入 JSON，不在首页展开。</p>",
         )
         + "<div class='catalog-layout'>"
         + f"<div class='catalog-filter-panel'>{_catalog_filter_panel(state)}</div>"
-        + f"<div>{ui.panel('库浏览器', '只显示库身份、当前有效组合和进入库工作台；scan/diff/effective/release preview 由库工作台串联。', _library_browser(out_path, state, effective_by_lib))}</div>"
+        + f"<div>{ui.panel('库浏览器', '只显示库身份、当前有效组合和进入库工作台；库工作台默认聚焦当前有效版与最新待审版。', _library_browser(out_path, state, effective_by_lib))}</div>"
         + "</div>"
-        + ui.collapsible_panel(
-            "管理建议",
-            "manager_tasks.json 是有效的管理者任务列表，用于补 scan、diff 或关系确认；普通 IP 使用者通常不需要处理。",
-            ui.filterable_table("catalog-task-table", ["优先级", "类型", "库 / 版本", "原因", "执行"], _task_rows(tasks), "暂无建议", "筛选 task / reason"),
-            open=False,
-        )
-        + ui.collapsible_panel(
-            "证据索引",
-            "Catalog 原始证据和统一报告索引。manager_tasks.json 的定位是管理者任务证据。",
-            ui.trace_link_list(
-                [
-                    ("report_index.json", common.href(report_index), "Catalog / Scan / Diff / Effective / Release Preview 的链接索引"),
-                    ("catalog_state.json", common.href(out_path / "catalog_state.json"), "Catalog 页面使用的状态模型"),
-                    ("manager_tasks.json", common.href(out_path / "manager_tasks.json"), "管理者建议动作列表"),
-                    ("catalog.json", common.href(catalog_json), "原始 catalog"),
-                ]
-            ),
-            open=True,
-        )
-        + ui.collapsible_panel("命令示例", "所有常用命令集中折叠在最下面。Browser 行内只保留状态和入口，不再放待生成命令。", _command_examples(), open=False)
     )
     return ui.review_page_shell(
         "库目录",
         "库目录",
-        "库版本变化导航入口。Catalog 是地图，不是命令控制台。",
+        "库版本变化导航入口。库目录是地图，不是命令控制台。",
         body,
         decision="REVIEW" if tasks.get("tasks") else "PASS",
-        nav="<a class='active' href='#'>库目录</a><a href='#'>库工作台</a><a href='#'>Scan 证据</a><a href='#'>Release 证据</a>",
-        meta=ui.compact_meta([("库", len(state.get("libraries", []) or [])), ("任务", len(tasks.get("tasks", []) or []))]),
+        nav="<a class='active' href='#'>库目录</a><a href='#'>库工作台</a><a href='#'>扫描证据</a><a href='#'>发布证据</a>",
+        meta=ui.compact_meta([("库", len(state.get("libraries", []) or [])), ("版本", sum(len(lib.get("versions", []) or []) for lib in state.get("libraries", []) or []))]),
     )

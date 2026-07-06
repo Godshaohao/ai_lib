@@ -243,15 +243,15 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(review["corner_summary"]["total_corner_files"], 3)
 
             html_text = (html / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Count-only", html_text)
-            self.assertIn("Corner Summary", html_text)
-            self.assertIn("Parser Summary", html_text)
-            self.assertIn("Scan 结论", html_text)
+            self.assertIn("大文件计数", html_text)
+            self.assertIn("Corner 摘要", html_text)
+            self.assertIn("解析器摘要", html_text)
+            self.assertIn("扫描结论", html_text)
             self.assertIn("核心视图", html_text)
             self.assertNotIn("Version Detail", html_text)
             self.assertNotIn("delivery type", html_text)
             self.assertNotIn("Metadata only", html_text)
-            self.assertIn("metadata-only", html_text)
+            self.assertIn("元数据级", html_text)
 
     def test_scan_classifies_gzip_files_and_writes_typed_parser_results(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -515,6 +515,7 @@ class ScanPipelineTest(unittest.TestCase):
                 if line.strip()
             ]
             self.assertTrue(any(len(event.get("active_workers", [])) > 1 for event in progress_events))
+            self.assertLessEqual(max(len(event.get("active_workers", [])) for event in progress_events), 4)
 
     def _normalize_parser_results(self, data):
         out = {}
@@ -1390,15 +1391,15 @@ class ScanPipelineTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "PASS")
             html = (html_out / "index.html").read_text(encoding="utf-8")
-            self.assertIn("Comparison 结论", html)
+            self.assertIn("对比结论", html)
             self.assertIn("结构概览", html)
-            self.assertIn("View 全量状态", html)
-            self.assertIn("File Type 全量变化", html)
+            self.assertIn("视图全量状态", html)
+            self.assertIn("文件类型全量变化", html)
             self.assertIn("重点文件确认项", html)
             self.assertNotIn("$PROJ/scripts/lg.csh fd", html)
             self.assertNotIn("python -m lib_guard.cli file-diff", html)
             self.assertNotIn("<th>命令</th>", html)
-            self.assertIn("打开 File Diff", html)
+            self.assertIn("打开文件深度对比", html)
             self.assertIn("DONE", html)
             self.assertNotIn("done / total", html)
 
@@ -2017,7 +2018,7 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertIn("示例", help_text)
         self.assertIn("日常流程", help_text)
         self.assertIn("lg.csh scan", help_text)
-        self.assertIn("lg.csh cat ucie --update-detail", help_text)
+        self.assertIn("lg.csh intake ucie                    # 确认计划后执行 scan/effective compare/render", help_text)
         self.assertIn("lg.ps1 scan", help_text)
         self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,intake,window,accept-window,mark,rv}", help_text)
         self.assertIn("lg.csh intake ucie --plan-only", help_text)
@@ -2052,7 +2053,7 @@ class ScanPipelineTest(unittest.TestCase):
         help_text = file_diff_parser.format_help()
 
         self.assertIn("--force-large", help_text)
-        self.assertIn("Expert opt-in", help_text)
+        self.assertIn("专家入口", help_text)
         self.assertIn("FILE_TYPE", help_text)
         self.assertNotIn("systemverilog", help_text)
         self.assertNotIn("verilog,", help_text)

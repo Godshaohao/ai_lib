@@ -1,7 +1,7 @@
-"""Chinese Release Review HTML renderer.
+"""中文发布审查 HTML renderer.
 
-Release Review answers whether manifest/link/postcheck evidence is consistent.
-It does not replace human signoff.
+发布审查回答 manifest/link/postcheck 证据是否一致。
+它不替代人工签核。
 """
 
 from __future__ import annotations
@@ -41,22 +41,22 @@ def _release_review_model(postcheck: Mapping[str, Any]) -> dict[str, Any]:
     status = str(postcheck.get("status") or "UNKNOWN").upper()
     if status in {"FAILED", "BLOCK", "BLOCKED"}:
         decision = "RELEASE_BLOCKED"
-        headline = "Release postcheck 失败，需要先处理发布结果。"
+        headline = "发布后检查失败，需要先处理发布结果。"
     elif issue_count:
         decision = "PASS_WITH_WARNING"
-        headline = f"Release 基本完成，但有 {issue_count} 个发布注意项。"
+        headline = f"发布基本完成，但有 {issue_count} 个发布注意项。"
     elif status == "PASS":
         decision = "PASS"
-        headline = "Release postcheck 通过，manifest 和 release area 一致。"
+        headline = "发布后检查通过，发布清单和发布区一致。"
     else:
         decision = "RELEASE_CHECK_REQUIRED"
-        headline = "Release 状态未确认，需要查看 manifest / postcheck。"
+        headline = "发布状态未确认，需要查看发布清单 / 发布后检查。"
     next_command = ""
     if issue_count:
         next_label = "检查发布注意项"
-        next_reason = "优先检查 missing / broken / mismatch / extra。"
+        next_reason = "优先检查缺失、断链、不匹配和多余文件。"
     else:
-        next_label = "返回 Catalog / 通知使用者"
+        next_label = "返回库目录 / 通知使用者"
         next_reason = "发布检查没有发现优先阻塞项。"
     return {
         "schema_version": "release_review.v1",
@@ -112,8 +112,8 @@ def _library_rows(postcheck: Mapping[str, Any]) -> list[str]:
         lib = str(item.get("library_name") or "unknown")
         counts = issues_by_lib.get(lib, Counter())
         evidence = ui.action_strip([
-            ui.button("Scan", _href(item.get("scan_html")), disabled=not item.get("scan_html"), target="_blank"),
-            ui.button("Diff", _href(item.get("diff_html")), disabled=not item.get("diff_html"), target="_blank"),
+            ui.button("扫描", _href(item.get("scan_html")), disabled=not item.get("scan_html"), target="_blank"),
+            ui.button("对比", _href(item.get("diff_html")), disabled=not item.get("diff_html"), target="_blank"),
         ])
         rows.append(
             "<tr>"
@@ -154,16 +154,16 @@ def _review_gate_panel(postcheck: Mapping[str, Any]) -> str:
     gate = postcheck.get("review_gate") if isinstance(postcheck.get("review_gate"), Mapping) else {}
     status = str((gate or {}).get("status") or "NOT_PROVIDED")
     return ui.panel(
-        "Review Gate",
-        "Release-check consumes this lightweight gate when available. Link/postcheck still records filesystem evidence only.",
+        "审查门禁",
+        "发布检查会读取轻量门禁状态；link/postcheck 仍只记录文件系统证据。",
         ui.metric_grid([
-            ("Status", status, str((gate or {}).get("gate") or "-"), status),
-            ("Blocking Open", int((gate or {}).get("blocking_open", 0) or 0), "must be zero for current when policy requires it", "BLOCK" if int((gate or {}).get("blocking_open", 0) or 0) else "PASS"),
-            ("Attention", int((gate or {}).get("attention_count", 0) or 0), "recommendations, not current blockers", "WARNING" if int((gate or {}).get("attention_count", 0) or 0) else "PASS"),
+            ("状态", status, str((gate or {}).get("gate") or "-"), status),
+            ("未关闭阻塞", int((gate or {}).get("blocking_open", 0) or 0), "策略要求时必须为 0", "BLOCK" if int((gate or {}).get("blocking_open", 0) or 0) else "PASS"),
+            ("关注项", int((gate or {}).get("attention_count", 0) or 0), "建议项，不默认阻塞当前使用", "WARNING" if int((gate or {}).get("attention_count", 0) or 0) else "PASS"),
         ])
         + ui.trace_link_list([
-            ("review_gate.json", _href((gate or {}).get("gate_file")), "Gate status used by release-check"),
-            ("review_overrides.json", _href((gate or {}).get("override_file")), "Owner accept/waive decisions"),
+            ("review_gate.json", _href((gate or {}).get("gate_file")), "发布检查使用的门禁状态"),
+            ("review_overrides.json", _href((gate or {}).get("override_file")), "负责人接受/豁免决策"),
         ]),
     )
 
@@ -177,32 +177,32 @@ def render_release_html(postcheck: Mapping[str, Any], out_dir: str | Path) -> di
     (out / "release_review.json").write_text(json.dumps(review, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
     s = review["summary"]
     rail = ui.status_rail([
-        ("Catalog", "DISCOVERED", "发布版本来自 catalog"),
-        ("Scan", "SCAN_READY", "发布基于已扫描版本"),
-        ("Diff", "REVIEW", "发布前应查看对应 Diff / File Diff"),
-        ("File Diff", "REVIEW", "必要时查看文件级结果"),
-        ("Release", review["decision"], review["headline"]),
+        ("库目录", "DISCOVERED", "发布版本来自库目录"),
+        ("扫描", "SCAN_READY", "发布基于已扫描版本"),
+        ("对比", "REVIEW", "发布前应查看对应对比 / 文件深度对比"),
+        ("文件深度对比", "REVIEW", "必要时查看文件级结果"),
+        ("发布", review["decision"], review["headline"]),
     ])
     attention = _release_attention_items(postcheck)
     body = (
         ui.panel(
-            "Release 结论",
-            "检查 manifest、link/copy 结果和 release area 是否一致。",
+            "发布结论",
+            "检查 manifest、link/copy 结果和发布区是否一致。",
             ui.metric_grid([
-                ("Expected", s["expected_files"], "manifest 计划文件数", "PASS"),
-                ("Linked", s["linked_files"], "release area 已存在文件", review["decision"]),
-                ("Missing", s["missing_files"], "manifest 有但 release area 缺失", "MISSING" if s["missing_files"] else "PASS"),
-                ("Mismatch", s["target_mismatch"], "目标与 manifest source 不一致", "MISMATCH" if s["target_mismatch"] else "PASS"),
-                ("Extra", s["extra_files"], "release area 多余文件", "EXTRA" if s["extra_files"] else "PASS"),
+                ("计划文件", s["expected_files"], "manifest 计划文件数", "PASS"),
+                ("已链接", s["linked_files"], "发布区已存在文件", review["decision"]),
+                ("缺失", s["missing_files"], "manifest 有但发布区缺失", "MISSING" if s["missing_files"] else "PASS"),
+                ("不匹配", s["target_mismatch"], "目标与清单来源不一致", "MISMATCH" if s["target_mismatch"] else "PASS"),
+                ("多余", s["extra_files"], "发布区多余文件", "EXTRA" if s["extra_files"] else "PASS"),
             ])
             + ui.compact_meta([
-                ("Release ID", review.get("release_id")), ("Alias", review.get("alias")), ("Release Root", review.get("release_root")), ("Release Dir", review.get("release_dir")),
+                ("发布 ID", review.get("release_id")), ("别名", review.get("alias")), ("发布根目录", review.get("release_root")), ("发布目录", review.get("release_dir")),
             ]),
         )
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["decision"])
         + _review_gate_panel(postcheck)
-        + ui.panel("发布注意项", "只列出 missing / broken / mismatch / extra / manual_review。", ui.attention_items(attention))
-        + ui.panel("Library 校验", "一行一个 library。文件级明细仍以 manifest / postcheck JSON 为准。", ui.filterable_table("release-lib-table", ["Library", "Expected", "Linked", "Missing", "Broken", "Mismatch", "Extra", "Link", "Target", "Evidence"], _library_rows(postcheck), "暂无 library", "筛选 library / version / status"))
+        + ui.panel("发布注意项", "只列出缺失、断链、不匹配、多余和需要人工复核的项。", ui.attention_items(attention))
+        + ui.panel("库校验", "一行一个库。文件级明细仍以 manifest / postcheck JSON 为准。", ui.filterable_table("release-lib-table", ["库", "计划", "已链接", "缺失", "断链", "不匹配", "多余", "链接", "目标", "证据"], _library_rows(postcheck), "暂无库", "筛选库 / 版本 / 状态"))
         + ui.collapsible_panel(
             "证据区",
             "发布原始证据默认折叠。",
@@ -212,19 +212,19 @@ def render_release_html(postcheck: Mapping[str, Any], out_dir: str | Path) -> di
                 ("release_link_result.json", _href(postcheck.get("link_result_path")), "link/copy 结果"),
                 ("release_postcheck.json", _href(postcheck.get("postcheck_path")), "postcheck 结果"),
             ])
-            + ui.filterable_table("release-issues", ["Severity", "Category", "Library", "Message"], _issue_rows(postcheck), "暂无 release issue", "筛选 issue"),
+            + ui.filterable_table("release-issues", ["级别", "类别", "库", "信息"], _issue_rows(postcheck), "暂无发布问题", "筛选问题"),
             open=False,
         )
     )
     html_text = ui.review_page_shell(
-        f"{review.get('release_id') or 'Release'} / {review.get('alias') or '-'}",
-        "RELEASE REVIEW",
+        f"{review.get('release_id') or '发布'} / {review.get('alias') or '-'}",
+        "发布审查",
         review["headline"],
         body,
         decision=review["decision"],
         rail=rail,
-        nav="<a href='#'>Scan</a><a href='#'>Diff</a><a href='#'>File Diff</a><a class='active' href='#'>Release</a>",
-        meta=ui.compact_meta([("Alias", review.get("alias")), ("Expected", s["expected_files"]), ("Linked", s["linked_files"]), ("Issues", len(attention))]),
+        nav="<a href='#'>扫描</a><a href='#'>对比</a><a href='#'>文件深度对比</a><a class='active' href='#'>发布</a>",
+        meta=ui.compact_meta([("别名", review.get("alias")), ("计划", s["expected_files"]), ("已链接", s["linked_files"]), ("问题", len(attention))]),
     )
     index = out / "index.html"
     index.write_text(html_text, encoding="utf-8")

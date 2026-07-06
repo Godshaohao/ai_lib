@@ -34,7 +34,7 @@ def render_snapshot_html(snapshot: Mapping[str, Any] | str | Path, out_dir: str 
     view_rows = "".join(
         f"<tr><td>{_esc(view)}</td><td>{_esc(source)}</td></tr>"
         for view, source in sorted((data.get("resolved_views") or {}).items())
-    ) or "<tr><td colspan='2' class='empty'>暂无 view</td></tr>"
+    ) or "<tr><td colspan='2' class='empty'>暂无视图</td></tr>"
     issue_rows = "".join(
         f"<tr><td>{_esc(i.get('severity'))}</td><td>{_esc(i.get('category'))}</td><td>{_esc(i.get('target_relpath'))}</td></tr>"
         for i in data.get("issues", []) or []
@@ -65,19 +65,19 @@ code {{ color: #1e3a8a; word-break: break-all; }}
 </head>
 <body>
 <header>
-  <h1>Assembled Snapshot</h1>
-  <div class="sub">{_esc(data.get('snapshot_id'))} · base={_esc(data.get('base_package'))} · updates={_esc(', '.join(data.get('updates') or []))}</div>
+  <h1>组合快照</h1>
+  <div class="sub">{_esc(data.get('snapshot_id'))} · 基线={_esc(data.get('base_package'))} · 更新={_esc(', '.join(data.get('updates') or []))}</div>
 </header>
 <main>
   <div class="grid">
     <div class="metric">状态<b>{_esc(data.get('status'))}</b></div>
-    <div class="metric">Resolved Views<b>{len(data.get('resolved_views') or {})}</b></div>
-    <div class="metric">Resolved Files<b>{len(data.get('resolved_files') or [])}</b></div>
-    <div class="metric">Issues<b>{len(data.get('issues') or [])}</b></div>
+    <div class="metric">已解析视图<b>{len(data.get('resolved_views') or {})}</b></div>
+    <div class="metric">已解析文件<b>{len(data.get('resolved_files') or [])}</b></div>
+    <div class="metric">问题<b>{len(data.get('issues') or [])}</b></div>
   </div>
-  <section><h2>Resolved View Map</h2><table><thead><tr><th>View</th><th>Source Package</th></tr></thead><tbody>{view_rows}</tbody></table></section>
-  <section><h2>Source Provenance</h2><table><thead><tr><th>Target</th><th>View</th><th>Kind</th><th>Package</th><th>Source</th></tr></thead><tbody>{_rows(list(data.get('resolved_files') or []))}</tbody></table></section>
-  <section><h2>Issues</h2><table><thead><tr><th>Severity</th><th>Category</th><th>Target</th></tr></thead><tbody>{issue_rows}</tbody></table></section>
+  <section><h2>视图解析映射</h2><table><thead><tr><th>视图</th><th>来源包</th></tr></thead><tbody>{view_rows}</tbody></table></section>
+  <section><h2>来源追溯</h2><table><thead><tr><th>目标</th><th>视图</th><th>类型</th><th>包</th><th>来源</th></tr></thead><tbody>{_rows(list(data.get('resolved_files') or []))}</tbody></table></section>
+  <section><h2>问题</h2><table><thead><tr><th>级别</th><th>类别</th><th>目标</th></tr></thead><tbody>{issue_rows}</tbody></table></section>
 </main>
 </body>
 </html>

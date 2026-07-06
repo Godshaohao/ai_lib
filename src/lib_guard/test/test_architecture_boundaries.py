@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 
@@ -52,6 +53,17 @@ class ArchitectureBoundariesTest(unittest.TestCase):
         self.assertEqual(unmatched["match_status"], "unmatched")
         self.assertEqual(unmatched["match_kind"], "evidence")
         self.assertEqual(unmatched["match_confidence"], "none")
+
+    def test_library_workspace_selection_logic_lives_in_model_not_renderer(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        render_source = (root / "render" / "catalog_workspace_report.py").read_text(encoding="utf-8")
+        model_source = (root / "render" / "library_workspace_model.py").read_text(encoding="utf-8")
+
+        self.assertIn("def build_library_workspace_model", model_source)
+        self.assertIn("build_library_workspace_model", render_source)
+        self.assertNotIn("def _current_effective_version", render_source)
+        self.assertNotIn("def _latest_candidate_version", render_source)
+        self.assertNotIn("def _latest_effective_evidence", render_source)
 
 
 if __name__ == "__main__":

@@ -108,8 +108,8 @@ def risk_panel(manifest: Mapping[str, Any]) -> str:
         return "<div class='notice pass'><b>未发现文件映射级风险。</b><span>当前报告做文件映射比较；内容级 deep diff 需要进入下方命令区。</span></div>"
     readable_messages = {
         "REMOVED_FILES": "对比目标缺少基准目标中存在的文件。",
-        "REPLACED_FILES": "存在来源、hash 或 size 变化的文件。",
-        "HASH_INCOMPLETE": "部分 replace 文件缺少 hash，当前以 source/size 兜底判断。",
+        "REPLACED_FILES": "存在来源、哈希或大小变化的文件。",
+        "HASH_INCOMPLETE": "部分替换文件缺少哈希，当前以来源/大小兜底判断。",
     }
     readable_labels = {
         "REMOVED_FILES": "文件删除",
@@ -218,14 +218,14 @@ def render_compare_report(manifest: Mapping[str, Any]) -> str:
             metric("变化文件", changed_count, "新增 / 删除 / 替换", "warn" if changed_count else "pass"),
             metric("新增", actions.get("add", 0), "仅在对比目标中出现", "pass"),
             metric("删除", actions.get("remove", 0), "对比目标缺失", "fail" if actions.get("remove") else "neutral"),
-            metric("替换", actions.get("replace", 0), "来源、hash 或 size 变化", "warn" if actions.get("replace") else "neutral"),
+            metric("替换", actions.get("replace", 0), "来源、哈希或大小变化", "warn" if actions.get("replace") else "neutral"),
             metric("保持", actions.get("keep", 0), "文件映射未变化", "neutral"),
         ]
     )
     json_payload = html.escape(json.dumps(manifest, ensure_ascii=False))
     nav = (
         "<nav class='page-nav'>"
-        "<a href='#overview'>总览</a><a href='#risk'>风险</a><a href='#changed'>变化文件</a><a href='#commands'>File Diff 建议</a>"
+        "<a href='#overview'>总览</a><a href='#risk'>风险</a><a href='#changed'>变化文件</a><a href='#commands'>文件深度对比建议</a>"
         "</nav>"
     )
     return f"""<!doctype html>
@@ -233,7 +233,7 @@ def render_compare_report(manifest: Mapping[str, Any]) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Compare Report / {esc(manifest.get('compare_id'))}</title>
+<title>对比审查报告 / {esc(manifest.get('compare_id'))}</title>
 <style>
 :root{{--bg:#f6f8fb;--panel:#fff;--text:#172033;--muted:#667085;--line:#d9e0ea;--line-soft:#eef2f6;--blue:#1d4ed8;--green:#087443;--amber:#a15c07;--red:#b42318;--mono:"Cascadia Mono",Consolas,monospace}}
 *{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI",Arial,sans-serif;font-size:14px;line-height:1.5;letter-spacing:0;overflow-x:hidden}}
@@ -257,14 +257,14 @@ code{{font-family:var(--mono);font-size:12px}}.relpath{{display:block;min-width:
 <body>
 <div class="app">
   <aside class="side">
-    <div class="brand"><div class="logo">LG</div><div><b>lib_guard</b><span>Compare Review</span></div></div>
+    <div class="brand"><div class="logo">LG</div><div><b>lib_guard</b><span>对比审查</span></div></div>
     {nav}
     <div class="side-note">文件映射级比较。大规模变化先确认基准/对比目标。</div>
   </aside>
   <main class="main">
     <header class="title-band" id="overview">
       <div>
-        <div class="kicker">Compare Report</div>
+        <div class="kicker">对比审查报告</div>
         <h1>{esc(manifest.get('compare_id') or '-')}</h1>
         <p>{esc(manifest.get('mode') or 'manual_compare')} / {esc(manifest.get('library_id') or '-')}</p>
         <div class="meta">

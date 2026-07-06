@@ -47,16 +47,16 @@ def status_label(value: Any) -> str:
     text = str(value or "")
     labels = {
         "PASS": "通过", "READY": "可用", "OK": "正常", "DONE": "完成", "SCANNED": "已扫描",
-        "SCAN_READY": "Scan 可用", "READY_FOR_DIFF": "可进入 Diff", "SCAN_NEEDS_REVIEW": "Scan 需确认",
-        "SCAN_BLOCKED": "Scan 阻塞", "NOT_SCANNED": "未扫描", "COMPARE_READY": "可对比",
+        "SCAN_READY": "扫描可用", "READY_FOR_DIFF": "可进入对比", "SCAN_NEEDS_REVIEW": "扫描需确认",
+        "SCAN_BLOCKED": "扫描阻塞", "NOT_SCANNED": "未扫描", "COMPARE_READY": "可对比",
         "COMPARE_PENDING": "待对比", "SAME": "无变化", "DIFF": "有差异", "CHANGED": "有变化",
         "NEEDS_FILE_DIFF": "建议查看重点文件", "FILE_DIFF_RECOMMENDED": "建议查看重点文件",
         "FILE_DIFF_PENDING": "重点文件待确认", "FILE_DIFF_DONE": "重点文件已确认",
-        "PAIRWISE_PENDING": "Pairwise 待完成", "PAIRWISE_PARTIAL": "Pairwise 部分完成",
-        "PAIRWISE_EMPTY": "无重点建议", "METADATA_ONLY": "仅 metadata", "REVIEW": "需审阅",
+        "PAIRWISE_PENDING": "文件配对待完成", "PAIRWISE_PARTIAL": "文件配对部分完成",
+        "PAIRWISE_EMPTY": "无重点建议", "METADATA_ONLY": "仅元数据", "REVIEW": "需审阅",
         "NEEDS_REVIEW": "需审阅", "REVIEW_REQUIRED": "需审阅", "USAGE_REVIEW_REQUIRED": "需审查后使用", "MANUAL_REVIEW": "需人工确认",
-        "NEEDS_BASE_CONFIRM": "需确认 base", "LARGE_CHANGE": "变化过大", "DIFF_EXPLOSION": "变化异常", "PATH_RESTRUCTURE": "疑似目录重组", "SCAN_EVIDENCE_INCOMPLETE": "Scan 证据不完整", "FILE_DIFF_RECOMMENDED": "建议查看重点文件", "RELEASE_CHECK_REQUIRED": "发布前检查",
-        "RELEASED": "已发布", "RELEASE_BLOCKED": "发布阻塞", "APPLIED": "已应用", "DRY_RUN": "预演",
+        "NEEDS_BASE_CONFIRM": "需确认基准版", "LARGE_CHANGE": "变化过大", "DIFF_EXPLOSION": "变化异常", "PATH_RESTRUCTURE": "疑似目录重组", "SCAN_EVIDENCE_INCOMPLETE": "扫描证据不完整", "FILE_DIFF_RECOMMENDED": "建议查看重点文件", "RELEASE_CHECK_REQUIRED": "发布前检查",
+        "RELEASED": "已发布", "RELEASE_BLOCKED": "发布阻塞", "RELEASE_NOT_APPLICABLE": "未接入正式发布", "APPLIED": "已应用", "DRY_RUN": "预演",
         "PASS_WITH_WARNING": "通过有注意项", "WARNING": "注意", "WARN": "注意", "PENDING": "待处理",
         "MISSING": "缺失", "EXTRA": "多余", "BROKEN": "断链", "MISMATCH": "不匹配",
         "TARGET_MATCH": "目标一致", "TARGET_MISMATCH": "目标不一致", "FAILED": "失败", "ERROR": "错误",
@@ -322,7 +322,7 @@ def _recommendation_summary(item: Mapping[str, Any]) -> str:
 
 def timeline(comparisons: list[Mapping[str, Any]]) -> str:
     if not comparisons:
-        return "<div class='empty'>暂无 comparison。</div>"
+        return "<div class='empty'>暂无对比记录。</div>"
     nodes = []
     for item in comparisons:
         status = item.get("comparison_quality") or item.get("status") or item.get("review_level") or "UNKNOWN"
@@ -330,7 +330,7 @@ def timeline(comparisons: list[Mapping[str, Any]]) -> str:
         new_v = item.get("new_version") or "-"
         mode = item.get("mode") or "selected"
         href = item.get("diff_html") or item.get("href") or ""
-        open_link = button("打开 Selected Diff", str(href), "primary", disabled=not bool(href))
+        open_link = button("打开选定对比", str(href), "primary", disabled=not bool(href))
         nodes.append(
             f"<div class='timeline-card {status_class(status)}' data-mode='{esc(mode)}' data-status='{esc(status)}'>"
             f"<div class='timeline-mode'>{esc(mode)}</div>"
@@ -345,7 +345,7 @@ def timeline(comparisons: list[Mapping[str, Any]]) -> str:
 
 def comparison_filter_bar() -> str:
     modes = [
-        ("all", "全部"), ("adjacent", "Adjacent"), ("base", "Base"), ("cumulative", "Cumulative"), ("release", "Release"), ("custom", "Custom"),
+        ("all", "全部"), ("adjacent", "相邻版本"), ("base", "基准版"), ("cumulative", "累计"), ("release", "发布"), ("custom", "自定义"),
     ]
     chips = "".join(f"<button type='button' class='filter-chip {'active' if k == 'all' else ''}' onclick=\"filterComparisons('{k}', this)\">{v}</button>" for k, v in modes)
     return f"<div class='comparison-filter'><div class='filter-chips'>{chips}</div><button type='button' class='btn secondary' onclick='scrollTimeline(-1)'>←</button><button type='button' class='btn secondary' onclick='scrollTimeline(1)'>→</button></div>"

@@ -18,7 +18,7 @@ def derive_next_action(version: Mapping[str, Any]) -> dict[str, Any]:
         return {
             "next_action": "RUN_SCAN",
             "next_command": f"$PROJ/scripts/lg.csh scan {library} {version_id}",
-            "next_reason": "该版本还没有 scan evidence。",
+            "next_reason": "该版本还没有扫描证据。",
         }
     if version.get("scan_status") in {"SCAN_BLOCK", "SCAN_FAILED"}:
         return {
@@ -31,26 +31,26 @@ def derive_next_action(version: Mapping[str, Any]) -> dict[str, Any]:
             return {
                 "next_action": "CONFIRM_VERSION_RELATION",
                 "next_command": "",
-                "next_reason": "缺少 base/parent，无法生成可靠 diff 命令。",
+                "next_reason": "缺少基准版/父版本，无法生成可靠对比命令。",
             }
         return {
             "next_action": "RUN_DIFF",
             "next_command": f"$PROJ/scripts/lg.csh cmp {library} {version_id} --base {base}",
-            "next_reason": "已有 scan evidence，下一步需要生成版本结构 diff。",
+            "next_reason": "已有扫描证据，下一步需要生成版本结构对比。",
         }
     if version.get("pairwise_status") in {"PAIRWISE_PENDING", "PAIRWISE_PARTIAL"}:
         task = next((item for item in version.get("pairwise_tasks", []) or [] if item.get("status") != "DONE"), None)
         return {
             "next_action": "RUN_PAIRWISE",
             "next_command": str((task or {}).get("command") or ""),
-            "next_reason": "diff 推荐做 focused File Diff；这是 attention，不默认阻塞 current release。",
+            "next_reason": "对比建议做重点文件深度确认；这是关注项，不默认阻塞当前正式发布。",
         }
     if version.get("release_status") == "RELEASE_READY":
         return {
             "next_action": "RELEASE_REVIEW",
             "next_command": "",
-            "next_reason": "该版本已有 release evidence，需要进入 Release Review 单独确认。",
+            "next_reason": "该版本已有发布证据，需要进入发布审查单独确认。",
         }
     if version.get("release_status") == "RELEASE_APPLIED":
         return {"next_action": "DONE", "next_command": "", "next_reason": "该版本已有发布结果。"}
-    return {"next_action": "REVIEW_READY", "next_command": "", "next_reason": "Scan/Diff evidence 已就绪，可进入版本对比审阅。"}
+    return {"next_action": "REVIEW_READY", "next_command": "", "next_reason": "扫描/对比证据已就绪，可进入版本对比审阅。"}

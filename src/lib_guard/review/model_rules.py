@@ -59,7 +59,7 @@ def resolve_review_base(version: Mapping[str, Any], library: Mapping[str, Any] |
         value = version.get(key) or diff.get(key) or lineage.get(key)
         if value and not isinstance(value, bool):
             return {"base_ref": "current_effective", "base_version": str(value), "base_source": key}
-    previous = version.get("previous_effective_version") or version.get("parent_version")
+    previous = version.get("previous_effective_version")
     if not previous and str(lineage.get("source") or "").lower() == "manual":
         previous = lineage.get("parent_candidate")
     if previous:
@@ -67,6 +67,8 @@ def resolve_review_base(version: Mapping[str, Any], library: Mapping[str, Any] |
     diff_base = diff.get("base_version")
     diff_base_source = str(diff.get("base_source") or diff.get("base_version_source") or "").lower()
     diff_kind = str(diff.get("kind") or diff.get("diff_kind") or "").lower()
+    if diff_base and diff_base_source in {"full_baseline", "previous_full"}:
+        return {"base_ref": "base_full", "base_version": str(diff_base), "base_source": f"diff.base_version:{diff_base_source}"}
     if diff_base and (diff_base_source in {"explicit", "current_effective", "previous_effective"} or diff_kind == "current_library_diff"):
         if diff_base_source == "current_effective" or diff_kind == "current_library_diff":
             base_ref = "current_effective"
@@ -91,7 +93,7 @@ def classify_review_lane(file_type: str) -> dict[str, str]:
     if key in SUMMARY_ONLY_TYPES:
         return {"lane": "Summary-only", "hint": "摘要级审查；默认不做文件级深度比较"}
     if key in BINARY_METADATA_ONLY_TYPES:
-        return {"lane": "Metadata-only", "hint": "metadata-only 审查；默认只看元数据/哈希/规模"}
+        return {"lane": "Metadata-only", "hint": "元数据级审查；默认只看元数据/哈希/规模"}
     if key in P0_REVIEW_TYPES:
         return {"lane": "P0", "hint": "重点确认内容变化或等价性"}
     if key in P1_REVIEW_TYPES:

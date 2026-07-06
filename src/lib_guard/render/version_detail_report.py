@@ -26,7 +26,7 @@ from lib_guard.render import catalog_report as catalog
 from lib_guard.render import product_theme as ui
 from lib_guard.render.version_detail_context import build_version_detail_review_context
 from lib_guard.render.version_review_model import build_version_review_model
-from lib_guard.render.version_review_render import render_ip_user_view, render_version_review_groups
+from lib_guard.render.version_review_render import render_ip_user_view
 from lib_guard.view_types import canonical_file_type, package_view_type
 
 
@@ -34,8 +34,8 @@ STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
 FALLBACK_BASE_REFS = {"adjacent_fallback", "recorded_base", "recorded_base_fallback", "unknown"}
 UPDATE_STATUS_COPY = {
     "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg cat <LIB> --update-detail。",
-    "NEEDS_BASE_CONFIRM": "无法确定 base；请先确认 current_effective 或 previous_effective。",
-    "NO_DIFF_SUMMARY": "找到 diff 输出目录，但缺少 diff_summary.json；请检查 compare artifact。",
+    "NEEDS_BASE_CONFIRM": "无法确定基准版；请先确认当前有效版或上一有效版。",
+    "NO_DIFF_SUMMARY": "找到对比输出目录，但缺少 diff_summary.json；请检查对比产物。",
     "CHANGED": "已完成比较，有变化。",
     "SAME": "已完成比较，无变化。",
 }
@@ -156,6 +156,39 @@ def _cn_change_kind(value: Any) -> str:
     return text or "-"
 
 
+def _cn_review_lane(value: Any) -> str:
+    text = str(value or "").strip()
+    return {
+        "Review": "审查",
+        "Summary-only": "摘要级证据（Summary-only）",
+        "Metadata-only": "元数据级证据（Metadata-only）",
+        "P0": "P0",
+        "P1": "P1",
+    }.get(text, text or "审查")
+
+
+def _cn_match_status(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return {
+        "matched_move": "已匹配迁移",
+        "candidate_match": "候选匹配",
+        "not_applicable": "不适用",
+        "same_path": "同路径",
+        "unmatched": "未匹配",
+        "true_added": "真实新增",
+        "true_removed": "真实删除",
+    }.get(text, text or "-")
+
+
+def _cn_evidence_mode(value: Any) -> str:
+    text = str(value or "").strip()
+    return {
+        "summary-only": "摘要级证据（Summary-only）",
+        "metadata-only": "元数据级证据（Metadata-only）",
+        "structured + raw": "结构化 + 原始文本",
+    }.get(text, text or "-")
+
+
 def _iter_file_changes(file_diff: Mapping[str, Any], *, raw_path: Any = None) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
     for kind in ["added", "removed", "changed"]:
@@ -176,7 +209,7 @@ def _iter_file_changes(file_diff: Mapping[str, Any], *, raw_path: Any = None) ->
             lane_rule = classify_review_lane(file_type)
             lane, hint = lane_rule["lane"], lane_rule["hint"]
             if kind in {"added", "removed"} and lane in {"P0", "P1"}:
-                hint = "先按 basename/hash/parser signature 匹配 old/new；匹配成功再进入文件证据确认，否则标记为真实新增/删除"
+                hint = "先按文件名 / 哈希 / 解析签名匹配旧版/新版；匹配成功再确认文件证据，否则标记为真实新增/删除"
             changes.append(
                 {
                     "change": kind,
@@ -207,8 +240,8 @@ def _release_note_summary(item: Mapping[str, Any]) -> str:
         value = item.get(key)
         if value:
             return str(value)
-    role = item.get("doc_type") or item.get("role") or "release evidence"
-    return f"scan evidence: {role}"
+    role = item.get("doc_type") or item.get("role") or "发布证据"
+    return f"扫描证据：{role}"
 
 
 def _add_release_note(notes: list[dict[str, str]], seen: set[str], item: Mapping[str, Any], *, limit: int) -> None:
@@ -228,7 +261,7 @@ def _release_notes_from_existing_evidence(version: Mapping[str, Any], *, limit: 
     explicit_notes = version.get("release_notes") or []
     if isinstance(explicit_notes, list):
         for raw in explicit_notes:
-            item = raw if isinstance(raw, Mapping) else {"path": str(raw), "summary": "catalog release evidence"}
+            item = raw if isinstance(raw, Mapping) else {"path": str(raw), "summary": "库目录发布证据"}
             _add_release_note(notes, seen, item, limit=limit)
 
     scan_dir = _version_scan_dir(version)
@@ -264,10 +297,10 @@ def _base_trust_status(base_ref: str) -> str:
 
 def _base_trust_note(base_ref: str) -> str:
     if base_ref == "NEEDS_BASE_CONFIRM":
-        return "无法确定 base；请先确认 current_effective 或 previous_effective。"
+        return "无法确定基准版；请先确认当前有效版或上一有效版。"
     if base_ref in STANDARD_BASE_REFS:
-        return "Base 已确认；该结果可作为标准更新详情。"
-    return "该结果不是标准 current-effective 更新详情，仅供手动 compare/debug；release 前请确认 base。"
+        return "基准版已确认；该结果可作为标准更新详情。"
+    return "该结果不是标准当前有效版更新详情，仅供手动对比/调试；正式发布前请确认基准版。"
 
 
 def _update_status_message(status: Any) -> str:
@@ -538,35 +571,42 @@ def _group_file_changes_by_review_mode(file_changes: list[dict[str, Any]]) -> tu
 def _cn_base_ref(value: Any) -> str:
     text = str(value or "")
     return {
-        "current_effective": "当前有效版本",
-        "previous_effective": "上一有效版本",
-        "latest_effective_ref": "最新有效版本",
-        "latest_effective": "最新有效版本",
-        "explicit": "手动指定 Base",
+        "current_effective": "当前有效版",
+        "previous_effective": "上一有效版",
+        "latest_effective_ref": "最新有效版",
+        "latest_effective": "最新有效版",
+        "base_full": "完整包基线",
+        "explicit": "手动指定基准版",
         "adjacent": "相邻版本",
-        "NEEDS_BASE_CONFIRM": "待确认 Base",
-    }.get(text, text or "待确认 Base")
+        "NEEDS_BASE_CONFIRM": "待确认基准版",
+    }.get(text, text or "待确认基准版")
 
 
 def _cn_base_source(value: Any) -> str:
     text = str(value or "")
     return {
-        "current_effective_ref": "当前有效版本引用",
-        "previous_effective_version": "上一有效版本",
-        "latest_effective_ref": "最新有效版本引用",
+        "current_effective_ref": "当前有效版引用",
+        "previous_effective_version": "上一有效版",
+        "base_full_version": "完整包基线",
+        "catalog_recorded_base": "目录记录基线",
+        "full_baseline": "完整包基线",
+        "previous_full": "上一完整包",
+        "latest_effective_ref": "最新有效版引用",
         "explicit": "手动指定",
         "manual": "手动指定",
-        "diff.base_version:explicit": "Diff 记录：手动指定",
-        "diff.base_version:current_effective": "Diff 记录：当前有效版本",
-        "diff.base_version:previous_effective": "Diff 记录：上一有效版本",
-        "diff_summary": "Diff 记录",
+        "diff.base_version:explicit": "对比记录：手动指定",
+        "diff.base_version:current_effective": "对比记录：当前有效版",
+        "diff.base_version:previous_effective": "对比记录：上一有效版",
+        "diff.base_version:full_baseline": "对比记录：完整包基线",
+        "diff.base_version:previous_full": "对比记录：上一完整包",
+        "diff_summary": "对比记录",
     }.get(text, text or "-")
 
 
 def _version_update_headline(base_ref: str, added_files: int, removed_files: int, changed_files: int, recommended_count: int, reviewed_count: int) -> str:
     return (
         f"当前版本相对 {_cn_base_ref(base_ref)}：修改文件 {changed_files} 个，新增 {added_files} 个，删除 {removed_files} 个；"
-        f"其中 {recommended_count} 个需要优先下钻，{reviewed_count} 个按 Summary/Metadata-only 处理。"
+        f"其中 {recommended_count} 个需要优先下钻，{reviewed_count} 个按摘要级/元数据级证据处理。"
     )
 
 
@@ -584,8 +624,8 @@ def _reviewed_count_for_headline(summary_only: list[dict[str, Any]], metadata_on
 
 def _version_update_confidence_note(model: Mapping[str, Any]) -> str:
     return (
-        f"Base 来源：{_cn_base_ref(model.get('base_ref'))} / {_cn_base_source(model.get('base_source'))}；"
-        f"Base 版本：{model.get('base_version') or '-'}；"
+        f"基准来源：{_cn_base_ref(model.get('base_ref'))} / {_cn_base_source(model.get('base_source'))}；"
+        f"基准版本：{model.get('base_version') or '-'}；"
         f"对比口径：{_cn_semantics(model.get('comparison_semantics'))}；"
         f"删除口径：{_cn_delete_semantics(model.get('delete_semantics'))}"
     )
@@ -596,18 +636,18 @@ def _primary_next_action(status: str, recommended_count: int, command_count: int
     if str(status or "").upper() == "NEEDS_BASE_CONFIRM":
         return {
             "kind": "base_confirm_required",
-            "label": "Confirm base before review",
+            "label": "审查前确认基准版",
             "command_count": 0,
         }
     if recommended_count > 0:
         return {
             "kind": "file_diff_recommended",
-            "label": "Review focused file evidence",
+            "label": "审查重点文件证据",
             "command_count": 0,
         }
     return {
         "kind": "review_evidence",
-        "label": "Review evidence",
+        "label": "审查证据",
         "command_count": 0,
     }
 
@@ -616,7 +656,7 @@ def _normalize_recommended_action(action: Any) -> str:
     text = str(action or "").strip()
     lowered = text.lower()
     if "手动两两" in text or "两两对比" in text or "pairwise" in lowered:
-        return "确认重点文件证据，并把确认结果作为 release evidence 归档。"
+        return "确认重点文件证据，并把确认结果作为发布证据归档。"
     return text
 
 
@@ -846,8 +886,8 @@ def _file_change_rows_for(items: Any) -> list[str]:
             f"<td>{ui.badge(str(item.get('change') or '').upper(), _cn_change_kind(item.get('change')))}</td>"
             f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
             f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
-            f"<td>{ui.badge(item.get('review_lane') or 'Review', item.get('review_lane') or 'Review')}</td>"
-            f"<td><code>{ui.esc(item.get('match_status') or '-')}</code></td>"
+            f"<td>{ui.badge(item.get('review_lane') or 'Review', _cn_review_lane(item.get('review_lane') or 'Review'))}</td>"
+            f"<td><code>{ui.esc(_cn_match_status(item.get('match_status')))}</code></td>"
             f"<td><code>{ui.esc(item.get('base_candidate') or '-')}</code></td>"
             f"<td><code>{ui.esc(item.get('target_candidate') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('hint') or '-')}</td>"
@@ -902,7 +942,7 @@ def _metadata_only_summary_rows(model: Mapping[str, Any]) -> list[str]:
     return _lane_summary_rows(
         list(model.get("metadata_only_reviewed", []) or []),
         evidence_keys=("metadata_evidence", "hint", "reason"),
-        default_evidence="metadata-only 审查；默认只看元数据/哈希/规模",
+        default_evidence="元数据级审查；默认只看元数据/哈希/规模",
     )
 
 
@@ -910,10 +950,10 @@ def _file_change_artifact_rows(model: Mapping[str, Any]) -> list[str]:
     file_changes = [item for item in model.get("file_changes", []) or [] if isinstance(item, Mapping)]
     return [
         f"<tr><td>完整变化文件</td><td>{ui.esc(len(file_changes))}</td><td>见 file_diff.json；详情页只保留重点变化表。</td></tr>",
-        f"<tr><td>新增</td><td>{ui.esc(model.get('added_files') or 0)}</td><td>按 View 变化矩阵聚合展示。</td></tr>",
-        f"<tr><td>删除</td><td>{ui.esc(model.get('removed_files') or 0)}</td><td>按 View 变化矩阵聚合展示。</td></tr>",
-        f"<tr><td>修改</td><td>{ui.esc(model.get('changed_files') or 0)}</td><td>按 View 变化矩阵聚合展示。</td></tr>",
-        f"<tr><td>P0/P1 重点</td><td>{ui.esc(len(model.get('recommended_file_diff', []) or []))}</td><td>主页面的变化文件明细只展示 P0/P1/Review。</td></tr>",
+        f"<tr><td>新增</td><td>{ui.esc(model.get('added_files') or 0)}</td><td>按视图变化矩阵聚合展示。</td></tr>",
+        f"<tr><td>删除</td><td>{ui.esc(model.get('removed_files') or 0)}</td><td>按视图变化矩阵聚合展示。</td></tr>",
+        f"<tr><td>修改</td><td>{ui.esc(model.get('changed_files') or 0)}</td><td>按视图变化矩阵聚合展示。</td></tr>",
+        f"<tr><td>P0/P1 重点</td><td>{ui.esc(len(model.get('recommended_file_diff', []) or []))}</td><td>主页面的变化文件明细只展示 P0/P1/审查项。</td></tr>",
     ]
 
 
@@ -952,6 +992,49 @@ def _release_note_rows(model: Mapping[str, Any]) -> list[str]:
 
 def _recommended_action_rows(model: Mapping[str, Any]) -> list[str]:
     return [f"<tr><td>{ui.esc(action)}</td></tr>" for action in model.get("recommended_actions", []) or []]
+
+
+def _review_brief_callouts(model: Mapping[str, Any]) -> str:
+    items: list[str] = []
+    base_ref = str(model.get("base_ref") or "")
+    if base_ref == "adjacent_fallback":
+        items.append("该结果不是标准当前有效版更新详情，仅供手动对比/调试；正式发布前请确认基准版。")
+    status_message = str(model.get("status_message") or _update_status_message(model.get("status")) or "").strip()
+    if status_message:
+        items.append(status_message)
+    path = _as_mapping(model.get("path_restructure"))
+    if path.get("suspected"):
+        old_root = path.get("old_root") or "-"
+        new_root = path.get("new_root") or "-"
+        matched = _as_int(path.get("package_root_migration_matched_files"))
+        items.append(
+            f"包装目录变化：旧包根={old_root}，新包根={new_root}，逻辑路径匹配 {matched} 个；该信息用于解释新增/删除统计，不默认代表 IP 使用风险。"
+        )
+    scan_evidence = _as_mapping(model.get("scan_evidence"))
+    counts = _as_mapping(scan_evidence.get("counts"))
+    count_only_total = sum(_as_int(counts.get(item)) for item in catalog.VERSION_COUNT_ONLY_TYPES)
+    if (
+        str(model.get("comparison_semantics") or "") == "incremental"
+        and not _as_int(scan_evidence.get("parser_task_count"))
+        and not count_only_total
+        and not _as_int(model.get("changed_files"))
+    ):
+        items.append("当前版本是增量包：本页原始扫描只统计本次交付内容；继承文件请查看有效版或基准版视图。")
+        items.append("当前原始扫描没有发现大文件计数项。")
+        items.append("当前扫描没有生成可展示的解析器结果。")
+    release_notes = [
+        common.relative_display_path(item.get("path") or "-")
+        for item in model.get("release_notes", []) or []
+        if isinstance(item, Mapping)
+    ][:3]
+    if release_notes:
+        items.append("发布说明：" + "，".join(release_notes))
+    else:
+        items.append("发布说明：缺失")
+    if not items:
+        return ""
+    rows = "".join(f"<div class='context-row'><b>审查提示</b><em>{ui.esc(item)}</em></div>" for item in items)
+    return "<div class='context-list review-brief-callouts'>" + rows + "</div>"
 
 
 def _mapping_rows(value: Mapping[str, Any], *, prefix: str = "") -> list[str]:
@@ -993,13 +1076,13 @@ def _compact_json_summary(value: Mapping[str, Any]) -> str:
 def _evidence_artifact_links(model: Mapping[str, Any]) -> str:
     links = _as_mapping(model.get("trace_links"))
     items = [
-        ("diff_summary.json", common.href(links.get("diff_summary") or ""), "Diff 总指标"),
+        ("diff_summary.json", common.href(links.get("diff_summary") or ""), "对比总指标"),
         ("file_diff.json", common.href(links.get("file_diff") or ""), "完整变化文件"),
-        ("view_diff.json", common.href(links.get("view_diff") or ""), "View 级变化证据"),
-        ("type_diff.json", common.href(links.get("type_diff") or ""), "原始 file_type 变化证据"),
-        ("release_readiness_diff.json", common.href(links.get("release_readiness_diff") or ""), "Release readiness 变化"),
-        ("release_evidence_diff.json", common.href(links.get("release_evidence_diff") or ""), "Release evidence 变化"),
-        ("diff_issues.json", common.href(links.get("diff_issues") or ""), "Diff issue 明细"),
+        ("view_diff.json", common.href(links.get("view_diff") or ""), "视图级变化证据"),
+        ("type_diff.json", common.href(links.get("type_diff") or ""), "原始文件类型变化证据"),
+        ("release_readiness_diff.json", common.href(links.get("release_readiness_diff") or ""), "发布就绪度变化"),
+        ("release_evidence_diff.json", common.href(links.get("release_evidence_diff") or ""), "发布证据变化"),
+        ("diff_issues.json", common.href(links.get("diff_issues") or ""), "对比问题明细"),
     ]
     return ui.trace_link_list(items)
 
@@ -1075,7 +1158,7 @@ def _raw_scan_scope_note(model: Mapping[str, Any], *, parser_task_count: int, co
     return (
         "<div class='raw-scan-note'>"
         "<b>当前版本是增量包</b>"
-        "本页 Raw Scan 只统计本次交付内容；继承文件请查看 effective 或 base 视图。"
+        "本页原始扫描只统计本次交付内容；继承文件请查看有效版或基准版视图。"
         "</div>"
     )
 
@@ -1128,7 +1211,7 @@ def _evidence_judgment(model: Mapping[str, Any]) -> tuple[str, str, str]:
     else:
         label = "内容级证据"
         status = "PASS"
-    detail = f"summary-only {summary_only} / metadata-only {metadata_only} / RN {release_notes}"
+    detail = f"摘要级 {summary_only} / 元数据级 {metadata_only} / 发布说明 {release_notes}"
     return label, detail, status
 
 
@@ -1199,6 +1282,29 @@ def _review_context_freshness_label(ctx: Mapping[str, Any]) -> str:
     return str(freshness.get("status") or "STALE_OR_MISSING")
 
 
+def _overview_window_context(ctx: Mapping[str, Any], model: Mapping[str, Any]) -> str:
+    if not _review_context_is_active(ctx):
+        return ""
+    rows = [
+        ("窗口角色", _review_context_role_label(ctx.get("role_in_window"))),
+        ("对比", _review_context_compare_label(ctx, model)),
+        ("候选有效版", ctx.get("candidate_effective_id") or "-"),
+        ("证据新鲜度", _review_context_freshness_label(ctx)),
+    ]
+    row_html = "".join(
+        "<div class='overview-context-item'>"
+        f"<b>{ui.esc(label)}</b><em title='{ui.esc(value)}'>{ui.esc(value)}</em>"
+        "</div>"
+        for label, value in rows
+    )
+    return (
+        "<div class='overview-context'>"
+        "<div><h3>当前审查窗口 / 有效版证据</h3>"
+        f"<div class='overview-context-grid'>{row_html}</div></div>"
+        "</div>"
+    )
+
+
 def _review_context_panel(model: Mapping[str, Any]) -> str:
     ctx = _review_context(model)
     if not ctx:
@@ -1220,36 +1326,36 @@ def _review_context_panel(model: Mapping[str, Any]) -> str:
             ("目标角色", _review_context_role_label(ctx.get("role_in_window"))),
             ("窗口成员", ", ".join(item_labels) or "-"),
             ("上一有效对象", ctx.get("old_label") or "-"),
-            ("候选 Effective", ctx.get("candidate_effective_id") or "-"),
+            ("候选有效版", ctx.get("candidate_effective_id") or "-"),
             ("候选完整基线", ctx.get("candidate_effective_base_full") or "-"),
             ("候选叠加版本", ", ".join(str(item) for item in overlays) or "-"),
             ("对比范围", compare_label),
             ("证据状态", _review_context_freshness_label(ctx)),
             ("窗口文件", ctx.get("window_file") or "-"),
-            ("Effective Manifest", ctx.get("candidate_effective_manifest") or "-"),
-            ("Compare Manifest", ctx.get("compare_manifest") or "-"),
-            ("Compare HTML", ctx.get("compare_html") or "-"),
+            ("有效版清单", ctx.get("candidate_effective_manifest") or "-"),
+            ("对比清单", ctx.get("compare_manifest") or "-"),
+            ("对比页面", ctx.get("compare_html") or "-"),
         ]
     )
     checks = ui.metric_grid(
         [
             ("窗口", "存在" if freshness.get("window_exists") else "缺失", "pending_window.json", "PASS" if freshness.get("window_exists") else "WARNING"),
             (
-                "Effective",
+                "有效版",
                 "存在" if freshness.get("candidate_manifest_exists") else "缺失",
-                "candidate manifest",
+                "候选有效版清单",
                 "PASS" if freshness.get("candidate_manifest_exists") else "WARNING",
             ),
             (
-                "Compare",
+                "对比",
                 "存在" if freshness.get("compare_manifest_exists") else "缺失",
-                "compare manifest/html",
+                "对比清单/页面",
                 "PASS" if freshness.get("compare_manifest_exists") and freshness.get("compare_html_exists") else "WARNING",
             ),
             (
-                "Scan",
+                "扫描",
                 "存在" if freshness.get("scan_evidence_exists") else "缺失",
-                "目标版本 scan evidence",
+                "目标版本扫描证据",
                 "PASS" if freshness.get("scan_evidence_exists") else "WARNING",
             ),
         ]
@@ -1259,8 +1365,8 @@ def _review_context_panel(model: Mapping[str, Any]) -> str:
     if warnings:
         warning_html = "<div class='quality-note'><b>窗口提示</b><br>" + "<br>".join(ui.esc(item) for item in warnings) + "</div>"
     return ui.collapsible_panel(
-        "当前审查窗口 / Effective 证据",
-        "Version Detail 的投影上下文：窗口、候选 effective、compare 和 freshness 只用于解释当前页面是否陈旧。",
+        "当前审查窗口 / 有效版证据",
+        "版本详情的投影上下文：窗口、候选有效版、对比结果和证据新鲜度只用于解释当前页面是否陈旧。",
         checks + body + warning_html,
         open=True,
     )
@@ -1273,7 +1379,6 @@ def _version_overview_panel(
     model: Mapping[str, Any],
     *,
     scan_dir: Path | None,
-    required_view_status: Any,
 ) -> str:
     ip_model = _as_mapping(model.get("ip_user_view_model"))
     decision = str(ip_model.get("ip_use_decision") or _usage_decision(model, version))
@@ -1291,20 +1396,20 @@ def _version_overview_panel(
     if _review_context_is_active(ctx):
         object_value = f"{model.get('version_id') or '-'} / {_review_context_role_label(ctx.get('role_in_window'))}"
         compare_value = _review_context_compare_label(ctx, model)
-        compare_hint = f"window role={ctx.get('role_in_window') or '-'}"
+        compare_hint = f"窗口角色={_review_context_role_label(ctx.get('role_in_window'))}"
         evidence_value = _review_context_freshness_label(ctx)
-        evidence_hint = "窗口 / effective / compare / scan freshness"
+        evidence_hint = "窗口 / 有效版 / 对比 / 扫描证据新鲜度"
     else:
         object_value = f"{model.get('version_id') or '-'} / 独立版本"
         compare_value = f"{base_label}: {model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"
-        compare_hint = "未命中 active window 时回退普通 base 选择"
+        compare_hint = "未命中当前审查窗口时回退普通基准版选择"
         evidence_value = ip_model.get("evidence_summary") or _review_context_freshness_label(ctx)
         evidence_hint = "轻量证据不自动代表不完整"
     overview_items = [
         ("接入判断", review_text, ip_model.get("main_reason") or ui.status_label(decision)),
-        ("审查对象", object_value, "Version Detail 是唯一审查投影"),
+        ("审查对象", object_value, "版本详情是唯一审查投影"),
         ("对比上下文", compare_value, compare_hint),
-        ("View 变化", delta_text, top_view_delta),
+        ("视图变化", delta_text, top_view_delta),
         ("证据状态", evidence_value, evidence_hint),
     ]
     overview_cells = "".join(
@@ -1318,14 +1423,15 @@ def _version_overview_panel(
     actions = ui.action_strip(
         [
             ui.button("库工作台", common.href(out_path / "libraries" / safe_lib / "index.html"), "primary", target="_blank"),
-            ui.button("Scan 目录", common.href(scan_dir), "secondary", disabled=not bool(scan_dir), target="_blank"),
+            ui.button("扫描目录", common.href(scan_dir), "secondary", disabled=not bool(scan_dir), target="_blank"),
         ]
     )
     return (
         "<section class='version-overview'>"
         "<div class='overview-head'>"
-        f"<div class='overview-title'><h2>版本使用结论</h2><p>面向 IP 使用者：先判断能否接入，再看 View 变化矩阵；管理审计和证据入口默认折叠。</p></div>{ui.badge(decision, review_text)}</div>"
+        f"<div class='overview-title'><h2>版本使用结论</h2><p>面向 IP 使用者：先判断能否接入，再看视图变化矩阵；管理审计和证据入口默认折叠。</p></div>{ui.badge(decision, review_text)}</div>"
         f"<div class='overview-grid compact-overview-grid'>{overview_cells}</div>"
+        f"{_overview_window_context(ctx, model)}"
         f"<div class='overview-actions'>{actions}</div></section>"
     )
 
@@ -1515,19 +1621,19 @@ def _view_coverage_panel(
     coverage_judgment = _judgment_strip(
         [
             ("完整性判断", ui.status_label(status), f"release_level={readiness.get('release_level_candidate') or '-'}", status),
-            ("必需 View", "已配置" if required else "未配置", ", ".join(sorted(required)) or "未配置", "PASS" if required else "WARNING"),
-            ("未知文件", str(unknown_count), "需要补分类或人工确认" if unknown_count else "无 unknown", "WARNING" if unknown_count else "PASS"),
+            ("必需视图", "已配置" if required else "未配置", ", ".join(sorted(required)) or "未配置", "PASS" if required else "WARNING"),
+            ("未知文件", str(unknown_count), "需要补分类或人工确认" if unknown_count else "无未知文件", "WARNING" if unknown_count else "PASS"),
             ("人工审查", str(manual_count), "flow_config / tech_config", "WARNING" if manual_count else "PASS"),
         ]
     )
     return ui.collapsible_panel(
-        "必需 View 覆盖证据",
-        "Raw Scan 的 view 覆盖证据；主判断已汇总到顶部结论和 View 变化矩阵。",
+        "必需视图覆盖证据",
+        "原始扫描的视图覆盖证据；主判断已汇总到顶部结论和视图变化矩阵。",
         coverage_judgment
         + catalog._scroll_table(
-            ["View / Scope", "要求", "文件数", "状态", "Parser", "校验级别", "代表路径 / 说明"],
+            ["视图 / 范围", "要求", "文件数", "状态", "解析器", "校验级别", "代表路径 / 说明"],
             rows,
-            "当前 Scan 没有可展示的 view 覆盖信息",
+            "当前扫描没有可展示的视图覆盖信息",
             "view-coverage-scroll",
         )
         + _unknown_file_breakdown_html(inventory),
@@ -1538,26 +1644,26 @@ def _view_coverage_panel(
 def _count_only_panel(counts: Mapping[str, int], corner_summary: Mapping[str, Any], count_only_total: int) -> str:
     empty = ""
     if not count_only_total:
-        empty += "<div class='empty-guidance'><b>当前 Raw Scan 没有发现大文件计数项</b>如果这是增量包，base/effective 中的 .lib/.db/.gds/.spef 不会在本页重复统计。</div>"
+        empty += "<div class='empty-guidance'><b>当前原始扫描没有发现大文件计数项</b>如果这是增量包，基准版/有效版中的 .lib/.db/.gds/.spef 不会在本页重复统计。</div>"
     if not (corner_summary or {}).get("total_corner_files"):
-        empty += "<div class='empty-guidance'><b>当前 Raw Scan 没有识别到 PVT Corner 文件名</b>只有文件名中带 PVT 信息的库文件会进入 Corner 汇总。</div>"
+        empty += "<div class='empty-guidance'><b>当前原始扫描没有识别到 PVT Corner 文件名</b>只有文件名中带 PVT 信息的库文件会进入 Corner 汇总。</div>"
     corner_rows = catalog._version_corner_rows(corner_summary and {"corner_filename_summary": corner_summary} or {})
     corner_detail = (
         "<details class='detail-fold review-fold corner-detail'>"
         "<summary>PVT Corner 明细</summary>"
-        + catalog._scroll_table(["文件类型", "工艺", "电压", "温度", "路径"], corner_rows, "当前 Raw Scan 没有识别到 PVT Corner 文件名", "corner-detail-scroll")
+        + catalog._scroll_table(["文件类型", "工艺", "电压", "温度", "路径"], corner_rows, "当前原始扫描没有识别到 PVT Corner 文件名", "corner-detail-scroll")
         + "</details>"
     )
     return ui.collapsible_panel(
         "大文件与 Corner 线索",
-        "Liberty、SPEF、DB、GDS、Verilog 等大/多文件默认用数量、路径、hash 和 PVT 文件名线索辅助判断。",
-        "<div class='quality-note'><b>默认策略</b> GDS/Liberty/SPEF/DB/OAS/Verilog 等大文件默认只看数量、路径、hash 和文件名 corner 线索。</div>"
+        "Liberty、SPEF、DB、GDS、Verilog 等大/多文件默认用数量、路径、哈希和 PVT 文件名线索辅助判断。",
+        "<div class='quality-note'><b>默认策略</b> GDS/Liberty/SPEF/DB/OAS/Verilog 等大文件默认只看数量、路径、哈希和文件名 corner 线索。</div>"
         + empty
         + ui.faceted_table(
             "count-only-files",
             ["文件类型", "数量", "默认处理"],
             catalog._version_count_only_rows(counts),
-            "当前 Raw Scan 没有发现大文件计数项",
+            "当前原始扫描没有发现大文件计数项",
             "搜索大文件类型 / 处理方式",
             [(0, "文件类型"), (2, "默认处理")],
         )
@@ -1570,18 +1676,18 @@ def _parser_panel(parser_manifest: Mapping[str, Any], parser_results: Mapping[st
     rows = catalog._version_parser_aggregate_rows(parser_manifest, parser_results)
     empty = ""
     if not rows:
-        empty = "<div class='empty-guidance'><b>当前 Scan 没有生成可展示的 Parser 结果</b>常见原因：本次 raw 包只包含文档/脚本，或相关文件类型没有 parser 任务。</div>"
+        empty = "<div class='empty-guidance'><b>当前扫描没有生成可展示的解析器结果</b>常见原因：本次 raw 包只包含文档/脚本，或相关文件类型没有解析器任务。</div>"
     return ui.collapsible_panel(
         "解析证据",
-        "按文件类型聚合 Parser 结果；代表对象和来源文件作为追溯证据折叠展示。",
+        "按文件类型聚合解析器结果；代表对象和来源文件作为追溯证据折叠展示。",
         empty
         + ui.faceted_table(
             "parser-aggregate",
-            ["Parser", "状态", "文件数", "任务状态", "聚合摘要", "来源"],
+            ["解析器", "状态", "文件数", "任务状态", "聚合摘要", "来源"],
             rows,
-            "当前 Scan 没有生成可展示的 Parser 结果",
-            "搜索 Parser / 对象 / 来源文件",
-            [(0, "Parser"), (1, "状态"), (3, "任务状态")],
+            "当前扫描没有生成可展示的解析器结果",
+            "搜索解析器 / 对象 / 来源文件",
+            [(0, "解析器"), (1, "状态"), (3, "任务状态")],
         ),
     )
 
@@ -1599,11 +1705,11 @@ def _quality_panel(
     scan_id = (version.get("scan") or {}).get("scan_id") or version.get("scan_id") or "-"
     evidence_rows = [
         ("scan_id", scan_id),
-        ("Scan 目录", scan_dir or "-"),
-        ("绝对 Raw 路径", version.get("raw_path") or "-"),
+        ("扫描目录", scan_dir or "-"),
+        ("绝对原始路径", version.get("raw_path") or "-"),
         ("文件清单", f"{file_total} files"),
-        ("Parser 任务", f"{parser_task_count} tasks"),
-        ("Diff 状态", ui.status_label(diff_status)),
+        ("解析器任务", f"{parser_task_count} 个"),
+        ("对比状态", ui.status_label(diff_status)),
         ("发布说明", f"{rn_count} 个"),
         ("证据分层", f"{evidence_label} - {evidence_detail}"),
     ]
@@ -1612,15 +1718,15 @@ def _quality_panel(
     ) + "</div>"
     trace_links = ui.trace_link_list(
         [
-            ("scan_dir", common.href(scan_dir), "Raw Scan 输出目录"),
+            ("scan_dir", common.href(scan_dir), "原始扫描输出目录"),
             ("file_inventory.json", common.href(scan_dir / "file_inventory.json") if scan_dir else "", "文件清单来源"),
-            ("parser_manifest.json", common.href(scan_dir / "parser_manifest.json") if scan_dir else "", "Parser 任务清单"),
-            ("parser_results.json", common.href(scan_dir / "parser_results.json") if scan_dir else "", "Parser 结果数据"),
+            ("parser_manifest.json", common.href(scan_dir / "parser_manifest.json") if scan_dir else "", "解析器任务清单"),
+            ("parser_results.json", common.href(scan_dir / "parser_results.json") if scan_dir else "", "解析器结果数据"),
         ]
     )
     return ui.collapsible_panel(
         "证据入口 / 调试",
-        "追溯 scan、parser、diff 和原始路径；这些是证据入口，不作为 IP 使用者主屏结论。",
+        "追溯扫描、解析器、对比和原始路径；这些是证据入口，不作为 IP 使用者主屏结论。",
         trace_links + evidence_context,
         open=False,
     )
@@ -1633,8 +1739,8 @@ def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
         "<div class='quality-note'><b>减噪策略</b> 主页面只保留摘要和入口；完整 JSON 不再内嵌，避免浏览器搜索被 debug 数据污染。</div>"
         + _evidence_artifact_links(model)
         + "</details>"
-        "<details><summary>完整 Diff 指标</summary>"
-        + catalog._scroll_table(["指标", "数值"], _metric_rows(model), "暂无自动 Diff 结果；下一步运行 lg cmp 或 lg lib-diff。", "metric-scroll")
+        "<details><summary>完整对比指标</summary>"
+        + catalog._scroll_table(["指标", "数值"], _metric_rows(model), "暂无自动对比结果；下一步运行 lg cmp 或 lg lib-diff。", "metric-scroll")
         + "</details>"
         "<details><summary>完整变化文件入口</summary>"
         "<div class='quality-note'><b>减噪策略</b> 完整逐文件变化不再内嵌到详情页；请打开 file_diff.json 查看全量清单。主页面仅保留重点变化文件。</div>"
@@ -1645,20 +1751,20 @@ def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
             "change-summary-scroll",
         )
         + "</details>"
-        "<details><summary>Summary-only / Metadata-only 摘要</summary>"
-        + "<div class='quality-note'><b>证据分层</b> Summary-only / Metadata-only 是正常证据策略，不自动代表不完整；这里按类型聚合，完整文件列表见 file_diff.json。</div>"
-        + "<h3>Summary-only 按类型汇总</h3>"
+        "<details><summary>摘要级 / 元数据级证据摘要</summary>"
+        + "<div class='quality-note'><b>证据分层</b> 摘要级证据（Summary-only）/ 元数据级证据（Metadata-only）是正常证据策略，不自动代表不完整；这里按类型聚合，完整文件列表见 file_diff.json。</div>"
+        + "<h3>摘要级证据按类型汇总</h3>"
         + catalog._scroll_table(
             ["文件类型", "数量", "代表文件", "证据"],
             _summary_only_summary_rows(model),
-            "暂无 summary-only 审查项。",
+            "暂无摘要级审查项。",
             "summary-only-scroll",
         )
-        + "<h3>Metadata-only 按类型汇总</h3>"
+        + "<h3>元数据级证据按类型汇总</h3>"
         + catalog._scroll_table(
             ["文件类型", "数量", "代表文件", "证据"],
             _metadata_only_summary_rows(model),
-            "暂无 metadata-only 审查项。",
+            "暂无元数据级审查项。",
             "metadata-only-scroll",
         )
         + "</details>"
@@ -1668,7 +1774,7 @@ def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
             "release-note-table",
             ["发布说明", "摘要"],
             _release_note_rows(model),
-            "暂无 release_note / changelog 摘要",
+            "暂无发布说明 / changelog 摘要",
             "搜索 release note / changelog",
             [(0, "文件")],
         )
@@ -1680,8 +1786,8 @@ def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
             "evidence-json-summary-scroll",
         )
         + "</details>"
-        "<details><summary>Diff 问题 / 建议动作</summary>"
-        + "<h3>Diff 问题</h3>"
+        "<details><summary>对比问题 / 建议动作</summary>"
+        + "<h3>对比问题</h3>"
         + ui.faceted_table(
             "diff-issue-table",
             ["级别", "类别", "问题"],
@@ -1703,7 +1809,7 @@ def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
     )
     return ui.collapsible_panel(
         "审计证据",
-        "完整指标、完整变化文件入口、summary/metadata-only 摘要、发布证据和 diff 问题默认折叠，供发布负责人追溯。",
+        "完整指标、完整变化文件入口、摘要级/元数据级证据、发布证据和对比问题默认折叠，供发布负责人追溯。",
         body,
         open=False,
     )
@@ -1721,18 +1827,13 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         f"<p>{ui.esc(model.get('confidence_note') or '-')}</p>"
         "</div>"
     )
-    advanced_review = (
-        "<details class='detail-fold review-fold'>"
-        "<summary>高级审查字段 / 管理证据</summary>"
-        + render_version_review_groups(review_model)
-        + "</details>"
-    )
+    callouts = _review_brief_callouts(model)
     focus_changes = (
         "<details class='detail-fold review-fold'>"
         "<summary>变化文件明细（按需展开）</summary>"
-        "<div class='quality-note'><b>显示范围</b> 默认不把文件清单作为 IP 使用者主线；这里仅显示 P0/P1/Review 重点变化，最多 120 行。完整变化文件请打开审计证据中的 file_diff.json。</div>"
+        "<div class='quality-note'><b>显示范围</b> 默认不把完整文件清单作为 IP 使用者主线；这里只显示 P0/P1/审查重点变化，最多 120 行。</div>"
         + catalog._scroll_table(
-            ["变化", "类型", "路径", "审查级别", "匹配状态", "Base 候选", "Target 文件", "建议"],
+            ["变化", "类型", "路径", "审查级别", "匹配状态", "基准候选", "目标文件", "建议"],
             _focus_file_change_rows(model),
             "暂无重点变化文件；可打开 file_diff.json 查看全量变化。",
             "focus-change-scroll",
@@ -1740,9 +1841,9 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         + "</details>"
     )
     return ui.panel(
-        f"View 变化矩阵（vs {_cn_base_ref(base_ref)} / {base_version}）",
-        "默认面向 IP 使用者：按 view 聚合新增、删除、修改和证据等级；管理和调试证据默认折叠。",
-        lead + render_ip_user_view(ip_model) + advanced_review + focus_changes,
+        f"视图变化矩阵（vs {_cn_base_ref(base_ref)} / {base_version}）",
+        "默认面向 IP 使用者：按视图聚合新增、删除、修改和证据等级；调试证据只保留在 JSON/扫描报告中。",
+        lead + callouts + render_ip_user_view(ip_model) + focus_changes,
     )
 
 def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Path) -> str:
@@ -1780,7 +1881,7 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
         "## Reviewer Context",
         "",
         f"- primary_next_action: {primary_next_action.get('kind') or 'review_evidence'}",
-        f"- primary_next_action_label: {primary_next_action.get('label') or 'Review evidence'}",
+        f"- primary_next_action_label: {primary_next_action.get('label') or '审查证据'}",
         f"- command_count: {primary_next_action.get('command_count') or 0}",
         f"- base_trust_status: {model.get('base_trust_status') or '-'}",
         f"- base_trust_note: {model.get('base_trust_note') or '-'}",
@@ -1866,20 +1967,9 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
     model["markdown_export_path"] = str(md_path)
     if export_markdown:
         export_current_lib_diff_markdown(model, md_path)
-    scan_evidence = _as_mapping(model.get("scan_evidence"))
     scan_context = _as_mapping(model.get("scan_context"))
     scan_dir_text = str(scan_context.get("scan_dir") or "")
     scan_dir = Path(scan_dir_text) if scan_dir_text else None
-    inventory = _as_mapping(scan_evidence.get("inventory"))
-    parser_manifest = _as_mapping(scan_evidence.get("parser_manifest"))
-    parser_results = _as_mapping(scan_evidence.get("parser_results"))
-    release_readiness = _as_mapping(scan_evidence.get("release_readiness"))
-    counts = catalog._version_file_type_counts(inventory)
-    count_only_total = sum(int(counts.get(item, 0) or 0) for item in catalog.VERSION_COUNT_ONLY_TYPES)
-    parser_task_count = _as_int(scan_evidence.get("parser_task_count"))
-    corner_summary = scan_evidence.get("corner_summary") or inventory.get("corner_filename_summary") or {}
-    file_total = _as_int(scan_evidence.get("file_total")) or sum(int(v or 0) for v in counts.values())
-    required_view_status = scan_evidence.get("required_view_status") or release_readiness.get("required_view_status") or release_readiness.get("bundle_status")
     body = (
         _version_detail_styles()
         + _version_overview_panel(
@@ -1888,31 +1978,21 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
             version,
             model,
             scan_dir=scan_dir,
-            required_view_status=required_view_status,
         )
-        + "<div class='version-dashboard'><main class='version-main'>"
+        + "<main class='version-main'>"
         + render_version_update_detail_panel(model)
-        + _review_context_panel(model)
-        + _raw_scan_scope_note(model, parser_task_count=parser_task_count, count_only_total=count_only_total)
-        + _view_coverage_panel(inventory, parser_manifest, release_readiness, counts)
-        + _count_only_panel(counts, corner_summary, count_only_total)
-        + _parser_panel(parser_manifest, parser_results)
-        + _audit_evidence_panel(model)
-        + "</main><aside class='version-side'>"
-        + _quality_panel(parser_task_count, file_total, model, version, scan_dir)
-        + _review_gate_summary_panel(version)
-        + "</aside></div>"
+        + "</main>"
     )
     ip_model = _as_mapping(model.get("ip_user_view_model"))
     usage_decision = str(ip_model.get("ip_use_decision") or _usage_decision(model, version))
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / {version_id}",
         "版本审查",
-        "面向 IP 使用者展示上一有效版对比、View 变化、证据等级和使用场景影响。",
+        "面向 IP 使用者展示基准对比、视图变化、证据等级和使用场景影响。",
         catalog_browser_styles() + body,
         decision=usage_decision,
         nav="<a href='../../../index.html'>目录</a><a class='active' href='#'>版本详情</a><a href='../index.html'>库工作台</a>",
-        meta=ui.compact_meta([("库", lib_id), ("版本", version_id), ("标签", ", ".join(sorted(tags)))]),
+        meta=ui.compact_meta([("库", lib_id), ("版本", version_id), ("基准版", model.get("base_version") or "-")]),
     )
     common.write_text(page, html)
     return str(page)

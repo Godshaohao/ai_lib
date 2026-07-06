@@ -163,6 +163,132 @@ class ShortCliRefreshTest(unittest.TestCase):
         self.assertIn("adjacent", command)
         self.assertNotIn("--base", command)
 
+    def test_update_detail_uses_full_baseline_for_partial_update_without_effective_pointer(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "work"
+            raw = workspace / "raw"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/Vendor_A.ucie",
+                                "formal_library_id": "Vendor_A.ucie",
+                                "library_type": "ip",
+                                "library_name": "Vendor_A.ucie",
+                                "summary": {"latest_version": "20260618_fix"},
+                                "versions": [
+                                    {
+                                        "version_id": "20260601_full",
+                                        "version_key": "ip/Vendor_A.ucie/20260601_full",
+                                        "raw_path": str(raw / "Vendor_A" / "ucie" / "20260601_full"),
+                                        "package_type": "FULL_PACKAGE",
+                                        "standalone": True,
+                                        "base_required": False,
+                                    },
+                                    {
+                                        "version_id": "20260618_fix",
+                                        "version_key": "ip/Vendor_A.ucie/20260618_fix",
+                                        "raw_path": str(raw / "Vendor_A" / "ucie" / "20260618_fix"),
+                                        "package_type": "PARTIAL_UPDATE",
+                                        "standalone": False,
+                                        "base_required": True,
+                                        "base_full_version": "20260601_full",
+                                        "compare_default": "full_baseline",
+                                        "diff": {"adjacent_old_version": "20260601_full"},
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            from lib_guard.short_cli import write_default_config
+
+            write_default_config(workspace, raw_root=raw)
+            commands = build_cli_commands(["cat", "Vendor_A.ucie", "--update-detail"], cwd=workspace)
+
+        command = commands[0]
+        self.assertEqual(command[0], "compare")
+        self.assertEqual(command[command.index("--new") + 1], "20260618_fix")
+        self.assertEqual(command[command.index("--base") + 1], "20260601_full")
+        self.assertEqual(command[command.index("--base-source") + 1], "full_baseline")
+        self.assertNotIn("--mode", command)
+
+    def test_update_detail_uses_previous_full_for_new_full_without_effective_pointer(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "work"
+            raw = workspace / "raw"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/Vendor_A.ucie",
+                                "formal_library_id": "Vendor_A.ucie",
+                                "library_type": "ip",
+                                "library_name": "Vendor_A.ucie",
+                                "summary": {"latest_version": "20260701_full"},
+                                "versions": [
+                                    {
+                                        "version_id": "20260601_full",
+                                        "version_key": "ip/Vendor_A.ucie/20260601_full",
+                                        "raw_path": str(raw / "Vendor_A" / "ucie" / "20260601_full"),
+                                        "package_type": "FULL_PACKAGE",
+                                        "standalone": True,
+                                        "base_required": False,
+                                    },
+                                    {
+                                        "version_id": "20260618_fix",
+                                        "version_key": "ip/Vendor_A.ucie/20260618_fix",
+                                        "raw_path": str(raw / "Vendor_A" / "ucie" / "20260618_fix"),
+                                        "package_type": "PARTIAL_UPDATE",
+                                        "standalone": False,
+                                        "base_required": True,
+                                        "base_full_version": "20260601_full",
+                                        "diff": {"adjacent_old_version": "20260601_full"},
+                                    },
+                                    {
+                                        "version_id": "20260701_full",
+                                        "version_key": "ip/Vendor_A.ucie/20260701_full",
+                                        "raw_path": str(raw / "Vendor_A" / "ucie" / "20260701_full"),
+                                        "package_type": "FULL_PACKAGE",
+                                        "standalone": True,
+                                        "base_required": False,
+                                        "diff": {"adjacent_old_version": "20260618_fix"},
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            from lib_guard.short_cli import write_default_config
+
+            write_default_config(workspace, raw_root=raw)
+            commands = build_cli_commands(["cat", "Vendor_A.ucie", "--update-detail"], cwd=workspace)
+
+        command = commands[0]
+        self.assertEqual(command[0], "compare")
+        self.assertEqual(command[command.index("--new") + 1], "20260701_full")
+        self.assertEqual(command[command.index("--base") + 1], "20260601_full")
+        self.assertEqual(command[command.index("--base-source") + 1], "previous_full")
+        self.assertNotIn("20260618_fix", command)
+
 
 if __name__ == "__main__":
     unittest.main()

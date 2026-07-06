@@ -583,26 +583,26 @@ def _effective_summary_panel(out: Path, effective_items: list[dict[str, Any]], *
     source_tags = "".join(f"<span class='tiny-tag' title='{ui.esc(k)}'>{ui.esc(k)}:{ui.esc(v)}</span>" for k, v in sorted(source.items()))
     muted_dash = "<span class='muted'>-</span>"
     actions = ui.action_strip([
-        ui.button("Effective 详情", _href(latest.get("html")), "primary", disabled=not bool(latest.get("html")), target="_blank"),
-        ui.button("Release Preview", _href(latest.get("release_preview")), "secondary", disabled=not bool(latest.get("release_preview")), target="_blank"),
-        ui.button("Manifest JSON", _href(latest.get("manifest")), "secondary", disabled=not bool(latest.get("manifest")), target="_blank"),
+        ui.button("有效版详情", _href(latest.get("html")), "primary", disabled=not bool(latest.get("html")), target="_blank"),
+        ui.button("发布预览", _href(latest.get("release_preview")), "secondary", disabled=not bool(latest.get("release_preview")), target="_blank"),
+        ui.button("清单 JSON", _href(latest.get("manifest")), "secondary", disabled=not bool(latest.get("manifest")), target="_blank"),
     ])
     if compact:
         return (
             "<div class='effective-mini'>"
             f"<b>{ui.esc(latest.get('effective_id') or '-')}</b>"
-            f"<span>{ui.esc(latest.get('file_count', 0))} files</span>"
-            f"<span>{ui.esc(latest.get('conflict_count', 0))} risks</span>"
+            f"<span>{ui.esc(latest.get('file_count', 0))} 个文件</span>"
+            f"<span>{ui.esc(latest.get('conflict_count', 0))} 个风险</span>"
             f"{actions}</div>"
         )
     return (
         "<div class='effective-summary'>"
-            f"<div class='effective-head'><div><div class='muted'>当前 Effective</div><h3 title='{ui.esc(latest.get('effective_id'))}'>{ui.esc(latest.get('effective_id') or '-')}</h3></div>{actions}</div>"
+            f"<div class='effective-head'><div><div class='muted'>当前有效版</div><h3 title='{ui.esc(latest.get('effective_id'))}'>{ui.esc(latest.get('effective_id') or '-')}</h3></div>{actions}</div>"
         + ui.metric_grid([
             ("有效文件", latest.get("file_count", 0), "effective_files", "PASS"),
-            ("组件", latest.get("component_count", 0), "base + updates", "PASS"),
-            ("冲突", latest.get("conflict_count", 0), "scope / replacement", "WARNING" if latest.get("conflict_count") else "PASS"),
-            ("快照", len(effective_items), "effective snapshots", "PASS"),
+            ("组件", latest.get("component_count", 0), "基线 + 更新", "PASS"),
+            ("冲突", latest.get("conflict_count", 0), "范围 / 替换", "WARNING" if latest.get("conflict_count") else "PASS"),
+            ("快照", len(effective_items), "有效版快照", "PASS"),
         ])
         + f"<div class='effective-stack'>{''.join(component_labels) or muted_dash}</div>"
         + f"<div class='effective-tags'><b>操作</b>{op_tags or muted_dash}</div>"
@@ -622,7 +622,7 @@ def _effective_snapshot_rows(out: Path, effective_items: list[dict[str, Any]]) -
             f"<td>{ui.esc(', '.join(str(v) for v in item.get('accepted_updates', []) or []) or '-')}</td>"
             f"<td>{ui.esc(item.get('file_count', 0))}</td>"
             f"<td>{ui.badge('RISK' if item.get('conflict_count') else 'OK', item.get('conflict_count', 0))}</td>"
-            f"<td>{ui.action_strip([ui.button('Effective 详情', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('Release Preview', _href(item.get('release_preview')), 'secondary', disabled=not bool(item.get('release_preview')), target='_blank')])}</td>"
+            f"<td>{ui.action_strip([ui.button('有效版详情', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('发布预览', _href(item.get('release_preview')), 'secondary', disabled=not bool(item.get('release_preview')), target='_blank')])}</td>"
             "</tr>"
         )
     return rows
@@ -635,14 +635,14 @@ def _version_ledger_rows(lib: Mapping[str, Any], effective_items: list[dict[str,
         links = _version_links(version)
         refs = _version_effective_refs(version_id, effective_items)
         latest_ref = refs[-1] if refs else {}
-        effective_label = str(latest_ref.get("effective_id") or "pending_review")
+        effective_label = str(latest_ref.get("effective_id") or "待审查")
         rows.append(
             "<tr>"
             f"<td><b title='{ui.esc(version_id)}'>{ui.esc(version_id)}</b><div class='muted'>{ui.esc(version.get('stage') or '-')}</div></td>"
-            f"<td>{ui.button('Scan 证据', _href(links.get('scan_html')), 'secondary', disabled=not bool(links.get('scan_html')), target='_blank')}</td>"
-            f"<td>{ui.button('Diff 证据', _href(links.get('diff_html')), 'secondary', disabled=not bool(links.get('diff_html')), target='_blank')}</td>"
+            f"<td>{ui.button('扫描证据', _href(links.get('scan_html')), 'secondary', disabled=not bool(links.get('scan_html')), target='_blank')}</td>"
+            f"<td>{ui.button('对比证据', _href(links.get('diff_html')), 'secondary', disabled=not bool(links.get('diff_html')), target='_blank')}</td>"
             f"<td>{ui.button(effective_label, _href(latest_ref.get('html')), 'primary' if latest_ref else 'secondary', disabled=not bool(latest_ref.get('html')), target='_blank')}</td>"
-            f"<td>{ui.button('Release Preview', _href(latest_ref.get('release_preview')), 'secondary', disabled=not bool(latest_ref.get('release_preview')), target='_blank')}</td>"
+            f"<td>{ui.button('发布预览', _href(latest_ref.get('release_preview')), 'secondary', disabled=not bool(latest_ref.get('release_preview')), target='_blank')}</td>"
             "</tr>"
         )
     return rows
@@ -670,7 +670,7 @@ def _compare_index_rows(lib: Mapping[str, Any], compare_items: list[dict[str, An
             f"<td>{ui.esc(item.get('changed_files', 0))}</td>"
             f"<td>{ui.esc(actions.get('replace', 0))}</td>"
             f"<td><span title='{ui.esc(item.get('owner_target') or '')}'>{ui.esc(_short_name(item.get('owner_target') or '-'))}</span></td>"
-            f"<td>{ui.action_strip([ui.button('打开报告', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('Manifest', _href(item.get('manifest')), 'secondary', disabled=not bool(item.get('manifest')), target='_blank')])}</td>"
+            f"<td>{ui.action_strip([ui.button('打开报告', _href(item.get('html')), 'primary', disabled=not bool(item.get('html')), target='_blank'), ui.button('清单', _href(item.get('manifest')), 'secondary', disabled=not bool(item.get('manifest')), target='_blank')])}</td>"
             "</tr>"
         )
     if rows:
@@ -688,7 +688,7 @@ def _compare_index_rows(lib: Mapping[str, Any], compare_items: list[dict[str, An
             f"<td>{ui.esc(item.get('recommended_total', 0))}</td>"
             f"<td>{ui.esc(item.get('candidate_total', 0))}</td>"
             f"<td>{ui.badge(item.get('comparison_quality') or 'NORMAL')}</td>"
-            f"<td>{ui.button('Diff', diff_html, 'primary', disabled=not bool(diff_html), target='_blank')}</td>"
+            f"<td>{ui.button('对比', diff_html, 'primary', disabled=not bool(diff_html), target='_blank')}</td>"
             "</tr>"
         )
     return rows
@@ -701,14 +701,41 @@ def _latest_full_version(versions: list[Mapping[str, Any]]) -> str:
     return "-"
 
 
-def _latest_effective_version(lib: Mapping[str, Any], versions: list[Mapping[str, Any]]) -> str:
-    for key in ["current_effective_version", "approved_version", "current_version"]:
+def _has_confirmed_current_effective(
+    lib: Mapping[str, Any],
+    versions: list[Mapping[str, Any]],
+    effective_items: list[dict[str, Any]] | None = None,
+) -> bool:
+    for item in effective_items or []:
+        if item.get("is_current_effective") or item.get("effective_status") == "current":
+            return True
+    for key in [
+        "current_effective_ref",
+        "latest_effective_ref",
+        "current_effective_version",
+        "approved_version",
+        "current_version",
+    ]:
+        if lib.get(key):
+            return True
+    return any(_truthy(version.get("current_effective")) for version in versions)
+
+
+def _latest_effective_version(
+    lib: Mapping[str, Any],
+    versions: list[Mapping[str, Any]],
+    effective_items: list[dict[str, Any]] | None = None,
+) -> str:
+    for item in effective_items or []:
+        if item.get("is_current_effective") or item.get("effective_status") == "current":
+            return str(item.get("effective_id") or item.get("version_id") or item.get("version") or "")
+    for key in ["current_effective_ref", "latest_effective_ref", "current_effective_version", "approved_version", "current_version"]:
         if lib.get(key):
             return str(lib.get(key))
     for version in reversed(versions):
         if _truthy(version.get("current_effective")):
             return str(version.get("version_id") or version.get("version") or "-")
-    return ""
+    return "未确认" if versions else ""
 
 
 def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any) -> str:
@@ -754,12 +781,16 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
     versions = list(lib.get("versions", []) or [])
     latest = lib.get("latest_version") or (versions[-1].get("version_id") if versions else "-")
     latest_full = _latest_full_version(versions)
-    latest_effective = _latest_effective_version(lib, versions)
+    latest_effective = _latest_effective_version(lib, versions, effective_items)
+    current_confirmed = _has_confirmed_current_effective(lib, versions, effective_items)
     status = lib.get("overall_status") or "UNKNOWN"
     vendor = str(lib.get("vendor") or "Unknown")
     middle = str(lib.get("middle_path") or lib.get("library_root") or "-")
     stages = sorted({str(v.get("stage") or "unknown") for v in versions})
     tags = _library_tags(lib)
+    if versions and not current_confirmed:
+        tags.discard("clear")
+        tags.add("review")
     home_path = str(lib.get("library_home_html") or "")
     latest_effective_item = _latest_effective_item(effective_items)
     changed = sum(1 for v in versions if "changed" in _version_tags(v))
@@ -770,18 +801,19 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
     version_list_html = version_rows or empty_versions
     actions = ui.action_strip([
         ui.button("进入库工作台", _href(home_path), "primary", disabled=not bool(home_path), target="_blank"),
-        ui.button("Effective", _href((latest_effective_item or {}).get("html")), "secondary", disabled=not bool((latest_effective_item or {}).get("html")), target="_blank"),
+        ui.button("有效版", _href((latest_effective_item or {}).get("html")), "secondary", disabled=not bool((latest_effective_item or {}).get("html")), target="_blank"),
     ])
     effective_label = str((latest_effective_item or {}).get("effective_id") or latest_effective or "待确认")
-    status_badge = "" if _status_key(status) == "UNKNOWN" else ui.badge(status)
+    status_for_display = "REVIEW" if versions and not current_confirmed and _status_key(status) == "UNKNOWN" else status
+    status_badge = "" if _status_key(status_for_display) == "UNKNOWN" else ui.badge(status_for_display)
     changed_badge = ui.quiet_badge("CHANGED", changed) if changed else ""
     return (
-        f"<section class='library-card' data-overall='{ui.esc(status)}' data-vendor='{ui.esc(vendor)}' data-stages='{ui.esc(','.join(stages))}' data-tags='{ui.esc(','.join(sorted(tags)))}'>"
+        f"<section class='library-card' data-overall='{ui.esc(status_for_display)}' data-vendor='{ui.esc(vendor)}' data-stages='{ui.esc(','.join(stages))}' data-tags='{ui.esc(','.join(sorted(tags)))}'>"
         "<div class='library-main'>"
         f"<div class='library-name-row'><div class='library-title long-token' title='{ui.esc(library_label)}'>{ui.esc(library_label)}</div></div>"
         f"<div class='library-path-row'><span class='muted'>库名</span><code title='{ui.esc(user_library_id)}'>{ui.esc(user_library_id or '-')}</code></div>"
         f"<div class='library-path-row'><span class='muted'>路径</span><code title='{ui.esc(middle)}'>{ui.esc(middle)}</code></div>"
-        f"<div><span class='muted'>Vendor</span><br><b>{ui.esc(vendor)}</b></div>"
+        f"<div><span class='muted'>供应方</span><br><b>{ui.esc(vendor)}</b></div>"
         f"<div><span class='muted'>完整基线</span><br><b title='{ui.esc(latest_full)}'>{ui.esc(latest_full)}</b></div>"
         f"<div><span class='muted'>当前有效</span><br><b title='{ui.esc(effective_label)}'>{ui.esc(effective_label)}</b></div>"
         "<div class='library-status'>"
@@ -800,22 +832,47 @@ def _group_libraries(libraries: list[Mapping[str, Any]]) -> dict[tuple[str, str]
     return dict(sorted(grouped.items(), key=lambda kv: (kv[0][0], kv[0][1])))
 
 
-def _summary_metrics(state: Mapping[str, Any], tasks: Mapping[str, Any]) -> list[tuple[str, Any, str, Any]]:
+def _summary_metrics(
+    state: Mapping[str, Any],
+    tasks: Mapping[str, Any],
+    effective_by_lib: Mapping[str, list[dict[str, Any]]] | None = None,
+) -> list[tuple[str, Any, str, Any]]:
+    del tasks
     libs = list(state.get("libraries", []) or [])
     versions = [v for lib in libs for v in lib.get("versions", []) or []]
     changed = sum(1 for v in versions if "changed" in _version_tags(v))
     diff_pending = sum(1 for v in versions if _status_key(v.get("diff_status")) in {"DIFF_PENDING", "DIFF_NOT_READY", "COMPARE_PENDING"})
-    recommended = sum(1 for v in versions if "file_review_recommended" in _version_tags(v))
     not_scanned = sum(1 for v in versions if "not_scanned" in _version_tags(v))
     evidence_pending = not_scanned + diff_pending
-    actionable_tasks = len([t for t in (tasks.get("tasks", []) or []) if "release" not in str(t.get("task_type") or "").lower()])
+    effective_by_lib = effective_by_lib or {}
+    unconfirmed_current = sum(
+        1
+        for lib in libs
+        if list(lib.get("versions", []) or [])
+        and not _has_confirmed_current_effective(
+            lib,
+            list(lib.get("versions", []) or []),
+            _effective_items_for_lib(effective_by_lib, lib),
+        )
+    )
+    review_versions = sum(
+        1
+        for version in versions
+        if (
+            {"review", "block", "needs_comparison_confirm", "file_review_recommended", "not_scanned"}
+            & _version_tags(version)
+        )
+    )
     return [
         ("库", len(libs), "可查询的 library", "PASS"),
         ("版本", len(versions), "可查询的版本", "PASS"),
-        ("有更新", changed, "进入库工作台查看更新文件", "WARNING" if changed else "PASS"),
-        ("重点文件", recommended, "版本详情证据确认项", "WARNING" if recommended else "PASS"),
-        ("待补证据", evidence_pending, "库管理者补 scan / diff", "WARNING" if evidence_pending else "PASS"),
-        ("管理任务", actionable_tasks, "见 manager_tasks.json", "INFO" if actionable_tasks else "PASS"),
+        (
+            "需审查",
+            max(review_versions + unconfirmed_current, changed),
+            "含当前有效版未确认和版本证据审查",
+            "WARNING" if review_versions or changed or unconfirmed_current else "PASS",
+        ),
+        ("证据缺失", evidence_pending, "缺 scan 或 diff 证据", "WARNING" if evidence_pending else "PASS"),
     ]
 
 
@@ -1596,24 +1653,24 @@ def _diff_issue_rows(diff_dir: Path | None, *, limit: int = 20) -> list[str]:
 def _version_diff_evidence_panel(version: Mapping[str, Any]) -> str:
     diff_dir = _version_diff_dir(version)
     if not diff_dir:
-        return ui.panel("Diff Evidence", "Run compare to populate version-level diff evidence.", ui.muted("No diff directory is registered for this version."))
+        return ui.panel("对比证据", "运行对比后会填充版本级对比证据。", ui.muted("当前版本未登记对比目录。"))
     view_diff = common.version_diff_json(diff_dir, "view_diff.json")
     type_diff = common.version_diff_json(diff_dir, "type_diff.json")
     readiness_diff = common.version_diff_json(diff_dir, "release_readiness_diff.json")
     summary = common.version_diff_summary(diff_dir)
     return ui.panel(
-        "Diff Evidence",
-        "Concrete comparison evidence embedded from the standalone comparison JSON. Open the full diff page only when you need the complete evidence trail.",
+        "对比证据",
+        "这里嵌入独立对比 JSON 的关键证据；只有需要完整追溯时才打开完整对比页。",
         ui.metric_grid([
-            ("Status", summary.get("status") or "NO_DIFF", _relative_display_path(diff_dir, tail_parts=5), summary.get("status")),
-            ("Files", f"+{summary.get('added_files', 0)} / -{summary.get('removed_files', 0)} / ~{summary.get('changed_files', 0)}", "added / removed / changed", "WARNING" if _as_int(summary.get("removed_files")) or _as_int(summary.get("changed_files")) else "INFO"),
-            ("Views", summary.get("view_changes", 0), "view-level changes", "WARNING" if _as_int(summary.get("view_changes")) else "PASS"),
-            ("Readiness", f"{(readiness_diff.get('bundle_status') or {}).get('old', '-')} → {(readiness_diff.get('bundle_status') or {}).get('new', '-')}", "release readiness delta", "BLOCK" if (readiness_diff.get("bundle_status") or {}).get("new") == "BLOCK" else "INFO"),
+            ("状态", summary.get("status") or "NO_DIFF", _relative_display_path(diff_dir, tail_parts=5), summary.get("status")),
+            ("文件", f"+{summary.get('added_files', 0)} / -{summary.get('removed_files', 0)} / ~{summary.get('changed_files', 0)}", "新增 / 删除 / 修改", "WARNING" if _as_int(summary.get("removed_files")) or _as_int(summary.get("changed_files")) else "INFO"),
+            ("视图", summary.get("view_changes", 0), "视图级变化", "WARNING" if _as_int(summary.get("view_changes")) else "PASS"),
+            ("发布就绪", f"{(readiness_diff.get('bundle_status') or {}).get('old', '-')} → {(readiness_diff.get('bundle_status') or {}).get('new', '-')}", "发布就绪度变化", "BLOCK" if (readiness_diff.get("bundle_status") or {}).get("new") == "BLOCK" else "INFO"),
         ])
-        + _scroll_table(["View", "Severity", "Count", "Status", "Parser"], _diff_view_rows(view_diff), "No changed views", "diff-view-scroll")
-        + _scroll_table(["Type", "Count", "Delta", "Status", "Examples"], _diff_type_rows(type_diff), "No type changes", "diff-type-scroll")
-        + _scroll_table(["Readiness", "Old", "New", "Delta / Message"], _diff_readiness_rows(readiness_diff), "No release readiness delta", "diff-readiness-scroll")
-        + _scroll_table(["Severity", "Category", "Title", "Message"], _diff_issue_rows(diff_dir), "No diff issues", "diff-issue-scroll"),
+        + _scroll_table(["视图", "级别", "数量", "状态", "解析器"], _diff_view_rows(view_diff), "无变化视图", "diff-view-scroll")
+        + _scroll_table(["类型", "数量", "变化", "状态", "示例"], _diff_type_rows(type_diff), "无类型变化", "diff-type-scroll")
+        + _scroll_table(["就绪项", "旧值", "新值", "变化 / 信息"], _diff_readiness_rows(readiness_diff), "无发布就绪变化", "diff-readiness-scroll")
+        + _scroll_table(["级别", "类别", "标题", "信息"], _diff_issue_rows(diff_dir), "无对比问题", "diff-issue-scroll"),
     )
 
 

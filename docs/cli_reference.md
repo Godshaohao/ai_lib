@@ -15,6 +15,22 @@ $PROJ/scripts/lg.csh <COMMAND>
 
 底层 `python -m lib_guard.cli` 是工程自动化和调试入口，不作为普通用户主路径。
 
+在 csh/tcsh 中可以 source 补全脚本，获得 `lg` alias、短命令补全、子命令补全和常用参数补全：
+
+```csh
+source $PROJ/scripts/lg_complete.csh
+lg <TAB>
+lg library <TAB>
+```
+
+库名和版本名是 workspace catalog 里的运行时数据。为了避免 Tab 时反复读取大工程目录，
+补全脚本默认不动态扫 catalog；复制正式名字请用：
+
+```csh
+lg library list --plain
+lg library list <LIBRARY> --versions --plain
+```
+
 | 短命令 | 作用 |
 | --- | --- |
 | `init` | 创建 workspace 配置 |
@@ -22,9 +38,11 @@ $PROJ/scripts/lg.csh <COMMAND>
 | `library discover` / `library accept` / `library apply` | 发现候选库、合并人工确认、生成正式 library map |
 | `library list` | 列出正式库名和版本名 |
 | `library override` | 人工确认版本 stage/base/package 关系 |
-| `cat` | 刷新 catalog/HTML；加 `--update-detail` 时刷新版本详情更新证据 |
+| `cat` | 渲染已有 catalog/HTML；显式 `--refresh-catalog` 时重建 catalog 投影 |
 | `scan` | 扫描一个版本或一批版本 |
 | `cmp` | 手动对比更新版本和指定 base 版本 |
+| `intake` | 预演/执行新版本接入窗口，自动串起 scan、effective compare 和 Version Detail 刷新 |
+| `window` / `accept-window` | 查看接入窗口、接受 candidate effective |
 | `fd` | 运行单文件两两 diff |
 | `rv check` / `rv list` | 查看 Review Gate 状态 |
 | `rv accept` / `rv waive` | 记录 owner 决策 |
@@ -37,19 +55,21 @@ $PROJ/scripts/lg.csh <COMMAND>
 ## 常用示例
 
 ```csh
-lg.csh library add vendor_A.openroad_platform.openroad_asap7 --root /path/to/vendor_A/openroad_asap7 --apply
+lg.csh library add vendor_A.openroad_platform.openroad_asap7 --root /path/to/vendor_A/openroad_asap7 --apply --refresh-catalog
 lg.csh library discover
 gvim $WORK/config/library_candidates/latest.tsv
 lg.csh library accept
 lg.csh library apply
 lg.csh library list
 lg.csh library list vendor_A.openroad_platform.openroad_asap7 --versions
-lg.csh cat --with-evidence
+lg.csh library list --plain
+lg.csh library list vendor_A.openroad_platform.openroad_asap7 --versions --plain
+lg.csh cat --refresh-catalog
 lg.csh library override ucie stable_20250608 --stage stable --base stable_20250601
-lg.csh scan ucie stable_20250608
+lg.csh intake ucie --plan-only
+lg.csh intake ucie
+lg.csh accept-window ucie --accepted-by lib_owner --note "review passed"
 lg.csh scan ucie stable_20250608 --parse-file-types lef,cdl
-lg.csh scan ucie stable_20250608 --hash-policy full
-lg.csh cat ucie --update-detail
 lg.csh cmp ucie stable_20250608 --base stable_20250601 --scan-if-missing
 lg.csh fd ucie stable_20250608 lef/ucie.lef --base stable_20250601 --type lef
 lg.csh rv check ucie stable_20250608 --gate current
@@ -68,15 +88,26 @@ lg.csh library discover --max-depth 4 --max-dirs 5000 --max-candidates 200
 大目录下已知库根时，优先使用：
 
 ```csh
-lg.csh library add <LIBRARY> --root <LIBRARY_ROOT> --apply
+lg.csh library add <LIBRARY> --root <LIBRARY_ROOT> --apply --refresh-catalog
 ```
 
 discover 不会把版本目录内部的 `phys_ver`、`dft`、`lef`、`lib` 等目录当成库。
 它只识别“直接包含多个版本/交付实例”的候选根；倒置 release 树需要人工 `library add`。
 
-## `cat --update-detail` 和 `cmp`
+## `intake`、`cat --update-detail` 和 `cmp`
 
-`cat <LIBRARY> --update-detail` 是 Version Review 更新证据的日常入口。默认行为是：
+日常新版本接入优先用 `intake` 两段式：
+
+```csh
+lg.csh intake ucie --plan-only
+lg.csh intake ucie
+```
+
+`--plan-only` 只输出 candidate/base/scan_versions 和确认后执行命令；确认后运行
+`intake <LIBRARY>`，系统会自动 scan 缺失版本、构建 candidate effective、做 effective
+compare，并刷新受影响 Version Detail。Version Review 仍是唯一主审查投影。
+
+`cat <LIBRARY> --update-detail` 是兼容的单版本更新证据入口。默认行为是：
 
 - 优先使用 `current_effective`。
 - 没有当前有效库时使用 `previous_effective`。

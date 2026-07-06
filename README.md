@@ -29,12 +29,17 @@ setenv RAW  /path/to/raw_delivery
 
 $PROJ/scripts/lg.csh init $WORK --raw-root $RAW --library-type ip
 cd $WORK
-$PROJ/scripts/lg.csh library add <LIBRARY> --root <LIBRARY_ROOT> --apply
-$PROJ/scripts/lg.csh cat --with-evidence
-$PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
-$PROJ/scripts/lg.csh cat <LIBRARY> --update-detail
+source $PROJ/scripts/lg_complete.csh
+$PROJ/scripts/lg.csh library add <LIBRARY> --root <LIBRARY_ROOT> --apply --refresh-catalog
+$PROJ/scripts/lg.csh intake <LIBRARY> --plan-only
+$PROJ/scripts/lg.csh intake <LIBRARY>
+$PROJ/scripts/lg.csh accept-window <LIBRARY> --accepted-by <USER> --note "review passed"
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION>
 ```
+
+`source $PROJ/scripts/lg_complete.csh` 会提供 `lg` alias 和 csh/tcsh Tab 补全。
+库名/版本名用 `lg library list --plain`、`lg library list <LIBRARY> --versions --plain`
+获取，避免手猜 `_` 和 `.`。
 
 完整流程见 [基础教程](docs/basic_tutorial.md)。
 

@@ -36,7 +36,7 @@ TYPE_FOCUS = {
     "upf": "关注 power domain、supply net、isolation、level shifter、retention 变化。",
     "cpf": "关注 power domain、power mode、isolation/level shifter/retention rule 变化。",
     "spef": "当前为轻量解析，关注 header 与 D_NET 数量等结构信号。",
-    "db": "DB 为二进制文件，当前仅做 metadata/hash 级证据，不做语义解析。",
+    "db": "DB 为二进制文件，当前仅做元数据/哈希级证据，不做语义解析。",
     "waiver": "关注 waiver 条目增删、规则名和作用对象变化。",
     "ibis": "关注 component、pin、model 和 model_type 变化。",
     "pwl": "关注 PWL 点数、时间/值变化和异常 directive。",
@@ -185,6 +185,7 @@ def _render_index(out: Path, meta: dict[str, Any], summary: dict[str, Any], sema
     change_count = int((semantic.get("summary") or {}).get("change_count") or 0)
     parser_status = f"{summary.get('old_parser_status')} / {summary.get('new_parser_status')}"
     evidence_mode = "metadata-only" if file_type == "db" or "METADATA_ONLY" in parser_status else "structured + raw"
+    evidence_mode_label = "元数据级证据" if evidence_mode == "metadata-only" else "结构化 + 原始文本"
     domain_rows = [f"<tr><td><code>{ui.esc(k)}</code></td><td>{ui.esc(v)}</td></tr>" for k, v in _domain_counts(changes).items()]
     change_rows = []
     for item in changes[:200]:
@@ -206,25 +207,25 @@ def _render_index(out: Path, meta: dict[str, Any], summary: dict[str, Any], sema
         for item in issues
     ]
     rail = ui.status_rail([
-        ("Diff", "NEEDS_FILE_DIFF", "本页由 Diff 任务进入"),
-        ("File Diff", status, f"结构化变化 {change_count}"),
-        ("Raw Diff", "READY", "可打开 raw_text_diff.html"),
-        ("Review", "MANUAL_REVIEW" if status == "DIFF" else "SAME", "最终结论由使用者确认"),
+        ("对比", "NEEDS_FILE_DIFF", "本页由对比任务进入"),
+        ("文件深度对比", status, f"结构化变化 {change_count}"),
+        ("原始文本差异", "READY", "可打开 raw_text_diff.html"),
+        ("审查", "MANUAL_REVIEW" if status == "DIFF" else "SAME", "最终结论由使用者确认"),
     ])
     body = (
         ui.panel(
-            "File Diff 结论 / 单文件深度对比报告",
-            "单文件深度页只服务一个 old_file → new_file。Diff 主页面只保留任务和入口。",
+            "单文件深度对比结论",
+            "单文件深度页只服务一个 old_file → new_file。对比主页面只保留任务和入口。",
             ui.metric_grid([
                 ("file_type", file_type, TYPE_LABELS.get(file_type, file_type), status),
                 ("结构化变化", change_count, "semantic_diff.json", status),
-                ("Parser", parser_status, "old / new", "WARNING" if "FAILED" in parser_status else "PASS"),
-                ("证据模式", evidence_mode, "structured + raw / metadata-only", "METADATA_ONLY" if evidence_mode == "metadata-only" else "PASS"),
+                ("解析器", parser_status, "old / new", "WARNING" if "FAILED" in parser_status else "PASS"),
+                ("证据模式", evidence_mode_label, "结构化 + 原始文本 / 元数据级证据", "METADATA_ONLY" if evidence_mode == "metadata-only" else "PASS"),
             ])
-            + ui.compact_meta([("Old", meta.get("old_file")), ("New", meta.get("new_file")), ("Focus", TYPE_FOCUS.get(file_type, "人工复核文件变化。"))]),
+            + ui.compact_meta([("旧文件", meta.get("old_file")), ("新文件", meta.get("new_file")), ("关注点", TYPE_FOCUS.get(file_type, "人工复核文件变化。"))]),
         )
         + ui.panel("变化域分布", "用于快速定位变化集中在哪些结构域。", ui.table(["域", "变化数"], domain_rows, "未发现结构化变化"))
-        + ui.panel("证据入口", "File Diff 保持独立页面，原始文本差异也独立打开。", ui.action_strip([
+        + ui.panel("证据入口", "文件深度对比保持独立页面，原始文本差异也独立打开。", ui.action_strip([
             ui.button("old_extract.json", "old_extract.json", target="_blank"),
             ui.button("new_extract.json", "new_extract.json", target="_blank"),
             ui.button("semantic_diff.json", "semantic_diff.json", target="_blank"),
@@ -232,16 +233,16 @@ def _render_index(out: Path, meta: dict[str, Any], summary: dict[str, Any], sema
             ui.button("pairwise_result.json", "pairwise_result.json", target="_blank"),
         ]))
         + ui.panel("字段变化 / 定位", "默认最多展示前 200 条，完整内容看 semantic_diff.json；定位列尽量显示 parser 抽取到的源文件行号和原始命令。", ui.filterable_table("semantic-change-table", ["类型", "路径", "定位", "旧值", "新值"], change_rows, "未发现结构化变化", "筛选路径 / 类型"))
-        + ui.collapsible_panel("Parser 限制 / 专家复核提示", "轻量 parser 不替代 EDA tool signoff。", ui.table(["Severity", "Category", "Message"], issue_rows, "未发现 parser 错误；仍需结合原始 diff 人工确认。"), open=False)
+        + ui.collapsible_panel("解析器限制 / 专家复核提示", "轻量解析器不替代 EDA tool signoff。", ui.table(["级别", "类别", "信息"], issue_rows, "未发现解析器错误；仍需结合原始差异人工确认。"), open=False)
     )
     html_text = ui.review_page_shell(
-        "File Diff / 单文件深度对比报告",
-        "FILE DIFF",
+        "单文件深度对比报告",
+        "文件深度对比",
         f"{TYPE_LABELS.get(file_type, file_type)} · {TYPE_FOCUS.get(file_type, '用于定位两份文件之间的结构化变化与原始证据。')}",
         body,
         decision=status,
         rail=rail,
-        nav="<a href='#'>Diff</a><a class='active' href='#'>File Diff</a><a href='raw_text_diff.html'>Raw Text Diff</a>",
+        nav="<a href='#'>对比</a><a class='active' href='#'>文件深度对比</a><a href='raw_text_diff.html'>原始文本差异</a>",
         meta=ui.compact_meta([("file_type", file_type), ("changes", change_count), ("status", status)]),
     )
     _write_text(out / "index.html", html_text)
@@ -288,7 +289,7 @@ def _unsupported_metadata_parse(file_type: str, path: Path) -> dict[str, Any]:
             {
                 "severity": "warning",
                 "category": "unsupported",
-                "message": f"unsupported pairwise file type: {file_type}; using metadata/hash-only evidence",
+                "message": f"不支持的文件配对类型：{file_type}；当前使用元数据/哈希级证据",
             }
         ],
     }
@@ -335,7 +336,7 @@ def diff_pairwise_files(
             issues.append({"severity": issue.get("severity") or "warning", "category": issue.get("category") or "parser", "title": f"{side} parser issue", "message": issue.get("message") or str(issue)})
         if str(res.get("status")).upper() == "FAILED":
             status = "FAILED"
-            issues.append({"severity": "error", "category": "parser", "title": "Parser failed", "message": f"{side} parser failed"})
+            issues.append({"severity": "error", "category": "parser", "title": "解析器失败", "message": f"{side} 侧解析器失败"})
     meta = {"schema_version": "1.0", "diff_type": "pairwise_file_diff", "file_type": file_type, "old_file": str(old), "new_file": str(new)}
     summary = {"schema_version": "1.0", "status": status, "file_type": file_type, "old_parser_status": old_result.get("status"), "new_parser_status": new_result.get("status"), "old_hash": old_hash, "new_hash": new_hash, "changed": old_hash != new_hash}
     old_extract = {"schema_version": "1.0", "file_type": file_type, "parser_status": old_result.get("status"), "data": old_result.get("data", {}), "issues": old_result.get("issues", [])}

@@ -44,6 +44,19 @@ def _window_versions(window: dict[str, Any]) -> list[str]:
     return versions
 
 
+def _plan_followup_commands(library: str) -> dict[str, Any]:
+    lib = _quote(library)
+    return {
+        "confirm_command": f"lg intake {lib}",
+        "relation_fix_commands": [
+            f"lg mark {lib} <VERSION> --type FULL",
+            f"lg library override {lib} <FIX_VERSION> --package-type PARTIAL_UPDATE --base-full <BASE_FULL_VERSION> --compare-default full_baseline --note 'confirmed fix baseline'",
+        ],
+        "accept_command": f"lg accept-window {lib} --accepted-by <USER> --note 'review passed'",
+        "review_hint": "先确认 candidate/base/scan_versions；关系不对先运行 mark 或 library override，再重新 plan。",
+    }
+
+
 def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], window: dict[str, Any], reason: str) -> None:
     if not getattr(args, "catalog", None) or not getattr(args, "library", None) or not getattr(args, "catalog_html_out", None):
         return
@@ -81,6 +94,7 @@ def cmd_intake(args: argparse.Namespace) -> int:
         "command_count": len(window.get("commands", []) or []),
         "message": window.get("message", ""),
     }
+    output.update(_plan_followup_commands(args.library))
     if args.plan_only or window.get("state") == "EMPTY":
         _print_json(output)
         return 0

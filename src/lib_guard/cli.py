@@ -361,7 +361,7 @@ def add_diff_parser(subparsers: Any) -> None:
 
 
 def add_file_diff_parser(subparsers: Any) -> None:
-    root = subparsers.add_parser("file-diff", help="Run explicit pairwise file diff")
+    root = subparsers.add_parser("file-diff", help="运行显式单文件深度对比")
     sp = root.add_subparsers(dest="file_type", required=True)
     for file_type in sorted(MANUAL_FILE_DIFF_TYPES):
         p = sp.add_parser(file_type, help=f"Compare two {file_type} files")
@@ -453,6 +453,7 @@ def add_catalog_parser(subparsers: Any) -> None:
     p.add_argument("--catalog", required=True)
     p.add_argument("--library")
     p.add_argument("--versions", action="store_true")
+    p.add_argument("--plain", action="store_true", help="Print only library/version names, one per line; useful for shell completion and copy/paste.")
     p.add_argument("--effective", action="store_true", help="列出交付库库存和当前 Effective 有效组合；Effective 只从 report_index.json 读取")
     p.add_argument("--html-out", help="包含 report_index.json 的 catalog HTML 目录；默认使用 catalog.json 旁边的 html 目录")
     p.set_defaults(func=run_catalog_list)
@@ -497,7 +498,7 @@ def add_catalog_parser(subparsers: Any) -> None:
     p.add_argument("--diff")
     p.add_argument("--diff-mode", choices=["adjacent", "cumulative"])
     p.add_argument("--review-gate")
-    p.add_argument("--explain", action="store_true", help="Print release-check explanation JSON without applying release.")
+    p.add_argument("--explain", action="store_true", help="只打印发布检查解释 JSON，不执行发布写入。")
     p.set_defaults(func=run_catalog_release_check)
 
     p = sp.add_parser("release-link", help="Run release link dry-run/apply from a catalog version")
@@ -553,7 +554,11 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--new", required=True)
     p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"])
     p.add_argument("--base", help="Explicit old/base version for this comparison")
-    p.add_argument("--base-source", choices=["explicit", "current_effective", "previous_effective"], help="Semantic source of --base for Version Detail review")
+    p.add_argument(
+        "--base-source",
+        choices=["explicit", "current_effective", "previous_effective", "full_baseline", "previous_full"],
+        help="Semantic source of --base for Version Detail review",
+    )
     p.add_argument("--workdir", default="work")
     p.add_argument("--out")
     p.add_argument("--html-out")
@@ -643,7 +648,7 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--diff")
     p.add_argument("--diff-mode", choices=["adjacent", "cumulative"])
     p.add_argument("--only-checked", action="store_true", help="Only select versions with PASS/PASS_WITH_WARNING release-check status.")
-    p.add_argument("--only-ready", action="store_true", help="Skip manual-review versions and versions with blocking release-check status.")
+    p.add_argument("--only-ready", action="store_true", help="跳过需要人工复核或发布检查阻塞的版本。")
     p.add_argument("--limit", type=int)
     p.add_argument("--no-verify", action="store_true", help="Skip post-release verify after --apply.")
     p.add_argument("--no-render", action="store_true", help="Skip release HTML rendering after verify.")

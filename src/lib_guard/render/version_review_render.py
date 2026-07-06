@@ -127,12 +127,12 @@ def render_ip_user_view(ip_model: Mapping[str, Any]) -> str:
         return "<div class='muted-box'>暂无 IP 使用者视图模型。</div>"
     return (
         "<div class='ip-user-view'>"
-        "<div class='quality-note'><b>IP 使用者默认视图</b> 主表只回答上一有效版到当前版的 View 变化、证据等级和使用场景影响；管理门禁、包根匹配算法、原始 JSON 默认下沉。</div>"
-        "<h3>各 View 影响</h3>"
+        "<div class='quality-note'><b>IP 使用者默认视图</b> 主表只回答基准版到当前版的视图变化、证据等级和使用场景影响；管理门禁、包根匹配算法、原始 JSON 默认下沉。</div>"
+        "<h3>各视图影响</h3>"
         + _simple_table(
-            ["View 类别", "当前数量", "新增/删除/修改", "证据等级", "原始类型", "使用场景", "状态"],
+            ["视图类别", "当前数量", "新增/删除/修改", "证据等级", "原始类型", "使用场景", "状态"],
             _view_delta_rows(ip_model),
-            "暂无 view delta。",
+            "暂无视图变化。",
         )
         + "<h3>按使用场景查看影响</h3>"
         + _usage_area_cards(ip_model)
@@ -146,19 +146,19 @@ def render_ip_user_view(ip_model: Mapping[str, Any]) -> str:
 def _package_root_callout(group: Mapping[str, Any], facts: list[Mapping[str, Any]]) -> str:
     if group.get("key") != "package_root_migration" or str(group.get("status") or "").upper() == "PASS":
         return ""
-    old_root = _fact_value(facts, "Old root")
-    new_root = _fact_value(facts, "New root")
+    old_root = _fact_value(facts, "旧包根")
+    new_root = _fact_value(facts, "新包根")
     matched = _fact_value(facts, "逻辑路径匹配")
     moved = _fact_value(facts, "文件级一一匹配")
-    old_count = _fact_value(facts, "Old 包内文件")
-    new_count = _fact_value(facts, "New 包内文件")
+    old_count = _fact_value(facts, "旧包根文件数")
+    new_count = _fact_value(facts, "新包根文件数")
     package_counts = ""
     if old_count not in {"", "-", "0"} or new_count not in {"", "-", "0"}:
-        package_counts = f"old 包内 {ui.esc(old_count)} 个文件，new 包内 {ui.esc(new_count)} 个文件；"
+        package_counts = f"旧包根内 {ui.esc(old_count)} 个文件，新包根内 {ui.esc(new_count)} 个文件；"
     return (
         "<div class='quality-note path-restructure-note'>"
-        f"<b>包装目录变化</b> old root: <code>{ui.esc(old_root)}</code>，"
-        f"new root: <code>{ui.esc(new_root)}</code>；逻辑路径匹配 {ui.esc(matched)}，"
+        f"<b>包装目录变化</b> 旧包根：<code>{ui.esc(old_root)}</code>，"
+        f"新包根：<code>{ui.esc(new_root)}</code>；逻辑路径匹配 {ui.esc(matched)}，"
         f"{package_counts}文件级一一匹配 {ui.esc(moved)}。此信息用于解释上一版对比，不默认作为 IP 使用阻塞。"
         "</div>"
     )

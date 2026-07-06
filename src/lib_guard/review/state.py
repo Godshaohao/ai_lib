@@ -355,7 +355,7 @@ def build_review_gate_for_version(
             _gate_item(
                 f"scan.fatal:{version_id}",
                 category="scan",
-                title="Scan is blocked or failed",
+                title="扫描阻塞或失败",
                 message=f"scan_status={scan_status}",
                 fatal=True,
             )
@@ -367,7 +367,7 @@ def build_review_gate_for_version(
             _gate_item(
                 f"diff.fatal:{version_id}",
                 category="diff",
-                title="Diff is blocked or failed",
+                title="对比阻塞或失败",
                 message=f"diff_status={diff_status}",
                 fatal=True,
             )
@@ -379,7 +379,7 @@ def build_review_gate_for_version(
             _gate_item(
                 f"release.fatal:{version_id}",
                 category="release",
-                title="Release evidence is blocked or failed",
+                title="发布证据阻塞或失败",
                 message=f"release_status={release_status}",
                 fatal=True,
             )
@@ -394,11 +394,11 @@ def build_review_gate_for_version(
             f"pairwise.recommended:{version_id}",
             severity="attention",
             category="file_diff",
-            title="Focused File Diff recommended",
-            message="Selected Diff recommends pairwise File Diff for focused review; this does not block current by default.",
+            title="建议做重点文件深度确认",
+            message="当前对比建议对重点文件做深度确认；默认不阻塞当前版本使用。",
             rule_id="pairwise.recommended.attention",
-            why="Focused file diff is useful evidence but not mandatory for current by default.",
-            next_action="Run lg fd for recommended P0/P1 files when needed.",
+            why="重点文件深度确认是有用证据，但默认不是当前版本使用的强制项。",
+            next_action="需要时对推荐的 P0/P1 文件运行 lg fd。",
         )
         item["pending"] = int((pairwise_summary or {}).get("pending", 0) or 0)
         item["total"] = int((pairwise_summary or {}).get("total", 0) or 0)
@@ -409,11 +409,11 @@ def build_review_gate_for_version(
                 f"pairwise.failed:{version_id}",
                 severity="warning",
                 category="file_diff",
-                title="Focused File Diff failed",
-                message="A recommended File Diff run failed; rerun it if this evidence is needed.",
+                title="重点文件深度确认失败",
+                message="推荐的文件深度确认运行失败；只有需要该证据时才重跑。",
                 rule_id="pairwise.failed.attention",
-                why="The focused file diff evidence could not be produced.",
-                next_action="Rerun lg fd if this evidence is needed for the review.",
+                why="重点文件深度确认证据未能生成。",
+                next_action="如果审查需要该证据，请重跑 lg fd。",
             )
         )
 
@@ -486,6 +486,11 @@ def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None
                 "pairwise_tasks": pairwise_tasks,
                 "release_result": _release_result(version),
             }
+            # Keep catalog/runtime annotations such as current_effective,
+            # compare-default hints, and package metadata available to
+            # renderers. Normalized fields above remain authoritative.
+            for key, value in dict(version).items():
+                item.setdefault(key, value)
             review_paths = review_paths_for_version(out_dir, lib_name, version_id)
             overrides = read_review_overrides(review_paths["override_file"])
             review_gate = build_review_gate_for_version(item, gate="current", overrides=overrides)
@@ -699,4 +704,3 @@ def build_review_version_state(
         }
     )
     return lib_state, enriched
-
