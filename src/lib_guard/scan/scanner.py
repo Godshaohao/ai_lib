@@ -242,7 +242,7 @@ class ScanRunner:
             self.services.report_writer.write_bundle(bundle, context)
             self._build_derived_outputs(context)
             if self.progress is not None:
-                self.progress.finish(status="FAILED", active_workers=[], by_type={}, summary={"failed": 1})
+                self.progress.finish(status="FAILED", active_workers=[], by_type={}, summary={"failed": 1}, error=error)
             return ScanRunResult(status="FAILED", scan_id=context.scan_id, out_dir=str(context.out_dir), stats=self.stats, bundle=bundle)
 
     def _build_derived_outputs(self, context: ScanContext) -> None:
@@ -645,7 +645,7 @@ class ScanRunner:
         percent = round(done * 100.0 / total, 2) if total else 100.0
         self.progress.event(
             event_type,
-            "4/8 parse",
+            "4/7 parse",
             message,
             done=done,
             total=total,

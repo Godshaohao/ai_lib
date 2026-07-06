@@ -74,6 +74,47 @@ class ScanPipelineTest(unittest.TestCase):
             ]
             self.assertEqual(tasks, [])
 
+    def test_scan_fatal_error_is_written_to_progress_latest(self) -> None:
+        from lib_guard.scan.scanner import ScanRunner
+
+        class BrokenWalker:
+            def walk(self, root_path, context=None):
+                raise RuntimeError("walk exploded")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            runner = ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="scan",
+                    scan_id="S1",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=False,
+                    no_cache=False,
+                    no_progress=False,
+                    console_progress=False,
+                    progress_interval=1,
+                    parse_jobs=1,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            )
+            runner.services.file_walker = BrokenWalker()
+
+            result = runner.run()
+
+            self.assertEqual(result.status, "FAILED")
+            latest = json.loads((out / "logs" / "scan_progress_latest.json").read_text(encoding="utf-8"))
+            self.assertEqual(latest["error"]["type"], "RuntimeError")
+            self.assertIn("walk exploded", latest["error"]["message"])
+
     def test_full_scan_runs_key_eda_parsers(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "raw"
@@ -363,12 +404,14 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(latest["by_type"]["lef"]["pass_empty"], 1)
 
             events = [
-                json.loads(line)["event"]
+                json.loads(line)
                 for line in (out / "logs" / "scan_progress.jsonl").read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-            self.assertIn("task_start", events)
-            self.assertIn("task_finish", events)
+            self.assertIn("task_start", [event["event"] for event in events])
+            self.assertIn("task_finish", [event["event"] for event in events])
+            self.assertIn("4/7 parse", {event["stage"] for event in events if event["event"].startswith("task_")})
+            self.assertNotIn("4/8 parse", {event["stage"] for event in events})
 
     def test_scan_writes_incremental_parser_outputs_and_status_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1730,13 +1773,15 @@ class ScanPipelineTest(unittest.TestCase):
 
             catalog_cmds = build_cli_commands(["catalog"], cwd=workspace)
             self.assertEqual(len(catalog_cmds), 1)
-            self.assertEqual(catalog_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
+            self.assertEqual(catalog_cmds[0][:4], ["catalog", "render", "--catalog", str(catalog)])
+            self.assertNotIn("--root", catalog_cmds[0])
 
             catalog_lib_cmds = build_cli_commands(["catalog", "ucie"], cwd=workspace)
             self.assertEqual(len(catalog_lib_cmds), 1)
-            self.assertEqual(catalog_lib_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
+            self.assertEqual(catalog_lib_cmds[0][:4], ["catalog", "render", "--catalog", str(catalog)])
             self.assertIn("--library", catalog_lib_cmds[0])
             self.assertIn("ucie", catalog_lib_cmds[0])
+            self.assertNotIn("--root", catalog_lib_cmds[0])
 
             catalog_version_cmds = build_cli_commands(["cat", "ucie", "stable_20250608"], cwd=workspace)
             self.assertEqual(len(catalog_version_cmds), 1)
@@ -1756,20 +1801,24 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(full_catalog_cmds[0][:2], ["catalog", "refresh"])
             self.assertIn("--full", full_catalog_cmds[0])
 
+            explicit_catalog_refresh_cmds = build_cli_commands(["cat", "--refresh-catalog", "ucie"], cwd=workspace)
+            self.assertEqual(explicit_catalog_refresh_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
+            self.assertIn("--library", explicit_catalog_refresh_cmds[0])
+            self.assertIn("ucie", explicit_catalog_refresh_cmds[0])
+
             with self.assertRaises(ValueError) as scan_error:
                 build_cli_commands(["scan", "ucie"], cwd=workspace)
             self.assertIn("scan 'ucie' is ambiguous", str(scan_error.exception))
 
             lib_scan_cmds = build_cli_commands(["scan", "ucie", "--all-versions"], cwd=workspace)
-            self.assertEqual(lib_scan_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
+            self.assertEqual(len(lib_scan_cmds), 1)
+            self.assertEqual(lib_scan_cmds[0][0], "run-batch")
             self.assertIn("--library", lib_scan_cmds[0])
             self.assertIn("ucie", lib_scan_cmds[0])
-            self.assertEqual(lib_scan_cmds[1][0], "run-batch")
-            self.assertIn("--library", lib_scan_cmds[1])
-            self.assertIn("ucie", lib_scan_cmds[1])
-            self.assertNotIn("--version", lib_scan_cmds[1])
-            self.assertIn("--parse-jobs", lib_scan_cmds[1])
-            self.assertIn("8", lib_scan_cmds[1])
+            self.assertNotIn("--version", lib_scan_cmds[0])
+            self.assertIn("--parse-jobs", lib_scan_cmds[0])
+            self.assertIn("8", lib_scan_cmds[0])
+            self.assertNotIn("refresh", lib_scan_cmds[0])
 
             version_scan_cmds = build_cli_commands(["scan", "ucie", "stable_20250608"], cwd=workspace)
             self.assertEqual(len(version_scan_cmds), 1)
@@ -1778,18 +1827,25 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("stable_20250608", version_scan_cmds[0])
             self.assertIn("--parse-jobs", version_scan_cmds[0])
             self.assertIn("8", version_scan_cmds[0])
+            self.assertNotIn("--no-catalog-render", version_scan_cmds[0])
 
-            undiscovered_scan_cmds = build_cli_commands(["scan", "ucie", "future_20250615"], cwd=workspace)
-            self.assertEqual(len(undiscovered_scan_cmds), 2)
-            self.assertEqual(undiscovered_scan_cmds[0][:2], ["catalog", "refresh"])
-            self.assertEqual(undiscovered_scan_cmds[1][0], "run")
-            self.assertIn("future_20250615", undiscovered_scan_cmds[1])
+            diagnostic_scan_cmds = build_cli_commands(["scan", "ucie", "stable_20250608", "--no-render"], cwd=workspace)
+            self.assertEqual(len(diagnostic_scan_cmds), 1)
+            self.assertIn("--no-catalog-render", diagnostic_scan_cmds[0])
 
-            evidence_scan_cmds = build_cli_commands(["scan", "ucie", "stable_20250608", "--with-evidence"], cwd=workspace)
-            self.assertEqual(len(evidence_scan_cmds), 2)
-            self.assertEqual(evidence_scan_cmds[0][:2], ["catalog", "refresh"])
-            self.assertIn("--with-evidence", evidence_scan_cmds[0])
-            self.assertEqual(evidence_scan_cmds[1][0], "run")
+            with self.assertRaises(ValueError) as missing_version_error:
+                build_cli_commands(["scan", "ucie", "future_20250615"], cwd=workspace)
+            self.assertIn("catalog 中没有版本", str(missing_version_error.exception))
+            self.assertIn("cat --refresh-catalog ucie", str(missing_version_error.exception))
+
+            with self.assertRaises(ValueError) as evidence_scan_error:
+                build_cli_commands(["scan", "ucie", "stable_20250608", "--with-evidence"], cwd=workspace)
+            self.assertIn("lg scan 不刷新 catalog", str(evidence_scan_error.exception))
+
+            diagnostic_batch_cmds = build_cli_commands(["scan", "ucie", "--missing", "--no-render"], cwd=workspace)
+            self.assertEqual(len(diagnostic_batch_cmds), 1)
+            self.assertEqual(diagnostic_batch_cmds[0][0], "run-batch")
+            self.assertIn("--no-catalog-render", diagnostic_batch_cmds[0])
 
             scan_cmd = build_cli_command(["scan", "ucie", "stable_20250608"], cwd=workspace)
             self.assertEqual(scan_cmd, version_scan_cmds[-1])
@@ -1859,8 +1915,14 @@ class ScanPipelineTest(unittest.TestCase):
                 cat_cmds = build_cli_commands(["cat"], cwd=caller)
 
             self.assertEqual(len(cat_cmds), 1)
-            self.assertEqual(cat_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
-            self.assertIn(str(catalog.parent), cat_cmds[0])
+            self.assertEqual(cat_cmds[0][:4], ["catalog", "render", "--catalog", str(catalog)])
+            self.assertNotIn("--root", cat_cmds[0])
+
+            with patch.dict(os.environ, {"LIB_GUARD_CONFIG": str(config)}):
+                refresh_cmds = build_cli_commands(["cat", "--refresh-catalog"], cwd=caller)
+
+            self.assertEqual(refresh_cmds[0][:4], ["catalog", "refresh", "--root", str(raw)])
+            self.assertIn(str(catalog.parent), refresh_cmds[0])
 
     def test_short_cli_simplifies_v6_file_diff_scenarios(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1930,7 +1992,8 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(explicit_cmd[0:2], ["file-diff", "snp"])
 
             catalog_alias_cmd = build_cli_commands(["cat", "u"], cwd=workspace)
-            self.assertEqual(catalog_alias_cmd[0][0:2], ["catalog", "refresh"])
+            self.assertEqual(catalog_alias_cmd[0][0:2], ["catalog", "render"])
+            self.assertIn("--library", catalog_alias_cmd[0])
             diff_alias_cmd = build_cli_commands(["cmp", "u", "stable_20250608", "--base", "initial_20250601"], cwd=workspace)
             self.assertEqual(diff_alias_cmd[0][0], "compare")
             self.assertIn("--base", diff_alias_cmd[0])
@@ -2245,6 +2308,155 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertNotIn("rebuilt_summaries", source)
         self.assertNotIn("developer_artifacts", source)
 
+    def test_catalog_workflow_reports_phase_timings(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw" / "ucie" / "v1"
+            raw.mkdir(parents=True)
+            catalog = root / "catalog.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_name": "ucie",
+                                "library_type": "ip",
+                                "versions": [
+                                    {
+                                        "version_id": "v1",
+                                        "version_key": "ip/ucie/v1",
+                                        "raw_path": str(raw),
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                catalog=str(catalog),
+                library="ucie",
+                version="v1",
+                mode="scan",
+                workdir=str(root / "work"),
+                out=None,
+                html_out=None,
+                catalog_html_out=str(root / "html"),
+                no_catalog_render=True,
+                state_dir=None,
+                cache_dir=None,
+                config=None,
+                no_progress=True,
+                console_progress=False,
+                progress_interval=1,
+                parse_jobs=1,
+                skip_cache=False,
+                no_cache=False,
+                scan_id="S1",
+                hash_policy=None,
+                parse_file_types=None,
+                parse_exclude_file_types=None,
+            )
+
+            from lib_guard.cli_commands.catalog import run_catalog_workflow
+
+            fake_scan = SimpleNamespace(
+                status="PASS",
+                scan_id="S1",
+                out_dir=str(root / "scan_out"),
+                bundle=SimpleNamespace(scan_meta={"input_fingerprint": {"digest": "fp"}}),
+            )
+            with patch("lib_guard.scan.scanner.ScanRunner") as scan_runner:
+                scan_runner.return_value.run.return_value = fake_scan
+                with patch("lib_guard.render.html_report.render_scan_html", return_value={"index_html": str(root / "scan.html")}):
+                    with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                        code = run_catalog_workflow(args)
+
+            self.assertEqual(code, 0)
+            data = json.loads(stdout.getvalue())
+            phases = [item["phase"] for item in data.get("phase_timings", [])]
+            self.assertIn("resolve_catalog_version", phases)
+            self.assertIn("scan_runner", phases)
+            self.assertIn("render_scan_html", phases)
+            self.assertIn("update_catalog_scan_status", phases)
+            self.assertIn("render_impacted_catalog_html", phases)
+
+    def test_catalog_workflow_surfaces_scan_error_in_top_level_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw" / "ucie" / "v1"
+            raw.mkdir(parents=True)
+            catalog = root / "catalog.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_name": "ucie",
+                                "library_type": "ip",
+                                "versions": [
+                                    {
+                                        "version_id": "v1",
+                                        "version_key": "ip/ucie/v1",
+                                        "raw_path": str(raw),
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                catalog=str(catalog),
+                library="ucie",
+                version="v1",
+                mode="scan",
+                workdir=str(root / "work"),
+                out=None,
+                html_out=None,
+                catalog_html_out=str(root / "html"),
+                no_catalog_render=True,
+                state_dir=None,
+                cache_dir=None,
+                config=None,
+                no_progress=True,
+                console_progress=False,
+                progress_interval=1,
+                parse_jobs=1,
+                skip_cache=False,
+                no_cache=False,
+                scan_id="S1",
+                hash_policy=None,
+                parse_file_types=None,
+                parse_exclude_file_types=None,
+            )
+
+            from lib_guard.cli_commands.catalog import run_catalog_workflow
+
+            fake_scan = SimpleNamespace(
+                status="FAILED",
+                scan_id="S1",
+                out_dir=str(root / "scan_out"),
+                bundle=SimpleNamespace(
+                    scan_meta={
+                        "input_fingerprint": {"digest": "fp"},
+                        "error": {"type": "ValueError", "message": "external target is not in root"},
+                    }
+                ),
+            )
+            with patch("lib_guard.scan.scanner.ScanRunner") as scan_runner:
+                scan_runner.return_value.run.return_value = fake_scan
+                with patch("lib_guard.render.html_report.render_scan_html", return_value={"index_html": str(root / "scan.html")}):
+                    with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                        code = run_catalog_workflow(args)
+
+            self.assertEqual(code, 2)
+            data = json.loads(stdout.getvalue())
+            self.assertEqual(data["scan_error"]["type"], "ValueError")
+            self.assertIn("external target", data["scan_error"]["message"])
+
     def test_scan_cli_exposes_one_scan_mode_and_strategy_controls_depth(self) -> None:
         from lib_guard.cli import build_parser
 
@@ -2319,7 +2531,7 @@ class ScanPipelineTest(unittest.TestCase):
 
             scan_cmd = build_cli_commands(["scan", "ucie", "stable_20250608"], cwd=workspace)[0]
             refresh_cmd = build_cli_commands(["refresh", "ucie"], cwd=workspace)[0]
-            batch_cmd = build_cli_commands(["scan", "ucie", "--missing"], cwd=workspace)[1]
+            batch_cmd = build_cli_commands(["scan", "ucie", "--missing"], cwd=workspace)[0]
 
             for command in [scan_cmd, refresh_cmd, batch_cmd]:
                 self.assertNotIn("--mode", command)
@@ -2437,7 +2649,7 @@ class ScanPipelineTest(unittest.TestCase):
                     "2",
                 ],
                 cwd=workspace,
-            )[1]
+            )[0]
 
             self.assertNotIn("--mode", command)
             self.assertIn("--hash-policy", command)
@@ -2482,7 +2694,7 @@ class ScanPipelineTest(unittest.TestCase):
             config = write_default_config(workspace, raw_root=raw)
             (root / "lib_guard.yml").symlink_to(config)
 
-            command = build_cli_commands(["cat"], cwd=root)[0]
+            command = build_cli_commands(["cat", "--refresh-catalog"], cwd=root)[0]
 
             self.assertIn("--policy", command)
             self.assertEqual(command[command.index("--policy") + 1], str(library_catalog))

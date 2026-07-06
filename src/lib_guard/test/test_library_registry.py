@@ -311,6 +311,44 @@ class LibraryRegistryTest(unittest.TestCase):
             self.assertEqual(apply_result["selected"], 1)
             self.assertEqual([ref.library_id for ref in refs], ["vendor_A.openroad_platform.openroad_asap7"])
 
+    def test_library_apply_blocks_accidental_catalog_shrink(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            ucie = raw / "vendor_A" / "ucie"
+            pcie = raw / "vendor_A" / "pcie"
+            for root in [ucie, pcie]:
+                root.mkdir(parents=True)
+            catalog = Path(td) / "config" / "library_catalog.yml"
+            catalog.parent.mkdir()
+            full_registry = Path(td) / "full_registry.tsv"
+            single_registry = Path(td) / "single_registry.tsv"
+            header = "status\tlibrary_id\troot_abs\tdisplay_name\tvendor\tmiddle_path\n"
+            full_registry.write_text(
+                header
+                + f"OK\tvendor_A.ucie\t{ucie}\tucie\tvendor_A\t\n"
+                + f"OK\tvendor_A.pcie\t{pcie}\tpcie\tvendor_A\t\n",
+                encoding="utf-8",
+            )
+            single_registry.write_text(
+                header
+                + f"OK\tvendor_A.ucie\t{ucie}\tucie\tvendor_A\t\n",
+                encoding="utf-8",
+            )
+
+            from lib_guard.library_registry import apply_list_to_catalog
+            from lib_guard.discovery import load_library_map
+
+            first = apply_list_to_catalog(raw, list_path=full_registry, out_path=catalog, library_type="ip")
+            blocked = apply_list_to_catalog(raw, list_path=single_registry, out_path=catalog, library_type="ip")
+            refs = load_library_map(raw, {"library_map": str(catalog)}, catalog)
+
+            self.assertEqual(first["status"], "PASS")
+            self.assertEqual(blocked["status"], "FAILED")
+            self.assertEqual(blocked["reason"], "library_catalog_shrink_guard")
+            self.assertEqual(blocked["previous_library_count"], 2)
+            self.assertEqual(blocked["new_library_count"], 1)
+            self.assertEqual({ref.library_id for ref in refs}, {"vendor_A.pcie", "vendor_A.ucie"})
+
     def test_library_accept_merges_only_approved_candidates_into_registry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             raw = Path(td) / "raw"

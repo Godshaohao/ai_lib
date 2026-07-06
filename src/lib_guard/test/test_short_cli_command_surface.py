@@ -124,6 +124,30 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             self.assertIn("ERROR: lg scan requires <library> <version>", stderr.getvalue())
             self.assertNotIn("Traceback", stderr.getvalue())
 
+    def test_library_list_before_catalog_exists_points_to_cat_bootstrap(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            raw = workspace / "raw"
+            raw.mkdir()
+            from lib_guard.short_cli import main, write_default_config
+
+            write_default_config(workspace, raw_root=raw)
+
+            old_cwd = Path.cwd()
+            stderr = io.StringIO()
+            try:
+                os.chdir(workspace)
+                with contextlib.redirect_stderr(stderr):
+                    code = main(["library", "list"])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 2)
+            error = stderr.getvalue()
+            self.assertIn("catalog 尚未生成", error)
+            self.assertIn("lg.csh cat --refresh-catalog --with-evidence", error)
+            self.assertNotIn("lg.ps1 scan", error)
+            self.assertNotIn("Traceback", error)
+
 
 if __name__ == "__main__":
     unittest.main()

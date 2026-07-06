@@ -823,6 +823,27 @@ def apply_list_to_catalog(
     library_type: str = "ip",
 ) -> dict[str, Any]:
     rows = read_library_list(list_path)
+    out = Path(out_path)
+    raw = Path(raw_root).resolve()
+    if out.exists():
+        from lib_guard.discovery import load_library_map
+
+        previous_ids = {ref.library_id for ref in load_library_map(raw, {"library_map": str(out)}, out)}
+        selected, errors, warnings = validate_library_rows(raw, rows)
+        if not errors and previous_ids and len(selected) < len(previous_ids):
+            new_ids = {_formal_library_identity(item)[0] for item in selected}
+            return {
+                "status": "FAILED",
+                "reason": "library_catalog_shrink_guard",
+                "message": "library apply would reduce the official library_catalog.yml library count; existing file was not overwritten.",
+                "out": str(out),
+                "list_path": str(list_path),
+                "raw_root": str(raw),
+                "previous_library_count": len(previous_ids),
+                "new_library_count": len(new_ids),
+                "missing_libraries": sorted(previous_ids - new_ids),
+                "warnings": warnings,
+            }
     result = write_library_catalog(raw_root, rows, out_path, library_type=library_type)
     result["list_path"] = str(list_path)
     result["raw_root"] = str(Path(raw_root).resolve())

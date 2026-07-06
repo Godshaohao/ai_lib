@@ -1361,6 +1361,32 @@ def scan_catalog(
         catalog["recommended_tasks"] = _build_tasks(catalog)
         catalog["summary"] = _summary(merged_libraries, catalog["recommended_tasks"])
         catalog["partial_refresh"] = {"library": library_filter, "refreshed_library_count": len(refreshed_names)}
+    if not library_filter and isinstance(previous, Mapping):
+        previous_libraries = previous.get("libraries", []) or []
+        previous_count = len(previous_libraries) if isinstance(previous_libraries, list) else 0
+        new_count = len(catalog.get("libraries", []) or [])
+        if previous_count and new_count < previous_count:
+            return {
+                "status": "FAILED",
+                "reason": "library_count_shrink_guard",
+                "message": "Catalog refresh would reduce the library count; existing catalog.json was not overwritten. Fix library_catalog.yml/registry first; --full only forces a full rescan and does not allow library shrink.",
+                "catalog_path": str(out / "catalog.json"),
+                "state_path": str(state_path),
+                "previous_library_count": previous_count,
+                "new_library_count": new_count,
+                "missing_libraries": sorted(
+                    {
+                        str(lib.get("library_name") or lib.get("library_id") or "")
+                        for lib in previous_libraries
+                        if isinstance(lib, Mapping)
+                    }
+                    - {
+                        str(lib.get("library_name") or lib.get("library_id") or "")
+                        for lib in (catalog.get("libraries", []) or [])
+                        if isinstance(lib, Mapping)
+                    }
+                ),
+            }
     _write_json(out / "catalog.json", catalog)
     state = _build_catalog_state(root_path, policy_hash, catalog, collect_evidence=collect_evidence)
     _write_json(state_path, state)

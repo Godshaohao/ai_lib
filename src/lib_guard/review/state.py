@@ -519,3 +519,184 @@ def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None
             }
         )
     return {"generated_at": utc_now(), "schema_version": "review_state.v1", "libraries": libraries}
+
+# ---------------------------------------------------------------------------
+# Single-version review-state builder
+# ---------------------------------------------------------------------------
+# Version Detail is the authoritative review projection. Full catalog rendering
+# still calls build_review_state(), but RenderImpact uses the helpers below to
+# enrich exactly one version without rebuilding every library/version.
+
+
+def _selector_aliases_for_value(value: Any) -> set[str]:
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    aliases = {text, _safe_name(text)}
+    aliases.add(text.replace("/", "."))
+    aliases.add(text.replace("/", "_"))
+    aliases.add(text.replace(".", "_"))
+    if "/" in text:
+        tail = text.rsplit("/", 1)[-1]
+        aliases.update({tail, _safe_name(tail), tail.replace("/", "."), tail.replace("/", "_")})
+    return {item for item in aliases if item}
+
+
+def _library_selector_aliases(lib: Mapping[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    for key in ["formal_library_id", "typed_library_id", "library_id", "library_name", "display_name", "report_slug"]:
+        aliases.update(_selector_aliases_for_value(lib.get(key)))
+    for alias in lib.get("aliases", []) or []:
+        aliases.update(_selector_aliases_for_value(alias))
+    return aliases
+
+
+def _version_selector_aliases(version: Mapping[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    for key in ["version_id", "version", "version_key", "version_uid", "name"]:
+        aliases.update(_selector_aliases_for_value(version.get(key)))
+    return aliases
+
+
+def _selector_matches(aliases: set[str], selector: Any) -> bool:
+    if not selector:
+        return True
+    values = selector if isinstance(selector, (list, tuple, set)) else [selector]
+    wanted = {str(value).strip() for value in values if str(value).strip()}
+    expanded: set[str] = set()
+    for value in wanted:
+        expanded.update(_selector_aliases_for_value(value))
+    return bool(aliases & expanded)
+
+
+def build_review_version_item(
+    lib: Mapping[str, Any],
+    version: Mapping[str, Any],
+    *,
+    out_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Build review-state fields for one catalog version.
+
+    This mirrors the per-version enrichment inside build_review_state() but is
+    intentionally scoped to one version. It is used by Version Detail fast
+    rendering so scan/cmp/intake do not need full catalog projection.
+    """
+
+    formal_library_id = str(lib.get("formal_library_id") or lib.get("library_name") or lib.get("library_id") or "unknown")
+    typed_library_id = str(lib.get("typed_library_id") or lib.get("library_id") or formal_library_id)
+    report_slug = str(lib.get("report_slug") or _safe_name(typed_library_id))
+    display_name = str(lib.get("display_name") or formal_library_id)
+    lib_name = formal_library_id
+
+    version_id = str(version.get("version_id") or version.get("version_key") or "unknown")
+    catalog_status = _catalog_status(version)
+    scan_status = _status_scan(version)
+    diff_status = _status_diff(version, scan_status)
+    pairwise_status, pairwise_tasks, pairwise_summary = _pairwise(version)
+    release_status = _status_release(version)
+    overall_status = _overall(scan_status, diff_status, pairwise_status, release_status, catalog_status)
+    lineage = version.get("lineage", {}) or {}
+    item: dict[str, Any] = {
+        "version_id": version_id,
+        "version_key": version.get("version_key"),
+        "version_uid": version.get("version_uid") or version.get("version_key"),
+        "formal_library_id": formal_library_id,
+        "typed_library_id": typed_library_id,
+        "report_slug": report_slug,
+        "stage": version.get("stage") or "unknown",
+        "raw_path": version.get("raw_path"),
+        "base_version": version.get("base_version") or lineage.get("base_candidate") or lineage.get("base"),
+        "parent_version": lineage.get("parent_candidate") or lineage.get("parent"),
+        "package_type": version.get("package_type"),
+        "update_scope": version.get("update_scope") or [],
+        "catalog_status": catalog_status,
+        "scan_status": scan_status,
+        "scan": {
+            "scan_dir": (version.get("scan", {}) or {}).get("scan_dir"),
+            "scan_html": (version.get("scan", {}) or {}).get("scan_html"),
+            "scan_id": (version.get("scan", {}) or {}).get("scan_id"),
+        },
+        "diff": dict(version.get("diff", {}) or {}),
+        "diff_status": diff_status,
+        "pairwise_status": pairwise_status,
+        "pairwise_summary": pairwise_summary,
+        "release_status": release_status,
+        "risk_level": overall_status,
+        "overall_status": overall_status,
+        "library_name": lib_name,
+        "display_name": display_name,
+        "library_id": typed_library_id,
+        "links": _version_links(out_dir, lib_name, version_id, version),
+        "pairwise_tasks": pairwise_tasks,
+        "release_result": _release_result(version),
+    }
+
+    # Preserve catalog/runtime fields that are not explicitly normalized above.
+    # Explicit normalized fields win.
+    for key, value in dict(version).items():
+        item.setdefault(key, value)
+
+    review_paths = review_paths_for_version(out_dir, lib_name, version_id)
+    overrides = read_review_overrides(review_paths["override_file"])
+    review_gate = build_review_gate_for_version(item, gate="current", overrides=overrides)
+    review_gate["override_file"] = review_paths["override_file"]
+    review_gate["gate_file"] = review_paths["gate_file"]
+    item["review_gate"] = review_gate
+    item.update(derive_next_action(item))
+    return item
+
+
+def build_review_version_state(
+    catalog: Mapping[str, Any],
+    *,
+    out_dir: str | Path | None = None,
+    library: str,
+    version: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return an enriched ``(library, version)`` pair for one Version Detail.
+
+    Unlike build_review_state(), this is O(1) with respect to the number of
+    catalog versions after the target library/version have been selected. It is
+    the correct dependency for hot-path Version Detail renders.
+    """
+
+    selected_lib: Mapping[str, Any] | None = None
+    for lib in catalog.get("libraries", []) or []:
+        if isinstance(lib, Mapping) and _selector_matches(_library_selector_aliases(lib), library):
+            selected_lib = lib
+            break
+    if selected_lib is None:
+        raise ValueError(f"library not found for version detail render: {library!r}")
+
+    selected_version: Mapping[str, Any] | None = None
+    for item in selected_lib.get("versions", []) or []:
+        if isinstance(item, Mapping) and _selector_matches(_version_selector_aliases(item), version):
+            selected_version = item
+            break
+    if selected_version is None:
+        raise ValueError(f"version not found for version detail render: library={library!r} version={version!r}")
+
+    enriched = build_review_version_item(selected_lib, selected_version, out_dir=out_dir)
+    formal_library_id = str(selected_lib.get("formal_library_id") or selected_lib.get("library_name") or selected_lib.get("library_id") or "unknown")
+    typed_library_id = str(selected_lib.get("typed_library_id") or selected_lib.get("library_id") or formal_library_id)
+    report_slug = str(selected_lib.get("report_slug") or _safe_name(typed_library_id))
+    display_name = str(selected_lib.get("display_name") or formal_library_id)
+    lib_state: dict[str, Any] = dict(selected_lib)
+    lib_state.update(
+        {
+            "library_id": selected_lib.get("library_id"),
+            "typed_library_id": typed_library_id,
+            "formal_library_id": formal_library_id,
+            "library_name": formal_library_id,
+            "display_name": display_name,
+            "report_slug": report_slug,
+            "vendor": selected_lib.get("vendor") or "",
+            "category": selected_lib.get("category") or selected_lib.get("library_type") or "",
+            "middle_path": selected_lib.get("middle_path") or "",
+            "library_root": selected_lib.get("library_root") or "",
+            "version_count": len(selected_lib.get("versions", []) or []),
+            "versions": [enriched],
+        }
+    )
+    return lib_state, enriched
+

@@ -628,6 +628,84 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual(direct_lib["library_name"], "vendorA.analog_ip.UVIP")
             self.assertEqual([v["version_id"] for v in direct_lib["versions"]], ["initial_20250601", "stable_20250608"])
 
+    def test_full_catalog_refresh_blocks_accidental_library_count_shrink(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            for library_name in ["ucie", "pcie"]:
+                version = raw / "vendorA" / library_name / "stable_20250608"
+                version.mkdir(parents=True)
+                (version / "rtl").mkdir()
+                (version / "rtl" / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+
+            first_map = root / "library_map_full.yml"
+            first_map.write_text(
+                "\n".join(
+                    [
+                        "libraries:",
+                        "  vendorA.ucie:",
+                        "    root: raw/vendorA/ucie",
+                        "    display_name: ucie",
+                        "    vendor: vendorA",
+                        "    library_type: ip",
+                        "  vendorA.pcie:",
+                        "    root: raw/vendorA/pcie",
+                        "    display_name: pcie",
+                        "    vendor: vendorA",
+                        "    library_type: ip",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            first_policy = root / "catalog_policy_full.json"
+            first_policy.write_text(
+                json.dumps({"library_type": "ip", "discovery": {"library_map": str(first_map), "pattern_fallback": False}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import scan_catalog
+
+            first = scan_catalog(raw, out_dir=out, library_type="ip", policy_path=first_policy)
+            self.assertEqual(first["catalog"]["summary"]["library_count"], 2)
+
+            shrink_map = root / "library_map_one.yml"
+            shrink_map.write_text(
+                "\n".join(
+                    [
+                        "libraries:",
+                        "  vendorA.ucie:",
+                        "    root: raw/vendorA/ucie",
+                        "    display_name: ucie",
+                        "    vendor: vendorA",
+                        "    library_type: ip",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            shrink_policy = root / "catalog_policy_one.json"
+            shrink_policy.write_text(
+                json.dumps({"library_type": "ip", "discovery": {"library_map": str(shrink_map), "pattern_fallback": False}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            blocked = scan_catalog(raw, out_dir=out, library_type="ip", policy_path=shrink_policy)
+
+            self.assertEqual(blocked["status"], "FAILED")
+            self.assertEqual(blocked["reason"], "library_count_shrink_guard")
+            self.assertEqual(blocked["previous_library_count"], 2)
+            self.assertEqual(blocked["new_library_count"], 1)
+            kept = json.loads((out / "catalog.json").read_text(encoding="utf-8"))
+            self.assertEqual(kept["summary"]["library_count"], 2)
+
+            forced = scan_catalog(raw, out_dir=out, library_type="ip", policy_path=shrink_policy, force=True)
+            self.assertEqual(forced["status"], "FAILED")
+            self.assertEqual(forced["reason"], "library_count_shrink_guard")
+            kept_after_force = json.loads((out / "catalog.json").read_text(encoding="utf-8"))
+            self.assertEqual(kept_after_force["summary"]["library_count"], 2)
+
     def test_library_map_ignores_parent_dirs_that_do_not_contain_version_dirs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1083,9 +1161,12 @@ class CatalogTimelineTest(unittest.TestCase):
             html_dir = root / "html"
             full = render_catalog_html(catalog_path, html_dir)
             self.assertEqual(full["rendered_libraries"], 2)
+            pcie_html = html_dir / "libraries" / "ip_pcie" / "versions" / "stable_20250608" / "index.html"
+            self.assertTrue(pcie_html.exists())
 
             filtered = render_catalog_html(catalog_path, html_dir, library_filter="ucie", version_filter="stable_20250608")
             self.assertEqual(filtered["rendered_libraries"], 1)
+            self.assertTrue(pcie_html.exists())
 
             state = json.loads((html_dir / "catalog_state.json").read_text(encoding="utf-8"))
             libraries = {item["library_name"]: item for item in state["libraries"]}
@@ -1345,12 +1426,16 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertTrue(Path(new_version["diff"]["adjacent_diff_dir"]).exists())
             diff_html = Path(new_version["diff"]["adjacent_diff_html"])
             self.assertTrue(diff_html.exists())
-            catalog_html = work / "catalog" / "html" / "libraries" / "ip_ucie" / "index.html"
-            self.assertTrue(catalog_html.exists())
-            catalog_text = catalog_html.read_text(encoding="utf-8")
-            self.assertIn("Compare 索引", catalog_text)
-            self.assertIn(str(diff_html).replace("\\", "/"), catalog_text)
-            self.assertNotIn("diff_timeline.html", catalog_text)
+            detail_html = work / "catalog" / "html" / "libraries" / "ip_ucie" / "versions" / "stable_20250608" / "index.html"
+            self.assertTrue(detail_html.exists())
+            deferred = work / "catalog" / "html" / "render_deferred.json"
+            self.assertTrue(deferred.exists())
+            deferred_data = json.loads(deferred.read_text(encoding="utf-8"))
+            self.assertEqual(deferred_data["status"], "DEFERRED")
+            self.assertIn(
+                {"kind": "library_page", "library": "ucie", "version": None, "reason": "compare_updated"},
+                deferred_data["deferred_pages"],
+            )
 
             self.assertEqual(
                 main(

@@ -264,7 +264,10 @@ def _parse_review_actions(path: Path) -> dict[str, Any]:
 def _catalog_data(cfg: dict[str, str]) -> dict[str, Any]:
     path = Path(cfg["catalog"])
     if not path.exists():
-        raise FileNotFoundError(f"catalog not found: {path}. Run: scripts/lg.ps1 scan")
+        raise FileNotFoundError(
+            f"catalog 尚未生成: {path}. 先运行 `$PROJ/scripts/lg.csh cat --refresh-catalog --with-evidence` "
+            "生成 catalog 投影；`library add --apply` 只更新 registry/library_catalog.yml。"
+        )
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -605,7 +608,7 @@ def _build_parser() -> ArgumentParser:
     lg.csh library apply
     lg.csh library list                 # 查看命令应使用的正式库名
     lg.csh library list <正式库名> --versions
-    lg.csh cat --with-evidence
+    lg.csh cat --refresh-catalog --with-evidence
     lg.csh cat ucie stable_20250608     # 只重渲染一个版本详情页，不重新 scan
     lg.csh library override ucie stable_20250608 --base initial_20250601 --stage stable
     lg.csh scan ucie stable_20250608
@@ -648,30 +651,31 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--raw-root")
     p.add_argument("--library-type", default="ip")
 
-    p = sub.add_parser("scan", help="扫描指定版本，或按策略批量补 scan evidence")
+    p = sub.add_parser("scan", help="扫描 catalog 中已有版本，或按策略批量补 scan evidence；不会自动刷新 catalog")
     p.add_argument("library", nargs="?")
     p.add_argument("version", nargs="?")
     p.add_argument("--missing", action="store_true", help="只扫描缺少或已过期 scan evidence 的版本")
     p.add_argument("--all-versions", action="store_true", help="扫描选中 library 的全部版本")
     p.add_argument("--limit", type=int, help="限制批量扫描数量，便于试跑")
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="只扫描某个 catalog stage")
-    p.add_argument("--with-evidence", action="store_true", help="扫描前刷新带文件类型 evidence 的 catalog")
+    p.add_argument("--with-evidence", action="store_true", help="不再由 scan 触发 catalog 刷新；请改用 cat --refresh-catalog --with-evidence")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次扫描的内容 hash 策略")
     p.add_argument("--parse-file-types", help="覆盖本次扫描进入 parser 的文件类型，例如 lef,cdl")
     p.add_argument("--parse-exclude-file-types", help="覆盖本次扫描不进入 parser 的文件类型，例如 verilog,liberty,spef")
     p.add_argument("--parse-jobs", help="覆盖本次扫描 parser 并发数")
+    p.add_argument("--no-render", action="store_true", help="只运行 scan 和 scan HTML，不刷新 catalog/版本详情页；用于定位慢点")
 
-    p = sub.add_parser("cat", help="刷新 catalog/HTML，或刷新版本详情更新证据")
+    p = sub.add_parser("cat", help="渲染已有 catalog/HTML；显式 --refresh-catalog/--with-evidence/--full 才重建 catalog")
     p.add_argument("library", nargs="?")
     p.add_argument("version", nargs="?")
-    p.add_argument("--full", action="store_true", help="强制全量 catalog refresh，不复用 catalog_state.json")
-    p.add_argument("--fast", action="store_true", help="只做目录级 catalog refresh；短命令默认使用该模式")
-    p.add_argument("--with-evidence", action="store_true", help="为发现的版本收集轻量文件类型 evidence；大 RAW 树会更慢")
+    p.add_argument("--full", action="store_true", help="显式全量 catalog refresh，不复用 catalog_state.json")
+    p.add_argument("--fast", action="store_true", help="显式目录级 catalog refresh")
+    p.add_argument("--with-evidence", action="store_true", help="显式 catalog refresh 并为发现的版本收集轻量文件类型 evidence；大 RAW 树会更慢")
     p.add_argument("--update-detail", action="store_true", help="刷新 Version Review 更新详情；旧 refresh 命令会改写到这里")
     p.add_argument("--all", action="store_true", help="配合 --update-detail 刷新所有 catalog library 的更新详情")
     p.add_argument("--mode", default="current_effective", choices=["current_effective", "previous_effective", "adjacent", "cumulative"], help="更新详情默认使用 current/previous effective；adjacent 仅用于显式手动 compare")
     p.add_argument("--rescan", action="store_true", help="配合 --update-detail 强制重扫 old/new 版本")
-    p.add_argument("--refresh-catalog", action="store_true", help="配合 --update-detail 先刷新 catalog")
+    p.add_argument("--refresh-catalog", action="store_true", help="显式刷新 catalog；默认 cat 只重渲染已有 catalog")
 
     root_library = sub.add_parser("library", help="维护人工确认 library registry，并生成正式 library map")
     lsp = root_library.add_subparsers(dest="library_cmd", required=True)
@@ -886,6 +890,8 @@ def _scan_run_command(cfg: dict[str, str], library: str, version: str, args: Any
         cfg["catalog_html"],
     ]
     _append_scan_strategy(command, cfg, args)
+    if getattr(args, "no_render", False):
+        command.append("--no-catalog-render")
     return command
 
 
@@ -967,6 +973,7 @@ def _library_add_command(cfg: dict[str, str], args: Any) -> list[str]:
 
 
 def _library_list_command(cfg: dict[str, str], args: Any) -> list[str]:
+    _catalog_data(cfg)
     command = ["catalog", "list", "--catalog", cfg["catalog"]]
     if getattr(args, "library", None):
         command.extend(["--library", args.library])
@@ -1075,6 +1082,8 @@ def _scan_batch_command(
         cfg["catalog_html"],
     ]
     _append_scan_strategy(command, cfg, strategy_args)
+    if getattr(strategy_args, "no_render", False):
+        command.append("--no-catalog-render")
     if library:
         command.extend(["--library", library])
     if only_missing:
@@ -1104,6 +1113,22 @@ def _find_version_in_catalog(cfg: dict[str, str], library: str, version: str) ->
         return _find_version(lib, version)
     except Exception:
         return None
+
+
+def _require_catalog_library(cfg: dict[str, str], library: str) -> dict[str, Any]:
+    return _find_library(_catalog_data(cfg), library)
+
+
+def _require_catalog_version(cfg: dict[str, str], library: str, version: str) -> dict[str, Any]:
+    lib = _require_catalog_library(cfg, library)
+    try:
+        return _find_version(lib, version)
+    except Exception as exc:
+        raise ValueError(
+            f"catalog 中没有版本 {version!r} for library {library!r}. "
+            f"lg scan 不会自动刷新 catalog；请先运行 `$PROJ/scripts/lg.csh cat --refresh-catalog {library}` "
+            "或检查 `$WORK/config/library_catalog.yml`。"
+        ) from exc
 
 
 def _scan_evidence_exists(cfg: dict[str, str], library: str, version: str) -> bool:
@@ -1397,17 +1422,24 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
     if args.short_command == "cat":
         if getattr(args, "update_detail", False):
             return _refresh_commands(cfg, args)
-        if args.library and getattr(args, "version", None):
-            return [_catalog_render_command(cfg, args.library, args.version)]
-        return [
-            _catalog_scan_command(
-                cfg,
-                args.library,
-                getattr(args, "version", None),
-                full=bool(getattr(args, "full", False)),
-                with_evidence=bool(getattr(args, "with_evidence", False)),
-            )
-        ]
+        refresh_requested = bool(
+            getattr(args, "refresh_catalog", False)
+            or getattr(args, "full", False)
+            or getattr(args, "fast", False)
+            or getattr(args, "with_evidence", False)
+        )
+        if refresh_requested:
+            return [
+                _catalog_scan_command(
+                    cfg,
+                    args.library,
+                    getattr(args, "version", None),
+                    full=bool(getattr(args, "full", False)),
+                    with_evidence=bool(getattr(args, "with_evidence", False)),
+                )
+            ]
+        _catalog_data(cfg)
+        return [_catalog_render_command(cfg, args.library, getattr(args, "version", None))]
     if args.short_command == "intake":
         return [_window_common_command(cfg, args, "intake")]
     if args.short_command == "window":
@@ -1423,12 +1455,14 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         return _review_commands(cfg, args)
     if args.short_command == "scan":
         with_evidence = bool(getattr(args, "with_evidence", False))
+        if with_evidence:
+            raise ValueError(
+                "lg scan 不刷新 catalog；请先运行 `$PROJ/scripts/lg.csh cat --refresh-catalog --with-evidence`，"
+                "再运行 `lg scan <library> <version>`。"
+            )
         if args.library and args.version:
-            commands: list[list[str]] = []
-            if with_evidence or not _find_version_in_catalog(cfg, args.library, args.version):
-                commands.append(_catalog_scan_command(cfg, args.library, with_evidence=with_evidence))
-            commands.append(_scan_run_command(cfg, args.library, args.version, args))
-            return commands
+            _require_catalog_version(cfg, args.library, args.version)
+            return [_scan_run_command(cfg, args.library, args.version, args)]
         if args.library:
             has_batch_intent = bool(
                 getattr(args, "missing", False)
@@ -1438,8 +1472,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             )
             if not has_batch_intent:
                 raise ValueError(_scan_library_help(args.library))
+            _require_catalog_library(cfg, args.library)
             return [
-                _catalog_scan_command(cfg, args.library, with_evidence=with_evidence),
                 _scan_batch_command(
                     cfg,
                     args.library,
@@ -1447,7 +1481,7 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
                     limit=getattr(args, "limit", None),
                     stage=getattr(args, "stage", None),
                     strategy_args=args,
-                ),
+                )
             ]
         raise ValueError("lg scan requires <library> <version> or <library> --missing/--all-versions. Use lg cat to refresh catalog/HTML.")
     if args.short_command == "cmp":

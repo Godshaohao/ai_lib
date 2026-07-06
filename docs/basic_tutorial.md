@@ -41,6 +41,19 @@ $PROJ/scripts/lg.csh library add vendor_A.openroad_platform.openroad_asap7 \
   --apply
 ```
 
+注意：`library add --apply` 只更新人工确认 registry 和正式 `library_catalog.yml`，
+还不会生成 `$WORK/catalog/catalog.json`。第一次入库后必须先生成 catalog 投影：
+
+```csh
+$PROJ/scripts/lg.csh cat --refresh-catalog --with-evidence
+```
+
+否则直接执行 `library list` 会看到类似错误：
+
+```text
+FileNotFoundError: .../catalog/catalog.json
+```
+
 如果不知道库根目录，先发现候选，再人工确认：
 
 ```csh
@@ -77,6 +90,12 @@ discover 的最小规则是：
 
 ## 2. 获取正式库名和版本名
 
+确认 `$WORK/catalog/catalog.json` 已经存在后，再列库和版本：
+
+```csh
+test -f $WORK/catalog/catalog.json
+```
+
 不要手猜 `_` 和 `.`。命令里使用 catalog 认可的正式名字：
 
 ```csh
@@ -89,10 +108,66 @@ $PROJ/scripts/lg.csh library list vendor_A.openroad_platform.openroad_asap7 --ve
 - `LIBRARY`：例如 `vendor_A.openroad_platform.openroad_asap7`
 - `VERSION`：例如 `20260627_asap7`
 
+## 2.1 手动测试最小闭环
+
+第一次演练不要直接跑全量。先用 `--dry-run` 看短命令会展开成哪些底层动作：
+
+```csh
+$PROJ/scripts/lg.csh --dry-run library list
+$PROJ/scripts/lg.csh --dry-run library list <LIBRARY> --versions
+$PROJ/scripts/lg.csh --dry-run cat <LIBRARY> <VERSION>
+$PROJ/scripts/lg.csh --dry-run scan <LIBRARY> <VERSION>
+$PROJ/scripts/lg.csh --dry-run cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
+$PROJ/scripts/lg.csh --dry-run intake <LIBRARY> --plan-only
+```
+
+确认展开命令合理后，再按这个小闭环执行：
+
+```csh
+# 1. 确认正式库名和版本名
+$PROJ/scripts/lg.csh library list
+$PROJ/scripts/lg.csh library list <LIBRARY> --versions
+
+# 2. 只渲染一个版本详情页，不重新 scan
+$PROJ/scripts/lg.csh cat <LIBRARY> <VERSION>
+
+# 3. 扫描一个版本；完成后会通过 Render Impact 刷新该版本详情页
+$PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
+
+# 4. 手动指定 base 做结构对比；完成后刷新 target 版本详情页
+$PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
+
+# 5. 打开 Version Detail 检查第一屏
+# 优先打开命令 JSON 里的 render_summary.open_first；
+# 没有该字段时再打开 Catalog 首页导航。
+firefox <render_summary.open_first>
+```
+
+第一屏只看五个判断：接入判断、审查对象、对比上下文、View 变化、证据状态。
+如果这里显示 `STALE_OR_MISSING` 或 `NEEDS_BASE_CONFIRM`，先不要看 parser 明细，
+先回到库名、版本名、base/effective 是否正确。
+
+短命令副作用速查：
+
+| 短命令 | 会 scan | 会 diff | 会刷新 Version Detail | 用途 |
+| --- | --- | --- | --- | --- |
+| `library list` | 否 | 否 | 否 | 找正式库名/版本名 |
+| `cat <LIBRARY> <VERSION>` | 否 | 否 | 是，仅该版本 | 重新打开/刷新详情页 |
+| `cat <LIBRARY> --update-detail` | 按需 | 是 | 是，按 update-detail 目标 | 刷新日常更新证据 |
+| `scan <LIBRARY> <VERSION>` | 是 | 否 | 是，仅该版本 | 生成 scan evidence |
+| `scan <LIBRARY> --missing` | 是，批量缺失项 | 否 | 是，成功版本集合 | 补齐 scan evidence |
+| `cmp <LIBRARY> <VERSION> --base ...` | 仅 `--scan-if-missing/--rescan` 时 | 是 | 是，target 版本 | 手动 compare/debug |
+| `intake <LIBRARY>` | 是，window 内版本 | 是，effective compare | 是，window 内版本 | 新版本接入窗口 |
+| `window <LIBRARY>` | 否 | 否 | 否 | 查看窗口算法结果 |
+| `accept-window <LIBRARY>` | 否 | 否 | 是，window 内版本 | 接受 candidate effective |
+| `mark <LIBRARY> <VERSION>` | 否 | 否 | 是，该版本 | 修正 package type |
+| `rv ...` | 否 | 否 | 否 | Review Gate 决策 |
+| `rel ...` | 否 | 否 | 否 | release check/link/verify |
+
 ## 3. 生成 Catalog 页面
 
 ```csh
-$PROJ/scripts/lg.csh cat --with-evidence
+$PROJ/scripts/lg.csh cat --refresh-catalog --with-evidence
 ```
 
 打开：
@@ -101,11 +176,77 @@ $PROJ/scripts/lg.csh cat --with-evidence
 $WORK/catalog/html/index.html
 ```
 
-`cat --with-evidence` 会刷新 catalog 和轻量 evidence。面对很多库时，优先用单库命令：
+`cat --refresh-catalog --with-evidence` 的作用是从正式 `library_catalog.yml` 重新生成
+`$WORK/catalog/catalog.json` 和 Catalog HTML，并顺手收集轻量文件类型 evidence。
+它是“低频重建 catalog 投影”，不是 scan/diff 的深度审查命令。
+
+它会覆盖这些生成物：
+
+- `$WORK/catalog/catalog.json`
+- `$WORK/catalog/html/index.html`
+- 受本次 catalog render 影响的 library/version HTML
+
+它不会删除这些事实证据：
+
+- `$WORK/config/library_registry.tsv`
+- `$WORK/config/library_catalog.yml`
+- `$WORK/scan_out/...`
+- `$WORK/diff/...`
+- `$WORK/file_diff/...`
+- `$WORK/release/...`
+
+所以它不会“打乱”已经完成的 scan/diff 证据，但会用当前 catalog 状态重新投影页面。
+如果你手工改过生成 HTML 或 `catalog.json`，下一次 `cat --refresh-catalog --with-evidence` 会覆盖这些手改。
+人工修正应写到 `library override`、registry 或 policy 里，不要改生成物。
+
+面对很多库时，优先用单库命令：
 
 ```csh
-$PROJ/scripts/lg.csh cat <LIBRARY> --with-evidence
+$PROJ/scripts/lg.csh cat --refresh-catalog <LIBRARY> --with-evidence
 ```
+
+第一次入库、registry/apply 后，需要提前跑一次 `cat --refresh-catalog --with-evidence`，否则
+`library list` 没有 `$WORK/catalog/catalog.json` 可读。
+
+如果 `cat` 后库数量从很多个突然变成 1 个，先不要继续扫描。真实来源通常不是 HTML，
+而是当前正式清单 `$WORK/config/library_catalog.yml` 只剩一个库，或者被最近一次
+`library apply` / `library add --apply` 用单库输入覆盖了。现在 `library apply` 和
+`cat --refresh-catalog` 都会阻止 library count shrink 并保留旧文件；如果确实要删除
+旧库，先人工修改 registry/library_catalog，再按错误信息确认，不要用普通扫描命令顺手覆盖。
+
+快速检查：
+
+```csh
+grep '^  [^ ].*:$' $WORK/config/library_catalog.yml
+python3 -c "import json; d=json.load(open('$WORK/catalog/catalog.json')); print(len(d.get('libraries', [])))"
+```
+
+### 3.1 哪些命令会覆盖 HTML 报告
+
+| 操作 | 会覆盖哪些页面 | 是否重跑 scan | 是否重跑 diff | 备注 |
+| --- | --- | --- | --- | --- |
+| `cat --refresh-catalog --with-evidence` | Catalog 首页、library 页、version 页投影 | 否 | 否 | 低频全局 catalog 重建 |
+| `cat --refresh-catalog <LIBRARY> --with-evidence` | 指定库相关页面投影 | 否 | 否 | 推荐用于大库日常局部刷新 |
+| `cat <LIBRARY> <VERSION>` | 指定 Version Detail | 否 | 否 | 只重新投影页面，不更新证据 |
+| `cat <LIBRARY> --update-detail` | update-detail 目标版本 | 按需 | 是 | 用上一有效版/当前有效版生成更新详情 |
+| `scan <LIBRARY> <VERSION>` | 该版本 Version Detail、scan HTML | 是 | 否 | Catalog 导航页可能延迟刷新 |
+| `scan <LIBRARY> <VERSION> --no-render` | 只更新 scan HTML | 是 | 否 | 诊断慢 scan；Version Detail 不刷新 |
+| `cmp <LIBRARY> <VERSION> --base ...` | target Version Detail | 仅 `--scan-if-missing/--rescan` | 是 | 手动 compare/debug |
+| `intake/accept-window/mark` | 受影响 Version Detail | 视命令而定 | 视命令而定 | Version Detail 是唯一审查投影 |
+| `rv` / `rel --check-first` | 默认不刷新 Version Detail | 否 | 否 | 只做决策/放行检查 |
+
+判断页面是否刚刷新，不要只看 Catalog 首页。优先看命令输出：
+
+```text
+render_summary.message
+render_summary.open_first
+render_summary.version_detail_htmls
+render_summary.deferred_file
+```
+
+如果 `message` 是 `版本详情已刷新 ...；Catalog 导航页延迟刷新`，说明 Version Detail
+已经更新；首页导航可由下一次普通 `cat` 基于已有 catalog 重渲染，或由显式
+`cat --refresh-catalog ...` 重建 catalog 后再渲染。
 
 ## 4. 人工确认版本关系
 
@@ -137,18 +278,66 @@ $PROJ/scripts/lg.csh scan <LIBRARY> --missing
 ```csh
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --parse-file-types lef,cdl
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --parse-exclude-file-types verilog,liberty,spef
-$PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --hash-policy full
 $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --parse-jobs 8
 ```
+
+正常 `scan` 会在完成后通过 Render Impact 自动刷新对应 Version Detail。命令输出里的
+`render_summary.message` 会直接说明是否刷新，`render_summary.open_first` 是建议打开的
+第一个详情页，例如：
+
+```text
+版本详情已刷新 1 个版本；Catalog 导航页延迟刷新
+```
+
+这表示 scan/cmp 热路径已经刷新 Version Detail；Catalog 首页和 library 导航页会写入
+`render_deferred.json`，等下一次 `cat` 或显式 catalog refresh 再低频重建。日常审查先看 Version Detail，
+不要把导航页延迟理解成扫描结果没有更新。
+
+如果感觉 `scan <LIBRARY> <VERSION>` 很慢，先不要直接加深扫描。按下面顺序排查：
+
+```csh
+# 1. 只看短命令会展开成什么；正常 scan 不应额外触发 catalog refresh
+$PROJ/scripts/lg.csh --dry-run scan <LIBRARY> <VERSION>
+
+# 2. 诊断专用：只跑 scan + scan HTML，跳过 catalog/版本详情页刷新
+$PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --no-render
+
+# 3. 查看 scan 内部当前阶段、耗时和 parser 最慢文件
+python3 -m json.tool <SCAN_DIR>/logs/scan_progress_latest.json
+```
+
+正常策略是 `hash-policy=smart`：大体量 `.lib/.db/.spef/.gds/.oas/.gz` 等不会默认读内容。
+`--hash-policy full` 会强制读取文件内容生成 hash，面对真实工艺库通常会非常慢，只在
+需要验证内容 hash 时临时使用：
+
+```csh
+$PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --hash-policy full --no-render
+```
+
+单次 `scan` 的 JSON 输出会包含 `phase_timings`，用于区分耗时来自 `scan_runner`、
+`render_scan_html`、`update_catalog_scan_status` 还是 `render_impacted_catalog_html`。
+如果使用 `--no-render`，输出会显示 `版本详情未刷新：no_catalog_render`；这时需要再
+执行 `cat <LIBRARY> <VERSION>` 才会更新页面。
 
 ## 6. 刷新版本详情页
 
 ```csh
+$PROJ/scripts/lg.csh cat <LIBRARY>
 $PROJ/scripts/lg.csh cat <LIBRARY> <VERSION>
 $PROJ/scripts/lg.csh cat <LIBRARY> --update-detail
 ```
 
-`cat <LIBRARY> <VERSION>` 只重渲染一个版本详情页，不重新 scan。
+`cat <LIBRARY>` 只基于已有 `catalog.json` 重渲染这个库的页面，不重新 discover，
+也不写 `catalog.json`。如果你确实需要重新读取 `library_catalog.yml` 和 RAW 目录，
+使用：
+
+```csh
+$PROJ/scripts/lg.csh cat --refresh-catalog <LIBRARY>
+```
+
+`cat <LIBRARY> <VERSION>` 只重渲染一个版本详情页，不重新 scan，也不补齐其它
+`versions/<VERSION>` 目录。已有的其它版本目录不会被删除；如果在一个新的 `$WORK`
+里只跑这个命令，页面目录里只出现这个版本是正常的。
 
 `cat <LIBRARY> --update-detail` 刷新 Version Review 的更新详情，默认使用
 `current_effective`，没有当前有效库时退到 `previous_effective`。找不到可信 base

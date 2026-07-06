@@ -35,6 +35,23 @@ class InventorySmokeTest(unittest.TestCase):
             self.assertNotIn("reports/noise.txt", paths)
             self.assertNotIn("diff/noise.txt", paths)
 
+    def test_file_walker_keeps_symlink_logical_path_inside_root(self) -> None:
+        from src.lib_guard.scan.inventory import FileWalker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "lib"
+            external = Path(tmp) / "external"
+            root.mkdir()
+            external.mkdir()
+            (external / "shared.lef").write_text("MACRO SHARED\nEND SHARED\n", encoding="utf-8")
+            (root / "shared.lef").symlink_to(external / "shared.lef")
+
+            rows = list(FileWalker().walk(root))
+
+            self.assertEqual([row["path"] for row in rows], ["shared.lef"])
+            self.assertTrue(rows[0]["is_symlink"])
+            self.assertEqual(rows[0]["symlink_target"], str(external / "shared.lef"))
+
 
 class FileDiffSmokeTest(unittest.TestCase):
     def test_read_text_supports_gzip(self) -> None:

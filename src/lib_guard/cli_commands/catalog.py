@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 import json
+import time
 
 from .common import auto_scan_id, default_cache_dir, default_state_dir, print_json, refresh_catalog_html, render_impacted_catalog_html
 from .scan import split_strategy_list
@@ -196,6 +197,52 @@ def _attach_render_output(output: dict[str, Any], render_impact: dict[str, Any])
     render_result = render_impact.get("render_result")
     if render_result:
         output["catalog_html"] = render_result
+    output["render_summary"] = _render_summary(render_impact)
+
+
+def _render_summary(render_impact: Mapping[str, Any]) -> dict[str, Any]:
+    render_result = render_impact.get("render_result") if isinstance(render_impact.get("render_result"), Mapping) else {}
+    affected_versions = [
+        {"library": item.get("library"), "version": item.get("version")}
+        for item in (render_impact.get("affected_pages") or [])
+        if isinstance(item, Mapping) and item.get("kind") == "version_detail"
+    ]
+    status = str(render_result.get("status") or "UNKNOWN")
+    skipped_reason = render_result.get("reason") if status == "SKIPPED" else None
+    rendered_versions = int(render_result.get("rendered_versions", 0) or 0)
+    version_detail_htmls = [
+        str(item.get("version_detail_html"))
+        for item in (render_result.get("version_detail_pages") or [])
+        if isinstance(item, Mapping) and item.get("version_detail_html")
+    ]
+    deferred_pages = render_result.get("deferred_pages") or []
+    deferred_file = render_result.get("deferred_file") or None
+    failed_versions = render_result.get("failed_versions") or []
+    if status == "SKIPPED":
+        message = f"版本详情未刷新：{skipped_reason or 'unknown'}"
+    elif status not in {"PASS", "UNKNOWN"}:
+        message = f"版本详情刷新失败：{len(failed_versions) or 'unknown'} 个版本失败"
+    elif rendered_versions and deferred_pages:
+        message = f"版本详情已刷新 {rendered_versions} 个版本；Catalog 导航页延迟刷新"
+    elif rendered_versions:
+        message = f"版本详情已刷新 {rendered_versions} 个版本；Catalog 首页已更新"
+    else:
+        message = "Catalog 首页已更新；没有版本详情页需要刷新"
+    return {
+        "status": status,
+        "message": message,
+        "catalog_html_out": render_impact.get("catalog_html_out"),
+        "index_html": render_result.get("index_html"),
+        "open_first": version_detail_htmls[0] if version_detail_htmls else render_result.get("index_html"),
+        "version_detail_htmls": version_detail_htmls,
+        "rendered_libraries": int(render_result.get("rendered_libraries", 0) or 0),
+        "rendered_versions": rendered_versions,
+        "skipped_reason": skipped_reason,
+        "deferred_pages": deferred_pages,
+        "deferred_file": deferred_file,
+        "failed_versions": failed_versions,
+        "affected_versions": affected_versions,
+    }
 
 
 def _version_ref_from_catalog_key(catalog: Mapping[str, Any], version_key: str) -> tuple[str, str] | None:
@@ -252,7 +299,17 @@ def run_catalog_workflow(args: Namespace) -> int:
     from lib_guard.render.html_report import render_scan_html
     from lib_guard.scan.scanner import ScanRunner
 
+    phase_timings: list[dict[str, Any]] = []
+
+    def start_phase() -> float:
+        return time.perf_counter()
+
+    def finish_phase(phase: str, started: float) -> None:
+        phase_timings.append({"phase": phase, "elapsed_seconds": round(max(0.0, time.perf_counter() - started), 3)})
+
+    started = start_phase()
     item = find_catalog_version(args.catalog, args.library, args.version)
+    finish_phase("resolve_catalog_version", started)
     scan_id = args.scan_id or auto_scan_id()
     out_dir = args.out or str(Path(args.workdir) / "scan_out" / item["library_name"] / item["version_id"] / f"{args.mode}_{scan_id}")
     cfg = SimpleNamespace(
@@ -290,8 +347,13 @@ def run_catalog_workflow(args: Namespace) -> int:
         base_required=item.get("base_required"),
         base_version=item.get("base_version") or (item.get("lineage", {}) or {}).get("base_candidate"),
     )
+    started = start_phase()
     scan_result = ScanRunner(cfg).run()
+    finish_phase("scan_runner", started)
+    started = start_phase()
     scan_html = render_scan_html(scan_result.out_dir, args.html_out or str(Path(args.workdir) / "reports" / item["library_name"] / item["version_id"] / "scan_html"))
+    finish_phase("render_scan_html", started)
+    started = start_phase()
     update_catalog_scan_status(
         args.catalog,
         version_key=item["version_key"],
@@ -301,6 +363,7 @@ def run_catalog_workflow(args: Namespace) -> int:
         scan_html=scan_html.get("index_html"),
         input_fingerprint=(scan_result.bundle.scan_meta.get("input_fingerprint") if getattr(scan_result, "bundle", None) else None),
     )
+    finish_phase("update_catalog_scan_status", started)
     result = {
         "status": scan_result.status,
         "catalog": args.catalog,
@@ -309,7 +372,13 @@ def run_catalog_workflow(args: Namespace) -> int:
         "scan_dir": scan_result.out_dir,
         "scan_html": scan_html,
     }
+    scan_error = (scan_result.bundle.scan_meta or {}).get("error") if getattr(scan_result, "bundle", None) else None
+    if scan_error:
+        result["scan_error"] = scan_error
+    started = start_phase()
     render_impact = render_impacted_catalog_html(args, impacts_for_versions(item["library_name"], [item["version_id"]], "scan_updated"))
+    finish_phase("render_impacted_catalog_html", started)
+    result["phase_timings"] = phase_timings
     _attach_render_output(result, render_impact)
     print_json(result)
     return 0 if scan_result.status not in {"FAILED", "BLOCK"} else 2

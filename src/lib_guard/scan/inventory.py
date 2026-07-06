@@ -149,8 +149,9 @@ class FileWalker:
                     stat = abs_path.stat()
                 except OSError:
                     continue
+                logical_path = abs_path.relative_to(root).as_posix()
                 yield {
-                    "path": abs_path.resolve().relative_to(root).as_posix(),
+                    "path": logical_path,
                     "abs_path": str(abs_path.resolve()),
                     "name": name,
                     "extension": abs_path.suffix.lower(),
