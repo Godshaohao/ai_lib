@@ -130,9 +130,12 @@ def _release_is_visible(version: Mapping[str, Any], lib: Mapping[str, Any] | Non
 
 
 def _scan_label(version: Mapping[str, Any]) -> tuple[str, str]:
-    status = _status_key(version.get("scan_status"))
-    if status in {"SCANNED", "PASS", "DONE", "FINISHED"}:
+    scan = version.get("scan") if isinstance(version.get("scan"), Mapping) else {}
+    status = _status_key(version.get("scan_status") or scan.get("status"))
+    if status in {"SCANNED", "PASS", "DONE", "FINISHED", "SCAN_PASS"}:
         return status, "已扫"
+    if status in {"PASS_WITH_WARNING", "WARNING", "WARN", "SCAN_WARN"}:
+        return status, "已扫有警告"
     if status in {"FAILED", "BLOCK", "BLOCKED", "ERROR"}:
         return status, "失败"
     return "NOT_SCANNED", "未扫"

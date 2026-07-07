@@ -92,13 +92,37 @@ def diff_label(version: Mapping[str, Any] | None) -> tuple[str, str]:
     if not isinstance(version, Mapping):
         return "UNKNOWN", "未知"
     status = common.status_key(version.get("diff_status") or (version.get("diff") or {}).get("status"))
-    if status in {"DIFF", "CHANGED", "REVIEW_REQUIRED"}:
+    if status in {"DIFF", "CHANGED"}:
         return status, "有变化"
+    if status in {"REVIEW_REQUIRED", "DIFF_REVIEW"}:
+        return status, "对比需审查"
     if status in {"PASS", "SAME", "NO_DIFF", "UNCHANGED"}:
         return status, "无变化"
     if status in {"FAILED", "ERROR", "BLOCKED"}:
         return status, "失败"
     return status or "COMPARE_PENDING", "待对比"
+
+
+def scan_note(status: str, text: str) -> str:
+    key = common.status_key(status)
+    if key == "NOT_SCANNED":
+        return "未扫描：需要运行 scan 或 intake 生成扫描证据"
+    if key in {"FAILED", "ERROR", "BLOCKED"}:
+        return "扫描失败：先查看扫描日志和输入路径"
+    if key in {"SCANNED", "PASS", "SCAN_READY", "DONE"}:
+        return "扫描证据已生成"
+    return f"{text or '扫描状态待确认'}：请查看扫描证据"
+
+
+def diff_note(status: str, text: str) -> str:
+    key = common.status_key(status)
+    if key in {"DIFF", "CHANGED", "REVIEW_REQUIRED", "DIFF_REVIEW"}:
+        return "已进入对比审查：请打开版本详情查看视图变化"
+    if key in {"PASS", "SAME", "NO_DIFF", "UNCHANGED"}:
+        return "对比完成：未发现变化"
+    if key in {"FAILED", "ERROR", "BLOCKED"}:
+        return "对比失败：先查看 diff 日志和 base 设置"
+    return f"{text or '待对比'}：需要生成相对当前/上一有效版的对比证据"
 
 
 def base_for_candidate(candidate: Mapping[str, Any] | None, current_ref: str) -> str:
@@ -175,8 +199,10 @@ def build_library_workspace_model(
         "base_ref": base_ref or "-",
         "scan_status": scan_status,
         "scan_text": scan_text,
+        "scan_note": scan_note(scan_status, scan_text),
         "diff_status": diff_status,
         "diff_text": diff_text,
+        "diff_note": diff_note(diff_status, diff_text),
         "release_status": release_status or "UNKNOWN",
         "decision": decision,
         "needs_review": needs_review,

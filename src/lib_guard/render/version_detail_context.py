@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 
 SCHEMA_VERSION = "version_detail_review_context.v1"
-ACTIVE_WINDOW_STATES = {"PENDING", "REBUILT", "COMPARED"}
+ACTIVE_WINDOW_STATES = {"PENDING", "REBUILT", "COMPARED", "ACCEPTED"}
 
 
 @dataclass(frozen=True)
@@ -309,31 +309,75 @@ def _compare_new(window: Mapping[str, Any]) -> str:
 def _compare_dir(catalog_html_out: str | Path, library_row: Mapping[str, Any], window: Mapping[str, Any]) -> str:
     compare = _compare(window)
     out_dir = str(compare.get("out_dir") or "")
-    if out_dir or not catalog_html_out:
+    if out_dir and Path(out_dir).exists():
+        return out_dir
+    if not catalog_html_out:
         return out_dir
     compare_id = _compare_id(window)
-    if not compare_id:
-        return ""
-    return str(Path(catalog_html_out) / "libraries" / _library_report_key(library_row) / "compare" / _safe(compare_id))
+    if compare_id:
+        candidate = Path(catalog_html_out) / "libraries" / _library_report_key(library_row) / "compare" / _safe(compare_id)
+        if candidate.exists():
+            return str(candidate)
+    manifest = _find_compare_manifest(catalog_html_out, library_row, window)
+    if manifest:
+        return str(manifest.parent)
+    return out_dir
 
 
 def _compare_html(catalog_html_out: str | Path, library_row: Mapping[str, Any], window: Mapping[str, Any]) -> str:
     compare = _compare(window)
     html = str(compare.get("html") or "")
-    if html:
+    if html and Path(html).exists():
         return html
     compare_dir = _compare_dir(catalog_html_out, library_row, window)
-    return str(Path(compare_dir) / "index.html") if compare_dir else ""
+    candidate = Path(compare_dir) / "index.html" if compare_dir else None
+    if candidate and candidate.exists():
+        return str(candidate)
+    return html or (str(candidate) if candidate else "")
 
 
 def _compare_manifest(catalog_html_out: str | Path, library_row: Mapping[str, Any], window: Mapping[str, Any]) -> str:
     compare = _compare(window)
     explicit = str(compare.get("manifest") or compare.get("compare_manifest") or "")
-    if explicit:
+    if explicit and Path(explicit).exists():
         return explicit
     compare_dir = _compare_dir(catalog_html_out, library_row, window)
     candidate = Path(compare_dir) / "compare_manifest.json" if compare_dir else None
-    return str(candidate) if candidate and candidate.exists() else ""
+    if candidate and candidate.exists():
+        return str(candidate)
+    manifest = _find_compare_manifest(catalog_html_out, library_row, window)
+    return str(manifest) if manifest else ""
+
+
+def _manifest_target_label(manifest: Mapping[str, Any], key: str) -> str:
+    target = _mapping(manifest.get(key))
+    return str(target.get("label") or (f"{target.get('type')}:{target.get('id')}" if target.get("type") and target.get("id") else ""))
+
+
+def _compare_manifest_matches(manifest: Mapping[str, Any], expected_old: str, expected_new: str) -> bool:
+    old_label = _manifest_target_label(manifest, "old_target")
+    new_label = _manifest_target_label(manifest, "new_target")
+    return bool(old_label and new_label and old_label == str(expected_old or "") and new_label == str(expected_new or ""))
+
+
+def _find_compare_manifest(catalog_html_out: str | Path, library_row: Mapping[str, Any], window: Mapping[str, Any]) -> Path | None:
+    if not catalog_html_out:
+        return None
+    compare_root = Path(catalog_html_out) / "libraries" / _library_report_key(library_row) / "compare"
+    if not compare_root.exists() or not compare_root.is_dir():
+        return None
+    expected_old = _compare_old(window)
+    expected_new = _compare_new(window)
+    for child in sorted(compare_root.iterdir()):
+        if not child.is_dir():
+            continue
+        manifest_path = child / "compare_manifest.json"
+        if not manifest_path.exists():
+            continue
+        manifest = _read_mapping(manifest_path)
+        if _compare_manifest_matches(manifest, expected_old, expected_new):
+            return manifest_path
+    return None
 
 
 def _scan_evidence_exists(version_row: Mapping[str, Any]) -> bool:

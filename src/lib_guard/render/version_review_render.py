@@ -62,27 +62,51 @@ def _simple_table(headers: list[str], rows: list[str], empty: str) -> str:
     )
 
 
-def _view_delta_rows(ip_model: Mapping[str, Any]) -> list[str]:
-    rows: list[str] = []
+def _example_list(title: str, values: Any) -> str:
+    if not isinstance(values, list) or not values:
+        return ""
+    body = "<br>".join(f"<code>{ui.esc(item)}</code>" for item in values[:4])
+    return f"<b>{ui.esc(title)}</b><br>{body}"
+
+
+def _view_delta_items(ip_model: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    items: list[Mapping[str, Any]] = []
     for item in ip_model.get("view_delta_rows", []) or []:
         if not isinstance(item, Mapping):
             continue
         if not int(item.get("delta_total") or 0) and not int(item.get("current_count") or 0):
             continue
+        items.append(item)
+    return items
+
+
+def _view_delta_file_evidence(item: Mapping[str, Any]) -> str:
+    changed_examples = _example_list("本次变化", item.get("changed_examples"))
+    current_examples = _example_list("当前代表", item.get("current_examples"))
+    return "<br>".join(part for part in [changed_examples, current_examples] if part) or "<span class='muted'>暂无文件样例</span>"
+
+
+def _view_delta_raw_text(item: Mapping[str, Any]) -> str:
+    raw_types = str(item.get("raw_types") or "-")
+    raw_delta_types = str(item.get("raw_delta_types") or "-")
+    if raw_delta_types not in {"-", raw_types}:
+        return f"当前 {raw_types}; 更新 {raw_delta_types}"
+    return raw_types
+
+
+def _view_delta_rows(ip_model: Mapping[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for item in _view_delta_items(ip_model):
         delta = f"+{item.get('added') or 0} / -{item.get('removed') or 0} / ~{item.get('changed') or 0}"
-        raw_types = str(item.get("raw_types") or "-")
-        raw_delta_types = str(item.get("raw_delta_types") or "-")
-        if raw_delta_types not in {"-", raw_types}:
-            raw_text = f"当前 {raw_types}; 更新 {raw_delta_types}"
-        else:
-            raw_text = raw_types
+        raw_text = _view_delta_raw_text(item)
         rows.append(
             "<tr>"
             f"<td><b>{ui.esc(item.get('view') or item.get('view_type') or '-')}</b><br><code>{ui.esc(item.get('view_type') or item.get('file_type') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('current_count') or 0)}</td>"
             f"<td><code>{ui.esc(delta)}</code></td>"
+            f"<td>{_view_delta_file_evidence(item)}</td>"
             f"<td>{ui.esc(item.get('evidence_level') or '-')}</td>"
-            f"<td><code>{ui.esc(raw_text)}</code></td>"
+            f"<td>{ui.esc(item.get('review_meaning') or '-')}<br><span class='muted'>原始类型：<code>{ui.esc(raw_text)}</code></span></td>"
             f"<td>{ui.esc(item.get('usage_area') or '-')}</td>"
             f"<td>{ui.badge(item.get('status') or 'INFO', item.get('status_label') or item.get('status') or 'INFO')}</td>"
             "</tr>"
@@ -130,7 +154,7 @@ def render_ip_user_view(ip_model: Mapping[str, Any]) -> str:
         "<div class='quality-note'><b>IP 使用者默认视图</b> 主表只回答基准版到当前版的视图变化、证据等级和使用场景影响；管理门禁、包根匹配算法、原始 JSON 默认下沉。</div>"
         "<h3>各视图影响</h3>"
         + _simple_table(
-            ["视图类别", "当前数量", "新增/删除/修改", "证据等级", "原始类型", "使用场景", "状态"],
+                ["视图类别", "当前数量", "新增/删除/修改", "文件证据", "证据等级", "说明", "使用场景", "状态"],
             _view_delta_rows(ip_model),
             "暂无视图变化。",
         )

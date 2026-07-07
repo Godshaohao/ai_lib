@@ -37,6 +37,10 @@ $PROJ/scripts/lg.csh accept-window <LIBRARY> --accepted-by <USER> --note "review
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION>
 ```
 
+`intake` 会维护 `$WORK/state/<LIBRARY>/current_plan.json`，重复运行会跳过已完成 task
+并从失败点继续；遇到未确认 `package_type` 会先阻断，要求 `lg mark` 或
+`lg library override` 显式确认后再执行。
+
 `source $PROJ/scripts/lg_complete.csh` 会提供 `lg` alias 和 csh/tcsh Tab 补全。
 库名/版本名用 `lg library list --plain`、`lg library list <LIBRARY> --versions --plain`
 获取，避免手猜 `_` 和 `.`。

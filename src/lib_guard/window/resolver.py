@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from lib_guard.atomic import atomic_write_json
 from lib_guard.effective.pointer import load_current_pointer, safe_name
 
 SCHEMA_VERSION = "review_window.v1"
@@ -14,6 +14,7 @@ SCHEMA_VERSION = "review_window.v1"
 FULL_TYPES = {"FULL", "FULL_PACKAGE", "BASE_FULL", "BASE", "COMPLETE"}
 FIX_TYPES = {"FIX", "HOTFIX", "PARTIAL", "PARTIAL_UPDATE", "DOC_UPDATE", "UPDATE"}
 IGNORE_TYPES = {"IGNORE", "IGNORED"}
+UNKNOWN_TYPES = {"UNKNOWN", "UNKNOWN_PACKAGE", "UNCLASSIFIED", "NEEDS_CONFIRM"}
 
 
 def now_iso() -> str:
@@ -28,12 +29,7 @@ def read_json(path: str | Path, default: Any = None) -> Any:
 
 
 def write_json(path: str | Path, data: Mapping[str, Any]) -> Path:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, p)
-    return p
+    return atomic_write_json(path, data, lock=True)
 
 
 def _libraries(catalog: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -81,12 +77,20 @@ def version_map(versions: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str,
 
 def package_kind(version: Mapping[str, Any]) -> str:
     explicit = str(version.get("package_type") or version.get("delivery_type") or "").strip().upper()
+    if explicit in UNKNOWN_TYPES or explicit.startswith("UNKNOWN"):
+        return "UNKNOWN"
     if explicit in FULL_TYPES or "FULL" in explicit:
         return "FULL"
     if explicit in FIX_TYPES or "HOTFIX" in explicit or "PARTIAL" in explicit or explicit.endswith("UPDATE"):
         return "FIX"
     if explicit in IGNORE_TYPES:
         return "IGNORE"
+    if explicit:
+        return "UNKNOWN"
+    return "UNKNOWN"
+
+
+def guessed_package_kind(version: Mapping[str, Any]) -> str:
     name = version_id(version).lower()
     if any(token in name for token in ["full", "initial", "base", "final", "release"]):
         return "FULL"
@@ -124,6 +128,11 @@ def _effective_dir(catalog_html_out: str | Path, library_row: Mapping[str, Any],
 
 def _compare_dir(catalog_html_out: str | Path, library_row: Mapping[str, Any], library: str, compare_id: str) -> Path:
     return Path(catalog_html_out) / "libraries" / _library_report_key(library_row, library) / "compare" / safe_name(compare_id)
+
+
+def _target_label(target: str) -> str:
+    text = str(target or "").strip()
+    return text.replace(":", "_") if text else "base"
 
 
 def _summary_ref(library_row: Mapping[str, Any], keys: Sequence[str]) -> str:
@@ -164,11 +173,11 @@ def _current_anchor(pointer: Mapping[str, Any], library_row: Mapping[str, Any], 
             "manifest": "",
         }
 
-    for item in versions:
+    for item in reversed(list(versions)):
         if package_kind(item) == "FULL":
             vid = version_id(item)
             return {
-                "source": "first_full_package",
+                "source": "latest_full_fallback",
                 "old_target": f"raw:{vid}",
                 "base_full": vid,
                 "accepted_updates": [],
@@ -198,10 +207,14 @@ def _after_checkpoint(versions: Sequence[Mapping[str, Any]], checkpoint: str, *,
 
 def _window_item(version: Mapping[str, Any], *, role: str) -> dict[str, Any]:
     scan = version.get("scan") if isinstance(version.get("scan"), Mapping) else {}
+    kind = package_kind(version)
+    guessed = guessed_package_kind(version) if kind == "UNKNOWN" else kind
     return {
         "version": version_id(version),
         "package_type": str(version.get("package_type") or ""),
-        "kind": package_kind(version),
+        "kind": kind,
+        "guessed_kind": guessed,
+        "requires_package_type_confirmation": kind == "UNKNOWN",
         "role": role,
         "scan_status": scan.get("status") or version.get("scan_status") or "",
     }
@@ -368,22 +381,44 @@ def resolve_review_window(
     new_ids = [version_id(item) for item in new_versions if version_id(item) not in seen_existing]
     item_ids = [*existing_ids, *new_ids]
     if not item_ids:
-        window = dict(pending or {})
-        window.setdefault("schema_version", SCHEMA_VERSION)
-        window.setdefault("library", library)
-        window.setdefault("state", "EMPTY")
-        window["changed"] = False
-        window["message"] = "no new versions after current checkpoint"
+        window = dict(pending if has_pending else {})
+        window.update(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "library": library,
+                "library_id": lib_id,
+                "state": "EMPTY",
+                "changed": False,
+                "pending_window_path": str(pending_path),
+                "base_effective": {
+                    "source": anchor.get("source"),
+                    "target": anchor.get("old_target"),
+                    "base_full": anchor.get("base_full"),
+                    "accepted_updates": list(anchor.get("accepted_updates", []) or []),
+                    "checkpoint_version": anchor.get("checkpoint_version"),
+                    "current_effective_id": anchor.get("current_effective_id"),
+                    "manifest": anchor.get("manifest"),
+                },
+                "last_seen_version": anchor.get("checkpoint_version"),
+                "new_versions": [],
+                "items": [],
+                "kind_counts": {},
+                "scan_versions": [],
+                "warnings": [],
+                "commands": [],
+                "message": "当前没有新的待审查版本",
+            }
+        )
         return window
 
     candidate = _resolve_candidate(anchor, item_ids, versions_by_id)
     last_material = str(candidate.get("last_material_version") or item_ids[-1])
     effective_id = f"candidate_{safe_name(last_material)}"
-    compare_id = f"window_{safe_name(anchor.get('checkpoint_version') or anchor.get('base_full') or 'base')}_to_{safe_name(effective_id)}"
+    old_target = str(anchor.get("old_target") or "")
+    compare_id = f"window_{safe_name(_target_label(old_target or str(anchor.get('checkpoint_version') or anchor.get('base_full') or 'base')))}_to_{safe_name(effective_id)}"
     eff_dir = _effective_dir(html_out, library_row, library, effective_id)
     compare_dir = _compare_dir(html_out, library_row, library, compare_id)
     manifest = eff_dir / "effective_manifest.json"
-    old_target = str(anchor.get("old_target") or "")
 
     scan_versions: list[str] = []
     if old_target.startswith("raw:"):
@@ -422,7 +457,7 @@ def resolve_review_window(
 
     warnings: list[str] = []
     if candidate.get("unknown_package_versions"):
-        warnings.append("Some package_type values are UNKNOWN; use lg mark/library override if the window target is wrong.")
+        warnings.append("存在 UNKNOWN package_type；请先用 lg mark 或 lg library override 确认类型，再执行 intake 或 accept-window。")
     if candidate.get("intermediate_items"):
         warnings.append("Versions before the latest FULL are kept as window evidence and are not overlaid on the candidate FULL.")
 
@@ -454,6 +489,7 @@ def resolve_review_window(
             "overlays": list(candidate.get("overlays", []) or []),
             "intermediate_items": list(candidate.get("intermediate_items", []) or []),
             "rule": candidate.get("rule"),
+            "unknown_package_versions": list(candidate.get("unknown_package_versions", []) or []),
             "manifest": str(manifest),
             "html": str(eff_dir / "index.html"),
         },

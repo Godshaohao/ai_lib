@@ -225,10 +225,16 @@ def _sync_version_relation_fields(item: dict[str, Any]) -> dict[str, Any]:
     if previous_effective:
         item["previous_effective_version"] = previous_effective
         lineage["parent_candidate"] = previous_effective
+    lineage_base_candidate = lineage.get("base_candidate")
     if base_full:
         item["base_full_version"] = base_full
         item["base_version"] = base_full
-        lineage["base_candidate"] = base_full
+        if base_full != version_id:
+            lineage["base_candidate"] = str(lineage_base_candidate or base_full)
+        elif lineage_base_candidate and str(lineage_base_candidate) != version_id:
+            lineage["base_candidate"] = str(lineage_base_candidate)
+        else:
+            lineage.pop("base_candidate", None)
     item["lineage"] = lineage
 
     cumulative_target = base_full if base_full and base_full != version_id else None
@@ -977,12 +983,18 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
                 "classification_evidence": {},
                 "classification_risks": ["classification_failed"],
             }
+        package_info = _apply_version_name_package_hint(package_info, version_id=version_id, stage=stage)
         package_type = str(package_info.get("package_type") or "UNKNOWN_PACKAGE")
         update_scope = _coerce_list(package_info.get("update_scope", []))
         standalone = bool(package_info.get("standalone")) or package_type == "FULL_PACKAGE"
         base_required = bool(package_info.get("base_required"))
         previous_effective_version = None
         base_full_version = version_id if standalone else (base if version_id != base else None)
+        lineage_base_candidate = None
+        if version_id != base and _item_looks_like_version(item):
+            lineage_base_candidate = base
+        if not standalone:
+            lineage_base_candidate = base_full_version
         if base_required and not standalone and not base_full_version:
             manual_review = True
         version = {
@@ -1014,7 +1026,7 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
             "detected": item["detected"],
             "lineage": {
                 "parent_candidate": parent,
-                "base_candidate": base_full_version,
+                "base_candidate": lineage_base_candidate,
                 "previous_final_candidate": previous_by_stage.get("final"),
                 "confidence": "HIGH" if item.get("detected", {}).get("confidence", 0) >= 0.7 else "LOW",
                 "source": lineage_source,
@@ -1076,6 +1088,33 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
         },
         "versions": versions,
     }
+
+
+def _version_name_suggests_full_package(version_id: str, stage: str) -> bool:
+    name = str(version_id or "").lower()
+    if any(token in name for token in ["adhoc", "ad_hoc", "ad-hoc", "fix", "hotfix", "patch", "delta", "eco", "netlist", "netlists", "doc_only"]):
+        return False
+    if stage in {"initial", "stable", "final"}:
+        return True
+    return any(token in name for token in ["full", "base", "complete", "final", "release"])
+
+
+def _apply_version_name_package_hint(package_info: Mapping[str, Any], *, version_id: str, stage: str) -> dict[str, Any]:
+    info = dict(package_info)
+    package_type = str(info.get("package_type") or "UNKNOWN_PACKAGE")
+    if package_type == "PARTIAL_UPDATE" and _version_name_suggests_full_package(version_id, stage):
+        risks = list(info.get("classification_risks") or [])
+        risks.append("name_suggests_full_but_missing_expected_views")
+        info.update(
+            {
+                "package_type": "FULL_PACKAGE",
+                "standalone": True,
+                "base_required": False,
+                "classification_confidence": min(float(info.get("classification_confidence") or 0.75), 0.75),
+                "classification_risks": risks,
+            }
+        )
+    return info
 
 
 def _build_issues(catalog: Mapping[str, Any]) -> list[dict[str, Any]]:

@@ -10,6 +10,7 @@ Status: current
 - [配置参考](config_reference.md)
 - [数据契约](data_contract.md)
 - [架构说明](architecture.md)
+- [架构与主流程总览图](lib_guard_architecture_flow.svg)
 - [测试计划](test_plan.md)
 - [兼容层说明](compatibility.md)
 

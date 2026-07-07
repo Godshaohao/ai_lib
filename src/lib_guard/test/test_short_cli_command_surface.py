@@ -61,8 +61,25 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             main(["--help"])
         self.assertEqual(cm.exception.code, 0)
         help_text = stdout.getvalue()
-        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,intake,window,accept-window,mark,rv}", help_text)
-        for name in ["init", "library", "cat", "scan", "cmp", "fd", "rv", "rel", "action", "intake", "window", "accept-window", "mark"]:
+        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv}", help_text)
+        for name in [
+            "init",
+            "library",
+            "cat",
+            "scan",
+            "cmp",
+            "fd",
+            "rv",
+            "rel",
+            "action",
+            "next",
+            "intake",
+            "window",
+            "worklist",
+            "accept-window",
+            "mark",
+            "effective",
+        ]:
             self.assertIn(name, help_text)
         for old_name in ["catalog,", "diff,", "file-diff", "release,", "override,", "refresh,", "rv-check", "rv-accept"]:
             self.assertNotIn(old_name, help_text)
@@ -107,6 +124,93 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             self.assertEqual(command[command.index("--library") + 1], "ucie")
             self.assertIn("--fast", command)
 
+    def test_worklist_and_effective_rollback_short_commands(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            worklist = build_cli_commands(["worklist"], cwd=workspace)[0]
+            self.assertEqual(worklist[:2], ["window", "worklist"])
+            self.assertEqual(worklist[worklist.index("--format") + 1], "text")
+
+            worklist_json = build_cli_commands(["worklist", "--json", "--ready"], cwd=workspace)[0]
+            self.assertIn("--ready", worklist_json)
+            self.assertNotIn("--format", worklist_json)
+
+            rollback = build_cli_commands(
+                ["effective", "rollback", "ucie", "--to", "E_old", "--by", "owner", "--reason", "wrong candidate"],
+                cwd=workspace,
+            )[0]
+            self.assertEqual(rollback[:2], ["window", "rollback"])
+            self.assertEqual(rollback[rollback.index("--library") + 1], "ucie")
+            self.assertEqual(rollback[rollback.index("--to") + 1], "E_old")
+            self.assertEqual(rollback[rollback.index("--by") + 1], "owner")
+            self.assertEqual(rollback[rollback.index("--reason") + 1], "wrong candidate")
+
+    def test_next_without_library_maps_to_text_worklist(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            command = build_cli_commands(["next"], cwd=workspace)[0]
+
+            self.assertEqual(command[:2], ["window", "worklist"])
+            self.assertEqual(command[command.index("--format") + 1], "text")
+
+    def test_next_library_defaults_to_plan_preview(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            command = build_cli_commands(["next", "ucie"], cwd=workspace)[0]
+
+            self.assertEqual(command[:2], ["window", "intake"])
+            self.assertEqual(command[command.index("--library") + 1], "ucie")
+            self.assertIn("--plan-only", command)
+            self.assertEqual(command[command.index("--format") + 1], "text")
+
+    def test_next_apply_runs_intake_without_plan_only(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            command = build_cli_commands(["next", "ucie", "--apply"], cwd=workspace)[0]
+
+            self.assertEqual(command[:2], ["window", "intake"])
+            self.assertEqual(command[command.index("--library") + 1], "ucie")
+            self.assertNotIn("--plan-only", command)
+
+    def test_next_accept_maps_to_accept_window(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            command = build_cli_commands(["next", "ucie", "--accept", "--by", "owner", "--note", "review passed"], cwd=workspace)[0]
+
+            self.assertEqual(command[:2], ["window", "accept"])
+            self.assertEqual(command[command.index("--library") + 1], "ucie")
+            self.assertEqual(command[command.index("--accepted-by") + 1], "owner")
+            self.assertEqual(command[command.index("--note") + 1], "review passed")
+
+    def test_next_fix_maps_to_window_show(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            command = build_cli_commands(["next", "ucie", "--fix"], cwd=workspace)[0]
+
+            self.assertEqual(command[:2], ["window", "show"])
+            self.assertEqual(command[command.index("--library") + 1], "ucie")
+            self.assertEqual(command[command.index("--format") + 1], "text")
+
+    def test_next_rejects_conflicting_actions(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            with self.assertRaisesRegex(ValueError, "next 只能选择一个动作"):
+                build_cli_commands(["next", "ucie", "--apply", "--accept", "--by", "owner"], cwd=workspace)
+
     def test_legacy_refresh_is_rewritten_to_cat_update_detail_for_compatibility(self) -> None:
         td, workspace = self._workspace()
         with td:
@@ -150,8 +254,76 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
             self.assertEqual(code, 2)
-            self.assertIn("ERROR: lg scan requires <library> <version>", stderr.getvalue())
+            self.assertIn("scan 参数不完整", stderr.getvalue())
+            self.assertIn("lg scan <LIBRARY> <VERSION>", stderr.getvalue())
             self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_cmp_missing_scan_evidence_prints_chinese_next_step(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import main
+
+            old_cwd = Path.cwd()
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            try:
+                os.chdir(workspace)
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = main(["cmp", "ucie", "patch", "--base", "base"])
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 2)
+            error = stderr.getvalue()
+            self.assertIn("对比前缺少 scan evidence", error)
+            self.assertIn("lg cmp <LIBRARY> <VERSION> --scan-if-missing", error)
+            self.assertNotIn("Traceback", error)
+            self.assertNotIn("command failed", error)
+
+    def test_cmp_without_base_relation_prints_chinese_base_hint(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import main
+
+            old_cwd = Path.cwd()
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            try:
+                os.chdir(workspace)
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = main(["cmp", "ucie", "patch"])
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 2)
+            error = stderr.getvalue()
+            self.assertIn("无法自动选择对比基线", error)
+            self.assertIn("lg window <LIBRARY>", error)
+            self.assertIn("lg cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing", error)
+            self.assertNotIn("Traceback", error)
+
+    def test_missing_library_error_tells_user_how_to_find_names(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import main
+
+            old_cwd = Path.cwd()
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            try:
+                os.chdir(workspace)
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = main(["window", "missing_lib"])
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 2)
+            error = stderr.getvalue()
+            self.assertIn("库未在 catalog 中找到", error)
+            self.assertIn("lg library list --plain", error)
+            self.assertNotIn("library not found", error)
+            self.assertNotIn("Traceback", error)
+            self.assertNotIn("command failed", error)
 
     def test_library_list_before_catalog_exists_points_to_cat_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -226,6 +398,8 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             refresh = commands[-1]
             self.assertIn("--library", refresh)
             self.assertEqual(refresh[refresh.index("--library") + 1], "newlib")
+            self.assertIn("--policy", refresh)
+            self.assertEqual(refresh[refresh.index("--policy") + 1], str(workspace / "config" / "library_catalog.yml"))
             self.assertIn("--fast", refresh)
             self.assertNotIn("--with-evidence", refresh)
 
@@ -289,7 +463,7 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
         text = script.read_text(encoding="utf-8")
         self.assertIn("alias lg", text)
         self.assertIn("complete $_lg_complete_name", text)
-        self.assertIn("init scan cat library cmp fd rel action intake window accept-window mark rv", text)
+        self.assertIn("init scan cat library cmp fd rel action next intake window worklist accept-window mark effective rv", text)
         self.assertIn("lg library list --plain", text)
         self.assertIn("lg library list <LIBRARY> --versions --plain", text)
 

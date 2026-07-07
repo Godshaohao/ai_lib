@@ -8,11 +8,14 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import json
 import os
 import shutil
+import uuid
 
+from lib_guard.atomic import atomic_write_json, file_lock
 from .checker import ReleaseChecker
 from .config import ReleasePolicy
 from .bundle import iter_release_files, load_release_manifest, manifest_run_dir, release_dir_for, utc_now
@@ -25,8 +28,7 @@ def _load_json(path: Path, default: Any) -> Any:
 
 
 def _write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_json(path, data, lock=True)
 
 
 def _utc_now() -> str:
@@ -94,12 +96,13 @@ class ReleaseLinker:
         elif blocked_by_existing_target:
             status = "BLOCKED"
         elif not dry_run:
-            if link_mode == "symlink":
-                self._link_symlink(source_root, target_version_dir, target_alias, overwrite=overwrite)
-            elif link_mode == "copy":
-                self._copy_tree(source_root, target_version_dir, target_alias, overwrite=overwrite)
-            else:
-                raise ValueError(f"Unsupported release link mode: {link_mode}")
+            with file_lock(_release_lock_path(release_root_path)):
+                if link_mode == "symlink":
+                    self._link_symlink(source_root, target_version_dir, target_alias, overwrite=overwrite)
+                elif link_mode == "copy":
+                    self._copy_tree(source_root, target_version_dir, target_alias, overwrite=overwrite)
+                else:
+                    raise ValueError(f"Unsupported release link mode: {link_mode}")
             if blocked_by_gate and force:
                 status = "FORCED_DONE"
 
@@ -108,6 +111,7 @@ class ReleaseLinker:
             "status": status,
             "scan_dir": str(scan),
             "release_root": str(release_root_path),
+            "release_lock": str(_release_lock_path(release_root_path)),
             "source_root": str(source_root),
             "target_version_dir": str(target_version_dir),
             "target_alias": str(target_alias),
@@ -157,9 +161,11 @@ class ReleaseLinker:
                 raise FileExistsError(f"release target already exists: {target_version_dir}")
             target_version_dir.unlink() if target_version_dir.is_symlink() else shutil.rmtree(target_version_dir)
         if not target_version_dir.exists():
-            target_version_dir.symlink_to(source_root)
+            tmp_version = _tmp_sibling(target_version_dir)
+            tmp_version.symlink_to(source_root)
+            os.replace(tmp_version, target_version_dir)
 
-        tmp_alias = target_alias.with_name(target_alias.name + ".tmp")
+        tmp_alias = _tmp_sibling(target_alias)
         if tmp_alias.exists() or tmp_alias.is_symlink():
             tmp_alias.unlink()
         tmp_alias.symlink_to(target_version_dir)
@@ -170,9 +176,14 @@ class ReleaseLinker:
         if target_version_dir.exists():
             if not overwrite:
                 raise FileExistsError(f"release target already exists: {target_version_dir}")
-            shutil.rmtree(target_version_dir)
-        shutil.copytree(source_root, target_version_dir, symlinks=True)
-        tmp_alias = target_alias.with_name(target_alias.name + ".tmp")
+        tmp_version = _tmp_sibling(target_version_dir)
+        if tmp_version.exists() or tmp_version.is_symlink():
+            _remove_path(tmp_version)
+        shutil.copytree(source_root, tmp_version, symlinks=True)
+        if target_version_dir.exists() or target_version_dir.is_symlink():
+            _remove_path(target_version_dir)
+        os.replace(tmp_version, target_version_dir)
+        tmp_alias = _tmp_sibling(target_alias)
         if tmp_alias.exists() or tmp_alias.is_symlink():
             tmp_alias.unlink() if tmp_alias.is_symlink() else shutil.rmtree(tmp_alias)
         shutil.copytree(target_version_dir, tmp_alias, symlinks=True)
@@ -202,21 +213,37 @@ def _remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def _tmp_sibling(path: Path) -> Path:
+    return path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+
+
+def _release_lock_path(release_root: Path) -> Path:
+    return release_root / ".lib_guard_release.lock"
+
+
 def _copy_or_link_source(source: Path, target: Path, *, mode: str, overwrite: bool) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() or target.is_symlink():
         if not overwrite:
             raise FileExistsError(f"release target already exists: {target}")
-        _remove_path(target)
+    tmp = _tmp_sibling(target)
+    if tmp.exists() or tmp.is_symlink():
+        _remove_path(tmp)
     if mode == "copy":
         if source.is_dir():
-            shutil.copytree(source, target, symlinks=True)
+            shutil.copytree(source, tmp, symlinks=True)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            shutil.copy2(source, tmp)
+        if target.exists() or target.is_symlink():
+            _remove_path(target)
+        os.replace(tmp, target)
         return "COPIED"
     if mode == "symlink":
-        target.symlink_to(source, target_is_directory=source.is_dir())
+        tmp.symlink_to(source, target_is_directory=source.is_dir())
+        if target.exists() or target.is_symlink():
+            _remove_path(target)
+        os.replace(tmp, target)
         return "LINKED"
     raise ValueError(f"Unsupported release link mode: {mode}")
 
@@ -224,7 +251,14 @@ def _copy_or_link_source(source: Path, target: Path, *, mode: str, overwrite: bo
 def _release_existing_files(release_dir: Path) -> list[Path]:
     if not release_dir.exists():
         return []
-    return sorted([item for item in release_dir.rglob("*") if item.is_file() or item.is_symlink()], key=lambda p: p.as_posix().lower())
+    return sorted(
+        [
+            item
+            for item in release_dir.rglob("*")
+            if (item.is_file() or item.is_symlink()) and item.name != ".lib_guard_release.lock" and not (item.name.startswith(".") and item.name.endswith(".tmp"))
+        ],
+        key=lambda p: p.as_posix().lower(),
+    )
 
 
 def _force_gate_summary(review_gate_path: str | Path | None, release_check_path: str | Path | None) -> Any:
@@ -322,55 +356,57 @@ def link_release_from_manifest(
     failed: list[dict[str, Any]] = []
     removed: list[dict[str, Any]] = []
     release_dir = release_dir_for(manifest)
-    release_dir.mkdir(parents=True, exist_ok=True) if apply else None
     planned = iter_release_files(manifest)
     expected_targets = {Path(str(item["target_path"])) for item in planned if item.get("target_path") and not item.get("error")}
 
-    for plan in planned:
-        source = Path(str(plan.get("source_path") or ""))
-        target = Path(str(plan.get("target_path") or ""))
-        item = {
-            "library_type": plan.get("library_type"),
-            "library_name": plan.get("library_name"),
-            "version_id": plan.get("version_id"),
-            "version_key": plan.get("version_key"),
-            "relative_path": plan.get("relative_path"),
-            "link_path": str(target),
-            "target_path": str(source),
-            "file_type": plan.get("file_type"),
-            "view": plan.get("view"),
-            "snapshot_id": plan.get("snapshot_id"),
-            "source_package": plan.get("source_package"),
-            "source_kind": plan.get("source_kind"),
-            "mode": mode,
-            "overwrite": overwrite,
-        }
-        try:
-            if plan.get("error"):
-                raise ValueError(str(plan.get("error")))
-            if not source.exists():
-                raise FileNotFoundError(f"release source does not exist: {source}")
-            if dry_run:
-                exists = target.exists() or target.is_symlink()
-                item["status"] = "WOULD_REPLACE" if exists and overwrite else ("TARGET_EXISTS" if exists else "WOULD_LINK")
-                if exists and not overwrite:
-                    item["warning"] = "target exists; apply would fail without overwrite"
+    lock_context = file_lock(_release_lock_path(release_dir)) if apply else nullcontext()
+    with lock_context:
+        release_dir.mkdir(parents=True, exist_ok=True) if apply else None
+        for plan in planned:
+            source = Path(str(plan.get("source_path") or ""))
+            target = Path(str(plan.get("target_path") or ""))
+            item = {
+                "library_type": plan.get("library_type"),
+                "library_name": plan.get("library_name"),
+                "version_id": plan.get("version_id"),
+                "version_key": plan.get("version_key"),
+                "relative_path": plan.get("relative_path"),
+                "link_path": str(target),
+                "target_path": str(source),
+                "file_type": plan.get("file_type"),
+                "view": plan.get("view"),
+                "snapshot_id": plan.get("snapshot_id"),
+                "source_package": plan.get("source_package"),
+                "source_kind": plan.get("source_kind"),
+                "mode": mode,
+                "overwrite": overwrite,
+            }
+            try:
+                if plan.get("error"):
+                    raise ValueError(str(plan.get("error")))
+                if not source.exists():
+                    raise FileNotFoundError(f"release source does not exist: {source}")
+                if dry_run:
+                    exists = target.exists() or target.is_symlink()
+                    item["status"] = "WOULD_REPLACE" if exists and overwrite else ("TARGET_EXISTS" if exists else "WOULD_LINK")
+                    if exists and not overwrite:
+                        item["warning"] = "target exists; apply would fail without overwrite"
+                    created.append(item)
+                    continue
+                item["status"] = _copy_or_link_source(source, target, mode=mode, overwrite=overwrite)
                 created.append(item)
-                continue
-            item["status"] = _copy_or_link_source(source, target, mode=mode, overwrite=overwrite)
-            created.append(item)
-        except Exception as exc:
-            failed_item = dict(item)
-            failed_item["status"] = "FAILED"
-            failed_item["error"] = str(exc)
-            failed.append(failed_item)
+            except Exception as exc:
+                failed_item = dict(item)
+                failed_item["status"] = "FAILED"
+                failed_item["error"] = str(exc)
+                failed.append(failed_item)
 
-    if apply and overwrite and mirror_release_root and not failed:
-        for existing in _release_existing_files(release_dir):
-            if existing in expected_targets:
-                continue
-            removed.append({"relative_path": existing.relative_to(release_dir).as_posix(), "path": str(existing), "status": "REMOVED"})
-            _remove_path(existing)
+        if apply and overwrite and mirror_release_root and not failed:
+            for existing in _release_existing_files(release_dir):
+                if existing in expected_targets:
+                    continue
+                removed.append({"relative_path": existing.relative_to(release_dir).as_posix(), "path": str(existing), "status": "REMOVED"})
+                _remove_path(existing)
 
     if force and dry_run:
         status = "FORCE_DRY_RUN"
@@ -406,6 +442,7 @@ def link_release_from_manifest(
         "alias": manifest.get("alias"),
         "release_root": manifest.get("release_root"),
         "release_dir": str(release_dir),
+        "release_lock": str(_release_lock_path(release_dir)),
         "manifest_path": str(Path(manifest_path)),
         "status": status,
         "dry_run": dry_run,

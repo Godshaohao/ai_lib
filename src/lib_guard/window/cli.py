@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 from typing import Any
 
-from lib_guard.effective.pointer import write_current_pointer
+from lib_guard.effective.pointer import safe_name, write_current_pointer
 from lib_guard.cli_commands.common import render_impacted_catalog_html
+from lib_guard.plan.engine import build_plan_from_window, execute_plan, load_plan, plan_path_for, save_plan
 from lib_guard.render.impact import impacts_for_versions
-from lib_guard.window.resolver import read_json, resolve_review_window, write_json
+from lib_guard.window.resolver import find_library, read_json, resolve_review_window, write_json
 
 
 def _print_json(data: Any) -> None:
@@ -31,6 +33,13 @@ def _run_commands(commands: list[list[str]]) -> int:
         if code != 0:
             return code
     return 0
+
+
+def _run_one_command(command: list[str]) -> int:
+    from lib_guard.cli import main as cli_main
+
+    print("python -m lib_guard.cli " + " ".join(_quote(item) for item in command))
+    return int(cli_main(command))
 
 
 def _window_versions(window: dict[str, Any]) -> list[str]:
@@ -57,6 +66,323 @@ def _plan_followup_commands(library: str) -> dict[str, Any]:
     }
 
 
+def _base_source_label(source: str) -> str:
+    labels = {
+        "current_effective_pointer": "当前Effective指针",
+        "catalog_summary": "Catalog已确认引用",
+        "latest_full_fallback": "自动回退到最新FULL",
+        "first_catalog_version": "自动回退到首个版本",
+    }
+    return labels.get(source, source or "未知")
+
+
+def _base_review(window: dict[str, Any]) -> dict[str, Any]:
+    base = window.get("base_effective") if isinstance(window.get("base_effective"), dict) else {}
+    source = str(base.get("source") or "")
+    target = str(base.get("target") or "")
+    fallback_sources = {"latest_full_fallback", "first_catalog_version"}
+    unknowns = _unknown_package_versions(window)
+    return {
+        "状态": "需确认" if source in fallback_sources or unknowns else "已确认",
+        "当前Base": target or "未识别",
+        "来源": _base_source_label(source),
+        "完整包基线": base.get("base_full") or "",
+        "确认说明": "自动回退结果不能当作事实；如不符合预期，请用 mark/library override 修正。"
+        if source in fallback_sources
+        else "来自已接受指针或人工 catalog 信息。",
+    }
+
+
+def _version_review_table(window: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    base = window.get("base_effective") if isinstance(window.get("base_effective"), dict) else {}
+    target = str(base.get("target") or "")
+    if target.startswith("raw:"):
+        rows.append(
+            {
+                "版本名": target.split(":", 1)[1],
+                "类型猜测": "FULL",
+                "Catalog类型": "FULL_PACKAGE" if base.get("source") != "first_catalog_version" else "",
+                "当前角色": "当前Base",
+                "是否需确认": "是" if base.get("source") in {"latest_full_fallback", "first_catalog_version"} else "否",
+            }
+        )
+    for item in window.get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "")
+        guessed = str(item.get("guessed_kind") or kind or "")
+        rows.append(
+            {
+                "版本名": item.get("version") or item.get("version_id") or "",
+                "类型猜测": guessed,
+                "Catalog类型": item.get("package_type") or "",
+                "当前角色": item.get("role") or "",
+                "是否需确认": "是" if item.get("requires_package_type_confirmation") else "否",
+                "Scan状态": item.get("scan_status") or "",
+            }
+        )
+    return rows
+
+
+def _suggested_fix_commands(library: str, window: dict[str, Any]) -> list[str]:
+    lib = _quote(library)
+    base = window.get("base_effective") if isinstance(window.get("base_effective"), dict) else {}
+    base_full = str(base.get("base_full") or "")
+    commands: list[str] = []
+    for item in window.get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        version = str(item.get("version") or item.get("version_id") or "")
+        if not version:
+            continue
+        kind = str(item.get("kind") or "").upper()
+        guessed = str(item.get("guessed_kind") or "").upper()
+        suggested = guessed if kind == "UNKNOWN" else kind
+        if item.get("requires_package_type_confirmation"):
+            if suggested == "FULL":
+                commands.append(f"lg mark {lib} {_quote(version)} --type FULL --note 'confirmed full package'")
+            elif suggested == "FIX":
+                commands.append(f"lg mark {lib} {_quote(version)} --type FIX --note 'confirmed fix package'")
+            else:
+                commands.append(f"lg mark {lib} {_quote(version)} --type FULL|FIX --note 'confirmed package type'")
+        if suggested == "FIX" and base_full:
+            commands.append(
+                f"lg library override {lib} {_quote(version)} --package-type PARTIAL_UPDATE "
+                f"--base-full {_quote(base_full)} --previous-effective {_quote(base_full)} "
+                "--compare-default full_baseline --note 'manual confirmed base'"
+            )
+    if not commands and window.get("state") == "EMPTY":
+        return []
+    if not commands:
+        commands.append(f"lg window {lib}")
+    return commands
+
+
+def _flow_review(window: dict[str, Any]) -> dict[str, Any]:
+    candidate = window.get("candidate_effective") if isinstance(window.get("candidate_effective"), dict) else {}
+    base = window.get("base_effective") if isinstance(window.get("base_effective"), dict) else {}
+    base_full = str(candidate.get("base_full") or base.get("base_full") or "")
+    overlays = [str(item) for item in candidate.get("overlays", []) or [] if str(item)]
+    rule = str(candidate.get("rule") or "")
+    if window.get("state") == "EMPTY":
+        return {
+            "流程类型": "无新版本",
+            "判断": "当前库没有新的待审查版本；无需执行 FULL 或增量接入。",
+            "最新FULL": base_full or "-",
+            "增量包": "-",
+        }
+    if overlays:
+        flow_type = "FULL流程 + 增量流程"
+        detail = (
+            f"系统选择最新FULL：{base_full or '-'} 作为完整基线，"
+            f"再叠加增量包：{', '.join(overlays)}。"
+        )
+    else:
+        flow_type = "FULL流程"
+        detail = f"系统选择最新FULL：{base_full or '-'} 作为候选有效版；没有需要叠加的增量包。"
+    if rule:
+        detail += f" 规则：{rule}。"
+    return {
+        "流程类型": flow_type,
+        "判断": detail,
+        "最新FULL": base_full or "-",
+        "增量包": ", ".join(overlays) or "-",
+    }
+
+
+def _review_window_summary(library: str, window: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "base_review": _base_review(window),
+        "flow_review": _flow_review(window),
+        "版本选择表": _version_review_table(window),
+        "建议修正命令": _suggested_fix_commands(library, window),
+    }
+
+
+def _library_cli_name(row: dict[str, Any]) -> str:
+    return str(row.get("formal_library_id") or row.get("library_name") or row.get("library_id") or "")
+
+
+def _worklist_row(library: str, window: dict[str, Any]) -> dict[str, Any]:
+    base = _base_review(window)
+    unknowns = _unknown_package_versions(window)
+    state = str(window.get("state") or "")
+    candidate = window.get("candidate_effective") if isinstance(window.get("candidate_effective"), dict) else {}
+    new_versions = [str(item) for item in window.get("new_versions", []) or [] if str(item)]
+    if not new_versions:
+        new_versions = [
+            str(item.get("version") or item.get("version_id") or "")
+            for item in window.get("items", []) or []
+            if isinstance(item, dict) and str(item.get("version") or item.get("version_id") or "")
+        ]
+    source = str((window.get("base_effective") or {}).get("source") or "")
+    if state == "EMPTY":
+        status = "无新版本"
+        action = "无需执行"
+    elif unknowns:
+        status = "需确认包类型"
+        action = f"lg next {_quote(library)} --fix"
+    elif source == "first_catalog_version":
+        status = "需确认Base"
+        action = f"lg next {_quote(library)} --fix"
+    else:
+        status = "可执行" if window.get("commands") else "可接受"
+        action = (
+            f"lg next {_quote(library)} --apply"
+            if status == "可执行"
+            else f"lg next {_quote(library)} --accept --by <USER> --note 'review passed'"
+        )
+    return {
+        "库": library,
+        "状态": status,
+        "当前Base": base.get("当前Base") or "-",
+        "Base来源": base.get("来源") or "-",
+        "新版本": ", ".join(new_versions) or "-",
+        "Candidate": candidate.get("effective_id") or "-",
+        "需扫描": len(window.get("scan_versions", []) or []),
+        "建议动作": action,
+    }
+
+
+def _format_text_table(rows: list[dict[str, Any]], headers: list[str]) -> str:
+    if not rows:
+        return "无版本记录"
+    widths: dict[str, int] = {}
+    for header in headers:
+        widths[header] = max(len(header), *(len(str(row.get(header) or "")) for row in rows))
+    lines = ["  ".join(header.ljust(widths[header]) for header in headers)]
+    lines.append("  ".join("-" * widths[header] for header in headers))
+    for row in rows:
+        lines.append("  ".join(str(row.get(header) or "").ljust(widths[header]) for header in headers))
+    return "\n".join(lines)
+
+
+def _format_window_text(library: str, window: dict[str, Any]) -> str:
+    if all(key in window for key in ["base_review", "版本选择表", "建议修正命令"]):
+        summary = {
+            "base_review": window.get("base_review") or {},
+            "flow_review": window.get("flow_review") or _flow_review(window),
+            "版本选择表": window.get("版本选择表") or [],
+            "建议修正命令": window.get("建议修正命令") or [],
+        }
+    else:
+        summary = _review_window_summary(library, window)
+    base = summary["base_review"]
+    flow = summary.get("flow_review") or {}
+    version_rows = summary["版本选择表"]
+    version_table = _format_text_table(
+        version_rows,
+        ["版本名", "类型猜测", "Catalog类型", "当前角色", "是否需确认", "Scan状态"],
+    )
+    if not version_rows and window.get("state") == "EMPTY":
+        version_table = "当前没有新的待审查版本；当前Base已来自有效版本指针。"
+    fix_commands = summary["建议修正命令"]
+
+    lines = [
+        f"库：{library}",
+        "",
+        "基线确认",
+        f"  状态：{base.get('状态')}",
+        f"  当前Base：{base.get('当前Base')}",
+        f"  来源：{base.get('来源')}",
+        f"  完整包基线：{base.get('完整包基线') or '-'}",
+        f"  说明：{base.get('确认说明')}",
+        "",
+        "流程判断",
+        f"  类型：{flow.get('流程类型') or '-'}",
+        f"  最新FULL：{flow.get('最新FULL') or '-'}",
+        f"  增量包：{flow.get('增量包') or '-'}",
+        f"  说明：{flow.get('判断') or '-'}",
+        "",
+        "版本选择表",
+        version_table,
+        "",
+        "建议修正命令",
+    ]
+    if fix_commands:
+        lines.extend(f"  {command}" for command in fix_commands)
+    else:
+        lines.append("  无需修正")
+    candidate = window.get("candidate_effective") if isinstance(window.get("candidate_effective"), dict) else {}
+    compare = window.get("compare") if isinstance(window.get("compare"), dict) else {}
+    lines.extend(
+        [
+            "",
+            "当前组合",
+            f"  Candidate：{candidate.get('effective_id') or '-'}",
+            f"  Base Full：{candidate.get('base_full') or '-'}",
+            f"  Overlay：{', '.join(str(x) for x in candidate.get('overlays', []) or []) or '-'}",
+            f"  Compare：{compare.get('old') or '-'} -> {compare.get('new') or '-'}",
+        ]
+    )
+    warnings = [str(item) for item in window.get("warnings", []) or [] if str(item)]
+    if warnings:
+        lines.append("")
+        lines.append("警告")
+        lines.extend(f"  {item}" for item in warnings)
+    return "\n".join(lines)
+
+
+def _format_intake_plan_text(library: str, output: dict[str, Any]) -> str:
+    lines = [
+        _format_window_text(
+            library,
+            {
+                "base_review": output.get("base_review") or {},
+                "flow_review": output.get("flow_review") or {},
+                "版本选择表": output.get("版本选择表") or [],
+                "建议修正命令": output.get("建议修正命令") or [],
+                "candidate_effective": output.get("candidate_effective") or {},
+                "compare": output.get("compare") or {},
+                "warnings": output.get("warnings") or [],
+                "state": output.get("state") or "",
+            },
+        ),
+        "",
+        "执行计划",
+        f"  状态：{output.get('plan_state') or output.get('state') or ''}",
+        f"  下一步：{output.get('next_action') or ''}",
+        f"  需扫描版本：{', '.join(str(item) for item in output.get('scan_versions', []) or []) or '无'}",
+        f"  确认执行：{'无需执行' if output.get('state') == 'EMPTY' else output.get('confirm_command') or ''}",
+        f"  接受窗口：{'无需执行' if output.get('state') == 'EMPTY' else output.get('accept_command') or ''}",
+    ]
+    blocked = str(output.get("blocked_reason") or "")
+    if blocked:
+        lines.extend(["", "阻塞原因", f"  {blocked}"])
+    return "\n".join(lines)
+
+
+def _format_worklist_text(output: dict[str, Any]) -> str:
+    summary = output.get("summary", {}) or {}
+    rows = output.get("rows", []) or []
+    counts = "，".join(f"{key} {value}" for key, value in summary.items()) or "无"
+    return "\n".join(
+        [
+            "接入工作清单",
+            f"  汇总：{counts}",
+            "",
+            _format_text_table(rows, ["库", "状态", "当前Base", "Base来源", "新版本", "Candidate", "需扫描", "建议动作"]),
+        ]
+    )
+
+
+def _unknown_package_versions(window: dict[str, Any]) -> list[str]:
+    unknowns: list[str] = []
+    for version in (window.get("candidate_effective") or {}).get("unknown_package_versions", []) or []:
+        text = str(version or "")
+        if text and text not in unknowns:
+            unknowns.append(text)
+    for item in window.get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("kind") or "").upper() == "UNKNOWN" or item.get("requires_package_type_confirmation"):
+            text = str(item.get("version") or item.get("version_id") or "")
+            if text and text not in unknowns:
+                unknowns.append(text)
+    return unknowns
+
+
 def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], window: dict[str, Any], reason: str) -> None:
     if not getattr(args, "catalog", None) or not getattr(args, "library", None) or not getattr(args, "catalog_html_out", None):
         return
@@ -64,6 +390,49 @@ def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], wind
     output["render_impact"] = render_impact
     output["rendered_pages"] = render_impact.get("affected_pages", [])
     output["catalog_html_out"] = render_impact.get("catalog_html_out")
+
+
+def cmd_worklist(args: argparse.Namespace) -> int:
+    catalog = read_json(args.catalog, {}) or {}
+    rows: list[dict[str, Any]] = []
+    for lib in catalog.get("libraries", []) or []:
+        if not isinstance(lib, dict):
+            continue
+        library = _library_cli_name(lib)
+        if not library:
+            continue
+        try:
+            window = resolve_review_window(
+                catalog_path=args.catalog,
+                library=library,
+                workdir=args.workdir,
+                catalog_html_out=args.catalog_html_out,
+            )
+            row = _worklist_row(library, window)
+        except Exception as exc:
+            row = {
+                "库": library,
+                "状态": "错误",
+                "当前Base": "-",
+                "Base来源": "-",
+                "新版本": "-",
+                "Candidate": "-",
+                "需扫描": 0,
+                "建议动作": f"lg window {_quote(library)}",
+                "错误": str(exc),
+            }
+        if getattr(args, "ready", False) and row["状态"] not in {"可执行", "可接受"}:
+            continue
+        if getattr(args, "blocked", False) and not str(row["状态"]).startswith("需") and row["状态"] != "错误":
+            continue
+        rows.append(row)
+    summary = dict(Counter(str(row.get("状态") or "未知") for row in rows))
+    output = {"status": "PASS", "summary": summary, "rows": rows}
+    if getattr(args, "format", "json") == "text":
+        print(_format_worklist_text(output))
+    else:
+        _print_json(output)
+    return 0
 
 
 def cmd_intake(args: argparse.Namespace) -> int:
@@ -82,9 +451,27 @@ def cmd_intake(args: argparse.Namespace) -> int:
     )
     if window.get("state") != "EMPTY":
         write_json(window["pending_window_path"], window)
+    plan_path = plan_path_for(args.workdir, args.library)
+    unknowns = _unknown_package_versions(window)
+    blocked_reason = ""
+    if unknowns:
+        blocked_reason = "存在未确认包类型，执行 intake 前需要 owner 确认：" + ", ".join(unknowns)
+    existing_plan = load_plan(plan_path)
+    plan = build_plan_from_window(
+        workdir=args.workdir,
+        library=args.library,
+        window=window,
+        existing=existing_plan,
+        blocked_reason=blocked_reason,
+    )
+    save_plan(plan_path, plan)
     output = {
-        "status": "PASS",
+        "status": "NEEDS_PACKAGE_CONFIRM" if blocked_reason else "PASS",
         "window": window.get("pending_window_path"),
+        "plan": str(plan_path),
+        "plan_state": plan.get("state"),
+        "next_action": plan.get("next_action"),
+        "blocked_reason": blocked_reason,
         "state": window.get("state"),
         "base": window.get("base_effective"),
         "candidate_effective": window.get("candidate_effective"),
@@ -94,12 +481,18 @@ def cmd_intake(args: argparse.Namespace) -> int:
         "command_count": len(window.get("commands", []) or []),
         "message": window.get("message", ""),
     }
+    output.update(_review_window_summary(args.library, window))
     output.update(_plan_followup_commands(args.library))
-    if args.plan_only or window.get("state") == "EMPTY":
+    if args.plan_only or window.get("state") == "EMPTY" or blocked_reason:
+        if getattr(args, "format", "json") == "text":
+            print(_format_intake_plan_text(args.library, output))
+            return 0 if args.plan_only or not blocked_reason else 2
         _print_json(output)
-        return 0
-    code = _run_commands(list(window.get("commands", []) or []))
+        return 0 if args.plan_only or not blocked_reason else 2
+    code, plan = execute_plan(plan_path=plan_path, plan=plan, runner=_run_one_command)
     output["command_exit_code"] = code
+    output["plan_state"] = plan.get("state")
+    output["next_action"] = plan.get("next_action")
     _attach_render_impact(args, output, window, "window_intake_updated")
     _print_json(output)
     return code
@@ -109,7 +502,7 @@ def cmd_show(args: argparse.Namespace) -> int:
     if args.window_file:
         data = read_json(args.window_file, {}) or {"status": "MISSING", "window": args.window_file}
     else:
-        resolved = resolve_review_window(
+        data = resolve_review_window(
             catalog_path=args.catalog,
             library=args.library,
             workdir=args.workdir,
@@ -117,8 +510,36 @@ def cmd_show(args: argparse.Namespace) -> int:
             since=args.since,
             parse_jobs=str(args.parse_jobs or ""),
         )
-        data = read_json(resolved.get("pending_window_path", ""), {}) or resolved
-    _print_json(data)
+    output = dict(data)
+    output.update(_review_window_summary(args.library, output))
+    if getattr(args, "format", "json") == "text":
+        print(_format_window_text(args.library, output))
+        return 0
+    _print_json(output)
+    return 0
+
+
+def cmd_rollback(args: argparse.Namespace) -> int:
+    catalog = read_json(args.catalog, {}) or {}
+    library_row = find_library(catalog, args.library)
+    library_key = safe_name(str(library_row.get("library_id") or library_row.get("library_name") or args.library))
+    effective_id = str(args.to or "")
+    manifest = Path(args.catalog_html_out) / "libraries" / library_key / "effective" / safe_name(effective_id) / "effective_manifest.json"
+    if not manifest.exists():
+        raise ValueError(f"effective manifest not found: {effective_id}")
+    pointer_path = Path(args.catalog_html_out) / "libraries" / library_key / "effective" / "current_effective.json"
+    pointer = write_current_pointer(
+        manifest,
+        out=pointer_path,
+        status="accepted",
+        accepted_by=args.by,
+        note=f"rollback: {args.reason}",
+    )
+    output = {"status": "PASS", "library": args.library, "current_effective": str(pointer), "effective_id": effective_id}
+    render_impact = render_impacted_catalog_html(args, impacts_for_versions(args.library, [], "effective_rollback"))
+    output["render_impact"] = render_impact
+    output["rendered_pages"] = render_impact.get("affected_pages", [])
+    _print_json(output)
     return 0
 
 
@@ -126,6 +547,9 @@ def cmd_accept(args: argparse.Namespace) -> int:
     data = read_json(args.window_file, {}) or {}
     if not data:
         raise ValueError(f"window file not found or empty: {args.window_file}")
+    unknowns = _unknown_package_versions(data)
+    if unknowns:
+        raise ValueError("accept-window requires confirmed package_type for: " + ", ".join(unknowns))
     manifest = (data.get("candidate_effective") or {}).get("manifest")
     if not manifest:
         raise ValueError("pending window has no candidate effective manifest")
@@ -168,11 +592,32 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(p)
     p.add_argument("--plan-only", action="store_true")
     p.add_argument("--rebuild", action="store_true")
+    p.add_argument("--format", choices=["json", "text"], default="json")
     p.set_defaults(func=cmd_intake)
 
     p = sub.add_parser("show")
     add_common(p)
+    p.add_argument("--format", choices=["json", "text"], default="json")
     p.set_defaults(func=cmd_show)
+
+    p = sub.add_parser("worklist")
+    p.add_argument("--catalog", required=True)
+    p.add_argument("--workdir", default="work")
+    p.add_argument("--catalog-html-out", required=True)
+    p.add_argument("--format", choices=["json", "text"], default="json")
+    p.add_argument("--ready", action="store_true")
+    p.add_argument("--blocked", action="store_true")
+    p.set_defaults(func=cmd_worklist)
+
+    p = sub.add_parser("rollback")
+    p.add_argument("--catalog", required=True)
+    p.add_argument("--library", required=True)
+    p.add_argument("--workdir", default="work")
+    p.add_argument("--catalog-html-out", required=True)
+    p.add_argument("--to", required=True)
+    p.add_argument("--by", required=True)
+    p.add_argument("--reason", required=True)
+    p.set_defaults(func=cmd_rollback)
 
     p = sub.add_parser("accept")
     p.add_argument("--catalog")

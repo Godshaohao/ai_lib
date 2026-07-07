@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from lib_guard.atomic import atomic_write_json
 from lib_guard.release.bundle import normalize_release_relpath
 
 SCHEMA_VERSION = "effective_manifest.v2"
@@ -68,10 +69,7 @@ def read_json(path: str | Path) -> dict[str, Any]:
 
 
 def write_json(path: str | Path, data: Mapping[str, Any]) -> Path:
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return out
+    return atomic_write_json(path, data, lock=True)
 
 
 def norm_view(value: Any) -> str:

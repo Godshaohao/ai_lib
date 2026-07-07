@@ -5,7 +5,7 @@ Status: current
 这份教程是普通用户的主入口。只按这里走，就能完成：
 
 ```text
-新库入库 -> catalog -> scan -> version review -> diff/fd -> review gate -> release
+新库入库 -> catalog -> next 预演 -> next 执行 -> version review -> release
 ```
 
 底层 `python -m lib_guard.cli` 是自动化和调试入口；日常使用优先用
@@ -113,15 +113,25 @@ discover 的最小规则是：
 # 1. 只把新库写进人工 registry 和正式 library_catalog.yml
 lg library add Vendor_Z.npu --root /path/to/Vendor_Z/npu --vendor Vendor_Z --display-name npu --apply --refresh-catalog
 
-# 2. 确认正式库名和版本名
+# 2. 先看多库工作清单；日常先处理“可执行”，异常库再单独看修正提示
+lg next
+lg next --ready
+
+# 3. 确认正式库名和版本名
 lg library list --plain
 lg library list Vendor_Z.npu --versions --plain
 
-# 3. 先看系统推导的窗口，不执行 scan/diff
-lg intake Vendor_Z.npu --plan-only
+# 4. 单库预演：不执行 scan/diff，只看 FULL/增量、Base、候选有效版
+lg next Vendor_Z.npu
 
-# 4. 确认计划后执行 scan/effective compare/render
-lg intake Vendor_Z.npu
+# 5. 如果提示需要修正包类型/Base，先看修正建议
+lg next Vendor_Z.npu --fix
+
+# 6. 确认 Base、Catalog类型、需扫描版本后执行 scan/effective compare/render
+lg next Vendor_Z.npu --apply
+
+# 7. Version Detail 审查通过后接受候选有效版
+lg next Vendor_Z.npu --accept --by <USER> --note "review passed"
 ```
 
 注意：如果只用了 `library add --apply`，`library list` 仍读取旧的
@@ -170,7 +180,31 @@ $PROJ/scripts/lg.csh library list --plain
 $PROJ/scripts/lg.csh library list <LIBRARY> --versions --plain
 ```
 
-## 2.1 手动测试最小闭环
+## 2.1 FULL 流程和增量流程
+
+日常不需要分别记两套命令。系统会在 `lg next <LIBRARY>` 里判断：
+
+| 场景 | 判断方式 | 推荐命令 |
+| --- | --- | --- |
+| FULL 流程 | 最新交付本身是完整包，作为新的完整基线 | `lg next <LIBRARY>` 预演，确认后 `lg next <LIBRARY> --apply` |
+| 增量流程 | 最新 FULL 作为基线，后续 FIX/HOTFIX 叠加成 candidate effective | `lg next <LIBRARY>` 预演，确认后 `lg next <LIBRARY> --apply` |
+| 包类型不确定 | 有版本被识别为 `UNKNOWN_PACKAGE` 或 Base 不可信 | `lg next <LIBRARY> --fix` 看修正建议，再 `lg mark ...` 或 `lg library override ...` |
+| 审查通过 | Version Detail 确认可用后写入当前有效版 | `lg next <LIBRARY> --accept --by <USER> --note "review passed"` |
+
+`lg next <LIBRARY>` 默认只读，不执行 scan/diff，不改 current effective。它会显示：
+
+```text
+基线确认
+流程判断：FULL流程 / FULL流程 + 增量流程
+版本选择表
+建议修正命令
+当前组合
+执行计划
+```
+
+这也是排查入口：如果流程判断不符合真实交付关系，先不要执行 `--apply`。
+
+## 2.2 手动测试最小闭环
 
 第一次演练不要直接跑全量。先用 `--dry-run` 看短命令会展开成哪些底层动作：
 
@@ -180,7 +214,8 @@ $PROJ/scripts/lg.csh --dry-run library list <LIBRARY> --versions
 $PROJ/scripts/lg.csh --dry-run cat <LIBRARY> <VERSION>
 $PROJ/scripts/lg.csh --dry-run scan <LIBRARY> <VERSION>
 $PROJ/scripts/lg.csh --dry-run cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-missing
-$PROJ/scripts/lg.csh --dry-run intake <LIBRARY> --plan-only
+$PROJ/scripts/lg.csh --dry-run next <LIBRARY>
+$PROJ/scripts/lg.csh --dry-run next <LIBRARY> --apply
 ```
 
 确认展开命令合理后，再按这个小闭环执行：
@@ -220,15 +255,22 @@ firefox <render_summary.open_first>
 | `cat <LIBRARY> --update-detail` | 按需 | 是 | 是，按 update-detail 目标 | 刷新日常更新证据 |
 | `scan <LIBRARY> <VERSION>` | 是 | 否 | 是，仅该版本 | 生成 scan evidence |
 | `scan <LIBRARY> --missing` | 是，批量缺失项 | 否 | 是，成功版本集合 | 补齐 scan evidence |
+| `next` | 否 | 否 | 否 | 小白入口：批量查看库下一步 |
+| `next <LIBRARY>` | 否 | 否 | 否 | 预演该库 FULL/增量流程、Base 和 candidate |
+| `next <LIBRARY> --apply` | 是，window 内版本 | 是，effective compare | 是，window 内版本 | 确认后执行 scan、effective compare、刷新详情页 |
+| `next <LIBRARY> --accept --by ...` | 否 | 否 | 是，window 内版本 | 接受 candidate effective |
+| `worklist` | 否 | 否 | 否 | 专家别名：批量查看哪些库可执行、需人工确认或无新版本 |
 | `cmp <LIBRARY> <VERSION> --base ...` | 仅 `--scan-if-missing/--rescan` 时 | 是 | 是，target 版本 | 手动 compare/debug |
-| `intake <LIBRARY>` | 是，window 内版本 | 是，effective compare | 是，window 内版本 | 新版本接入窗口 |
-| `window <LIBRARY>` | 否 | 否 | 否 | 查看窗口算法结果 |
+| `intake <LIBRARY> --plan-only` | 否 | 否 | 否 | 专家入口：生成接入计划；默认人工可读，`--json` 才输出机器 JSON |
+| `intake <LIBRARY>` | 是，window 内版本 | 是，effective compare | 是，window 内版本 | 专家入口：执行接入计划 |
+| `window <LIBRARY>` | 否 | 否 | 否 | 专家入口：查看 Base、候选版本、Catalog 类型和建议修正命令 |
 | `accept-window <LIBRARY>` | 否 | 否 | 是，window 内版本 | 接受 candidate effective |
+| `effective rollback <LIBRARY> --to <ID>` | 否 | 否 | 是，库级页面 | 错误 accept 后把 current effective 指回旧 manifest |
 | `mark <LIBRARY> <VERSION>` | 否 | 否 | 是，该版本 | 修正 package type |
 | `rv ...` | 否 | 否 | 否 | Review Gate 决策 |
 | `rel ...` | 否 | 否 | 否 | release check/link/verify |
 
-## 2.2 单库新版本：FIX 和 FULL 怎么走
+## 2.3 单库新版本：FIX 和 FULL 怎么走
 
 单个库有新版本时，先不要急着全量刷新。核心问题只有两个：
 
@@ -254,17 +296,69 @@ lg library override <LIBRARY> <FIX_VERSION> \
   --compare-default full_baseline \
   --note "manual confirmed fix package"
 
-# 4. 预演：确认 candidate/base/scan_versions
-lg intake <LIBRARY> --plan-only
+# 4. 预演：确认 Base、候选版本、Catalog 类型、scan_versions
+lg next <LIBRARY>
 
 # 5. 执行：自动 scan、构建 candidate effective、对比并刷新 Version Detail
-lg intake <LIBRARY>
+lg next <LIBRARY> --apply
+```
+
+`intake` 会把这次窗口写成可恢复执行计划：
+
+```text
+$WORK/state/<LIBRARY>/current_plan.json
+```
+
+如果中途失败，重新运行 `lg next <LIBRARY> --apply` 会复用同一计划，跳过同一输入指纹下
+已经 `DONE` 的 task，从失败点继续。命令输出里的 `plan_state`、`next_action` 和
+`blocked_reason` 是判断下一步的主入口。
+
+`lg next <LIBRARY>` 默认输出人工可读表；如果要给脚本解析，使用：
+
+```csh
+lg next <LIBRARY> --json
+```
+
+如果窗口里存在 `UNKNOWN_PACKAGE` 或缺失 `package_type` 的版本，`intake` 只会生成
+计划并返回 `NEEDS_PACKAGE_CONFIRM`，不会执行 scan/effective compare。先用下面任一
+方式确认类型，再重新 `intake`：
+
+```csh
+lg mark <LIBRARY> <VERSION> --type FULL --note "confirmed full package"
+lg mark <LIBRARY> <VERSION> --type FIX  --note "confirmed partial update"
 ```
 
 如果已经有 `current effective`，`cat --update-detail` 优先用 current/previous
 effective；如果没有 effective 指针，但版本是 FIX/HOTFIX 并记录了
 `base_full_version`，会回退到完整包基线，页面显示为“完整包基线”，不会伪装成
 “上一有效版”。
+
+### 批量库处理和错误 accept 回退
+
+多库场景不要逐个进入专家 `window`。先跑：
+
+```csh
+lg next
+lg next --ready
+lg next --blocked
+```
+
+`next` 不传库名时只读 catalog/current effective/window 信息，不运行 scan/diff。它把库分成：
+
+- `可执行`：系统已能推导 candidate/base，建议运行 `lg next <LIBRARY> --apply`。
+- `可接受`：candidate 已生成且没有待执行 task，建议运行 `lg next <LIBRARY> --accept --by <USER>`。
+- `需确认包类型` / `需确认Base`：只对这些异常库运行 `lg next <LIBRARY> --fix`，再用
+  `mark` 或 `library override` 修正。
+- `无新版本`：无需执行。
+
+如果误执行了 `next <LIBRARY> --accept`，不要删 catalog、scan 或 HTML。把 current effective 指回旧 manifest：
+
+```csh
+lg effective rollback <LIBRARY> --to <OLD_EFFECTIVE_ID> --by $USER --reason "wrong candidate accepted"
+```
+
+`--to` 是 `$WORK/catalog/html/libraries/<LIB>/effective/<OLD_EFFECTIVE_ID>/effective_manifest.json`
+所在目录名。
 
 ### FULL 更新
 
@@ -281,8 +375,8 @@ lg library list <LIBRARY> --versions
 lg mark <LIBRARY> <FULL_VERSION> --type FULL --note "manual confirmed full package"
 
 # 4. 预演，再执行
-lg intake <LIBRARY> --plan-only
-lg intake <LIBRARY>
+lg next <LIBRARY>
+lg next <LIBRARY> --apply
 ```
 
 当没有 current effective 指针时，FULL 默认和上一完整包比较，页面显示为
@@ -292,11 +386,11 @@ FULL 的默认 base。
 如果你要审查一个窗口内“旧 full + 若干 fix + 新 full”的组合关系，优先用：
 
 ```csh
-lg intake <LIBRARY> --plan-only
-lg intake <LIBRARY>
+lg next <LIBRARY>
+lg next <LIBRARY> --apply
 ```
 
-`intake` 会给出 candidate effective：FIX 场景会把 FIX 叠加到基线；FULL 场景会把
+`next` 会给出 candidate effective：FIX 场景会把 FIX 叠加到基线；FULL 场景会把
 最新 FULL 作为候选完整基线，并把它之前的 FIX 作为证据说明。
 
 ## 3. 生成 Catalog 页面
@@ -362,7 +456,7 @@ current 时，才会升级为“当前有效版”。
 面对很多库时，优先用单库命令：
 
 ```csh
-$PROJ/scripts/lg.csh cat --refresh-catalog <LIBRARY> --with-evidence
+$PROJ/scripts/lg.csh cat <LIBRARY> --refresh-catalog --with-evidence
 ```
 
 第一次入库、registry/apply 后，需要提前跑一次 `cat --refresh-catalog`，否则
@@ -386,9 +480,9 @@ python3 -c "import json; d=json.load(open('$WORK/catalog/catalog.json')); print(
 | 操作 | 会覆盖哪些页面 | 是否重跑 scan | 是否重跑 diff | 备注 |
 | --- | --- | --- | --- | --- |
 | `cat` | Catalog 首页和导航状态 | 否 | 否 | 只 render 已有 `catalog.json`；不会 discover，不会减少库 |
-| `cat <LIBRARY>` | 该库最新版本的 Version Detail | 否 | 否 | 不覆盖 Catalog 首页；不会 discover，不会减少库 |
+| `cat <LIBRARY>` | 该库最新版本的 Version Detail | 否 | 否 | 不刷新二层库工作台；不会 discover，不会减少库 |
 | `cat --refresh-catalog --with-evidence` | Catalog 首页、library 页、version 页投影 | 否 | 否 | 低频全局 catalog 重建 |
-| `cat --refresh-catalog <LIBRARY> --with-evidence` | 指定库相关页面投影 | 否 | 否 | 推荐用于大库日常局部刷新；仍受 shrink guard 保护 |
+| `cat <LIBRARY> --refresh-catalog --with-evidence` | 指定库二层工作台和相关 Version Detail | 否 | 否 | 推荐用于大库日常局部刷新；仍受 shrink guard 保护 |
 | `cat <LIBRARY> <VERSION>` | 指定 Version Detail | 否 | 否 | 只重新投影页面，不更新证据 |
 | `cat <LIBRARY> --update-detail` | update-detail 目标版本 | 按需 | 是 | 用上一有效版/当前有效版生成更新详情 |
 | `scan <LIBRARY> <VERSION>` | 该版本 Version Detail、scan HTML | 是 | 否 | Catalog 导航页可能延迟刷新 |
@@ -503,7 +597,7 @@ $PROJ/scripts/lg.csh cat <LIBRARY> --update-detail
 RAW 目录，使用：
 
 ```csh
-$PROJ/scripts/lg.csh cat --refresh-catalog <LIBRARY>
+$PROJ/scripts/lg.csh cat <LIBRARY> --refresh-catalog
 ```
 
 `cat <LIBRARY> <VERSION>` 只重渲染一个版本详情页，不重新 scan，也不补齐其它

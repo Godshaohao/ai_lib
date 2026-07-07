@@ -24,6 +24,7 @@ from lib_guard.project_config import (
     workspace_config_file_defaults,
     workspace_defaults,
 )
+from lib_guard.user_errors import format_user_error
 
 PAIRWISE_FILE_DIFF_TYPES = set(DEFAULT_FILE_DIFF_TYPES)
 FORCE_LARGE_FILE_DIFF_TYPES = set(SUMMARY_ONLY_TYPES) | set(BINARY_METADATA_ONLY_TYPES)
@@ -730,13 +731,20 @@ def _build_parser() -> ArgumentParser:
     lg.csh library list --plain         # 只输出正式库名，便于复制
     lg.csh library list <正式库名> --versions
     lg.csh library list <正式库名> --versions --plain
+    lg.csh next                          # 小白入口：查看所有库下一步
+    lg.csh next --ready                  # 只看可一键执行的库
+    lg.csh next ucie                     # 预演该库 FULL/增量接入计划
+    lg.csh next ucie --apply             # 确认后执行 scan/effective compare/render
+    lg.csh next ucie --accept --by owner --note "review passed"
+    lg.csh worklist                      # 专家别名：批量查看哪些库可执行/需确认/无新版本
     lg.csh cat ucie stable_20250608     # 只重渲染一个版本详情页，不重新 scan
     lg.csh library override ucie stable_20250608 --base initial_20250601 --stage stable
-    lg.csh intake ucie --plan-only        # 只生成 review window 和命令计划
-    lg.csh intake ucie                    # 确认计划后执行 scan/effective compare/render
+    lg.csh intake ucie --plan-only        # 专家入口：只生成 review window 和命令计划
+    lg.csh intake ucie                    # 专家入口：确认计划后执行 scan/effective compare/render
     lg.csh window ucie                    # 查看 old/candidate/scan/compare 组合
     lg.csh mark ucie stable_20250608 --type FULL
     lg.csh accept-window ucie --accepted-by lib_owner --note "review passed"
+    lg.csh effective rollback ucie --to E_old --by lib_owner --reason "wrong accept"
     # 手动 compare/debug 时再显式指定 base 或 adjacent/cumulative
     lg.csh cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
@@ -892,11 +900,29 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("library")
     p.add_argument("--action", help="Explicit action file path. Default: $WORK/actions/<library>.action")
 
+    p = sub.add_parser("next", help="小白入口：查看下一步、预演、执行或接受候选有效版")
+    p.add_argument("library", nargs="?", help="正式库名；不传则查看全部库工作清单")
+    p.add_argument("--ready", action="store_true", help="不传 library 时，只显示可执行/可接受的库")
+    p.add_argument("--blocked", action="store_true", help="不传 library 时，只显示需要人工处理的库")
+    p.add_argument("--apply", action="store_true", help="传 library 时，按预演计划执行 scan/effective compare/render")
+    p.add_argument("--accept", action="store_true", help="传 library 时，接受当前 candidate effective")
+    p.add_argument("--fix", action="store_true", help="传 library 时，只显示需要修正的包类型/Base 关系")
+    p.add_argument("--by", help="配合 --accept 记录接受人")
+    p.add_argument("--note", help="配合 --accept 记录说明")
+    p.add_argument("--since", help="传 library 时，临时从指定 raw version 之后推导窗口")
+    p.add_argument("--rebuild", action="store_true", help="传 library 时，强制重建 candidate effective 和 compare")
+    p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
+    p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次 scan hash 策略")
+    p.add_argument("--parse-file-types", help="覆盖本次 scan parser 类型")
+    p.add_argument("--parse-exclude-file-types", help="覆盖本次 scan parser 排除类型")
+    p.add_argument("--parse-jobs", help="覆盖本次 parser worker 数")
+
     p = sub.add_parser("intake", help="扫描新版本，构建 review window，并对比 current effective vs candidate effective")
     p.add_argument("library")
     p.add_argument("--since", help="从指定 raw version 之后开始构建窗口")
     p.add_argument("--plan-only", action="store_true", help="只写 pending_window.json 和命令计划，不执行")
     p.add_argument("--rebuild", action="store_true", help="强制重建 candidate effective 和 compare")
+    p.add_argument("--json", action="store_true", help="配合 --plan-only 输出机器可读 JSON；默认输出人工可读表")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次 scan hash 策略")
     p.add_argument("--parse-file-types", help="覆盖本次 scan parser 类型")
     p.add_argument("--parse-exclude-file-types", help="覆盖本次 scan parser 排除类型")
@@ -905,7 +931,13 @@ def _build_parser() -> ArgumentParser:
     p = sub.add_parser("window", help="查看当前 review window 算法结果")
     p.add_argument("library")
     p.add_argument("--since", help="临时从指定 raw version 之后推导窗口")
+    p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
     p.add_argument("--parse-jobs", help=SUPPRESS)
+
+    p = sub.add_parser("worklist", help="批量查看哪些库可执行、需人工确认或无新版本")
+    p.add_argument("--ready", action="store_true", help="只显示可执行/可接受的库")
+    p.add_argument("--blocked", action="store_true", help="只显示需要人工处理的库")
+    p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
 
     p = sub.add_parser("accept-window", help="接受当前 candidate effective，写 current_effective.json")
     p.add_argument("library")
@@ -918,6 +950,14 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--type", required=True, choices=["FULL", "FIX", "HOTFIX", "UNKNOWN"])
     p.add_argument("--updated-by")
     p.add_argument("--note")
+
+    root_eff = sub.add_parser("effective", help="查看/回退当前有效组合")
+    effsp = root_eff.add_subparsers(dest="effective_cmd", required=True)
+    p = effsp.add_parser("rollback", help="把 current_effective 指回一个已有 effective manifest")
+    p.add_argument("library")
+    p.add_argument("--to", required=True, help="目标 effective_id，例如 E_old 或 candidate_20260618")
+    p.add_argument("--by", required=True)
+    p.add_argument("--reason", required=True)
 
     root_rv = sub.add_parser("rv", help="Review Gate 构建、检查、列表和 owner 决策")
     rvsp = root_rv.add_subparsers(dest="rv_cmd", required=True)
@@ -1221,13 +1261,13 @@ def _scan_batch_command(
 
 def _scan_library_help(library: str) -> str:
     return (
-        f"scan {library!r} is ambiguous because one library can have many versions.\n"
-        "Use one explicit mode:\n"
-        f"  lg.csh scan {library} <version>\n"
-        f"  lg.csh scan {library} --missing\n"
-        f"  lg.csh scan {library} --all-versions\n"
-        f"  lg.csh scan {library} --limit 3\n"
-        f"  lg.csh scan {library} --stage stable --missing"
+        f"scan 需要明确版本或批量策略，因为一个库可能有很多版本：{library}\n"
+        "请选择一种明确模式：\n"
+        f"  lg scan {library} <VERSION>\n"
+        f"  lg scan {library} --missing\n"
+        f"  lg scan {library} --all-versions\n"
+        f"  lg scan {library} --limit 3\n"
+        f"  lg scan {library} --stage stable --missing"
     )
 
 
@@ -1249,8 +1289,8 @@ def _require_catalog_version(cfg: dict[str, str], library: str, version: str) ->
         return _find_version(lib, version)
     except Exception as exc:
         raise ValueError(
-            f"catalog 中没有版本 {version!r} for library {library!r}. "
-            f"lg scan 不会自动刷新 catalog；请先运行 `$PROJ/scripts/lg.csh cat --refresh-catalog {library}` "
+            f"catalog 中没有版本 {version!r}，库：{library!r}。"
+            f"lg scan 不会自动刷新 catalog；请先运行 `lg cat {library} --refresh-catalog` "
             "或检查 `$WORK/config/library_catalog.yml`。"
         ) from exc
 
@@ -1305,8 +1345,32 @@ def _window_common_command(cfg: dict[str, str], args: Any, subcommand: str) -> l
         _append_scan_strategy(command, cfg, args)
         if getattr(args, "plan_only", False):
             command.append("--plan-only")
+            if not getattr(args, "json", False):
+                command.extend(["--format", "text"])
         if getattr(args, "rebuild", False):
             command.append("--rebuild")
+    elif subcommand == "show" and not getattr(args, "json", False):
+        command.extend(["--format", "text"])
+    return command
+
+
+def _worklist_command(cfg: dict[str, str], args: Any) -> list[str]:
+    command = [
+        "window",
+        "worklist",
+        "--catalog",
+        cfg["catalog"],
+        "--workdir",
+        cfg["workspace"],
+        "--catalog-html-out",
+        cfg["catalog_html"],
+    ]
+    if getattr(args, "ready", False):
+        command.append("--ready")
+    if getattr(args, "blocked", False):
+        command.append("--blocked")
+    if not getattr(args, "json", False):
+        command.extend(["--format", "text"])
     return command
 
 
@@ -1330,6 +1394,63 @@ def _window_accept_command(cfg: dict[str, str], args: Any) -> list[str]:
     if getattr(args, "note", None):
         command.extend(["--note", args.note])
     return command
+
+
+def _next_command(cfg: dict[str, str], args: Any) -> list[str]:
+    actions = [bool(getattr(args, name, False)) for name in ["apply", "accept", "fix"]]
+    if sum(actions) > 1:
+        raise ValueError("next 只能选择一个动作：--apply / --accept / --fix")
+    if not getattr(args, "library", None):
+        if getattr(args, "apply", False) or getattr(args, "accept", False) or getattr(args, "fix", False):
+            raise ValueError("lg next 不传库名时只能查看工作清单；执行动作请使用 `lg next <LIBRARY> --apply|--accept|--fix`")
+        return _worklist_command(cfg, args)
+    if getattr(args, "ready", False) or getattr(args, "blocked", False):
+        raise ValueError("lg next <LIBRARY> 不支持 --ready/--blocked；这些筛选只用于 `lg next` 工作清单")
+    if getattr(args, "accept", False):
+        if not getattr(args, "by", None):
+            raise ValueError("lg next <LIBRARY> --accept 需要 --by <USER>，用于审计记录")
+        return _window_accept_command(
+            cfg,
+            Namespace(library=args.library, accepted_by=args.by, note=getattr(args, "note", None)),
+        )
+    if getattr(args, "fix", False):
+        return _window_common_command(cfg, args, "show")
+    return _window_common_command(
+        cfg,
+        Namespace(
+            library=args.library,
+            since=getattr(args, "since", None),
+            plan_only=not getattr(args, "apply", False),
+            rebuild=getattr(args, "rebuild", False),
+            json=getattr(args, "json", False),
+            hash_policy=getattr(args, "hash_policy", None),
+            parse_file_types=getattr(args, "parse_file_types", None),
+            parse_exclude_file_types=getattr(args, "parse_exclude_file_types", None),
+            parse_jobs=getattr(args, "parse_jobs", None),
+        ),
+        "intake",
+    )
+
+
+def _effective_rollback_command(cfg: dict[str, str], args: Any) -> list[str]:
+    return [
+        "window",
+        "rollback",
+        "--catalog",
+        cfg["catalog"],
+        "--library",
+        args.library,
+        "--workdir",
+        cfg["workspace"],
+        "--catalog-html-out",
+        cfg["catalog_html"],
+        "--to",
+        args.to,
+        "--by",
+        args.by,
+        "--reason",
+        args.reason,
+    ]
 
 
 def _mark_command(cfg: dict[str, str], args: Any) -> list[str]:
@@ -1540,7 +1661,13 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             if getattr(args, "apply", False):
                 commands.append(_library_apply_command(cfg, Namespace(input=args.registry, out=None)))
             if getattr(args, "refresh_catalog", False):
-                commands.append(_catalog_scan_command(cfg, args.library_id))
+                refresh_cfg = dict(cfg)
+                # build_cli_commands() loads cfg before library apply runs, so
+                # cfg["catalog_policy"] may still point at the generic discovery
+                # policy.  The chained refresh must use the library_catalog.yml
+                # that the previous command is about to create.
+                refresh_cfg["catalog_policy"] = cfg["library_catalog"]
+                commands.append(_catalog_scan_command(refresh_cfg, args.library_id))
             return commands
         if args.library_cmd == "apply":
             return [_library_apply_command(cfg, args)]
@@ -1568,14 +1695,22 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             ]
         _catalog_data(cfg)
         return [_catalog_render_command(cfg, args.library, getattr(args, "version", None))]
+    if args.short_command == "next":
+        return [_next_command(cfg, args)]
     if args.short_command == "intake":
         return [_window_common_command(cfg, args, "intake")]
     if args.short_command == "window":
         return [_window_common_command(cfg, args, "show")]
+    if args.short_command == "worklist":
+        return [_worklist_command(cfg, args)]
     if args.short_command == "accept-window":
         return [_window_accept_command(cfg, args)]
     if args.short_command == "mark":
         return [_mark_command(cfg, args)]
+    if args.short_command == "effective":
+        if args.effective_cmd == "rollback":
+            return [_effective_rollback_command(cfg, args)]
+        raise ValueError(f"unsupported effective command: {args.effective_cmd}")
     if args.short_command == "rv":
         review_subcommand = args.rv_cmd
         return [_review_gate_command(cfg, args, review_subcommand)]
@@ -1748,13 +1883,7 @@ def _command_for_execution(command: list[str]) -> list[str]:
 
 
 def _should_echo_commands(args: Any) -> bool:
-    if getattr(args, "dry_run", False):
-        return True
-    return not (
-        getattr(args, "short_command", "") == "library"
-        and getattr(args, "library_cmd", "") == "list"
-        and bool(getattr(args, "plain", False))
-    )
+    return bool(getattr(args, "dry_run", False))
 
 
 def _print_post_command_hint(args: Any) -> None:
@@ -1800,7 +1929,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         commands = build_cli_commands(argv, cwd=Path.cwd())
     except (FileNotFoundError, ValueError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(format_user_error(exc, argv=argv), file=sys.stderr)
         return 2
     if args.short_command == "cmp" and getattr(args, "auto_scan", False):
         print("[WARN] 'lg cmp --auto-scan' is deprecated and now means --scan-if-missing, not forced rescan.", file=sys.stderr)

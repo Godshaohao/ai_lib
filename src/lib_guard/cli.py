@@ -27,6 +27,7 @@ from lib_guard.project_config import (
     PROJECT_CONFIG_DIR,
     SUMMARY_ONLY_TYPES,
 )
+from lib_guard.user_errors import format_user_error
 
 
 LOGGER = logging.getLogger("lib_guard")
@@ -721,6 +722,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         LOGGER.error("interrupted")
         return 130
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        print(format_user_error(exc, argv=argv), file=sys.stderr)
+        return 2
     except Exception as exc:
         LOGGER.exception("command failed: %s", exc)
         return 2

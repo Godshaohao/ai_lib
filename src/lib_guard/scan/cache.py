@@ -5,6 +5,8 @@ from typing import Any, Mapping
 import hashlib
 import json
 
+from lib_guard.atomic import atomic_write_json
+
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
@@ -35,5 +37,4 @@ class ScanCache:
         if self.no_cache:
             return
         path = self._path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        atomic_write_json(path, result, lock=True)

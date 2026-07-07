@@ -156,6 +156,51 @@ class VersionDetailReviewContextTest(unittest.TestCase):
             self.assertEqual(ctx["compare_new"], "effective:candidate_fix2")
             self.assertEqual(ctx["freshness"]["status"], "FRESH")
 
+    def test_accepted_window_still_projects_candidate_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = _write_active_window(root)
+            window_file = paths["window_file"]
+            window = json.loads(window_file.read_text(encoding="utf-8"))
+            window["state"] = "ACCEPTED"
+            window_file.write_text(json.dumps(window, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            from lib_guard.render.version_detail_context import build_version_detail_review_context
+
+            ctx = build_version_detail_review_context(
+                catalog_html_out=paths["html"],
+                library_row=_library(),
+                version_row=_version("fix2", paths["scan_dir"]),
+            )
+
+            self.assertEqual(ctx["status"], "IN_ACTIVE_WINDOW")
+            self.assertEqual(ctx["window_state"], "ACCEPTED")
+            self.assertEqual(ctx["role_in_window"], "candidate_overlay")
+            self.assertEqual(ctx["compare_old"], "raw:full1")
+            self.assertEqual(ctx["compare_new"], "effective:candidate_fix2")
+
+    def test_compare_manifest_recovers_when_recorded_out_dir_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = _write_active_window(root)
+            window_file = paths["window_file"]
+            window = json.loads(window_file.read_text(encoding="utf-8"))
+            window["compare"]["out_dir"] = str(root / "html" / "libraries" / "ip_ucie" / "compare" / "stale_missing_dir")
+            window["compare"]["html"] = str(root / "html" / "libraries" / "ip_ucie" / "compare" / "stale_missing_dir" / "index.html")
+            window_file.write_text(json.dumps(window, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            from lib_guard.render.version_detail_context import build_version_detail_review_context
+
+            ctx = build_version_detail_review_context(
+                catalog_html_out=paths["html"],
+                library_row=_library(),
+                version_row=_version("fix2", paths["scan_dir"]),
+            )
+
+            self.assertEqual(ctx["compare_dir"], str(paths["compare_dir"]))
+            self.assertEqual(ctx["compare_manifest"], str(paths["compare_manifest"]))
+            self.assertEqual(ctx["compare_html"], str(paths["compare_html"]))
+
     def test_intermediate_context_preserves_window_but_marks_non_candidate_role(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

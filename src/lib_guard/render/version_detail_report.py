@@ -30,7 +30,7 @@ from lib_guard.render.version_review_render import render_ip_user_view
 from lib_guard.view_types import canonical_file_type, package_view_type
 
 
-STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit"}
+STANDARD_BASE_REFS = {"current_effective", "previous_effective", "explicit", "review_window"}
 FALLBACK_BASE_REFS = {"adjacent_fallback", "recorded_base", "recorded_base_fallback", "unknown"}
 UPDATE_STATUS_COPY = {
     "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg cat <LIB> --update-detail。",
@@ -422,6 +422,7 @@ def _select_diff_dir(version: Mapping[str, Any], *, base_ref: str, base_version:
         ("explicit", ("base_diff_dir", "current_effective_diff_dir", "diff_dir")),
         ("current_effective", ("current_effective_diff_dir", "base_diff_dir", "diff_dir")),
         ("previous_effective", ("previous_effective_diff_dir", "current_effective_diff_dir", "base_diff_dir", "diff_dir")),
+        ("review_window", ()),
         ("base_full", ("cumulative_diff_dir", "base_diff_dir", "diff_dir")),
         ("recorded_base", ("base_diff_dir", "diff_dir")),
         ("adjacent_fallback", ("adjacent_diff_dir", "diff_dir")),
@@ -446,6 +447,38 @@ def _select_diff_dir(version: Mapping[str, Any], *, base_ref: str, base_version:
             path = _path_if_exists(diff.get(dir_key))
             if path:
                 return path
+    inferred = _infer_diff_dir_for_base(diff, base_version)
+    if inferred:
+        return inferred
+    return None
+
+
+def _infer_diff_dir_for_base(diff: Mapping[str, Any], base_version: str) -> Path | None:
+    if not base_version:
+        return None
+    known: list[Path] = []
+    for key in [
+        "base_diff_dir",
+        "current_effective_diff_dir",
+        "previous_effective_diff_dir",
+        "adjacent_diff_dir",
+        "cumulative_diff_dir",
+        "diff_dir",
+    ]:
+        path = _path_if_exists(diff.get(key))
+        if path:
+            known.append(path)
+    if not known:
+        return None
+    candidates: list[Path] = []
+    for path in known:
+        parent = path.parent if path.name == "adjacent" or path.name.startswith("base_") else path
+        candidates.append(parent / f"base_{base_version}")
+        candidates.append(parent / f"base_{common.safe(base_version)}")
+    for candidate in candidates:
+        path = _path_if_exists(candidate)
+        if path:
+            return path
     return None
 
 
@@ -576,8 +609,12 @@ def _cn_base_ref(value: Any) -> str:
         "latest_effective_ref": "最新有效版",
         "latest_effective": "最新有效版",
         "base_full": "完整包基线",
+        "review_window": "审查窗口基准",
         "explicit": "手动指定基准版",
         "adjacent": "相邻版本",
+        "adjacent_fallback": "相邻上一版",
+        "recorded_base": "已记录对比基准",
+        "recorded_base_fallback": "已记录对比基准",
         "NEEDS_BASE_CONFIRM": "待确认基准版",
     }.get(text, text or "待确认基准版")
 
@@ -599,7 +636,9 @@ def _cn_base_source(value: Any) -> str:
         "diff.base_version:previous_effective": "对比记录：上一有效版",
         "diff.base_version:full_baseline": "对比记录：完整包基线",
         "diff.base_version:previous_full": "对比记录：上一完整包",
+        "diff.base_version:fallback": "已记录对比结果",
         "diff_summary": "对比记录",
+        "review_window.compare_old": "审查窗口对比对象",
     }.get(text, text or "-")
 
 
@@ -696,13 +735,39 @@ def _usage_decision_result(
     return "READY", []
 
 
+def _target_ref_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if ":" in text:
+        return text.split(":", 1)[1].strip()
+    return text
+
+
+def _review_context_base_rule(review_context: Mapping[str, Any]) -> dict[str, str] | None:
+    if not _review_context_is_active(review_context):
+        return None
+    old_target = str(review_context.get("compare_old") or review_context.get("old_target") or "").strip()
+    base_version = _target_ref_id(old_target)
+    if not base_version:
+        return None
+    return {
+        "base_ref": "review_window",
+        "base_version": base_version,
+        "base_source": "review_window.compare_old",
+    }
+
+
 def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], version: Mapping[str, Any]) -> dict[str, Any]:
     out_path = Path(out)
     lib_id = _library_id(lib)
     version_id = _version_id(version)
     safe_lib = _library_report_slug(lib)
     safe_ver = common.safe(version_id)
-    base_rule = resolve_review_base(version, lib)
+    review_context = build_version_detail_review_context(
+        catalog_html_out=out_path,
+        library_row=lib,
+        version_row=version,
+    )
+    base_rule = _review_context_base_rule(review_context) or resolve_review_base(version, lib)
     base_ref = base_rule["base_ref"]
     base_version = base_rule["base_version"]
     base_source = base_rule["base_source"]
@@ -753,11 +818,6 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     )
     scan_context = _as_mapping(scan_evidence.get("context"))
     scan_compatibility = _scan_compatibility(scan_context, comparison_context)
-    review_context = build_version_detail_review_context(
-        catalog_html_out=out_path,
-        library_row=lib,
-        version_row=version,
-    )
     release_notes = _release_notes_from_existing_evidence(version)
     recommended_file_diff, summary_only_reviewed, metadata_only_reviewed = _group_file_changes_by_review_mode(file_changes)
     commands = _file_diff_commands(lib, version, base_version, file_changes)
@@ -1267,19 +1327,37 @@ def _review_context_role_label(role: Any) -> str:
     }.get(str(role or ""), str(role or "独立版本"))
 
 
+def _base_context_label(model: Mapping[str, Any]) -> str:
+    return f"{_cn_base_ref(model.get('base_ref') or 'NEEDS_BASE_CONFIRM')} / {model.get('base_version') or '-'}"
+
+
+def _display_target_ref(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.startswith("raw:"):
+        return f"原始版 {text[4:] or '-'}"
+    if text.startswith("effective:"):
+        return f"有效版 {text[len('effective:'):] or '-'}"
+    return text or "-"
+
+
 def _review_context_compare_label(ctx: Mapping[str, Any], model: Mapping[str, Any]) -> str:
     if _review_context_is_active(ctx):
         old = str(ctx.get("compare_old") or ctx.get("old_label") or "-")
         new = str(ctx.get("compare_new") or "")
         if not new and ctx.get("candidate_effective_id"):
             new = f"effective:{ctx.get('candidate_effective_id')}"
-        return f"{old} → {new or '-'}"
-    return f"{model.get('base_ref') or 'NEEDS_BASE_CONFIRM'} / {model.get('base_version') or '-'}"
+        return f"{_display_target_ref(old)} → {_display_target_ref(new)}"
+    return _base_context_label(model)
 
 
 def _review_context_freshness_label(ctx: Mapping[str, Any]) -> str:
     freshness = _as_mapping(ctx.get("freshness"))
-    return str(freshness.get("status") or "STALE_OR_MISSING")
+    status = str(freshness.get("status") or "STALE_OR_MISSING")
+    return {
+        "FRESH": "证据齐全",
+        "PARTIAL": "证据部分存在",
+        "STALE_OR_MISSING": "证据缺失或陈旧",
+    }.get(status, status)
 
 
 def _overview_window_context(ctx: Mapping[str, Any], model: Mapping[str, Any]) -> str:
@@ -1325,7 +1403,7 @@ def _review_context_panel(model: Mapping[str, Any]) -> str:
             ("窗口状态", ctx.get("window_state") or "-"),
             ("目标角色", _review_context_role_label(ctx.get("role_in_window"))),
             ("窗口成员", ", ".join(item_labels) or "-"),
-            ("上一有效对象", ctx.get("old_label") or "-"),
+            ("上一有效对象", _display_target_ref(ctx.get("old_label"))),
             ("候选有效版", ctx.get("candidate_effective_id") or "-"),
             ("候选完整基线", ctx.get("candidate_effective_base_full") or "-"),
             ("候选叠加版本", ", ".join(str(item) for item in overlays) or "-"),
@@ -1401,7 +1479,7 @@ def _version_overview_panel(
         evidence_hint = "窗口 / 有效版 / 对比 / 扫描证据新鲜度"
     else:
         object_value = f"{model.get('version_id') or '-'} / 独立版本"
-        compare_value = f"{base_label}: {model.get('base_ref') or '-'} / {model.get('base_version') or '-'}"
+        compare_value = f"{base_label}: {_base_context_label(model)}"
         compare_hint = "未命中当前审查窗口时回退普通基准版选择"
         evidence_value = ip_model.get("evidence_summary") or _review_context_freshness_label(ctx)
         evidence_hint = "轻量证据不自动代表不完整"

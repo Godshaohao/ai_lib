@@ -25,8 +25,12 @@ BASE_REF_COPY = {
     "previous_effective": "上一有效版",
     "latest_effective": "最新有效版",
     "base_full": "完整包基线",
+    "review_window": "审查窗口基准",
     "explicit": "手动指定",
     "adjacent": "相邻版本",
+    "adjacent_fallback": "相邻上一版",
+    "recorded_base": "已记录对比基准",
+    "recorded_base_fallback": "已记录对比基准",
     "NEEDS_BASE_CONFIRM": "待确认基准版",
 }
 BASE_SOURCE_COPY = {
@@ -37,11 +41,13 @@ BASE_SOURCE_COPY = {
     "full_baseline": "完整包基线",
     "previous_full": "上一完整包",
     "latest_effective_ref": "最新有效版引用",
+    "review_window.compare_old": "审查窗口对比对象",
     "explicit": "手动指定",
     "manual": "手动指定",
     "diff_summary": "对比记录",
     "diff.base_version:full_baseline": "对比记录：完整包基线",
     "diff.base_version:previous_full": "对比记录：上一完整包",
+    "diff.base_version:fallback": "已记录对比结果",
 }
 SEMANTICS_COPY = {
     "full": "全量",
@@ -227,6 +233,57 @@ def _change_counts_by_view(file_changes: list[Mapping[str, Any]]) -> dict[str, d
     return dict(out)
 
 
+def _cn_change_kind(value: Any) -> str:
+    text = str(value or "").lower()
+    if text == "added":
+        return "新增"
+    if text == "removed":
+        return "删除"
+    if text == "changed":
+        return "修改"
+    return text or "变化"
+
+
+def _short_examples(values: list[str], *, limit: int = 4) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _current_file_examples_by_view(model: Mapping[str, Any], *, limit: int = 3) -> dict[str, list[str]]:
+    inventory = _as_mapping(_as_mapping(model.get("scan_evidence")).get("inventory"))
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for item in inventory.get("files", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        view_type = _canonical_view_type(item.get("file_type"))
+        path = str(item.get("path") or item.get("relpath") or item.get("file") or "").strip()
+        if path and len(grouped[view_type]) < limit:
+            grouped[view_type].append(path)
+    return grouped
+
+
+def _changed_file_examples_by_view(file_changes: list[Mapping[str, Any]], *, limit: int = 4) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for item in file_changes:
+        view_type = _canonical_view_type(item.get("file_type"))
+        path = str(item.get("path") or "").strip()
+        if not path:
+            continue
+        label = f"{_cn_change_kind(item.get('change'))}: {path}"
+        if len(grouped[view_type]) < limit:
+            grouped[view_type].append(label)
+    return grouped
+
+
 def _evidence_levels_for_view(file_changes: list[Mapping[str, Any]], view_type: str) -> list[str]:
     levels: set[str] = set()
     for item in file_changes:
@@ -245,6 +302,34 @@ def _evidence_levels_for_view(file_changes: list[Mapping[str, Any]], view_type: 
     return [_evidence_copy(item) for item in ordered]
 
 
+def _review_meaning_for_view(view_type: str, evidence_level: str, delta_total: int) -> str:
+    if not delta_total:
+        return "当前扫描中存在该视图，本次相对基准未发现变化。"
+    if view_type == "physical_abstract":
+        return "检查宏、pin、层或物理抽象是否影响 floorplan、PD 接入和抽象库引用。"
+    if view_type == "rtl_model":
+        return "检查 RTL/SystemVerilog 接口、模型或集成引用是否变化。"
+    if view_type == "timing":
+        return "检查 timing view 数量和文件身份；摘要级证据是正常策略，不等于内容缺失。"
+    if view_type == "layout":
+        return "检查版图类文件是否新增/删除/替换；通常按元数据、哈希和发布证据确认。"
+    if view_type == "parasitic":
+        return "检查寄生/抽取视图是否影响时序签核场景；默认不做内容级展开。"
+    if view_type == "constraint":
+        return "检查约束、UPF/CPF/SDC 是否影响综合、实现或集成脚本。"
+    if view_type == "spice_netlist":
+        return "检查 CDL/SPICE 连接视图是否影响 LVS 或电路级验证。"
+    if view_type == "doc_evidence":
+        return "检查 release note、waiver 或说明文件是否能解释本次更新。"
+    if view_type == "flow_config":
+        return "检查脚本/config 变化是否影响现有 flow 引用。"
+    if view_type == "unknown":
+        return "需要补充分类规则或人工确认，避免未知文件绕过审查。"
+    if "Summary-only" in evidence_level or "Metadata-only" in evidence_level:
+        return "轻量证据只说明采用摘要/元数据策略，不自动代表不完整。"
+    return "按视图变化和证据等级确认是否影响当前使用场景。"
+
+
 def _usage_area_for_type(file_type: str) -> str:
     return usage_area_for_view(file_type)
 
@@ -252,6 +337,8 @@ def _usage_area_for_type(file_type: str) -> str:
 def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     raw_current_counts = _current_type_counts(model)
     current_counts = _aggregate_counts_by_view(raw_current_counts)
+    current_examples = _current_file_examples_by_view(model)
+    changed_examples = _changed_file_examples_by_view(file_changes)
     raw_counts_by_view: dict[str, Counter[str]] = defaultdict(Counter)
     for raw_type, count in raw_current_counts.items():
         raw_counts_by_view[_canonical_view_type(raw_type)][_norm_type(raw_type)] += _as_int(count)
@@ -263,6 +350,13 @@ def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[
         counts = delta.get(view_type, {"added": 0, "removed": 0, "changed": 0, "raw_delta_counts": {}})
         delta_total = counts["added"] + counts["removed"] + counts["changed"]
         evidence_levels = _evidence_levels_for_view(file_changes, view_type)
+        suppress_file_examples = view_type == "unknown" or not delta_total or (
+            bool(evidence_levels)
+            and all(
+                "Summary-only" in level or "Metadata-only" in level
+                for level in evidence_levels
+            )
+        )
         current_total = _as_int(current_counts.get(view_type))
         current_total = max(current_total, counts["added"] + counts["changed"])
         if delta_total:
@@ -286,11 +380,18 @@ def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[
                 "changed": counts["changed"],
                 "delta_total": delta_total,
                 "evidence_level": " / ".join(evidence_levels) if evidence_levels else _evidence_copy("No delta"),
+                "current_examples": [] if suppress_file_examples else _short_examples(current_examples.get(view_type, []), limit=3),
+                "changed_examples": [] if suppress_file_examples else _short_examples(changed_examples.get(view_type, []), limit=4),
                 "raw_types": _raw_type_summary(raw_counts_by_view.get(view_type, {})),
                 "raw_delta_types": _raw_type_summary(_as_mapping(counts.get("raw_delta_counts"))),
                 "status": status,
                 "status_label": status_label,
             }
+        )
+        rows[-1]["review_meaning"] = _review_meaning_for_view(
+            view_type,
+            str(rows[-1].get("evidence_level") or ""),
+            delta_total,
         )
     return rows
 

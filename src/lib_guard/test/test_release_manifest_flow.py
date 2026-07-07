@@ -146,10 +146,14 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             from lib_guard.release.postcheck import verify_release_manifest
 
             verified = verify_release_manifest(manifest_path)
-            self.assertEqual(verified["status"], "PASS_WITH_WARNING")
+            self.assertEqual(verified["status"], "FAILED")
             self.assertEqual(verified["summary"]["missing_files"], 1)
             self.assertEqual(verified["summary"]["extra_files"], 1)
             self.assertEqual(verified["summary"]["target_mismatch"], 1)
+            severities = {item["category"]: item["severity"] for item in verified["issues"]}
+            self.assertEqual(severities["missing_file"], "error")
+            self.assertEqual(severities["target_mismatch"], "error")
+            self.assertEqual(severities["extra_file"], "warning")
             categories = {item["category"] for item in verified["issues"]}
             self.assertIn("missing_file", categories)
             self.assertIn("extra_file", categories)
@@ -176,10 +180,29 @@ class ReleaseManifestFlowTest(unittest.TestCase):
 
             result = link_release_from_manifest(manifest_path, apply=True, mode="copy", overwrite=True)
             self.assertEqual(result["status"], "APPLIED")
+            self.assertTrue(Path(result["release_lock"]).exists())
             self.assertEqual((release_root / "RTL" / "new_top.v").read_text(encoding="utf-8"), "module new_top; endmodule\n")
             self.assertTrue((release_root / "RTL" / "ddr.v").exists())
             self.assertTrue((release_root / "RTL" / "old_top.v").exists())
             self.assertEqual(result["summary"]["removed_files"], 0)
+
+    def test_release_manifest_rejects_unknown_package_type(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            ucie = base / "raw" / "ucie" / "unknown_20260620"
+            ddr = base / "raw" / "ddr" / "final_20260601"
+            release_root = base / "release_area"
+            manifest_path = base / "release_runs" / "PD_LIB_CURRENT_20260620" / "release_manifest.json"
+            ucie.mkdir(parents=True)
+            ddr.mkdir(parents=True)
+            manifest = self._write_manifest(manifest_path, release_root, ucie, ddr)
+            manifest["libraries"][0]["package_type"] = "UNKNOWN_PACKAGE"
+            manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            from lib_guard.release.bundle import load_release_manifest
+
+            with self.assertRaisesRegex(ValueError, "unconfirmed package_type"):
+                load_release_manifest(manifest_path)
 
     def test_manifest_mirror_release_root_removes_unlisted_files_only_when_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as td:

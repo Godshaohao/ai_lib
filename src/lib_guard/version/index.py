@@ -5,9 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import json
-import os
-import tempfile
 
+from lib_guard.atomic import atomic_write_json
 
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
@@ -20,19 +19,7 @@ def _read_json(path: Path, default: Any) -> Any:
 
 
 def _atomic_write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, ensure_ascii=False, default=str)
-            fh.write("\n")
-        os.replace(tmp_name, path)
-    finally:
-        try:
-            if os.path.exists(tmp_name):
-                os.remove(tmp_name)
-        except OSError:
-            pass
+    atomic_write_json(path, data, lock=True)
 
 
 @dataclass
@@ -67,6 +54,8 @@ class VersionIndex:
         parent_version: str | None = None,
         base_version: str | None = None,
         release_status: str | None = None,
+        scan_status: str | None = None,
+        bundle_status: str | None = None,
         release_channel: str | None = None,
         scan_id: str | None = None,
         overwrite: bool = False,
@@ -107,10 +96,10 @@ class VersionIndex:
             "raw_root": str(raw_root) if raw_root is not None else versions.get(version_id, {}).get("raw_root"),
             "scan_dir": str(scan_dir) if scan_dir is not None else None,
             "scan_id": scan_id,
-            "scan_status": release_status,
+            "scan_status": scan_status,
             "release_status": release_status,
             "release_channel": release_channel,
-            "bundle_status": release_status,
+            "bundle_status": bundle_status,
             "latest_scan_by_mode": versions.get(version_id, {}).get("latest_scan_by_mode", {}),
             "all_scans": versions.get(version_id, {}).get("all_scans", []),
             "created_at": versions.get(version_id, {}).get("created_at") or _utc_now(),
@@ -119,7 +108,7 @@ class VersionIndex:
         if scan_dir is not None:
             mode = "unknown"
             record["latest_scan_by_mode"][mode] = str(scan_dir)
-            record["all_scans"].append({"scan_dir": str(scan_dir), "scan_id": scan_id, "scan_status": release_status, "mode": mode, "created_at": _utc_now()})
+            record["all_scans"].append({"scan_dir": str(scan_dir), "scan_id": scan_id, "scan_status": scan_status, "mode": mode, "created_at": _utc_now()})
         versions[version_id] = record
         lib["latest_version"] = version_id
         self.save(data)
@@ -178,7 +167,9 @@ def register_scan_version(
         base_version=base_version,
         scan_dir=scan,
         raw_root=raw_root,
-        release_status=readiness.get("bundle_status") or meta.get("status"),
+        release_status=readiness.get("release_status"),
+        scan_status=meta.get("status"),
+        bundle_status=readiness.get("bundle_status"),
         release_channel=readiness.get("release_channel"),
         scan_id=meta.get("scan_id"),
         overwrite=overwrite,

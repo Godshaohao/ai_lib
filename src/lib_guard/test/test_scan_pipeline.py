@@ -1809,7 +1809,7 @@ class ScanPipelineTest(unittest.TestCase):
 
             with self.assertRaises(ValueError) as scan_error:
                 build_cli_commands(["scan", "ucie"], cwd=workspace)
-            self.assertIn("scan 'ucie' is ambiguous", str(scan_error.exception))
+            self.assertIn("scan 需要明确版本或批量策略", str(scan_error.exception))
 
             lib_scan_cmds = build_cli_commands(["scan", "ucie", "--all-versions"], cwd=workspace)
             self.assertEqual(len(lib_scan_cmds), 1)
@@ -1837,7 +1837,7 @@ class ScanPipelineTest(unittest.TestCase):
             with self.assertRaises(ValueError) as missing_version_error:
                 build_cli_commands(["scan", "ucie", "future_20250615"], cwd=workspace)
             self.assertIn("catalog 中没有版本", str(missing_version_error.exception))
-            self.assertIn("cat --refresh-catalog ucie", str(missing_version_error.exception))
+            self.assertIn("lg cat ucie --refresh-catalog", str(missing_version_error.exception))
 
             with self.assertRaises(ValueError) as evidence_scan_error:
                 build_cli_commands(["scan", "ucie", "stable_20250608", "--with-evidence"], cwd=workspace)
@@ -2018,12 +2018,14 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertIn("示例", help_text)
         self.assertIn("日常流程", help_text)
         self.assertIn("lg.csh scan", help_text)
-        self.assertIn("lg.csh intake ucie                    # 确认计划后执行 scan/effective compare/render", help_text)
+        self.assertIn("lg.csh next ucie --apply", help_text)
         self.assertIn("lg.ps1 scan", help_text)
-        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,intake,window,accept-window,mark,rv}", help_text)
+        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv}", help_text)
         self.assertIn("lg.csh intake ucie --plan-only", help_text)
+        self.assertIn("lg.csh worklist", help_text)
         self.assertIn("lg.csh window ucie", help_text)
         self.assertIn("lg.csh accept-window ucie", help_text)
+        self.assertIn("lg.csh effective rollback", help_text)
         self.assertIn("--force-large", help_text)
         self.assertIn("spice", help_text)
         self.assertIn("touchstone", help_text)

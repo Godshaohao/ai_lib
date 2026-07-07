@@ -205,6 +205,11 @@ def _diff_label(version: Mapping[str, Any] | None) -> tuple[str, str]:
     return workspace_model.diff_label(version)
 
 
+def _display_badge(status: Any, label: Any) -> str:
+    text = ui.esc(label or ui.status_label(status) or "-")
+    return f"<span class='badge {ui.status_class(status)}' title='{text}'>{text}</span>"
+
+
 def _version_detail_href(version: Mapping[str, Any] | None) -> str:
     if not isinstance(version, Mapping):
         return ""
@@ -239,8 +244,10 @@ def _library_entry_summary(
         "base_ref": model["base_ref"],
         "scan_status": model["scan_status"],
         "scan_text": model["scan_text"],
+        "scan_note": model["scan_note"],
         "diff_status": model["diff_status"],
         "diff_text": model["diff_text"],
+        "diff_note": model["diff_note"],
         "release_status": model["release_status"],
         "decision": model["decision"],
         "needs_review": model["needs_review"],
@@ -293,8 +300,8 @@ def _library_focus_panel(summary: Mapping[str, Any]) -> str:
 def _review_now_panel(summary: Mapping[str, Any]) -> str:
     rows = [
         ("对比范围", f"{summary.get('candidate_ref')} vs {summary.get('base_ref')}", "最新待审版相对当前/上一有效版"),
-        ("扫描", summary.get("scan_text"), summary.get("scan_status")),
-        ("对比", summary.get("diff_text"), summary.get("diff_status")),
+        ("扫描", summary.get("scan_text"), summary.get("scan_note")),
+        ("对比", summary.get("diff_text"), summary.get("diff_note")),
         ("判断", summary.get("decision"), "是否需要进入版本详情审查"),
     ]
     row_html = "".join(
@@ -331,15 +338,31 @@ def _history_version_rows(lib: Mapping[str, Any], versions: list[Mapping[str, An
         action = ui.button("详情", _version_detail_href(version), "secondary", disabled=not bool(_version_detail_href(version)), target="_blank")
         rows.append(
             "<tr>"
-            f"<td><b title='{ui.esc(version_id)}'>{ui.esc(common.short_name(version_id))}</b>{' ' + ui.badge('INFO', '最新') if version_id == str(latest) else ''}</td>"
-            f"<td>{ui.badge(pkg_status, pkg_label)}</td>"
-            f"<td>{ui.badge(scan_status, scan_text)}</td>"
-            f"<td>{ui.badge(diff_status, diff_text)}</td>"
+            f"<td><b title='{ui.esc(version_id)}'>{ui.esc(common.short_name(version_id))}</b>{' ' + _display_badge('INFO', '最新') if version_id == str(latest) else ''}</td>"
+            f"<td>{_display_badge(pkg_status, pkg_label)}</td>"
+            f"<td>{_display_badge(scan_status, scan_text)}</td>"
+            f"<td>{_display_badge(diff_status, diff_text)}</td>"
             f"<td>{ui.esc(relation)}</td>"
             f"<td>{action}</td>"
             "</tr>"
         )
     return rows
+
+
+def _library_version_ledger_panel(lib: Mapping[str, Any], versions: list[Mapping[str, Any]]) -> str:
+    rows = _history_version_rows(lib, versions)
+    row_html = "".join(rows) if rows else "<tr><td class='empty' colspan='6'>暂无版本</td></tr>"
+    body = (
+        "<div class='library-version-ledger table-wrap'>"
+        "<table><thead><tr><th>版本</th><th>包类型</th><th>扫描</th><th>对比</th><th>关系</th><th>入口</th></tr></thead>"
+        f"<tbody>{row_html}</tbody></table>"
+        "</div>"
+    )
+    return ui.panel(
+        "库版本清单",
+        f"保留该库全部 {len(versions)} 个版本的定位入口；版本详情仍只在需要时刷新，不在库页展开所有 scan/diff 明细。",
+        body,
+    )
 
 
 def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: list[dict[str, Any]], compare_items: list[dict[str, Any]] | None = None) -> str:
@@ -349,12 +372,13 @@ def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: lis
     versions = list(lib.get("versions", []) or [])
     timeline, latest_effective_ref = catalog._library_timeline(lib, effective_items)
     summary = _library_entry_summary(lib, effective_items, timeline, latest_effective_ref)
-    del compare_items, versions
+    del compare_items
     body = (
         _catalog_browser_styles()
         + _library_focus_styles()
         + _library_focus_panel(summary)
         + _review_now_panel(summary)
+        + _library_version_ledger_panel(lib, versions)
     )
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / 库工作台",
@@ -572,6 +596,9 @@ def _library_focus_styles() -> str:
 .library-review-now{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
 .review-actions{display:flex;justify-content:flex-start}
 .history-ledger .panel-head{background:#fbfcff}
+.library-version-ledger{max-height:460px;overflow:auto;scrollbar-gutter:stable}
+.library-version-ledger table{min-width:860px}
+.library-version-ledger th{position:sticky;top:0;z-index:1}
 @media(max-width:980px){.library-focus-grid{grid-template-columns:1fr}.library-focus-card{min-height:auto}}
 </style>
 """

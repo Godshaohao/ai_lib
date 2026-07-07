@@ -4,6 +4,8 @@ Status: current
 
 `lib_guard` 围绕审查证据组织，而不是围绕页面或命令组织。
 
+![Lib Guard 架构与主流程](lib_guard_architecture_flow.svg)
+
 ```text
 raw delivery
   -> catalog

@@ -8,6 +8,7 @@ from collections import Counter
 import json
 
 from .config import ReleasePolicy
+from lib_guard.atomic import atomic_write_json
 from lib_guard.summary.readiness import build_release_readiness
 
 
@@ -21,8 +22,7 @@ def _load_json(path: Path, default: Any) -> Any:
 
 
 def _write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_json(path, data, lock=True)
 
 
 def _issue(severity: str, category: str, title: str, message: str, files: list[str] | None = None) -> dict[str, Any]:

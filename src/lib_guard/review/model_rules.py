@@ -48,6 +48,7 @@ def resolve_review_base(version: Mapping[str, Any], library: Mapping[str, Any] |
     del library
     diff = _as_mapping(version.get("diff"))
     lineage = _as_mapping(version.get("lineage"))
+    version_id = str(version.get("version_id") or version.get("version") or "")
     explicit = (
         version.get("explicit_base_version")
         or diff.get("explicit_base_version")
@@ -78,13 +79,14 @@ def resolve_review_base(version: Mapping[str, Any], library: Mapping[str, Any] |
             base_ref = "explicit"
         return {"base_ref": base_ref, "base_version": str(diff_base), "base_source": f"diff.base_version:{diff_base_source or diff_kind}"}
     full_base = _base_full_version(version)
-    if full_base:
+    diff_base = diff.get("base_version")
+    if full_base and (not version_id or str(full_base) != version_id or not diff_base):
         return {"base_ref": "base_full", "base_version": str(full_base), "base_source": "base_full_version"}
+    if diff_base:
+        return {"base_ref": "recorded_base", "base_version": str(diff_base), "base_source": "diff.base_version:fallback"}
     adjacent = diff.get("adjacent_old_version")
     if adjacent:
         return {"base_ref": "adjacent_fallback", "base_version": str(adjacent), "base_source": "adjacent_old_version"}
-    if diff_base:
-        return {"base_ref": "recorded_base", "base_version": str(diff_base), "base_source": "diff.base_version:fallback"}
     return {"base_ref": "NEEDS_BASE_CONFIRM", "base_version": "", "base_source": "missing_base"}
 
 

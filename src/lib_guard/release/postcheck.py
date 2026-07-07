@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 from collections import Counter
+import hashlib
 import os
 
 from .bundle import iter_release_files, load_release_manifest, manifest_run_dir, release_dir_for, read_json, write_json
@@ -21,6 +22,14 @@ def _norm(path: Any) -> str:
 
 def _issue(severity: str, category: str, library_name: str | None, message: str) -> dict[str, Any]:
     return {"severity": severity, "category": category, "library_name": library_name, "message": message}
+
+
+def _sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _file_type_counts(path: Path, limit: int = 200000) -> dict[str, int]:
@@ -42,6 +51,11 @@ def _file_type_counts(path: Path, limit: int = 200000) -> dict[str, int]:
             counts["__truncated__"] += 1
             break
     return dict(sorted(counts.items()))
+
+
+def _is_internal_release_artifact(path: Path) -> bool:
+    name = path.name
+    return name == ".lib_guard_release.lock" or (name.startswith(".") and name.endswith(".tmp"))
 
 
 def _link_result_by_library(link_result: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -80,7 +94,7 @@ def verify_release_manifest(
     actual_files = {
         item.relative_to(release_dir).as_posix(): item
         for item in release_dir.rglob("*")
-        if release_dir.exists() and (item.is_file() or item.is_symlink())
+        if release_dir.exists() and (item.is_file() or item.is_symlink()) and not _is_internal_release_artifact(item)
     } if release_dir.exists() else {}
     issues: list[dict[str, Any]] = []
     library_stats: dict[str, dict[str, Any]] = {}
@@ -114,10 +128,10 @@ def verify_release_manifest(
         is_broken = target.is_symlink() and not target.exists()
         if not exists:
             stats["link_status"] = "MISSING"
-            issues.append(_issue("warning", "missing_file", library_name, f"release file missing: {rel_path}"))
+            issues.append(_issue("error", "missing_file", library_name, f"release file missing: {rel_path}"))
         if is_broken:
             stats["link_status"] = "BROKEN"
-            issues.append(_issue("warning", "broken_link", library_name, f"broken symlink: {rel_path}"))
+            issues.append(_issue("error", "broken_link", library_name, f"broken symlink: {rel_path}"))
 
         source_path = str(plan.get("source_path") or "")
         recorded_target = str(link_info.get("target_path") or link_info.get("source_path") or "")
@@ -131,9 +145,14 @@ def verify_release_manifest(
                 target_match = False
         if not target_match:
             stats["target_match"] = False
-            issues.append(_issue("warning", "target_mismatch", library_name, f"release target does not match manifest source file: {rel_path}"))
+            issues.append(_issue("error", "target_mismatch", library_name, f"release target does not match manifest source file: {rel_path}"))
 
         if exists and not is_broken:
+            expected_hash = str(plan.get("sha256") or plan.get("source_sha256") or plan.get("content_sha256") or "")
+            if expected_hash and target.is_file():
+                actual_hash = _sha256(target)
+                if actual_hash != expected_hash:
+                    issues.append(_issue("error", "hash_mismatch", library_name, f"release file hash mismatch: {rel_path}"))
             stats["linked_files"] += 1
             stats["file_type_counts"][str(plan.get("file_type") or "unknown")] += 1
             if plan.get("source_package"):
@@ -145,6 +164,7 @@ def verify_release_manifest(
         issues.append(_issue("warning", "extra_file", None, f"release directory contains extra file: {rel_path}"))
 
     counts = Counter(issue["category"] for issue in issues)
+    severities = Counter(str(issue.get("severity") or "info") for issue in issues)
     libraries = []
     for stats in library_stats.values():
         clean = dict(stats)
@@ -162,7 +182,7 @@ def verify_release_manifest(
         "manifest_path": str(Path(manifest_path)),
         "link_result_path": str(link_json) if link_json.exists() else None,
         "postcheck_path": str(run_dir / "release_postcheck.json"),
-        "status": "PASS_WITH_WARNING" if issues else "PASS",
+        "status": "FAILED" if severities.get("error", 0) or severities.get("blocker", 0) else ("PASS_WITH_WARNING" if issues else "PASS"),
         "summary": {
             "expected_libraries": len(library_stats),
             "linked_libraries": sum(1 for item in libraries if item.get("linked_files") == item.get("expected_files")),
@@ -172,6 +192,7 @@ def verify_release_manifest(
             "extra_files": counts.get("extra_file", 0),
             "broken_links": counts.get("broken_link", 0),
             "target_mismatch": counts.get("target_mismatch", 0),
+            "hash_mismatch": counts.get("hash_mismatch", 0),
             "unknown_file_types": sum((item.get("file_type_counts", {}) or {}).get("unknown", 0) for item in libraries),
         },
         "libraries": libraries,

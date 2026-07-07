@@ -455,7 +455,8 @@ class CatalogTimelineTest(unittest.TestCase):
             html = page.read_text(encoding="utf-8")
 
             self.assertEqual(model["status"], "NEEDS_BASE_CONFIRM")
-            self.assertIn("NEEDS_BASE_CONFIRM", html)
+            self.assertIn("待确认基准版", html)
+            self.assertNotIn("NEEDS_BASE_CONFIRM", html)
             self.assertNotIn("NO_DIFF_SUMMARY", html)
             self.assertNotIn("Comparison Review 是唯一 diff 入口", html)
             self.assertFalse((page.parent / "current_lib_diff.md").exists())
@@ -2744,6 +2745,53 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual(runtime["release"]["check_status"], "PASS")
             self.assertEqual(runtime["release"]["link_status"], "DRY_RUN")
             self.assertTrue(runtime["release"]["manifest_json"].endswith("release_manifest.json"))
+
+    def test_final_maintenance_name_promotes_incomplete_view_set_to_full_package(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            work = Path(td) / "work"
+            library_root = raw / "Vendor_A" / "ucie"
+            final_full = library_root / "20260618_UCIe_UAXI_SP_X16_BE_Final_maintenance"
+            adhoc_fix = library_root / "20260624_adhoc_ucie_netlists_t7_release"
+            for root in [final_full, adhoc_fix]:
+                (root / "rtl").mkdir(parents=True)
+                (root / "rtl" / "ucie_top.v").write_text("module ucie_top; endmodule\n", encoding="utf-8")
+            (final_full / "lef").mkdir()
+            (final_full / "lef" / "ucie.lef").write_text("MACRO UCIe\nEND UCIe\n", encoding="utf-8")
+
+            library_map = Path(td) / "library_map.yml"
+            library_map.write_text(
+                "\n".join(
+                    [
+                        "libraries:",
+                        "  Vendor_A.ucie:",
+                        "    root: raw/Vendor_A/ucie",
+                        "    display_name: ucie",
+                        "    vendor: Vendor_A",
+                        "    library_type: ip",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            policy = Path(td) / "catalog_policy.json"
+            policy.write_text(
+                json.dumps({"library_type": "ip", "discovery": {"library_map": str(library_map), "pattern_fallback": False}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            from lib_guard.cli import main
+
+            catalog = work / "catalog" / "catalog.json"
+            self.assertEqual(main(["catalog", "refresh", "--root", str(raw), "--out", str(work / "catalog"), "--library-type", "ip", "--policy", str(policy)]), 0)
+
+            data = json.loads(catalog.read_text(encoding="utf-8"))
+            versions = {version["version_id"]: version for lib in data["libraries"] for version in lib["versions"]}
+            self.assertEqual(versions[final_full.name]["package_type"], "FULL_PACKAGE")
+            self.assertTrue(versions[final_full.name]["standalone"])
+            self.assertFalse(versions[final_full.name]["base_required"])
+            self.assertIn("name_suggests_full_but_missing_expected_views", versions[final_full.name]["classification_risks"])
+            self.assertEqual(versions[adhoc_fix.name]["package_type"], "PARTIAL_UPDATE")
 
 
 if __name__ == "__main__":

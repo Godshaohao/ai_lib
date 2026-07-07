@@ -112,9 +112,90 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(model["review_context"]["role_in_window"], "candidate_overlay")
             self.assertIn("当前审查窗口 / 有效版证据", rendered)
             self.assertIn("候选叠加版本", rendered)
-            self.assertIn("raw:full1 → effective:candidate_fix2", rendered)
+            self.assertIn("原始版 full1 → 有效版 candidate_fix2", rendered)
             self.assertIn("candidate_fix2", rendered)
-            self.assertIn("FRESH", rendered)
+            self.assertIn("证据齐全", rendered)
+
+    def test_accepted_window_base_overrides_stale_explicit_catalog_base(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            html_root = root / "html"
+            lib_dir = html_root / "libraries" / "ip_window_demo"
+            scan_dir = root / "scan" / "fix2"
+            scan_dir.mkdir(parents=True)
+            diff_dir = root / "diff" / "window_demo" / "fix2" / "adjacent"
+            diff_dir.mkdir(parents=True)
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps({"status": "DIFF", "changed_files": 2, "added_files": 0, "removed_files": 1}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            effective_dir = lib_dir / "effective" / "candidate_fix2"
+            compare_dir = lib_dir / "compare" / "window_raw_full1_to_candidate_fix2"
+            effective_dir.mkdir(parents=True)
+            compare_dir.mkdir(parents=True)
+            candidate_manifest = effective_dir / "effective_manifest.json"
+            candidate_manifest.write_text("{}", encoding="utf-8")
+            (effective_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+            (compare_dir / "compare_manifest.json").write_text("{}", encoding="utf-8")
+            (compare_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+            window_file = lib_dir / "window" / "pending_window.json"
+            window_file.parent.mkdir(parents=True)
+            window_file.write_text(
+                json.dumps(
+                    {
+                        "state": "ACCEPTED",
+                        "library": "window_demo",
+                        "library_id": "ip/window_demo",
+                        "items": [{"version": "fix2", "role": "candidate_overlay"}],
+                        "base_effective": {"target": "raw:full1", "base_full": "full1"},
+                        "candidate_effective": {
+                            "effective_id": "candidate_fix2",
+                            "base_full": "full1",
+                            "overlays": ["fix2"],
+                            "manifest": str(candidate_manifest),
+                        },
+                        "compare": {
+                            "compare_id": "window_raw_full1_to_candidate_fix2",
+                            "old": "raw:full1",
+                            "new": "effective:candidate_fix2",
+                            "out_dir": str(compare_dir),
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            lib = {"library_id": "ip/window_demo", "library_name": "window_demo", "report_slug": "ip_window_demo"}
+            version = {
+                "version_id": "fix2",
+                "scan": {"status": "PASS", "scan_dir": str(scan_dir)},
+                "diff": {
+                    "base_version": "stale_manual_full",
+                    "base_source": "explicit",
+                    "base_diff_dir": None,
+                    "adjacent_old_version": "full1",
+                    "adjacent_diff_dir": str(diff_dir),
+                },
+            }
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model, render_version_detail_page
+
+            model = build_version_update_detail_model(html_root, lib, version)
+            page = Path(render_version_detail_page(html_root, lib, version))
+            rendered = page.read_text(encoding="utf-8")
+
+            self.assertEqual(model["review_context"]["status"], "IN_ACTIVE_WINDOW")
+            self.assertEqual(model["review_context"]["window_state"], "ACCEPTED")
+            self.assertEqual(model["base_ref"], "review_window")
+            self.assertEqual(model["base_version"], "full1")
+            self.assertEqual(model["diff_dir"], str(diff_dir))
+            self.assertEqual(model["status"], "CHANGED")
+            self.assertIn("fix2 / 候选叠加版本", rendered)
+            self.assertIn("原始版 full1 → 有效版 candidate_fix2", rendered)
+            self.assertIn("审查窗口基准", rendered)
+            self.assertIn("证据齐全", rendered)
+            self.assertNotIn("stale_manual_full", rendered)
+            self.assertNotIn("独立版本", rendered)
 
     def test_review_model_rules_are_available_outside_renderer(self) -> None:
         from lib_guard.review.model_rules import (
@@ -160,6 +241,11 @@ class VersionDetailReportTest(unittest.TestCase):
                 [item["path"] for item in model["metadata_only_reviewed"]],
                 ["db/top.db", "layout/top.gds", "layout/top.oas"],
             )
+            self.assertIn("文件证据", main_html)
+            self.assertIn("说明", main_html)
+            self.assertIn("本次变化", main_html)
+            self.assertIn("lef/top.lef", main_html)
+            self.assertIn("constraints/top.sdc", main_html)
             self.assertIn("重点变化文件", main_html)
             self.assertNotIn("Summary-only / Metadata-only 明细", main_html)
             self.assertIn("审计证据", audit_html)
@@ -1058,6 +1144,58 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(previous_model["base_ref"], "previous_effective")
             self.assertEqual(previous_model["base_version"], "previous_base")
 
+    def test_self_base_full_does_not_mask_recorded_diff_base(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            diff_dir = root / "base_diff"
+            diff_dir.mkdir()
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps({"status": "DIFF", "added_files": 3, "changed_files": 1}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model, render_version_detail_page
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/asap7", "library_name": "asap7"},
+                {
+                    "version_id": "20260627_asap7",
+                    "base_full_version": "20260627_asap7",
+                    "base_version": "20260627_asap7",
+                    "diff": {
+                        "base_version": "20260624_asap7",
+                        "base_diff_dir": str(diff_dir),
+                        "adjacent_old_version": "20260624_asap7",
+                    },
+                },
+            )
+
+            self.assertEqual(model["base_ref"], "recorded_base")
+            self.assertEqual(model["base_version"], "20260624_asap7")
+            self.assertEqual(model["base_source"], "diff.base_version:fallback")
+            self.assertEqual(model["diff_summary"]["added_files"], 3)
+
+            page = Path(
+                render_version_detail_page(
+                    root / "html",
+                    {"library_id": "ip/asap7", "library_name": "asap7"},
+                    {
+                        "version_id": "20260627_asap7",
+                        "base_full_version": "20260627_asap7",
+                        "base_version": "20260627_asap7",
+                        "diff": {
+                            "base_version": "20260624_asap7",
+                            "base_diff_dir": str(diff_dir),
+                            "adjacent_old_version": "20260624_asap7",
+                        },
+                    },
+                )
+            )
+            html = page.read_text(encoding="utf-8")
+            self.assertIn("已记录对比基准 / 20260624_asap7", html)
+            self.assertNotIn("recorded_base", html)
+
     def test_current_library_diff_uses_current_effective_lane(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1280,7 +1418,8 @@ class VersionDetailReportTest(unittest.TestCase):
 
             self.assertFalse(md_path.exists())
             self.assertEqual(panel_before_md, panel_after_delete)
-            self.assertIn("NEEDS_BASE_CONFIRM", html)
+            self.assertIn("待确认基准版", html)
+            self.assertNotIn("NEEDS_BASE_CONFIRM", html)
             self.assertIn("NEEDS_BASE_CONFIRM", md_text)
             self.assertNotIn("NO_DIFF_SUMMARY", html)
             self.assertNotIn("Comparison Review 是唯一 diff 入口", html)

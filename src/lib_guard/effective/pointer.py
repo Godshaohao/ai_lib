@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+
+from lib_guard.atomic import atomic_write_json
 
 POINTER_SCHEMA = "current_effective.v1"
 
@@ -27,12 +28,7 @@ def read_json(path: str | Path, default: Any = None) -> Any:
 
 
 def write_json(path: str | Path, data: Mapping[str, Any]) -> Path:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, p)
-    return p
+    return atomic_write_json(path, data, lock=True)
 
 
 def normalize_effective_ref(value: str) -> str:
