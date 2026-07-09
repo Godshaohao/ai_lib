@@ -711,6 +711,12 @@ def _file_diff_out_dir(cfg: dict[str, str], library: str, version: str, relpath:
     return Path(cfg["file_diff"]) / library / version / out_name
 
 
+def _manual_file_diff_out_dir(cfg: dict[str, str], old_file: str | Path, new_file: str | Path, file_type: str) -> Path:
+    old_stem = _safe_path_name(Path(str(old_file)).stem)
+    new_stem = _safe_path_name(Path(str(new_file)).stem)
+    return Path(cfg["file_diff"]) / "manual" / f"{file_type}_{old_stem}_to_{new_stem}"
+
+
 def _build_parser() -> ArgumentParser:
     file_diff_types = " ".join(sorted(PAIRWISE_FILE_DIFF_TYPES))
     parser = ArgumentParser(
@@ -870,10 +876,12 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--refresh-catalog", action="store_true", help="compare 前刷新该 library catalog；默认使用已有 catalog.json")
     p.add_argument("--with-evidence", action="store_true", help="配合 --refresh-catalog 收集文件类型 evidence")
 
-    p = sub.add_parser("fd", help="基于 catalog raw path 运行单文件两两 diff；不会运行 scan")
-    p.add_argument("library")
-    p.add_argument("version")
-    p.add_argument("relpath")
+    p = sub.add_parser("fd", help="运行单文件两两 diff；支持 catalog 同路径跨版本，或 --old/--new 显式文件")
+    p.add_argument("library", nargs="?")
+    p.add_argument("version", nargs="?")
+    p.add_argument("relpath", nargs="?")
+    p.add_argument("--old", dest="old_file", help="显式指定 old 文件路径；配合 --new 使用，不读取 catalog")
+    p.add_argument("--new", dest="new_file", help="显式指定 new 文件路径；配合 --old 使用，不读取 catalog")
     p.add_argument("--base")
     p.add_argument("--type", metavar="FILE_TYPE", help="覆盖自动推断的文件类型；专家入口，具体类型按策略校验")
     p.add_argument("--force-large", action="store_true", help="专家入口：允许摘要级/元数据级证据文件类型运行手动文件深度对比")
@@ -1779,6 +1787,33 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         commands.append(compare)
         return commands
     if args.short_command == "fd":
+        explicit_old = getattr(args, "old_file", None)
+        explicit_new = getattr(args, "new_file", None)
+        if explicit_old or explicit_new:
+            if not explicit_old or not explicit_new:
+                raise ValueError("lg fd explicit mode requires both --old and --new")
+            if args.library or args.version or args.relpath or args.base:
+                raise ValueError("lg fd --old/--new mode does not accept library/version/relpath/--base")
+            if not args.type:
+                raise ValueError("lg fd --old/--new mode requires --type")
+            file_type = str(args.type)
+            _validate_manual_file_diff_type(file_type, force_large=bool(getattr(args, "force_large", False)))
+            out = _manual_file_diff_out_dir(cfg, explicit_old, explicit_new, file_type)
+            command = [
+                "file-diff",
+                file_type,
+                "--old",
+                str(explicit_old),
+                "--new",
+                str(explicit_new),
+                "--out",
+                str(out),
+            ]
+            if bool(getattr(args, "force_large", False)) and file_type in FORCE_LARGE_FILE_DIFF_TYPES:
+                command.append("--manual-large-file-opt-in")
+            return [command]
+        if not args.library or not args.version or not args.relpath:
+            raise ValueError("lg fd requires either <LIBRARY> <VERSION> <REL_PATH> or --old <FILE> --new <FILE> --type <FILE_TYPE>")
         data = _catalog_data(cfg)
         lib = _find_library(data, args.library)
         new_version = _find_version(lib, args.version)

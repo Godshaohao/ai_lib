@@ -83,7 +83,16 @@ def _view_delta_items(ip_model: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 def _view_delta_file_evidence(item: Mapping[str, Any]) -> str:
     changed_examples = _example_list("本次变化", item.get("changed_examples"))
     current_examples = _example_list("当前代表", item.get("current_examples"))
-    return "<br>".join(part for part in [changed_examples, current_examples] if part) or "<span class='muted'>暂无文件样例</span>"
+    body = "<br>".join(part for part in [changed_examples, current_examples] if part)
+    if not body:
+        return "<span class='muted'>暂无文件样例</span>"
+    return (
+        "<details class='inline-file-evidence'>"
+        "<summary>展开文件</summary>"
+        "<div class='muted'>数字对应文件</div>"
+        f"{body}"
+        "</details>"
+    )
 
 
 def _view_delta_raw_text(item: Mapping[str, Any]) -> str:
@@ -149,10 +158,19 @@ def _must_check_list(ip_model: Mapping[str, Any]) -> str:
 def render_ip_user_view(ip_model: Mapping[str, Any]) -> str:
     if not ip_model:
         return "<div class='muted-box'>暂无 IP 使用者视图模型。</div>"
+    table_title = str(ip_model.get("view_table_title") or "视图变化矩阵")
+    table_hint = str(ip_model.get("view_table_hint") or "按视图聚合新增、删除、修改和证据等级。")
+    review_mode = str(ip_model.get("review_mode") or "")
+    intro = (
+        "首版审查：当前无可比基准版，以下展示版本自身交付内容；数字可展开到文件证据。"
+        if review_mode == "first_version"
+        else "主表回答基准版到当前版的视图变化、证据等级和使用场景影响；数字可展开到文件证据。"
+    )
     return (
         "<div class='ip-user-view'>"
-        "<div class='quality-note'><b>IP 使用者默认视图</b> 主表只回答基准版到当前版的视图变化、证据等级和使用场景影响；管理门禁、包根匹配算法、原始 JSON 默认下沉。</div>"
-        "<h3>各视图影响</h3>"
+        f"<div class='quality-note'><b>IP 使用者默认视图</b> {ui.esc(intro)} 管理门禁、包根匹配算法、原始 JSON 默认下沉。</div>"
+        f"<h3>{ui.esc(table_title)}</h3>"
+        f"<p class='muted'>{ui.esc(table_hint)}</p>"
         + _simple_table(
                 ["视图类别", "当前数量", "新增/删除/修改", "文件证据", "证据等级", "说明", "使用场景", "状态"],
             _view_delta_rows(ip_model),

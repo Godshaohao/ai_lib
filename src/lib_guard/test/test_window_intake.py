@@ -235,6 +235,7 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertIn("当前没有新的待审查版本", text)
             self.assertIn("无需修正", text)
             self.assertNotIn("lg window ucie", text)
+            self.assertNotIn("lg accept-window ucie", text)
 
             from lib_guard.window.cli import cmd_intake
 
@@ -262,6 +263,31 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertIn("当前没有新的待审查版本", plan_text)
             self.assertIn("确认执行：无需执行", plan_text)
             self.assertIn("接受窗口：无需执行", plan_text)
+            self.assertNotIn("lg accept-window ucie", plan_text)
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = cmd_intake(
+                    argparse.Namespace(
+                        catalog=str(catalog),
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(html),
+                        since=None,
+                        window_file=None,
+                        rebuild=False,
+                        parse_jobs="",
+                        hash_policy="",
+                        parse_file_types="",
+                        parse_exclude_file_types="",
+                        plan_only=True,
+                        format="json",
+                    )
+                )
+            self.assertEqual(code, 0)
+            plan_json = json.loads(stdout.getvalue())
+            self.assertEqual(plan_json["accept_command"], "无需执行：没有 candidate effective，不能运行 accept-window")
+            self.assertNotIn("lg accept-window", plan_json["accept_command"])
 
     def test_window_output_contains_human_review_table_and_fix_commands(self) -> None:
         with tempfile.TemporaryDirectory() as td:

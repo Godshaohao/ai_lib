@@ -53,8 +53,17 @@ def _window_versions(window: dict[str, Any]) -> list[str]:
     return versions
 
 
-def _plan_followup_commands(library: str) -> dict[str, Any]:
+def _plan_followup_commands(library: str, window: dict[str, Any] | None = None) -> dict[str, Any]:
     lib = _quote(library)
+    state = str((window or {}).get("state") or "").upper()
+    candidate = (window or {}).get("candidate_effective") if isinstance((window or {}).get("candidate_effective"), dict) else {}
+    if state == "EMPTY" or not candidate:
+        return {
+            "confirm_command": "无需执行：当前没有新的待审查版本",
+            "relation_fix_commands": [],
+            "accept_command": "无需执行：没有 candidate effective，不能运行 accept-window",
+            "review_hint": "当前只有已识别的基线版本；新版本到来后再运行 lg next/window/intake。",
+        }
     return {
         "confirm_command": f"lg intake {lib}",
         "relation_fix_commands": [
@@ -104,7 +113,7 @@ def _version_review_table(window: dict[str, Any]) -> list[dict[str, Any]]:
                 "类型猜测": "FULL",
                 "Catalog类型": "FULL_PACKAGE" if base.get("source") != "first_catalog_version" else "",
                 "当前角色": "当前Base",
-                "是否需确认": "是" if base.get("source") in {"latest_full_fallback", "first_catalog_version"} else "否",
+                "是否需确认": "Base来源需确认" if base.get("source") in {"latest_full_fallback", "first_catalog_version"} else "否",
             }
         )
     for item in window.get("items", []) or []:
@@ -482,7 +491,7 @@ def cmd_intake(args: argparse.Namespace) -> int:
         "message": window.get("message", ""),
     }
     output.update(_review_window_summary(args.library, window))
-    output.update(_plan_followup_commands(args.library))
+    output.update(_plan_followup_commands(args.library, window))
     if args.plan_only or window.get("state") == "EMPTY" or blocked_reason:
         if getattr(args, "format", "json") == "text":
             print(_format_intake_plan_text(args.library, output))

@@ -670,6 +670,100 @@ class VersionDetailReportTest(unittest.TestCase):
         self.assertEqual(rows["physical_abstract"]["raw_types"], "lef:2")
         self.assertEqual(rows["physical_abstract"]["status_label"], "有更新")
 
+    def test_first_full_version_without_base_uses_scan_coverage_not_empty_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scan_dir = root / "scan" / "initial_full"
+            scan_dir.mkdir(parents=True)
+            (scan_dir / "file_inventory.json").write_text(
+                json.dumps(
+                    {
+                        "file_type_counts": {"lef": 2, "liberty": 3, "gds": 1, "verilog": 1, "unknown": 1},
+                        "files": [
+                            {"path": "lef/top.lef", "file_type": "lef"},
+                            {"path": "lef/macro.lef", "file_type": "lef"},
+                            {"path": "lib/tt.lib", "file_type": "liberty"},
+                            {"path": "lib/ss.lib", "file_type": "liberty"},
+                            {"path": "gds/top.gds", "file_type": "gds"},
+                            {"path": "rtl/top.v", "file_type": "verilog"},
+                            {"path": "misc/todo.raw", "file_type": "unknown"},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model, render_version_update_detail_panel
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {
+                    "version_id": "initial_full_20260708",
+                    "package_type": "FULL_PACKAGE",
+                    "standalone": True,
+                    "scan": {"status": "PASS", "scan_dir": str(scan_dir)},
+                },
+            )
+            html = render_version_update_detail_panel(model)
+
+            self.assertEqual(model["review_mode"], "first_version")
+            self.assertEqual(model["usage_decision"], "USAGE_REVIEW_REQUIRED")
+            self.assertEqual(model["ip_user_view_model"]["ip_use_label"], "首版需审查")
+            self.assertIn("首版审查", html)
+            self.assertIn("当前无可比基准版，以下展示版本自身交付内容", html)
+            self.assertIn("View Coverage Matrix", html)
+            self.assertIn("LEF / 物理抽象", html)
+            self.assertIn("Liberty / 时序", html)
+            self.assertIn("GDS/OAS / 版图", html)
+            self.assertIn("Unknown", html)
+            self.assertIn("lef/top.lef", html)
+            self.assertIn("misc/todo.raw", html)
+            self.assertNotIn("缺少基准对比", html)
+            self.assertNotIn("暂无视图变化", html)
+
+    def test_view_matrix_exposes_expandable_file_trace_from_counts_to_evidence(self) -> None:
+        from lib_guard.render.version_review_model import build_version_review_model
+        from lib_guard.render.version_review_render import render_ip_user_view
+
+        review_model = build_version_review_model(
+            {
+                "status": "DIFF",
+                "base_trust_status": "PASS",
+                "base_ref": "previous_effective",
+                "base_version": "full_20260701",
+                "added_files": 2,
+                "removed_files": 0,
+                "changed_files": 1,
+                "file_changes": [
+                    {"path": "lef/top.lef", "file_type": "lef", "change": "changed", "review_lane": "P0"},
+                    {"path": "sdc/top.sdc", "file_type": "sdc", "change": "added", "review_lane": "P1"},
+                    {"path": "rtl/model.v", "file_type": "verilog", "change": "added", "review_lane": "Summary-only"},
+                ],
+                "scan_evidence": {
+                    "counts": {"lef": 2, "sdc": 1, "verilog": 1},
+                    "inventory": {
+                        "files": [
+                            {"path": "lef/top.lef", "file_type": "lef"},
+                            {"path": "lef/extra.lef", "file_type": "lef"},
+                            {"path": "sdc/top.sdc", "file_type": "sdc"},
+                            {"path": "rtl/model.v", "file_type": "verilog"},
+                        ]
+                    },
+                },
+            }
+        )
+        html = render_ip_user_view(review_model["ip_user_view"])
+
+        self.assertIn("展开文件", html)
+        self.assertIn("数字对应文件", html)
+        self.assertIn("本次变化", html)
+        self.assertIn("当前代表", html)
+        self.assertIn("lef/top.lef", html)
+        self.assertIn("sdc/top.sdc", html)
+        self.assertIn("rtl/model.v", html)
+
     def test_ip_user_view_current_count_is_never_less_than_target_delta(self) -> None:
         from lib_guard.render.version_review_model import build_version_review_model
 

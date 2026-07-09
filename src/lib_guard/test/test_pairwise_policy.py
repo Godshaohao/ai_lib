@@ -218,6 +218,63 @@ class PairwisePolicyTest(unittest.TestCase):
         self.assertEqual(commands[0][1], "verilog")
         self.assertIn("--manual-large-file-opt-in", commands[0])
 
+    def test_fd_explicit_old_new_files_generates_pairwise_command_for_lef(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._fd_workspace(Path(td), "unused.lef")
+            old = workspace / "old_macro.lef"
+            new = workspace / "new_macro.lef"
+            old.write_text("VERSION 5.8 ;\nMACRO A\nEND A\nEND LIBRARY\n", encoding="utf-8")
+            new.write_text("VERSION 5.8 ;\nMACRO B\nEND B\nEND LIBRARY\n", encoding="utf-8")
+            commands = build_cli_commands(
+                ["fd", "--old", str(old), "--new", str(new), "--type", "lef"],
+                cwd=workspace,
+            )
+
+        self.assertEqual(commands[0][0], "file-diff")
+        self.assertEqual(commands[0][1], "lef")
+        self.assertEqual(commands[0][commands[0].index("--old") + 1], str(old))
+        self.assertEqual(commands[0][commands[0].index("--new") + 1], str(new))
+        self.assertIn("manual", commands[0][commands[0].index("--out") + 1])
+
+    def test_fd_explicit_old_new_large_type_still_requires_force_large(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._fd_workspace(Path(td), "unused.db")
+            old = workspace / "old.db"
+            new = workspace / "new.db"
+            old.write_text("old", encoding="utf-8")
+            new.write_text("new", encoding="utf-8")
+            with self.assertRaises(ValueError) as cm:
+                build_cli_commands(
+                    ["fd", "--old", str(old), "--new", str(new), "--type", "db"],
+                    cwd=workspace,
+                )
+        self.assertEqual(
+            str(cm.exception),
+            "db is metadata-only; pass --force-large only for expert manual review.",
+        )
+
+    def test_fd_explicit_old_new_large_type_with_force_large_generates_command(self) -> None:
+        from lib_guard.short_cli import build_cli_commands
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = self._fd_workspace(Path(td), "unused.db")
+            old = workspace / "old.db"
+            new = workspace / "new.db"
+            old.write_text("old", encoding="utf-8")
+            new.write_text("new", encoding="utf-8")
+            commands = build_cli_commands(
+                ["fd", "--old", str(old), "--new", str(new), "--type", "db", "--force-large"],
+                cwd=workspace,
+            )
+
+        self.assertEqual(commands[0][0], "file-diff")
+        self.assertEqual(commands[0][1], "db")
+        self.assertIn("--manual-large-file-opt-in", commands[0])
+
     def test_fd_binary_metadata_only_without_force_large_fails_with_clear_message(self) -> None:
         from lib_guard.short_cli import build_cli_commands
 

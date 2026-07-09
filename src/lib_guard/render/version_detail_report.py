@@ -35,6 +35,7 @@ FALLBACK_BASE_REFS = {"adjacent_fallback", "recorded_base", "recorded_base_fallb
 UPDATE_STATUS_COPY = {
     "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg cat <LIB> --update-detail。",
     "NEEDS_BASE_CONFIRM": "无法确定基准版；请先确认当前有效版或上一有效版。",
+    "FIRST_VERSION_REVIEW": "当前无可比基准版；按首版/单版本交付内容审查。",
     "NO_DIFF_SUMMARY": "找到对比输出目录，但缺少 diff_summary.json；请检查对比产物。",
     "CHANGED": "已完成比较，有变化。",
     "SAME": "已完成比较，无变化。",
@@ -373,6 +374,62 @@ def _build_scan_evidence_model(version: Mapping[str, Any]) -> dict[str, Any]:
         "unknown_count": _as_int(counts.get("unknown")),
         "required_view_status": release_readiness.get("required_view_status") or release_readiness.get("bundle_status"),
     }
+
+
+def _scan_evidence_has_files(scan_evidence: Mapping[str, Any]) -> bool:
+    if _as_int(scan_evidence.get("file_total")):
+        return True
+    counts = _as_mapping(scan_evidence.get("counts"))
+    if any(_as_int(value) for value in counts.values()):
+        return True
+    inventory = _as_mapping(scan_evidence.get("inventory"))
+    files = inventory.get("files", []) or []
+    return isinstance(files, list) and bool(files)
+
+
+def _scan_evidence_file_total(scan_evidence: Mapping[str, Any]) -> int:
+    if _as_int(scan_evidence.get("file_total")):
+        return _as_int(scan_evidence.get("file_total"))
+    counts = _as_mapping(scan_evidence.get("counts"))
+    total = sum(_as_int(value) for value in counts.values())
+    if total:
+        return total
+    inventory = _as_mapping(scan_evidence.get("inventory"))
+    files = inventory.get("files", []) or []
+    return len(files) if isinstance(files, list) else 0
+
+
+def _scan_evidence_unknown_total(scan_evidence: Mapping[str, Any]) -> int:
+    if _as_int(scan_evidence.get("unknown_count")):
+        return _as_int(scan_evidence.get("unknown_count"))
+    counts = _as_mapping(scan_evidence.get("counts"))
+    if _as_int(counts.get("unknown")):
+        return _as_int(counts.get("unknown"))
+    inventory = _as_mapping(scan_evidence.get("inventory"))
+    files = inventory.get("files", []) or []
+    if not isinstance(files, list):
+        return 0
+    return sum(1 for item in files if isinstance(item, Mapping) and canonical_file_type(item.get("file_type")) == "unknown")
+
+
+def _is_partial_update(version: Mapping[str, Any]) -> bool:
+    pkg = common.package_type(version)
+    if pkg in {"PARTIAL_UPDATE", "PARTIAL", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"}:
+        return True
+    if common.truthy(version.get("base_required")):
+        return True
+    return bool(version.get("update_scope"))
+
+
+def _is_first_version_review(version: Mapping[str, Any], *, base_ref: str, scan_evidence: Mapping[str, Any]) -> bool:
+    if base_ref != "NEEDS_BASE_CONFIRM":
+        return False
+    if _is_partial_update(version):
+        return False
+    if not _scan_evidence_has_files(scan_evidence):
+        return False
+    pkg = common.package_type(version)
+    return bool(common.truthy(version.get("standalone")) or pkg in {"FULL_PACKAGE", "FULL", "UNKNOWN"})
 
 
 def _comparison_context(
@@ -714,6 +771,12 @@ def _usage_decision_result(
     gate_status = str(gate.get("status") or "").upper()
     blocking = len(gate.get("blocking_items", []) or [])
 
+    if status_key == "FIRST_VERSION_REVIEW":
+        reasons.append("first_version_review")
+        if blocking:
+            reasons.append("review_gate_blocking")
+            return "BLOCKED", reasons
+        return "USAGE_REVIEW_REQUIRED", reasons
     if status_key in {"NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"} or base_key in {"BLOCK", "BLOCKING", "BLOCKED"}:
         reasons.append("base_not_confirmed")
         return "BLOCKED", reasons
@@ -796,8 +859,12 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     if changed_files is None:
         changed_files = len(file_changes)
     path_restructure = _path_restructure_summary(file_diff, summary)
+    scan_evidence = _build_scan_evidence_model(version)
+    first_version_review = _is_first_version_review(version, base_ref=base_ref, scan_evidence=scan_evidence)
     summary_status = str(summary.get("status") or "").upper()
-    if base_ref == "NEEDS_BASE_CONFIRM":
+    if first_version_review:
+        status = "FIRST_VERSION_REVIEW"
+    elif base_ref == "NEEDS_BASE_CONFIRM":
         status = "NEEDS_BASE_CONFIRM"
     elif diff_dir and not summary:
         status = "NO_DIFF_SUMMARY"
@@ -807,7 +874,6 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         status = "CHANGED"
     else:
         status = summary_status or "SAME"
-    scan_evidence = _build_scan_evidence_model(version)
     comparison_context = _comparison_context(
         diff_dir=diff_dir,
         diff_meta=diff_meta,
@@ -834,9 +900,10 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "metadata_only": len(metadata_only_reviewed),
         "blocking_issues": blocking_issues,
     }
+    base_trust_status = "INFO" if first_version_review else _base_trust_status(base_ref)
     usage_decision, usage_reasons = _usage_decision_result(
         status=status,
-        base_trust_status=_base_trust_status(base_ref),
+        base_trust_status=base_trust_status,
         lane_counts=lane_counts,
         release_notes=release_notes,
         review_gate=version.get("review_gate") if isinstance(version.get("review_gate"), Mapping) else {},
@@ -864,8 +931,9 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "base_ref": base_ref,
         "base_version": base_version,
         "base_source": base_source,
-        "base_trust_status": _base_trust_status(base_ref),
-        "base_trust_note": _base_trust_note(base_ref),
+        "base_trust_status": base_trust_status,
+        "base_trust_note": "当前无可比基准版；按首版/单版本交付内容审查。" if first_version_review else _base_trust_note(base_ref),
+        "review_mode": "first_version" if first_version_review else ("blocked_base" if base_ref == "NEEDS_BASE_CONFIRM" else "baseline"),
         "usage_decision": usage_decision,
         "usage_decision_reasons": usage_reasons,
         "package_type": common.package_type(version),
@@ -912,8 +980,15 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "path_restructure": path_restructure,
         "trace_links": trace_links,
     }
-    model["headline"] = _version_update_headline(base_ref, added_files, removed_files, _as_int(changed_files), recommended_count, reviewed_count)
-    model["confidence_note"] = _version_update_confidence_note(model)
+    if first_version_review:
+        model["headline"] = (
+            f"首版审查：当前无可比基准版，展示版本自身 view 覆盖、文件分类和证据等级；"
+            f"扫描文件 {_scan_evidence_file_total(scan_evidence)} 个，Unknown {_scan_evidence_unknown_total(scan_evidence)} 个。"
+        )
+        model["confidence_note"] = "没有基准版时不做新增/删除/修改判断；FULL/独立包可先做版本自身覆盖审查。"
+    else:
+        model["headline"] = _version_update_headline(base_ref, added_files, removed_files, _as_int(changed_files), recommended_count, reviewed_count)
+        model["confidence_note"] = _version_update_confidence_note(model)
     model["primary_next_action"] = _primary_next_action(status, recommended_count, len(commands))
     model["version_review_model"] = build_version_review_model(model)
     model["ip_user_view_model"] = _as_mapping(model["version_review_model"].get("ip_user_view"))
@@ -1471,7 +1546,13 @@ def _version_overview_panel(
     delta_text = ip_model.get("delta_summary") or f"{file_change_total} 个变化"
     top_view_delta = ip_model.get("top_view_delta") or _top_file_type_text(model, limit=2)
     ctx = _review_context(model)
-    if _review_context_is_active(ctx):
+    if str(model.get("review_mode") or "") == "first_version":
+        object_value = f"{model.get('version_id') or '-'} / 首版审查"
+        compare_value = "无基准：版本自身覆盖"
+        compare_hint = "当前无可比基准版，不做新增/删除/修改判断"
+        evidence_value = ip_model.get("evidence_summary") or _review_context_freshness_label(ctx)
+        evidence_hint = "扫描证据用于首版完整性审查"
+    elif _review_context_is_active(ctx):
         object_value = f"{model.get('version_id') or '-'} / {_review_context_role_label(ctx.get('role_in_window'))}"
         compare_value = _review_context_compare_label(ctx, model)
         compare_hint = f"窗口角色={_review_context_role_label(ctx.get('role_in_window'))}"
@@ -1898,6 +1979,7 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
     base_ref = model.get("base_ref") or "NEEDS_BASE_CONFIRM"
     review_model = _as_mapping(model.get("version_review_model")) or build_version_review_model(model)
     ip_model = _as_mapping(model.get("ip_user_view_model")) or _as_mapping(review_model.get("ip_user_view"))
+    first_version = str(model.get("review_mode") or "") == "first_version"
     lead = (
         "<div class='version-update-lead'>"
         f"<b>本次变化一句话</b>"
@@ -1918,9 +2000,15 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
         )
         + "</details>"
     )
+    if first_version:
+        panel_title = "首版审查 / View Coverage Matrix"
+        panel_subtitle = "当前无可比基准版：不展示空 diff，改为展示版本自身 view 覆盖、文件分类、证据等级和必须确认项。"
+    else:
+        panel_title = f"视图变化矩阵（vs {_cn_base_ref(base_ref)} / {base_version}）"
+        panel_subtitle = "默认面向 IP 使用者：按视图聚合新增、删除、修改和证据等级；调试证据只保留在 JSON/扫描报告中。"
     return ui.panel(
-        f"视图变化矩阵（vs {_cn_base_ref(base_ref)} / {base_version}）",
-        "默认面向 IP 使用者：按视图聚合新增、删除、修改和证据等级；调试证据只保留在 JSON/扫描报告中。",
+        panel_title,
+        panel_subtitle,
         lead + callouts + render_ip_user_view(ip_model) + focus_changes,
     )
 

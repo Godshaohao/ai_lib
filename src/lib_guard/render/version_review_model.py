@@ -16,6 +16,7 @@ GROUP_LABELS = ["对比范围", "包根目录迁移", "文件匹配质量", "内
 STATUS_COPY = {
     "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg cat <LIB> --update-detail。",
     "NEEDS_BASE_CONFIRM": "无法确定基准版；请先确认当前有效版或上一有效版。",
+    "FIRST_VERSION_REVIEW": "当前无可比基准版；按首版/单版本交付内容审查。",
     "NO_DIFF_SUMMARY": "找到对比输出目录，但缺少 diff_summary.json；请检查对比产物。",
     "CHANGED": "已完成比较，有变化。",
     "SAME": "已完成比较，无变化。",
@@ -61,6 +62,7 @@ DIFF_STATUS_COPY = {
     "CHANGED": "有变化",
     "SAME": "无变化",
     "DIFF_NOT_RUN": "未生成",
+    "FIRST_VERSION_REVIEW": "首版审查",
     "NEEDS_BASE_CONFIRM": "基准版待确认",
     "NO_DIFF_SUMMARY": "缺少对比摘要",
 }
@@ -71,6 +73,7 @@ USAGE_COPY = {
     "UNKNOWN": "待判断",
 }
 REASON_COPY = {
+    "first_version_review": "首版/单版本需确认交付完整性",
     "diff_changed": "存在版本变化",
     "recommended_file_diff": "存在 P0/P1 重点文件",
     "release_note_missing": "缺少发布说明",
@@ -196,6 +199,22 @@ def _current_type_counts(model: Mapping[str, Any]) -> Mapping[str, Any]:
         if isinstance(item, Mapping):
             inferred[_norm_type(item.get("file_type"))] += 1
     return dict(inferred)
+
+
+def _scan_file_count(model: Mapping[str, Any]) -> int:
+    scan_evidence = _as_mapping(model.get("scan_evidence"))
+    if _as_int(scan_evidence.get("file_count")):
+        return _as_int(scan_evidence.get("file_count"))
+    counts = _current_type_counts(model)
+    return sum(_as_int(value) for value in counts.values())
+
+
+def _unknown_file_count(model: Mapping[str, Any]) -> int:
+    scan_evidence = _as_mapping(model.get("scan_evidence"))
+    if _as_int(scan_evidence.get("unknown_count")):
+        return _as_int(scan_evidence.get("unknown_count"))
+    counts = _current_type_counts(model)
+    return _as_int(counts.get("unknown"))
 
 
 def _canonical_view_type(file_type: Any) -> str:
@@ -335,6 +354,8 @@ def _usage_area_for_type(file_type: str) -> str:
 
 
 def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    review_mode = str(model.get("review_mode") or "").lower()
+    first_version = review_mode == "first_version"
     raw_current_counts = _current_type_counts(model)
     current_counts = _aggregate_counts_by_view(raw_current_counts)
     current_examples = _current_file_examples_by_view(model)
@@ -350,18 +371,15 @@ def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[
         counts = delta.get(view_type, {"added": 0, "removed": 0, "changed": 0, "raw_delta_counts": {}})
         delta_total = counts["added"] + counts["removed"] + counts["changed"]
         evidence_levels = _evidence_levels_for_view(file_changes, view_type)
-        suppress_file_examples = view_type == "unknown" or not delta_total or (
-            bool(evidence_levels)
-            and all(
-                "Summary-only" in level or "Metadata-only" in level
-                for level in evidence_levels
-            )
-        )
+        suppress_file_examples = not first_version and not delta_total
         current_total = _as_int(current_counts.get(view_type))
         current_total = max(current_total, counts["added"] + counts["changed"])
         if delta_total:
             status = "INFO"
             status_label = "有更新"
+        elif first_version and current_total:
+            status = "PASS"
+            status_label = "已扫描"
         elif current_total:
             status = "PASS"
             status_label = "无变化"
@@ -399,17 +417,27 @@ def _build_view_delta_rows(model: Mapping[str, Any], file_changes: list[Mapping[
 def _build_usage_area_sections(view_rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     sections: list[dict[str, Any]] = []
     for area in list(USAGE_AREAS) + ["其他 / 证据"]:
-        rows = [row for row in view_rows if row.get("usage_area") == area and _as_int(row.get("delta_total"))]
+        rows = [
+            row
+            for row in view_rows
+            if row.get("usage_area") == area
+            and (_as_int(row.get("delta_total")) or _as_int(row.get("current_count")))
+        ]
         if not rows:
             continue
         types = ", ".join(str(row.get("view")) for row in rows[:5])
         delta_total = sum(_as_int(row.get("delta_total")) for row in rows)
+        current_total = sum(_as_int(row.get("current_count")) for row in rows)
         evidence = sorted({str(row.get("evidence_level") or "-") for row in rows})
+        if delta_total:
+            summary = f"{delta_total} 个更新；涉及 {types or '-'}。"
+        else:
+            summary = f"当前覆盖 {current_total} 个文件；涉及 {types or '-'}。"
         sections.append(
             {
                 "area": area,
                 "status": "INFO",
-                "summary": f"{delta_total} 个更新；涉及 {types or '-'}。",
+                "summary": summary,
                 "evidence": "；".join(evidence[:3]) if evidence else "-",
                 "rows": rows,
             }
@@ -456,13 +484,19 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
     summary_only = _as_int(lane_counts.get("summary_only"))
     metadata_only = _as_int(lane_counts.get("metadata_only"))
     status_key = str(model.get("status") or "").upper()
+    review_mode = str(model.get("review_mode") or "baseline").lower()
+    first_version = review_mode == "first_version"
     base_key = str(model.get("base_trust_status") or "").upper()
     base_noun = _copy(BASE_REF_COPY, model.get("base_ref"))
     base_blocked = status_key in {"NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"} or base_key in {"BLOCK", "BLOCKING", "BLOCKED"}
     diff_missing = status_key in {"DIFF_NOT_RUN", "NO_DIFF_SUMMARY"}
     gate_blocking, gate_attention, gate_status = _review_gate_counts(model)
 
-    if base_blocked:
+    if first_version:
+        ip_decision = "USAGE_REVIEW_REQUIRED"
+        ip_label = "首版需审查"
+        main_reason = "当前无可比基准版；不做变化判断，先审查版本自身 view 覆盖、文件分类和证据等级。"
+    elif base_blocked:
         ip_decision = "BLOCKED"
         ip_label = "不可接入"
         main_reason = "基准版、扫描、对比基础证据不可信，不能作为版本更新判断。"
@@ -500,11 +534,22 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         f"{str(row.get('view') or row.get('file_type') or '-').split('/')[0].strip()}:{row.get('delta_total')}"
         for row in sorted(changed_view_rows, key=lambda row: -_as_int(row.get("delta_total")))[:5]
     )
-    if not top_views:
+    if first_version:
+        top_views = ", ".join(
+            f"{str(row.get('view') or row.get('file_type') or '-').split('/')[0].strip()}:{row.get('current_count')}"
+            for row in sorted(view_rows, key=lambda row: -_as_int(row.get("current_count")))[:5]
+            if _as_int(row.get("current_count"))
+        ) or "无扫描覆盖"
+    elif not top_views:
         top_views = "无视图变化"
 
     must_check = []
-    if changed_view_rows:
+    if first_version:
+        must_check.append("确认这是完整交付包，而不是缺少基准的增量包。")
+        must_check.append("确认 required view 是否满足当前项目使用场景；首版不做变化判断，但必须看自身覆盖。")
+        if _unknown_file_count(model):
+            must_check.append(f"确认 {_unknown_file_count(model)} 个 Unknown 文件是否需要归类或补充规则。")
+    elif changed_view_rows:
         must_check.append(f"先看视图变化矩阵：确认相对{base_noun}，哪些视图新增、删除、修改。")
         must_check.append("按使用场景筛选：时序看 Liberty/SPEF/DB，物理实现看 LEF/GDS/OAS/DB，RTL 集成看 Verilog/SystemVerilog，约束看 SDC/UPF/CPF。")
     if summary_only or metadata_only:
@@ -517,6 +562,7 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": "ip_user_view.v1",
         "source_model": "version_update_detail.v1",
+        "review_mode": review_mode,
         "ip_use_decision": ip_decision,
         "ip_use_label": ip_label,
         "ip_use_status": _status_from_usage(ip_decision),
@@ -524,17 +570,31 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         "release_decision": release_decision,
         "release_label": release_label,
         "release_reason": release_reason,
-        "base_label": f"{_copy(BASE_REF_COPY, model.get('base_ref'))} / {model.get('base_version') or '-'}",
+        "base_label": "无基准：首版/单版本审查" if first_version else f"{_copy(BASE_REF_COPY, model.get('base_ref'))} / {model.get('base_version') or '-'}",
         "comparison_label": f"{_copy(SEMANTICS_COPY, model.get('comparison_semantics'))}；{_copy(DELETE_COPY, model.get('delete_semantics'))}",
-        "delta_summary": f"新增 {added} / 删除 {removed} / 修改 {changed}",
+        "delta_summary": f"当前文件 {_scan_file_count(model)}" if first_version else f"新增 {added} / 删除 {removed} / 修改 {changed}",
         "top_view_delta": top_views,
-        "delta_status": "INFO" if (added or removed or changed) else "PASS",
-        "delta_label": "有更新" if (added or removed or changed) else "无更新",
-        "evidence_summary": f"重点审查 {p0p1} / 摘要级 {summary_only} / 元数据级 {metadata_only}",
+        "delta_status": "INFO" if (first_version or added or removed or changed) else "PASS",
+        "delta_label": "首版覆盖" if first_version else ("有更新" if (added or removed or changed) else "无更新"),
+        "evidence_summary": (
+            f"扫描文件 {_scan_file_count(model)} / Unknown {_unknown_file_count(model)}"
+            if first_version
+            else f"重点审查 {p0p1} / 摘要级 {summary_only} / 元数据级 {metadata_only}"
+        ),
+        "view_table_title": "View Coverage Matrix" if first_version else "视图变化矩阵",
+        "view_table_hint": (
+            "首版审查：当前无可比基准版，以下展示版本自身交付内容、文件分类和证据等级。"
+            if first_version
+            else "按视图聚合新增、删除、修改和证据等级。"
+        ),
         "view_delta_rows": view_rows,
         "usage_area_sections": _build_usage_area_sections(view_rows),
         "must_check_items": must_check,
-        "non_blocker_note": "普通增量变化、摘要级证据、元数据级证据、P0/P1 不自动构成阻塞；只有基准版、扫描、对比基础证据不可信或明确门禁阻塞项才升级为阻塞。",
+        "non_blocker_note": (
+            "首版没有变化判断；只有识别为增量包却缺少基准、扫描证据不可信或明确门禁阻塞项才升级为阻塞。"
+            if first_version
+            else "普通增量变化、摘要级证据、元数据级证据、P0/P1 不自动构成阻塞；只有基准版、扫描、对比基础证据不可信或明确门禁阻塞项才升级为阻塞。"
+        ),
     }
 
 
