@@ -5,6 +5,16 @@ Status: current
 这份文档是命令字典。第一次完整演练请看
 [基础教程](basic_tutorial.md)。
 
+## 文档契约
+
+| 项 | 说明 |
+| --- | --- |
+| 目标读者 | 需要查命令副作用、参数和专家入口的人 |
+| 推荐入口 | `$PROJ/scripts/lg.csh` 或 source `scripts/lg_complete.csh` 后使用 `lg` |
+| 底层入口 | `python -m lib_guard.cli`，仅用于自动化、调试和测试 |
+| 禁止假设 | 命令成功不等于 Catalog 首页已全量刷新；先看 `render_summary` |
+| 命名规则 | 日常命令只输入正式 `LIBRARY` 和 `VERSION`，不要手敲 typed id / report slug |
+
 ## 命令入口分层
 
 日常使用优先走短命令 wrapper：
@@ -88,6 +98,25 @@ lg.csh action ucie
 lg.csh rel ucie stable_20250608
 lg.csh rel ucie stable_20250608 --apply --overwrite
 ```
+
+## 命令副作用矩阵
+
+| 命令 | 主要事实输入 | 写入事实 | 写入投影 | 默认复杂度 |
+| --- | --- | --- | --- | --- |
+| `library add ... --apply` | 用户提供库根 | registry、library_catalog | 可选 catalog 投影 | O(1) |
+| `library discover` | RAW root | candidates | 候选 HTML/TSV | 受 `max-*` 限制 |
+| `library apply` | registry/candidates | library_catalog | 无 | O(库数) |
+| `cat` | catalog.json | 无 | Catalog 首页/导航 | O(库数 + 版本数) |
+| `cat <LIBRARY> <VERSION>` | catalog、已有 scan/diff/effective | 无 | 单个 Version Detail | O(1) |
+| `scan <LIBRARY> <VERSION>` | catalog、raw path | scan_out、catalog runtime 指针 | scan HTML、Version Detail | O(版本文件数) |
+| `cmp <LIBRARY> <VERSION>` | catalog、scan_out、base | diff、catalog runtime 指针 | target Version Detail | O(两版本文件数) |
+| `next <LIBRARY>` | catalog、effective/window | 无 | 无 | O(该库版本数) |
+| `next <LIBRARY> --apply` | catalog、raw、scan/diff/effective | scan_out、effective、diff、plan state | window 内 Version Detail | O(window) |
+| `next <LIBRARY> --accept` | pending window、candidate effective | current_effective | 相关 Version Detail | O(window) |
+| `rel ... --apply` | release manifest、scan/diff/gate | release area、release result | release HTML | O(manifest 文件数) |
+
+所有热路径都应通过 Render Impact 局部刷新 Version Detail。只有显式 `cat --refresh-catalog`
+才应低频重建 catalog 投影。
 
 `library discover` 是候选发现，不是正式入库动作。默认浅层、有上限：
 
@@ -190,6 +219,19 @@ lg.csh mark ucie stable_20250608 --type FULL
 这些命令更新的是 Version Detail 这个唯一审查投影；`window`、`effective`、`compare`
 不是新的主审查入口。
 
+命令输出里应优先看：
+
+| 字段 | 如何理解 |
+| --- | --- |
+| `status` | 本命令业务是否成功 |
+| `phase_timings` | 诊断 scan/render 慢在哪里 |
+| `render_summary.message` | 页面是否刷新、是否延迟刷新导航 |
+| `render_summary.open_first` | 审查时优先打开的详情页 |
+| `render_summary.deferred_file` | 哪些导航页延迟刷新 |
+
+如果 `scan` 或 `cmp` 后库工作台看起来没变，但 `open_first` 指向的 Version Detail 已更新，
+这是预期的热路径行为，不是证据丢失。
+
 ## `scan`
 
 `scan` 只有一种用户态动作：生成当前版本的 scan evidence。扫描深度由策略参数控制，
@@ -202,6 +244,15 @@ lg.csh mark ucie stable_20250608 --type FULL
 | `--hash-policy smart` | 默认策略，小文件 hash，大型 EDA 文件按 metadata 处理 |
 | `--hash-policy full` | 专家/调试场景，强制计算内容 hash |
 | `--parse-jobs 8` | parser 并行度 |
+
+scan 输出分两层：
+
+| 层 | 文件 | 用途 |
+| --- | --- | --- |
+| 机器事实 | `file_inventory.json`, `parser_manifest.json`, `parser_results.json`, `summary/*.json` | diff、release、自动化 |
+| 人工证据 | `review/view_coverage.tsv`, `review/files_by_view.tsv`, `review/unknown_files.tsv`, `review/large_metadata_files.tsv`, `review/parser_evidence.tsv` | Scan HTML 和 Version Detail |
+
+人工审查优先看 `review/*.tsv`。JSON 可以保留，但不应该被复制到主页面正文里。
 
 ## 文件类型 Lane
 
@@ -292,6 +343,16 @@ lg.csh rel <LIBRARY> <VERSION> --apply --force \
   --force-reason "owner accepted metadata-only change" \
   --force-by <USER>
 ```
+
+## 不推荐继续使用的入口
+
+| 入口 | 状态 | 替代 |
+| --- | --- | --- |
+| 旧 `refresh` | 兼容改写 | `cat <LIBRARY> --update-detail` 或 `scan/cmp` 热路径 |
+| 旧 `compare` | 兼容改写 | `cmp` |
+| 旧文件级对比长命令 | 移除或兼容期 | `fd` |
+| 手改 `catalog.json` | 禁止 | `library override`、`mark`、policy/registry |
+| 手改 HTML | 禁止 | 重新 `cat` 或触发 Render Impact |
 
 ## 配置默认值
 

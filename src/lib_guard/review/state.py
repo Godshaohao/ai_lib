@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .commands import derive_next_action
+from .evidence_state import build_version_evidence_state
 from .io import read_json, utc_now
 from .overrides import apply_overrides_to_gate, read_review_overrides
 
@@ -647,6 +648,7 @@ def build_review_version_item(
     review_gate["override_file"] = review_paths["override_file"]
     review_gate["gate_file"] = review_paths["gate_file"]
     item["review_gate"] = review_gate
+    item["evidence_state"] = build_version_evidence_state(library=lib, version=item)
     item.update(derive_next_action(item))
     return item
 

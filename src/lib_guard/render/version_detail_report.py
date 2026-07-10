@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping
 from lib_guard.diff.file_match import default_path_match_evidence, path_match_evidence as build_path_match_evidence
 from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
 from lib_guard.review.io import read_json
+from lib_guard.review.evidence_state import build_version_evidence_state
 from lib_guard.review.model_rules import (
     classify_review_lane,
     comparison_semantics_for_package,
@@ -830,6 +831,13 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         library_row=lib,
         version_row=version,
     )
+    render_output = out_path / "libraries" / safe_lib / "versions" / safe_ver / "index.html"
+    evidence_state = build_version_evidence_state(
+        library=lib,
+        version=version,
+        review_context=review_context,
+        render_output=render_output,
+    )
     base_rule = _review_context_base_rule(review_context) or resolve_review_base(version, lib)
     base_ref = base_rule["base_ref"]
     base_version = base_rule["base_version"]
@@ -949,6 +957,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "scan_context": scan_context,
         "comparison_context": comparison_context,
         "review_context": review_context,
+        "evidence_state": evidence_state,
         "scan_compatibility": scan_compatibility,
         "scan_evidence": scan_evidence,
         "diff_meta": diff_meta,
@@ -1525,6 +1534,58 @@ def _review_context_panel(model: Mapping[str, Any]) -> str:
     )
 
 
+def _evidence_state_rows(evidence_state: Mapping[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for item in evidence_state.get("sources", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        source_name = str(item.get("name") or "")
+        artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), Mapping) else {}
+        artifact_links: list[str] = []
+        if source_name == "scan_review_tables":
+            for key in ["view_coverage", "files_by_view", "unknown_files", "large_metadata_files", "parser_evidence"]:
+                value = artifacts.get(key)
+                if not value:
+                    continue
+                path = Path(str(value))
+                label = f"review/{path.name}"
+                artifact_links.append(ui.esc(label))
+                if len(artifact_links) >= 4:
+                    break
+        elif item.get("status"):
+            artifact_links.append(ui.esc(str(item.get("status"))))
+        rows.append(
+            "<tr>"
+            f"<td><b>{ui.esc(item.get('name') or '-')}</b><br><span class='muted'>{ui.esc(item.get('owner') or '-')}</span></td>"
+            f"<td>{ui.esc(item.get('role') or '-')}</td>"
+            f"<td>{ui.badge(item.get('status') or 'UNKNOWN')}</td>"
+            f"<td>{'<br>'.join(artifact_links) if artifact_links else '-'}</td>"
+            f"<td>{ui.esc(item.get('message') or '-')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _evidence_state_panel(model: Mapping[str, Any]) -> str:
+    evidence_state = _as_mapping(model.get("evidence_state"))
+    if not evidence_state:
+        return ""
+    return ui.collapsible_panel(
+        "事实源状态",
+        "统一解释 catalog、scan、diff、effective/window 和 HTML 投影的关系；HTML 只是投影，不是事实源。",
+        "<div class='quality-note'><b>第一性边界</b> "
+        + ui.esc(evidence_state.get("principle") or "catalog/scan/diff/effective-window 是事实输入；HTML render 只是投影。")
+        + "</div>"
+        + catalog._scroll_table(
+            ["事实源", "职责", "状态", "主要证据", "页面含义"],
+            _evidence_state_rows(evidence_state),
+            "暂无事实源状态。",
+            "evidence-state-scroll",
+        ),
+        open=True,
+    )
+
+
 def _version_overview_panel(
     out_path: Path,
     safe_lib: str,
@@ -1865,7 +1926,6 @@ def _quality_panel(
     evidence_rows = [
         ("scan_id", scan_id),
         ("扫描目录", scan_dir or "-"),
-        ("绝对原始路径", version.get("raw_path") or "-"),
         ("文件清单", f"{file_total} files"),
         ("解析器任务", f"{parser_task_count} 个"),
         ("对比状态", ui.status_label(diff_status)),
@@ -1885,7 +1945,7 @@ def _quality_panel(
     )
     return ui.collapsible_panel(
         "证据入口 / 调试",
-        "追溯扫描、解析器、对比和原始路径；这些是证据入口，不作为 IP 使用者主屏结论。",
+        "追溯扫描、解析器和对比；这些是证据入口，不作为 IP 使用者主屏结论。",
         trace_links + evidence_context,
         open=False,
     )
@@ -2009,7 +2069,7 @@ def render_version_update_detail_panel(model: Mapping[str, Any]) -> str:
     return ui.panel(
         panel_title,
         panel_subtitle,
-        lead + callouts + render_ip_user_view(ip_model) + focus_changes,
+        _evidence_state_panel(model) + lead + callouts + render_ip_user_view(ip_model) + focus_changes,
     )
 
 def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Path) -> str:

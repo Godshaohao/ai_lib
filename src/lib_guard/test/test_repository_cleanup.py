@@ -289,6 +289,7 @@ class RepositoryCleanupTest(unittest.TestCase):
             "config_reference.md",
             "data_contract.md",
             "index.md",
+            "scan_evidence_review.md",
             "test_plan.md",
         }
         actual = {path.name for path in (ROOT / "docs").glob("*.md")}
@@ -296,6 +297,7 @@ class RepositoryCleanupTest(unittest.TestCase):
         index = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
         self.assertIn("basic_tutorial.md", index)
         self.assertIn("config_reference.md", index)
+        self.assertIn("scan_evidence_review.md", index)
 
     def test_current_tests_are_not_v5_named(self) -> None:
         stale = sorted((ROOT / "src" / "lib_guard" / "test").glob("test_v5_*.py"))

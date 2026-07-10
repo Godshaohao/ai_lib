@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
+import csv
 import json
 import os
 import tempfile
@@ -43,6 +44,14 @@ def write_json(path: str | Path, data: Any) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+
+
+def read_tsv(path: str | Path) -> list[dict[str, str]]:
+    p = Path(path)
+    if not p.exists():
+        return []
+    with p.open("r", encoding="utf-8", newline="") as fh:
+        return [dict(row) for row in csv.DictReader(fh, delimiter="\t")]
 
 
 def atomic_write_text(path: str | Path, text: str) -> None:
@@ -269,8 +278,97 @@ def _scan_view_rows(counts: Mapping[str, int]) -> list[str]:
             f"<td><code>{ui.esc(name)}</code></td>"
             f"<td>{ui.badge(status)}</td>"
             f"<td>{ui.esc(count)}</td>"
-            f"<td>{ui.esc(_type_group(name))}</td>"
+            f"<td>{ui.esc('yes' if name in CORE_VIEW_TYPES else 'no')}</td>"
+            f"<td><code>{ui.esc('count_only' if name in COUNT_ONLY_TYPES and count else 'parsed' if count else 'missing')}</code></td>"
             f"<td>{ui.esc(_type_meaning(name))}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _scan_view_rows_from_review(rows_in: list[Mapping[str, Any]]) -> list[str]:
+    from lib_guard.render import product_theme as ui
+
+    rows: list[str] = []
+    for item in rows_in:
+        rows.append(
+            "<tr>"
+            f"<td>{ui.esc(item.get('view_label') or item.get('view_type') or '-')}</td>"
+            f"<td>{ui.badge(item.get('status') or '-')}</td>"
+            f"<td>{ui.esc(item.get('count') or 0)}</td>"
+            f"<td>{ui.esc(item.get('required') or '-')}</td>"
+            f"<td><code>{ui.esc(item.get('evidence_level') or '-')}</code></td>"
+            f"<td>{ui.esc(item.get('meaning') or '-')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _files_by_view_rows(rows_in: list[Mapping[str, Any]], limit: int = 800) -> list[str]:
+    from lib_guard.render import product_theme as ui
+
+    rows: list[str] = []
+    for item in rows_in[:limit]:
+        rows.append(
+            "<tr>"
+            f"<td>{ui.esc(item.get('view_label') or item.get('view_type') or '-')}</td>"
+            f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
+            f"<td>{ui.esc(item.get('role') or '-')}</td>"
+            f"<td>{ui.esc(item.get('size_bytes') or '-')}</td>"
+            f"<td>{ui.badge(item.get('evidence_level') or '-')}</td>"
+            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _unknown_file_rows(rows_in: list[Mapping[str, Any]], limit: int = 300) -> list[str]:
+    from lib_guard.render import product_theme as ui
+
+    rows: list[str] = []
+    for item in rows_in[:limit]:
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
+            f"<td>{ui.esc(item.get('extension') or '-')}</td>"
+            f"<td>{ui.esc(item.get('size_bytes') or '-')}</td>"
+            f"<td>{ui.badge(item.get('suggested_action') or '-')}</td>"
+            f"<td>{ui.esc(item.get('reason') or '-')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _large_metadata_rows(rows_in: list[Mapping[str, Any]], limit: int = 500) -> list[str]:
+    from lib_guard.render import product_theme as ui
+
+    rows: list[str] = []
+    for item in rows_in[:limit]:
+        rows.append(
+            "<tr>"
+            f"<td>{ui.esc(item.get('view_label') or item.get('view_type') or '-')}</td>"
+            f"<td>{ui.badge(item.get('evidence_level') or '-')}</td>"
+            f"<td>{ui.esc(item.get('size_bytes') or '-')}</td>"
+            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
+            f"<td>{ui.esc(item.get('review_policy') or '-')}</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _parser_evidence_rows_from_review(rows_in: list[Mapping[str, Any]]) -> list[str]:
+    from lib_guard.render import product_theme as ui
+
+    rows: list[str] = []
+    for item in rows_in:
+        rows.append(
+            "<tr>"
+            f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
+            f"<td>{ui.badge(item.get('status') or '-')}</td>"
+            f"<td>{ui.esc(item.get('tasks') or 0)}</td>"
+            f"<td>{ui.esc(item.get('parsed') or 0)}</td>"
+            f"<td>{ui.esc(item.get('empty') or 0)}</td>"
+            f"<td>{ui.esc(item.get('failed') or 0)}</td>"
             "</tr>"
         )
     return rows
@@ -342,6 +440,13 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     dashboard = read_json(scan / "summary" / "dashboard_summary.json", {}) or {}
     release_readiness = read_json(scan / "summary" / "release_readiness.json", {}) or {}
     parser_quality = read_json(scan / "summary" / "parser_quality.json", {}) or {}
+    review_dir = scan / "review"
+    review_scan = read_json(review_dir / "scan_review.json", {}) or {}
+    review_view_rows = read_tsv(review_dir / "view_coverage.tsv")
+    review_files_by_view = read_tsv(review_dir / "files_by_view.tsv")
+    review_unknown_files = read_tsv(review_dir / "unknown_files.tsv")
+    review_large_metadata = read_tsv(review_dir / "large_metadata_files.tsv")
+    review_parser_evidence = read_tsv(review_dir / "parser_evidence.tsv")
     files = inventory.get("files", []) or []
     issue_items = list(issues.get("issues", []) or [])
     counts = _type_counts(inventory, parser_manifest, dashboard)
@@ -365,7 +470,7 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             ui.metric_grid([
                 ("Package", review.get("package_type"), "交付类型", "PASS" if review.get("package_type") != "UNKNOWN" else "WARNING"),
                 ("核心视图缺失", len(review["required_views"]["missing"]), "LEF / Liberty / Verilog", "WARNING" if review["required_views"]["missing"] else "PASS"),
-                ("元数据级证据", len(review.get("metadata_only") or []), "DB / GDS / OAS 等", "METADATA_ONLY" if review.get("metadata_only") else "PASS"),
+                ("元数据/摘要文件", int((review_scan or {}).get("large_metadata_files", len(review_large_metadata)) or 0), "summary-only / metadata-only", "INFO" if review_large_metadata else "PASS"),
                 ("注意项", len(attention), review["headline"], review["decision"]),
             ])
             + ui.compact_meta([
@@ -373,20 +478,69 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             ]),
         )
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["decision"])
-        + ui.panel("核心视图", "面向使用者的视图存在性检查。是否 required 仍以项目 policy 为准。", ui.table(["视图", "状态", "数量", "领域", "说明"], _scan_view_rows(counts), "暂无视图信息"))
+        + ui.panel(
+            "View 覆盖矩阵",
+            "先看每类交付视图是否存在、证据等级是什么；数量可以在下方文件证据表展开。",
+            ui.table(
+                ["View", "状态", "数量", "必需", "证据等级", "审查含义"],
+                _scan_view_rows_from_review(review_view_rows) if review_view_rows else _scan_view_rows(counts),
+                "暂无视图信息",
+            ),
+        )
         + ui.panel("优先关注", "只显示会影响继续对比 / 使用判断的注意项。", ui.attention_items(attention))
+        + ui.panel(
+            "文件证据表",
+            "数量必须能追到文件。这里按 View 聚合列出路径、角色、证据等级；大表默认支持筛选。",
+            ui.filterable_table(
+                "files-by-view-table",
+                ["View", "file_type", "role", "size", "证据等级", "path"],
+                _files_by_view_rows(review_files_by_view) if review_files_by_view else _file_rows(files),
+                "暂无文件证据",
+                "筛选 View / file_type / path",
+            ),
+        )
         + ui.collapsible_panel(
-            "证据区",
-            "原始 JSON、完整文件类型和文件列表只作为追溯证据。",
+            "Unknown 文件",
+            "未识别文件不应被数量淹没；这里集中列出需要分类或确认可忽略的文件。",
+            ui.filterable_table(
+                "unknown-file-table",
+                ["path", "extension", "size", "建议动作", "原因"],
+                _unknown_file_rows(review_unknown_files),
+                "没有 unknown 文件",
+                "筛选 unknown 文件",
+            ),
+            open=bool(review_unknown_files),
+        )
+        + ui.collapsible_panel(
+            "摘要级 / 元数据级文件",
+            "大文件不是没审查，而是按证据等级审查；这里解释每个文件为什么不默认深读。",
+            ui.filterable_table(
+                "large-metadata-table",
+                ["View", "证据等级", "size", "path", "审查策略"],
+                _large_metadata_rows(review_large_metadata),
+                "没有摘要级或元数据级文件",
+                "筛选大文件 / 证据等级",
+            ),
+            open=False,
+        )
+        + ui.collapsible_panel(
+            "调试证据区",
+            "原始 JSON、cache、progress 和机器清单只作为追溯证据；人工审查优先看上面的证据表。",
             ui.trace_link_list([
-                ("scan_review.json", _file_href(out / "scan_review.json"), "本页面使用的审阅导航模型"),
+                ("review/scan_review.json", _file_href(review_dir / "scan_review.json"), "scan 人工证据摘要"),
+                ("review/view_coverage.tsv", _file_href(review_dir / "view_coverage.tsv"), "View 覆盖表"),
+                ("review/files_by_view.tsv", _file_href(review_dir / "files_by_view.tsv"), "按 View 聚合的文件证据表"),
+                ("review/unknown_files.tsv", _file_href(review_dir / "unknown_files.tsv"), "未识别文件表"),
+                ("review/large_metadata_files.tsv", _file_href(review_dir / "large_metadata_files.tsv"), "摘要级 / 元数据级文件表"),
+                ("review/parser_evidence.tsv", _file_href(review_dir / "parser_evidence.tsv"), "Parser 证据表"),
+                ("scan_review.json", _file_href(out / "scan_review.json"), "当前 HTML 使用的审阅导航模型"),
                 ("scan_meta.json", _file_href(scan / "scan_meta.json"), "版本和原始根目录上下文"),
                 ("file_inventory.json", _file_href(scan / "file_inventory.json"), "完整文件清单"),
                 ("scan_issues.json", _file_href(scan / "scan_issues.json"), "扫描原始问题"),
                 ("release_readiness.json", _file_href(scan / "summary" / "release_readiness.json"), "后续发布检查参考"),
             ])
             + ui.filterable_table("file-type-table", ["领域", "file_type", "数量", "说明"], _file_type_rows(counts), "暂无 file_type", "筛选 file_type / 领域")
-            + ui.collapsible_panel("完整文件列表", "默认折叠，避免扫描页面变成原始目录浏览器。", ui.filterable_table("file-list", ["file_type", "role", "size", "path"], _file_rows(files), "暂无文件", "筛选文件路径"), open=False),
+            + ui.collapsible_panel("旧版完整文件列表", "兼容旧 scan JSON；新审查优先看 files_by_view.tsv。", ui.filterable_table("file-list", ["file_type", "role", "size", "path"], _file_rows(files), "暂无文件", "筛选文件路径"), open=False),
             open=False,
         )
     )
@@ -408,7 +562,11 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         + ui.panel(
             "解析器摘要",
             "默认运行的轻量解析器只提供结构摘要，作为版本审查证据。",
-            ui.table(["file_type", "状态", "任务", "已解析", "空结果", "失败"], _parser_summary_rows(parser), "没有解析器任务"),
+            ui.table(
+                ["file_type", "状态", "任务", "已解析", "空结果", "失败"],
+                _parser_evidence_rows_from_review(review_parser_evidence) if review_parser_evidence else _parser_summary_rows(parser),
+                "没有解析器任务",
+            ),
         )
     )
     html_text = ui.review_page_shell(

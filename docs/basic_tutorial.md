@@ -8,6 +8,16 @@ Status: current
 新库入库 -> catalog -> next 预演 -> next 执行 -> version review -> release
 ```
 
+## 文档契约
+
+| 项 | 说明 |
+| --- | --- |
+| 目标读者 | 库管理员、IP 使用者、首次接入新版本的人 |
+| 目标判断 | 新库/新版本是否能进入审查、是否能成为当前有效版、是否能 release |
+| 允许输入 | RAW 库根、人工确认的库名/版本名、package type/Base 修正、review 决策 |
+| 主要输出 | `catalog.json`、scan evidence、diff evidence、Version Detail、current effective、release manifest |
+| 禁止做法 | 手改生成 HTML、手改 `catalog.json` 的 scan/diff 字段、用全量 discover 代替已知库入库 |
+
 底层 `python -m lib_guard.cli` 是自动化和调试入口；日常使用优先用
 `$PROJ/scripts/lg.csh`。
 
@@ -42,6 +52,17 @@ cd $WORK
 ```csh
 setenv LIB_GUARD_CONFIG $WORK/lib_guard.yml
 ```
+
+初始化后先确认三件事：
+
+```csh
+test -f $WORK/lib_guard.yml
+test -d $WORK/config
+$PROJ/scripts/lg.csh --help
+```
+
+如果 `lg.csh` 报 Python module 冲突，先修 shell 环境，再继续业务流程。不要在失败环境里
+反复运行 discover/scan。
 
 ## 1. 新库入库
 
@@ -86,6 +107,18 @@ $PROJ/scripts/lg.csh library apply
 $WORK/config/library_registry.tsv
 $WORK/config/library_catalog.yml
 ```
+
+### 入库工程原则
+
+| 场景 | 推荐动作 | 原因 |
+| --- | --- | --- |
+| 已知库根 | `library add ... --apply --refresh-catalog` | 最小、可解释、不会扫整棵 RAW |
+| 不知道库根 | `library discover -> accept -> apply` | discover 只产生候选，需要人确认 |
+| 大型内网库 | 先单库 `library add`，再 `next <LIBRARY>` | 避免 5000 个误候选和长时间递归 |
+| 新增一个库 | 不重跑全量 discover | 已确认 registry 才是事实源 |
+
+`library_catalog.yml` 是 catalog 的正式输入；`catalog.json` 是它的投影和运行时状态。
+如果二者不一致，先检查 registry/apply，不要手改 `catalog.json`。
 
 大 RAW 树上不要把 discover 当成日常刷新。默认 discover 是浅层、有上限的候选发现：
 
@@ -180,6 +213,15 @@ $PROJ/scripts/lg.csh library list --plain
 $PROJ/scripts/lg.csh library list <LIBRARY> --versions --plain
 ```
 
+命名约定只让用户记两种：
+
+| 用户需要输入 | 示例 | 不需要手敲 |
+| --- | --- | --- |
+| `LIBRARY` | `vendor_A.openroad_platform.openroad_asap7` | `ip/vendor_A.openroad_platform.openroad_asap7`、`ip_vendor_A...` |
+| `VERSION` | `20260627_asap7` | `version_uid`、HTML 目录名 |
+
+如果 UI 或 JSON 同时出现 typed id、slug、uid，日常命令仍只用 `LIBRARY` 和 `VERSION`。
+
 ## 2.1 FULL 流程和增量流程
 
 日常不需要分别记两套命令。系统会在 `lg next <LIBRARY>` 里判断：
@@ -203,6 +245,19 @@ $PROJ/scripts/lg.csh library list <LIBRARY> --versions --plain
 ```
 
 这也是排查入口：如果流程判断不符合真实交付关系，先不要执行 `--apply`。
+
+### 小白主路径
+
+日常新版本到了，优先只记三步：
+
+```csh
+lg next <LIBRARY>
+lg next <LIBRARY> --apply
+lg next <LIBRARY> --accept --by <USER> --note "review passed"
+```
+
+第一步只读，第二步执行 scan/diff/effective compare 并刷新 Version Detail，第三步在审查通过后
+写入 current effective。遇到异常再看 `lg next <LIBRARY> --fix`。
 
 ## 2.2 手动测试最小闭环
 
@@ -475,6 +530,21 @@ grep '^  [^ ].*:$' $WORK/config/library_catalog.yml
 python3 -c "import json; d=json.load(open('$WORK/catalog/catalog.json')); print(len(d.get('libraries', [])))"
 ```
 
+### 事实源排查顺序
+
+页面看起来不对时，按这个顺序排查：
+
+```text
+1. library_registry.tsv / library_catalog.yml：库是否还在正式清单里
+2. catalog.json：版本是否被 catalog 识别
+3. scan_out：目标版本是否有 scan evidence
+4. diff：目标版本是否有相对正确 base 的 diff evidence
+5. effective/window：当前有效版和候选窗口是否正确
+6. HTML：是否只是投影陈旧
+```
+
+不要从第 6 步反推前 5 步；HTML 只是投影。
+
 ### 3.1 哪些命令会覆盖 HTML 报告
 
 | 操作 | 会覆盖哪些页面 | 是否重跑 scan | 是否重跑 diff | 备注 |
@@ -583,6 +653,16 @@ $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --hash-policy full --no-render
 如果使用 `--no-render`，输出会显示 `版本详情未刷新：no_catalog_render`；这时需要再
 执行 `cat <LIBRARY> <VERSION>` 才会更新页面。
 
+scan 完成后会写两类证据：
+
+| 证据 | 面向对象 | 默认查看方式 |
+| --- | --- | --- |
+| `scan_out/**/*.json` | 机器流程和调试 | 不直接人工审查 |
+| `scan_out/**/review/*.tsv` | 人工 review | Scan HTML / Version Detail 聚合 |
+
+如果页面只显示数量但不知道文件在哪里，优先打开 `review/files_by_view.tsv`；
+如果出现 unknown，打开 `review/unknown_files.tsv`。
+
 ## 6. 刷新版本详情页
 
 ```csh
@@ -618,6 +698,20 @@ $PROJ/scripts/lg.csh cat <LIBRARY> <VERSION>
 
 Version Detail 第一屏固定看五件事：接入判断、审查对象、对比上下文、View 变化、
 证据状态。review window、candidate effective、compare manifest 只作为这个页面的
+证据来源，不是新的主审查入口。
+
+### 只有一个版本时
+
+只有一个版本并不意味着页面应该空白。没有 base/diff 时，Version Detail 仍应展示：
+
+- 版本和库名。
+- scan 是否存在。
+- View 覆盖矩阵。
+- unknown 文件。
+- summary-only / metadata-only 证据等级。
+- 下一步是否需要建立 FULL baseline 或等待新版本。
+
+此时状态应是“首版审查”或“缺少基准”，不能显示成“无变化”。
 上下文证据，不是新的审查入口。
 
 ## 7. 结构对比

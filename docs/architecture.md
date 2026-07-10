@@ -2,7 +2,14 @@ Status: current
 
 # 架构说明
 
-`lib_guard` 围绕审查证据组织，而不是围绕页面或命令组织。
+`lib_guard` 围绕审查证据组织，而不是围绕页面或命令组织。所有模块必须遵守单向数据流：
+
+```text
+配置/人工确认 -> 事实采集 -> 派生审查模型 -> HTML/TSV/JSON 投影
+```
+
+HTML、`catalog_state.json`、`manager_tasks.json` 和 `report_index.json` 是投影或索引，
+不能反向驱动 scan、diff、release 或有效版判断。
 
 ![Lib Guard 架构与主流程](lib_guard_architecture_flow.svg)
 
@@ -31,6 +38,22 @@ raw delivery
 | HTML 渲染 | `src/lib_guard/render/` |
 | CLI 入口 | `src/lib_guard/cli.py`, `src/lib_guard/short_cli.py`, `src/lib_guard/cli_commands/` |
 
+## 事实源边界
+
+系统当前有五类关键事实或投影。它们必须按下面的职责使用：
+
+| 层级 | Artifact | 职责 | 允许写入者 | 允许读取者 | 禁止事项 |
+| --- | --- | --- | --- | --- | --- |
+| 人工确认 | `config/library_registry.tsv`, `config/library_catalog.yml`, overrides | 正式库根、人工确认关系、包类型/Base 修正 | `library add/accept/apply/override`, `mark` | catalog、short CLI、intake | 不允许 scan/render 自动覆盖人工确认 |
+| 资产地图 | `catalog/catalog.json` | 库、版本、raw path 和合并后的运行时指针 | catalog refresh、scan/cmp 状态更新 | list、scan、cmp、render、intake | 不手改 scan/diff/release 字段 |
+| 单版本事实 | `scan_out/**` | 文件清单、parser 任务、scan review TSV、release readiness | scan pipeline | diff、Version Detail、release check | 不把 raw JSON 直接作为人工主页面 |
+| 变化事实 | `diff/**`, `file_diff/**` | 相对可信 base 的 view/file/release 差异 | compare、fd | Version Detail、Comparison Review | 缺 diff 不能显示成“无变化” |
+| 有效版/窗口 | `catalog/html/libraries/**/effective`, `window`, `current_effective.json` | 候选组合、当前 effective 指针、接入窗口 | intake、accept-window、effective rollback | Version Detail、library workspace、release | 不替代 scan/diff 事实 |
+| 用户投影 | HTML、`catalog_state.json`、`manager_tasks.json`、`report_index.json` | 浏览和导航、聚合状态、证据入口 | renderer | 浏览器、人工审查 | 不作为上游事实源 |
+
+`version_evidence_state` 只是 Version Detail 的事实源索引。它解释页面当前引用了哪些输入，
+但不创建新的事实，也不写回 catalog runtime state。
+
 ## Render 边界
 
 | 页面 / 边界 | Owner |
@@ -54,10 +77,29 @@ Version Detail 是唯一审查投影。`window`、`effective`、`compare` 只是
 - View 变化。
 - 证据 freshness。
 
+Version Detail 使用 `version_evidence_state` 解释五类输入的边界：
+
+- Catalog：库和版本资产地图。
+- Scan：单版本目录事实。
+- Diff/Compare：相对基准的变化事实。
+- Effective/Window：当前有效版和接入窗口。
+- HTML Render：用户看到的投影，不是事实源。
+
 `RenderImpact` 只负责避免投影 stale。scan、batch scan、compare、batch compare、
 intake、accept-window、mark 会声明受影响的库/版本，再由 finalizer 局部刷新对应
 Version Detail、库工作台和目录索引。它不负责重新发现库，也不改变 scan、diff、
 release 的业务规则。
+
+复杂度约束：
+
+| 操作 | 刷新范围 | 复杂度目标 |
+| --- | --- | --- |
+| 单版本 scan/cmp | 当前版本详情页 | O(1) |
+| batch scan/cmp | 成功版本集合 | O(K) |
+| intake/accept-window | 当前 review window 内版本集合 | O(W) |
+| cat --refresh-catalog | 显式 catalog 重建 | O(库数 + 版本数)，低频 |
+
+任何日常命令如果为了刷新一个版本而全量重建所有库页面，都应视为架构回归。
 
 ## 生成物边界
 
@@ -89,3 +131,21 @@ File Diff 推荐默认只是 attention item，不等同 blocker。
 
 页面和 release 逻辑不能把“算法匹配推断”直接当成事实结论；路径迁移、matched/moved
 一类信息必须保留 match reason 和 confidence。
+
+## 工程修改规则
+
+| 修改目标 | 应改位置 | 不应改位置 |
+| --- | --- | --- |
+| 文件识别/扫描速度 | `scan/`, `view_types.py`, `project_config.py` | HTML renderer |
+| View Delta / IP 使用判断 | review model、`version_detail_report.py` model builder | scan parser |
+| 页面布局和中文文案 | `render/` | scan/diff/release 规则 |
+| Base/effective/window 关系 | `effective/`, `window_intake`, review context | HTML 字符串拼接 |
+| release link/verify | `release/` | catalog renderer |
+| 短命令展开 | `short_cli.py`, `cli_commands/` | 底层数据模型 |
+
+每次修改必须同时回答：
+
+1. 修改的是事实采集、派生模型，还是投影？
+2. 是否引入了新的事实源？如果是，为什么不能复用已有 artifact？
+3. 是否会让单版本热路径退化成全量 catalog render？
+4. 是否有测试覆盖 stale render、错误 base、缺 scan/diff、unknown 文件和大文件 lane？

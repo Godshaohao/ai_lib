@@ -36,6 +36,9 @@ class ScanReportWriter:
         self._write_json(out / "signatures" / "signatures.json", bundle.signatures)
         self._write_json(out / "logs" / "parser_errors.json", bundle.logs.get("parser_errors", []))
         self._write_json(out / "logs" / "cache_events.json", bundle.logs.get("cache_events", []))
+        from .evidence_export import write_scan_review_evidence
+
+        write_scan_review_evidence(out, bundle, context)
 
     def _write_json(self, path: Path, data: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

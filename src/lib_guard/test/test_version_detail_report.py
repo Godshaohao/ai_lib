@@ -1583,6 +1583,49 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("doc/release_note.txt", html)
             self.assertNotIn(str(raw / "doc" / "release_note.txt"), html)
 
+    def test_version_detail_shows_unified_evidence_source_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "html"
+            scan_dir = root / "scan"
+            review_dir = scan_dir / "review"
+            review_dir.mkdir(parents=True)
+            (review_dir / "scan_review.json").write_text("{}", encoding="utf-8")
+            (review_dir / "view_coverage.tsv").write_text(
+                "view_type\tview_label\tfile_type\tcount\trequired\tevidence_level\tstatus\tmeaning\n"
+                "physical_abstract\tLEF / 物理抽象\tlef\t1\tyes\tparsed\tPASS\t已有可读结构证据\n",
+                encoding="utf-8",
+            )
+            (review_dir / "files_by_view.tsv").write_text(
+                "view_type\tview_label\tusage_area\tfile_type\trole\tsize_bytes\tevidence_level\tparser_status\tpath\n"
+                "physical_abstract\tLEF / 物理抽象\t物理实现 / PD\tlef\tmacro\t20\tparsed\tPASS\tlef/top.lef\n",
+                encoding="utf-8",
+            )
+            (scan_dir / "file_inventory.json").write_text(
+                json.dumps({"files": [{"path": "lef/top.lef", "file_type": "lef", "size_bytes": 20}]}),
+                encoding="utf-8",
+            )
+            (scan_dir / "parser_manifest.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+            lib = {"library_id": "ip/source_demo", "library_name": "source_demo"}
+            version = {"version_id": "v1", "raw_path": str(root / "raw" / "v1"), "scan": {"scan_dir": str(scan_dir)}}
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model, render_version_detail_page
+
+            model = build_version_update_detail_model(out, lib, version)
+            source_names = [item["name"] for item in model["evidence_state"]["sources"]]
+            self.assertIn("catalog", source_names)
+            self.assertIn("scan", source_names)
+            self.assertIn("scan_review_tables", source_names)
+            self.assertIn("diff", source_names)
+            self.assertIn("html_render", source_names)
+
+            page = Path(render_version_detail_page(out, lib, version))
+            html = page.read_text(encoding="utf-8")
+            self.assertIn("事实源状态", html)
+            self.assertIn("scan_review_tables", html)
+            self.assertIn("HTML 只是投影", html)
+            self.assertIn("review/view_coverage.tsv", html)
+
 
 if __name__ == "__main__":
     unittest.main()
