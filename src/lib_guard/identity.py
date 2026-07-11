@@ -11,7 +11,6 @@ def canonical_digest(value: Any) -> str:
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
-        default=str,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
