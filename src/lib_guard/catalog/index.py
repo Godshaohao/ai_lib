@@ -378,12 +378,20 @@ def _fingerprint_payload(entries: list[Mapping[str, Any]], *, mode: str, truncat
     digest = hashlib.sha256(
         json.dumps(normalized_entries, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()
+    hashed = sum(1 for entry in normalized_entries if entry.get("sha256"))
+    strength = "full" if normalized_entries and hashed == len(normalized_entries) else ("mixed" if hashed else "metadata")
     return {
         "schema_version": "version_input_fingerprint.v1",
         "mode": mode,
         "hash": digest,
         "entry_count": len(entries),
         "truncated": bool(truncated),
+        "hash_coverage": {
+            "hashed": hashed,
+            "unhashed": len(normalized_entries) - hashed,
+            "total": len(normalized_entries),
+        },
+        "strength": strength,
     }
 
 
@@ -409,6 +417,9 @@ def _inventory_evidence(path: Path, policy: Mapping[str, Any], limit: int = 5000
                     "size_bytes": stat.st_size,
                     "mtime_ns": stat.st_mtime_ns,
                     "file_type": str(record.get("file_type") or "unknown"),
+                    "sha256": None,
+                    "hash_status": None,
+                    "hash_policy": None,
                 }
             )
         except OSError:
@@ -1629,6 +1640,7 @@ def update_catalog_scan_status(
     status: str,
     scan_html: str | Path | None = None,
     input_fingerprint: Mapping[str, Any] | None = None,
+    snapshot_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     path = Path(catalog_path)
     data = _read_json(path, {}) or {}
@@ -1643,6 +1655,8 @@ def update_catalog_scan_status(
     }
     if input_fingerprint:
         item["scan"]["input_fingerprint"] = dict(input_fingerprint)
+    if snapshot_identity:
+        item["scan"]["snapshot_identity"] = dict(snapshot_identity)
     item["updated_by"] = "lib_guard.run"
     item["updated_at"] = _now()
     runtime[version_key] = item

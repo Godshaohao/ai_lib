@@ -597,6 +597,36 @@ class CatalogTimelineTest(unittest.TestCase):
             forced = scan_catalog(raw, out_dir=out, library_type="ip", force=True)
             self.assertFalse(forced.get("skipped", False))
 
+    def test_catalog_scan_status_persists_scan_snapshot_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            version = raw / "ucie" / "stable_20250608"
+            version.mkdir(parents=True)
+            (version / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+
+            from lib_guard.catalog.index import find_catalog_version, scan_catalog, update_catalog_scan_status
+
+            scan_catalog(raw, out_dir=out, library_type="ip")
+            snapshot_identity = {
+                "schema_version": "delivery_snapshot_identity.v1",
+                "digest": "sha256:stable",
+                "strength": "full",
+                "payload": {"input_fingerprint": {"hash": "stable"}},
+            }
+            update_catalog_scan_status(
+                out / "catalog.json",
+                version_key="ip/ucie/stable_20250608",
+                scan_dir=root / "scan_out" / "ucie" / "stable_20250608",
+                scan_id="scan_1",
+                status="PASS",
+                snapshot_identity=snapshot_identity,
+            )
+
+            version_item = find_catalog_version(out / "catalog.json", "ucie", "stable_20250608")
+            self.assertEqual(version_item["scan"]["snapshot_identity"], snapshot_identity)
+
     def test_catalog_marks_scan_stale_when_version_fingerprint_changes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

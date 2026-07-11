@@ -60,6 +60,23 @@ class ScanPolicy:
     def should_hash(self, record: Any, context: Any) -> bool:
         return self.hash_decision(record, context)["should_hash"]
 
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": "scan_policy_identity.v1",
+            "hash_policy": str(_get(self.config, "hash_policy", "smart") or "smart").lower(),
+            "small_file_sha256_max_bytes": int(
+                _get(self.config, "small_file_sha256_max_bytes", self.DEFAULT_SMALL_FILE_MAX_BYTES)
+                or self.DEFAULT_SMALL_FILE_MAX_BYTES
+            ),
+            "parse_file_types": sorted(
+                str(item).lower() for item in (_get(self.config, "parse_file_types", []) or [])
+            ),
+            "parse_exclude_file_types": sorted(
+                str(item).lower()
+                for item in (_get(self.config, "parse_exclude_file_types", []) or [])
+            ),
+        }
+
     def hash_decision(self, record: Any, context: Any) -> dict[str, Any]:
         mode = str(_get(context, "scan_mode", "scan"))
         if mode in {"quick", "inventory"}:

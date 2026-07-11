@@ -74,6 +74,40 @@ class ScanPipelineTest(unittest.TestCase):
             ]
             self.assertEqual(tasks, [])
 
+    def test_scan_snapshot_identity_is_stable_and_reports_hash_strength(self) -> None:
+        from lib_guard.scan.scanner import ScanRunner
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            root.mkdir()
+            (root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            base = dict(
+                root_path=str(root),
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="scan",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            first = Path(td) / "first"
+            second = Path(td) / "second"
+            ScanRunner(SimpleNamespace(**base, out_dir=str(first), scan_id="S1")).run()
+            ScanRunner(SimpleNamespace(**base, out_dir=str(second), scan_id="S2")).run()
+            first_meta = json.loads((first / "scan_meta.json").read_text(encoding="utf-8"))
+            second_meta = json.loads((second / "scan_meta.json").read_text(encoding="utf-8"))
+            first_inventory = json.loads((first / "file_inventory.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(first_meta["snapshot_identity"]["digest"], second_meta["snapshot_identity"]["digest"])
+        self.assertIn(first_meta["snapshot_identity"]["strength"], {"full", "mixed", "metadata"})
+        self.assertEqual(first_meta["snapshot_identity"], first_inventory["snapshot_identity"])
+
     def test_scan_fatal_error_is_written_to_progress_latest(self) -> None:
         from lib_guard.scan.scanner import ScanRunner
 

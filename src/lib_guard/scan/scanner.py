@@ -65,6 +65,9 @@ def _input_fingerprint(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "size_bytes": size,
                 "mtime_ns": mtime_ns,
                 "file_type": str(record.get("file_type") or "unknown"),
+                "sha256": record.get("sha256"),
+                "hash_status": record.get("hash_status"),
+                "hash_policy": record.get("hash_policy"),
             }
         )
     entries = sorted(
@@ -77,12 +80,20 @@ def _input_fingerprint(records: list[dict[str, Any]]) -> dict[str, Any]:
         ),
     )
     raw = json.dumps(entries, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
+    hashed = sum(1 for item in entries if item.get("sha256"))
+    strength = "full" if entries and hashed == len(entries) else ("mixed" if hashed else "metadata")
     return {
         "schema_version": "version_input_fingerprint.v1",
         "mode": "scan_inventory",
         "hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         "entry_count": len(entries),
         "truncated": False,
+        "hash_coverage": {
+            "hashed": hashed,
+            "unhashed": len(entries) - hashed,
+            "total": len(entries),
+        },
+        "strength": strength,
     }
 
 
@@ -827,6 +838,14 @@ class ScanRunner:
 
         corner_summary = corner_filename_summary(inventory_files)
         fingerprint = _input_fingerprint(inventory_files)
+        from lib_guard.identity import build_snapshot_identity
+
+        snapshot_identity = build_snapshot_identity(
+            input_fingerprint=fingerprint,
+            policy_identity=context.policy.identity_payload(),
+            tool_version=context.tool_version,
+            strength=str(fingerprint["strength"]),
+        )
         meta = {
             "schema_version": context.schema_version,
             "tool": "lib_guard",
@@ -849,6 +868,7 @@ class ScanRunner:
             "version_kind": self._version_kind(inventory_files, context),
             "base_version_source": "CONFIG" if _get(context.config, "base_version", None) else "AUTO_CATALOG_OR_UNSET",
             "input_fingerprint": fingerprint,
+            "snapshot_identity": snapshot_identity,
             "hash_policy": self._hash_policy(inventory_files),
             "started_at_ms": context.started_at_ms,
             "finished_at_ms": _now_ms(),
@@ -879,7 +899,7 @@ class ScanRunner:
         return ScanBundle(
             scan_meta=meta,
             manifest=manifest,
-            file_inventory={"schema_version": context.schema_version, "scan_id": context.scan_id, "root_path": str(context.root_path), "files": inventory_files, "corner_filename_summary": corner_summary, "input_fingerprint": fingerprint},
+            file_inventory={"schema_version": context.schema_version, "scan_id": context.scan_id, "root_path": str(context.root_path), "files": inventory_files, "corner_filename_summary": corner_summary, "input_fingerprint": fingerprint, "snapshot_identity": snapshot_identity},
             parser_task_list=parser_task_list,
             parser_manifest=parser_manifest,
             parser_results=parser_results,

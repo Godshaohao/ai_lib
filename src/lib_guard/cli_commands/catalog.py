@@ -458,6 +458,7 @@ def run_catalog_workflow(args: Namespace) -> int:
         status=scan_result.status,
         scan_html=scan_html.get("index_html"),
         input_fingerprint=(scan_result.bundle.scan_meta.get("input_fingerprint") if getattr(scan_result, "bundle", None) else None),
+        snapshot_identity=(scan_result.bundle.scan_meta.get("snapshot_identity") if getattr(scan_result, "bundle", None) else None),
     )
     finish_phase("update_catalog_scan_status", started)
     result = {
