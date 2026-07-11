@@ -154,6 +154,110 @@ class ReleaseExplainTest(unittest.TestCase):
         write_result.assert_not_called()
         update_status.assert_not_called()
 
+    def test_catalog_release_check_block_returns_nonzero_after_recording_result(self) -> None:
+        from lib_guard.cli_commands.catalog import run_catalog_release_check
+
+        args = Namespace(
+            catalog="catalog.json",
+            library="ucie",
+            version="stable_20250608",
+            policy=None,
+            alias="current",
+            diff=None,
+            diff_mode=None,
+            review_gate=None,
+            explain=False,
+        )
+        check_result = {
+            "release_check_status": "BLOCK",
+            "library_name": "ucie",
+            "version": "stable_20250608",
+            "block_reasons": ["review gate open"],
+        }
+
+        with (
+            patch("lib_guard.catalog.index.find_catalog_version", return_value={"version_key": "ip/ucie/stable_20250608", "scan": {"scan_dir": "scan"}}),
+            patch("lib_guard.cli_commands.catalog._review_gate_for_catalog_version", return_value=(None, {})),
+            patch("lib_guard.release.checker.check_release_scan", return_value=check_result),
+            patch("lib_guard.release.result.write_release_result") as write_result,
+            patch("lib_guard.catalog.index.update_catalog_release_status") as update_status,
+        ):
+            with redirect_stdout(StringIO()):
+                code = run_catalog_release_check(args)
+
+        self.assertEqual(code, 2)
+        write_result.assert_called_once()
+        update_status.assert_called_once()
+
+    def test_release_batch_defaults_to_fail_closed_for_blocked_check_status(self) -> None:
+        from lib_guard.cli_commands.catalog import run_catalog_release_batch
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scan_dir = root / "scan" / "stable"
+            scan_dir.mkdir(parents=True)
+            catalog = root / "catalog.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": "ip/ucie/stable_20250608",
+                                        "scan": {"scan_dir": str(scan_dir)},
+                                        "release": {"check_status": "BLOCK"},
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = Namespace(
+                catalog=str(catalog),
+                library="ucie",
+                version=["stable_20250608"],
+                stage=None,
+                policy=None,
+                release_root=str(root / "release"),
+                alias="current",
+                release_id="R1",
+                out=str(root / "run"),
+                apply=True,
+                overwrite=False,
+                link_mode="symlink",
+                force=False,
+                force_reason=None,
+                force_by=None,
+                diff=None,
+                diff_mode=None,
+                only_checked=False,
+                only_ready=False,
+                limit=None,
+                no_verify=True,
+                no_render=True,
+                catalog_html_out=None,
+                no_catalog_render=True,
+            )
+
+            with (
+                patch("lib_guard.release.bundle.create_manifest_template_from_catalog") as create_manifest,
+                patch("lib_guard.release.linker.link_release_from_manifest") as link_release,
+            ):
+                create_manifest.return_value = {"libraries": []}
+                link_release.return_value = {"status": "PASS", "failed_links": []}
+                with redirect_stdout(StringIO()):
+                    code = run_catalog_release_batch(args)
+
+        self.assertEqual(code, 2)
+        create_manifest.assert_not_called()
+        link_release.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

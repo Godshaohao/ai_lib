@@ -1,5 +1,5 @@
 ---
-name: pd_vibe_guard
+name: pd-vibe-guard
 description: Use for PD dashboard, timing/FCT/QoR analysis, release monitor, library guard, tile detail, or AI-assisted coding tasks that risk vague requirements, overengineering, premature architecture, unsupported algorithms, or bloated implementation. Routes to internal requirement_grill, requirement_ponytail, architecture_grill, algorithm_grill, and implementation_ponytail checks without exposing them as top-level global skills.
 ---
 

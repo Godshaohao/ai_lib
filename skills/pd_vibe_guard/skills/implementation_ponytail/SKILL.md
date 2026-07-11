@@ -1,3 +1,8 @@
+---
+name: implementation-ponytail
+description: Use before implementing or reviewing AI-generated changes to a PD dashboard, timing/FCT/QoR tool, release monitor, library guard, or tile detail page.
+---
+
 # Implementation Ponytail Skill
 
 ## Purpose

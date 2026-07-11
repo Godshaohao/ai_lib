@@ -565,6 +565,22 @@ def cmd_accept(args: argparse.Namespace) -> int:
     manifest_path = Path(str(manifest))
     if not manifest_path.exists():
         raise ValueError(f"candidate effective manifest does not exist: {manifest_path}. Run intake first.")
+    plan = load_plan(plan_path_for(args.workdir, args.library))
+    if not plan:
+        raise ValueError("accept-window requires intake plan DONE; run lg next <LIBRARY> --apply first")
+    if str(plan.get("state") or "") != "DONE":
+        raise ValueError(f"accept-window requires intake plan DONE; current plan state is {plan.get('state') or 'UNKNOWN'}")
+    unfinished = [
+        str(task.get("id") or task.get("kind") or "task")
+        for task in plan.get("tasks", []) or []
+        if str(task.get("status") or "") != "DONE"
+    ]
+    if unfinished:
+        raise ValueError("accept-window requires intake plan DONE; unfinished tasks: " + ", ".join(unfinished[:8]))
+    compare = data.get("compare") if isinstance(data.get("compare"), dict) else {}
+    compare_dir = Path(str(compare.get("out_dir") or "")) if compare.get("out_dir") else None
+    if not compare or not compare_dir or not (compare_dir / "compare_manifest.json").exists():
+        raise ValueError("accept-window requires fresh effective compare evidence; run lg next <LIBRARY> --apply --rebuild")
     pointer = write_current_pointer(
         manifest_path,
         status="accepted",

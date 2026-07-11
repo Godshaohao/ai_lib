@@ -13,6 +13,8 @@ from .common import auto_scan_id, default_cache_dir, default_state_dir, print_js
 from .scan import split_strategy_list
 from lib_guard.render.impact import impacts_for_versions
 
+RELEASE_CHECK_PASS_STATUSES = {"PASS", "PASS_WITH_WARNING"}
+
 
 def _read_json(path: str | Path) -> dict[str, Any]:
     try:
@@ -108,6 +110,42 @@ def _report_library_entry(report_index: Mapping[str, Any], lib: dict[str, Any]) 
     return {}
 
 
+def _current_effective_pointer_entry(html_out: str | Path, lib: Mapping[str, Any]) -> dict[str, Any]:
+    from lib_guard.effective.pointer import load_current_pointer
+
+    for key in _library_match_names(lib):
+        pointer = load_current_pointer(html_out, key)
+        if pointer:
+            manifest_data: dict[str, Any] = {}
+            manifest = pointer.get("manifest")
+            if manifest:
+                try:
+                    loaded = json.loads(Path(str(manifest)).read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        manifest_data = loaded
+                except Exception:
+                    manifest_data = {}
+            summary = pointer.get("summary") if isinstance(pointer.get("summary"), Mapping) else {}
+            if not summary and isinstance(manifest_data.get("summary"), Mapping):
+                summary = manifest_data.get("summary") or {}
+            current_id = str(pointer.get("current_effective_id") or manifest_data.get("effective_id") or "")
+            return {
+                "current_effective": current_id,
+                "effective": {
+                    current_id: {
+                        "manifest": pointer.get("manifest") or str(manifest or ""),
+                        "html": pointer.get("html") or "",
+                        "release_preview": pointer.get("release_preview") or "",
+                        "summary": dict(summary or {}),
+                    }
+                }
+                if current_id
+                else {},
+                "source": "current_effective_pointer",
+            }
+    return {}
+
+
 def _effective_list_rows(data: dict[str, Any], args: Namespace) -> list[dict[str, Any]]:
     report_index = _load_report_index(args)
     rows: list[dict[str, Any]] = []
@@ -116,7 +154,7 @@ def _effective_list_rows(data: dict[str, Any], args: Namespace) -> list[dict[str
             continue
         summary = lib.get("summary") or {}
         versions = list(lib.get("versions", []) or [])
-        report_lib = _report_library_entry(report_index, lib)
+        report_lib = _current_effective_pointer_entry(_report_index_path(args).parent, lib) or _report_library_entry(report_index, lib)
         effective = report_lib.get("effective", {}) if isinstance(report_lib.get("effective"), dict) else {}
         current_id = str(report_lib.get("current_effective") or "")
         current = effective.get(current_id, {}) if current_id and isinstance(effective.get(current_id), dict) else {}
@@ -126,7 +164,7 @@ def _effective_list_rows(data: dict[str, Any], args: Namespace) -> list[dict[str
             source = "catalog_only"
             effective_status = "NEEDS_EFFECTIVE_CONFIRM"
         elif effective:
-            source = "report_index"
+            source = str(report_lib.get("source") or "report_index")
             effective_status = "CURRENT_EFFECTIVE_READY" if current_id and current else "HAS_EFFECTIVE_NO_CURRENT"
         else:
             source = "report_index_no_effective"
@@ -347,7 +385,7 @@ def run_catalog_override(args: Namespace) -> int:
         getattr(args, name, None)
         for name in ["package_type", "base", "base_full_version", "previous_effective_version", "current_effective", "compare_default"]
     ):
-        output["recommended_next"] = f"lg.csh intake {version_ref[0]} --rebuild"
+        output["recommended_next"] = f"lg next {version_ref[0]} --apply --rebuild"
     print_json(output)
     return 0 if result.get("status") == "PASS" else 2
 
@@ -904,7 +942,7 @@ def run_catalog_release_check(args: Namespace) -> int:
     write_release_result(release_result_path, release_result_from_check(result))
     update_catalog_release_status(args.catalog, version_key=item["version_key"], action="check", status=result.get("release_check_status", "UNKNOWN"), result_path=result_path)
     print_json(result)
-    return 0
+    return 0 if str(result.get("release_check_status") or "") in RELEASE_CHECK_PASS_STATUSES else 2
 
 
 def run_catalog_release_link(args: Namespace) -> int:
@@ -968,10 +1006,13 @@ def run_catalog_release_batch(args: Namespace) -> int:
         if not item.get("scan", {}).get("scan_dir"):
             continue
         release = item.get("release", {}) or {}
-        if args.only_checked and release.get("check_status") not in {"PASS", "PASS_WITH_WARNING"}:
+        check_status = str(release.get("check_status") or "")
+        if not getattr(args, "force", False) and check_status not in RELEASE_CHECK_PASS_STATUSES:
+            continue
+        if args.only_checked and check_status not in RELEASE_CHECK_PASS_STATUSES:
             continue
         if args.only_ready:
-            if item.get("manual_review") or release.get("check_status") in {"BLOCK", "FAILED"}:
+            if item.get("manual_review") or check_status in {"BLOCK", "FAILED"}:
                 continue
         selected.append(item)
         if args.limit and len(selected) >= args.limit:

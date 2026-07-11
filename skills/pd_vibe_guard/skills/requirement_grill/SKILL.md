@@ -1,3 +1,8 @@
+---
+name: requirement-grill
+description: Use when a PD dashboard, report, analysis script, or feature request has an unclear target user, review scenario, judgement, action, or supporting data.
+---
+
 # Requirement Grill Skill
 
 ## Purpose

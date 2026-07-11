@@ -1,3 +1,8 @@
+---
+name: architecture-grill
+description: Use when a PD tool proposal introduces services, databases, state machines, workflows, caches, plugins, roles, auto-refresh, or agent architecture.
+---
+
 # Architecture Grill Skill
 
 ## Purpose

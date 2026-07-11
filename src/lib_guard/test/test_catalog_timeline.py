@@ -155,6 +155,77 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual(row["来源"], "report_index_no_effective")
             self.assertNotIn("最新真实版本", row)
 
+    def test_effective_list_reads_current_pointer_without_report_index(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = root / "catalog.json"
+            html = root / "html"
+            lib_dir = html / "libraries" / "ip_Vendor_A.ucie"
+            eff_dir = lib_dir / "effective" / "E1_20260630"
+            eff_dir.mkdir(parents=True)
+            manifest = eff_dir / "effective_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "effective_manifest.v2",
+                        "library_id": "ip/Vendor_A.ucie",
+                        "effective_id": "E1_20260630",
+                        "base_full_version": "20260618_UCIe_Final",
+                        "accepted_updates": ["20260624_adhoc_ucie_netlists"],
+                        "summary": {"file_count": 12, "component_count": 2},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (lib_dir / "effective" / "current_effective.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "current_effective.v1",
+                        "library_id": "ip/Vendor_A.ucie",
+                        "current_effective_id": "E1_20260630",
+                        "manifest": str(manifest),
+                        "summary": {"file_count": 12, "component_count": 2},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/Vendor_A.ucie",
+                                "library_name": "Vendor_A.ucie",
+                                "formal_library_id": "Vendor_A.ucie",
+                                "typed_library_id": "ip/Vendor_A.ucie",
+                                "summary": {"version_count": 2, "latest_version": "20260624_adhoc_ucie_netlists"},
+                                "versions": [
+                                    {"version_id": "20260618_UCIe_Final"},
+                                    {"version_id": "20260624_adhoc_ucie_netlists"},
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.cli_commands.catalog import run_catalog_list
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = run_catalog_list(Namespace(catalog=str(catalog), library="Vendor_A.ucie", versions=False, effective=True, html_out=str(html)))
+            self.assertEqual(rc, 0)
+            row = json.loads(out.getvalue())["rows"][0]
+            self.assertEqual(row["当前Effective"], "E1_20260630")
+            self.assertEqual(row["有效状态"], "CURRENT_EFFECTIVE_READY")
+            self.assertEqual(row["Effective文件数"], 12)
+            self.assertEqual(row["Effective组件数"], 2)
+            self.assertEqual(row["来源"], "current_effective_pointer")
+
     def test_catalog_list_outputs_only_actionable_user_names(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

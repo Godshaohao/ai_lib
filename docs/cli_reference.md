@@ -310,8 +310,8 @@ $WORK/actions/<library>.action
 | --- | --- |
 | `@scan VERSION` | 扫描指定版本 |
 | `@rescan VERSION` | 强制重扫指定版本 |
-| `@diff VERSION base=BASE` | 生成对比 |
-| `@rediff VERSION base=BASE` | 强制重新对比 |
+| `@diff OLD NEW NAME` | 生成对比 |
+| `@rediff OLD NEW NAME` | 强制重新对比 |
 | `@release VERSION` | 生成 release preview/规划 |
 | `@rerelease VERSION` | 强制重新生成 release preview/规划 |
 | `@ALL redo` | 标记后续动作全部重做 |
@@ -333,6 +333,13 @@ lg.csh rel <LIBRARY> <VERSION> --apply --overwrite
 
 `rel <LIBRARY> <VERSION>` 默认先执行 release-check，再生成 symlink release 规划；
 不会自动 apply。
+
+release batch 默认 fail-closed：没有当前 `PASS` / `PASS_WITH_WARNING` 检查状态的版本不会被
+选择。`BLOCK` / `FAILED` 会停止短命令链路；只有显式 `--force --force-reason --force-by`
+会走审计绕过。
+
+注意：`rel <LIBRARY> <VERSION>` 发布的是 catalog raw version 入口。若库采用
+FULL + FIX/HOTFIX 组合，发布前必须确认 manifest 与已接受的 current effective 对齐。
 
 `--overwrite` 只替换 manifest 中列出的目标文件，不会清空 release root 中其他库文件。
 

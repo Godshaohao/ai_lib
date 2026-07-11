@@ -1,3 +1,8 @@
+---
+name: requirement-ponytail
+description: Use when a clear PD tool requirement may still be too broad, future-oriented, or larger than the minimum useful review outcome.
+---
+
 # Requirement Ponytail Skill
 
 ## Purpose

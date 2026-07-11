@@ -11,6 +11,10 @@ Status: current
 HTML、`catalog_state.json`、`manager_tasks.json` 和 `report_index.json` 是投影或索引，
 不能反向驱动 scan、diff、release 或有效版判断。
 
+命令行查询当前有效版时，优先读取 `current_effective.json` 和对应
+`effective_manifest.json`。`report_index.json` 只能作为报告导航索引和兼容回退，不能作为
+有效版事实来源。
+
 ![Lib Guard 架构与主流程](lib_guard_architecture_flow.svg)
 
 ```text
@@ -49,7 +53,7 @@ raw delivery
 | 单版本事实 | `scan_out/**` | 文件清单、parser 任务、scan review TSV、release readiness | scan pipeline | diff、Version Detail、release check | 不把 raw JSON 直接作为人工主页面 |
 | 变化事实 | `diff/**`, `file_diff/**` | 相对可信 base 的 view/file/release 差异 | compare、fd | Version Detail、Comparison Review | 缺 diff 不能显示成“无变化” |
 | 有效版/窗口 | `catalog/html/libraries/**/effective`, `window`, `current_effective.json` | 候选组合、当前 effective 指针、接入窗口 | intake、accept-window、effective rollback | Version Detail、library workspace、release | 不替代 scan/diff 事实 |
-| 用户投影 | HTML、`catalog_state.json`、`manager_tasks.json`、`report_index.json` | 浏览和导航、聚合状态、证据入口 | renderer | 浏览器、人工审查 | 不作为上游事实源 |
+| 用户投影 | HTML、`catalog_state.json`、`manager_tasks.json`、`report_index.json` | 浏览和导航、聚合状态、证据入口 | renderer | 浏览器、人工审查 | 不作为上游事实源；不决定 current effective |
 
 `version_evidence_state` 只是 Version Detail 的事实源索引。它解释页面当前引用了哪些输入，
 但不创建新的事实，也不写回 catalog runtime state。

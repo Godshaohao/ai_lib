@@ -784,7 +784,7 @@ $WORK/actions/<library>.action
 
 ```text
 @scan 20260627_asap7
-@diff 20260627_asap7 base=20260624_asap7 scan_if_missing=true
+@diff 20260624_asap7 20260627_asap7 review_main
 @release 20260627_asap7
 ```
 
@@ -805,6 +805,14 @@ $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --explain
 
 `rel <LIBRARY> <VERSION>` 默认先执行 release-check，再生成 symlink release 规划；
 不会自动 apply。
+
+release-check 不是装饰状态。只有 `PASS` / `PASS_WITH_WARNING` 的版本才会进入
+release batch；`BLOCK` / `FAILED` 会返回非零并停止后续发布动作。需要绕过时必须显式
+使用 `--force --force-reason --force-by`。
+
+当前 `rel <LIBRARY> <VERSION>` 仍是专家级 raw catalog version 发布入口。FIX/HOTFIX
+场景在正式发布前必须确认 release manifest 是否代表已接受的 current effective；不要把
+单个 FIX raw 包误认为完整组合。
 
 正式 release 路径是扁平大写 View 目录，例如：
 

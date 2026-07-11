@@ -1,3 +1,8 @@
+---
+name: algorithm-grill
+description: Use when a PD analysis proposal adds scoring, ranking, clustering, prediction, anomaly detection, fuzzy matching, attribution, recommendation, or AI inference.
+---
+
 # Algorithm Grill Skill
 
 ## Purpose

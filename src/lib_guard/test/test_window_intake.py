@@ -743,6 +743,55 @@ class WindowIntakeTest(unittest.TestCase):
                     )
                 )
 
+    def test_accept_window_rejects_pending_or_failed_intake_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            window = root / "pending_window.json"
+            manifest = root / "effective_manifest.json"
+            manifest.write_text(json.dumps({"effective_id": "candidate_fix1"}), encoding="utf-8")
+            compare_dir = root / "compare"
+            compare_dir.mkdir()
+            (compare_dir / "compare_manifest.json").write_text(json.dumps({"compare_id": "cmp1"}), encoding="utf-8")
+            window.write_text(
+                json.dumps(
+                    {
+                        "state": "PENDING",
+                        "candidate_effective": {"manifest": str(manifest)},
+                        "compare": {"compare_id": "cmp1", "out_dir": str(compare_dir), "html": str(compare_dir / "index.html")},
+                        "items": [{"version": "fix1", "kind": "PARTIAL_UPDATE"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            plan_dir = root / "work" / "state" / "ucie"
+            plan_dir.mkdir(parents=True)
+            (plan_dir / "current_plan.json").write_text(
+                json.dumps(
+                    {
+                        "library": "ucie",
+                        "state": "PENDING",
+                        "tasks": [{"id": "scan:fix1", "status": "PENDING"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            from lib_guard.window.cli import cmd_accept
+
+            with self.assertRaisesRegex(ValueError, "plan.*DONE"):
+                cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
+
     def test_plan_engine_skips_done_tasks_on_same_input_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

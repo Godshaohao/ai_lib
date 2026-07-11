@@ -31,14 +31,18 @@ $PROJ/scripts/lg.csh init $WORK --raw-root $RAW --library-type ip
 cd $WORK
 source $PROJ/scripts/lg_complete.csh
 $PROJ/scripts/lg.csh library add <LIBRARY> --root <LIBRARY_ROOT> --apply --refresh-catalog
-$PROJ/scripts/lg.csh intake <LIBRARY> --plan-only
-$PROJ/scripts/lg.csh intake <LIBRARY>
-$PROJ/scripts/lg.csh accept-window <LIBRARY> --accepted-by <USER> --note "review passed"
+$PROJ/scripts/lg.csh next <LIBRARY>
+$PROJ/scripts/lg.csh next <LIBRARY> --apply
+$PROJ/scripts/lg.csh next <LIBRARY> --accept --by <USER> --note "review passed"
 $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION>
 ```
 
-`intake` 会维护 `$WORK/state/<LIBRARY>/current_plan.json`，重复运行会跳过已完成 task
-并从失败点继续；遇到未确认 `package_type` 会先阻断，要求 `lg mark` 或
+`next <LIBRARY>` 是普通用户入口：先只读预演，确认后 `--apply` 执行 scan/effective
+compare/render，审查通过后 `--accept` 写入 current effective。底层 `intake`、
+`window`、`accept-window` 是专家/调试入口，不作为 README 主路径。
+
+`next --apply` 会维护 `$WORK/state/<LIBRARY>/current_plan.json`，重复运行会跳过同一输入下
+已完成 task 并从失败点继续；遇到未确认 `package_type` 会先阻断，要求 `lg mark` 或
 `lg library override` 显式确认后再执行。
 
 `source $PROJ/scripts/lg_complete.csh` 会提供 `lg` alias 和 csh/tcsh Tab 补全。
