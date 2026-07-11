@@ -1047,6 +1047,43 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("top.v", result["inventory"]["changed"])
             self.assertTrue(result["summary"]["changed_files"] >= 1)
 
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "first_diff")
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "second_diff")
+            first_meta = json.loads((Path(td) / "first_diff" / "diff_meta.json").read_text(encoding="utf-8"))
+            second_meta = json.loads((Path(td) / "second_diff" / "diff_meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(first_meta["diff_id"], second_meta["diff_id"])
+            self.assertEqual(first_meta["identity"], second_meta["identity"])
+            self.assertEqual(first_meta["identity_source"], "snapshot_identity")
+
+            new_meta_path = new_out / "scan_meta.json"
+            new_meta = json.loads(new_meta_path.read_text(encoding="utf-8"))
+            original_new_snapshot_digest = new_meta["snapshot_identity"]["digest"]
+            new_meta["snapshot_identity"]["digest"] = "sha256:changed-snapshot"
+            new_meta_path.write_text(json.dumps(new_meta), encoding="utf-8")
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "changed_diff")
+            changed = json.loads((Path(td) / "changed_diff" / "diff_meta.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(first_meta["identity"], changed["identity"])
+
+            new_meta["snapshot_identity"]["digest"] = original_new_snapshot_digest
+            new_meta_path.write_text(json.dumps(new_meta), encoding="utf-8")
+            old_meta_path = old_out / "scan_meta.json"
+            old_meta = json.loads(old_meta_path.read_text(encoding="utf-8"))
+            old_meta["snapshot_identity"]["digest"] = "sha256:changed-old-snapshot"
+            old_meta_path.write_text(json.dumps(old_meta), encoding="utf-8")
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "changed_old_diff")
+            changed_old = json.loads((Path(td) / "changed_old_diff" / "diff_meta.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(first_meta["identity"], changed_old["identity"])
+
+            for scan in (old_out, new_out):
+                for artifact in ("scan_meta.json", "file_inventory.json"):
+                    path = scan / artifact
+                    evidence = json.loads(path.read_text(encoding="utf-8"))
+                    evidence.pop("snapshot_identity", None)
+                    path.write_text(json.dumps(evidence), encoding="utf-8")
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "legacy_diff")
+            legacy = json.loads((Path(td) / "legacy_diff" / "diff_meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(legacy["identity_source"], "input_fingerprint_fallback")
+
     def test_diff_scan_writes_p0_release_bundle_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             old_root = Path(td) / "old_raw"

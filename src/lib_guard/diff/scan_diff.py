@@ -45,6 +45,24 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
 
 
+def _snapshot_digest(scan_meta: Mapping[str, Any], file_inventory: Mapping[str, Any]) -> tuple[str, str]:
+    for evidence in (scan_meta, file_inventory):
+        identity = evidence.get("snapshot_identity")
+        if not isinstance(identity, Mapping):
+            continue
+        digest = identity.get("digest")
+        if isinstance(digest, str) and digest:
+            return digest, "snapshot_identity"
+    for evidence in (scan_meta, file_inventory):
+        fingerprint = evidence.get("input_fingerprint")
+        if not isinstance(fingerprint, Mapping):
+            continue
+        digest = fingerprint.get("hash")
+        if isinstance(digest, str) and digest:
+            return digest, "input_fingerprint_fallback"
+    return "", "missing_evidence"
+
+
 def _stable_hash(data: Any) -> str:
     raw = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -898,6 +916,20 @@ def diff_scan_outputs(
     new = Path(new_scan)
     old_meta = _read_json(old / "scan_meta.json", {}) or {}
     new_meta = _read_json(new / "scan_meta.json", {}) or {}
+    old_inventory = _read_json(old / "file_inventory.json", {}) or {}
+    new_inventory = _read_json(new / "file_inventory.json", {}) or {}
+    old_snapshot_digest, old_identity_source = _snapshot_digest(old_meta, old_inventory)
+    new_snapshot_digest, new_identity_source = _snapshot_digest(new_meta, new_inventory)
+    from lib_guard.identity import build_diff_identity
+
+    identity = build_diff_identity(old_snapshot_digest, new_snapshot_digest, "scan_diff.v1")
+    identity_sources = {old_identity_source, new_identity_source}
+    if identity_sources == {"snapshot_identity"}:
+        identity_source = "snapshot_identity"
+    elif "input_fingerprint_fallback" in identity_sources:
+        identity_source = "input_fingerprint_fallback"
+    else:
+        identity_source = "missing_evidence"
     relation = {
         "diff_mode": "explicit",
         "old_version": old_meta.get("release_version"),
@@ -953,12 +985,14 @@ def diff_scan_outputs(
         ]
     )
     status = _status_from_issues(issues, has_diff)
-    diff_id = hashlib.sha256(f"{old.resolve()}::{new.resolve()}::{_utc_now()}".encode("utf-8")).hexdigest()[:16]
+    diff_created_at = _utc_now()
     meta = {
         "schema_version": "1.0",
-        "diff_id": diff_id,
+        "diff_id": identity["digest"].split(":", 1)[1][:16],
         "diff_type": "scan_output_diff",
-        "diff_created_at": _utc_now(),
+        "diff_created_at": diff_created_at,
+        "identity": identity,
+        "identity_source": identity_source,
         "old_scan": str(old),
         "new_scan": str(new),
         "old_scan_id": old_meta.get("scan_id"),
@@ -1008,6 +1042,7 @@ def diff_scan_outputs(
         "schema_version": "1.0",
         "diff_type": "scan_output_diff",
         "status": status,
+        "diff_meta": meta,
         "old_scan": str(old),
         "new_scan": str(new),
         "version_relation": relation,

@@ -1670,6 +1670,15 @@ def update_catalog_diff_status(
     runtime = data.setdefault("runtime_state", {})
     item = dict(runtime.get(version_key, {}) or {})
     diff = dict(item.get("diff", {}) or {})
+    diff_meta = _read_json(Path(diff_dir) / "diff_meta.json", {}) or {}
+    if isinstance(diff_meta, Mapping):
+        identity = diff_meta.get("identity")
+        if isinstance(identity, Mapping):
+            diff["identity"] = dict(identity)
+        if diff_meta.get("diff_id"):
+            diff["diff_id"] = diff_meta["diff_id"]
+        if diff_meta.get("identity_source"):
+            diff["identity_source"] = diff_meta["identity_source"]
     if mode == "cumulative":
         diff.update({"cumulative_status": "DIFF_DONE", "cumulative_base_version": old_version, "cumulative_diff_dir": str(diff_dir), "cumulative_diff_html": str(diff_html) if diff_html else None})
     elif mode == "base":
