@@ -15,6 +15,83 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class CatalogTimelineTest(unittest.TestCase):
+    def test_catalog_diff_status_passes_through_identity_provenance_and_clears_missing_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            version = raw / "ucie" / "stable_20250608"
+            version.mkdir(parents=True)
+            (version / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            diff_dir = root / "diff"
+            diff_dir.mkdir()
+
+            from lib_guard.catalog.index import find_catalog_version, scan_catalog, update_catalog_diff_status
+
+            scan_catalog(raw, out_dir=out, library_type="ip")
+            (diff_dir / "diff_meta.json").write_text(
+                json.dumps(
+                    {
+                        "identity": {"schema_version": "diff_identity.v1", "digest": "sha256:mixed"},
+                        "diff_id": "mixed-identity",
+                        "identity_source": "mixed_evidence",
+                        "identity_status": "MIXED_EVIDENCE",
+                        "identity_trust": "NON_HOMOGENEOUS",
+                        "identity_sources": {
+                            "old": {"source": "snapshot_identity", "trust": "TRUSTED"},
+                            "new": {"source": "input_fingerprint_fallback", "trust": "LEGACY_FALLBACK"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            update_catalog_diff_status(
+                out / "catalog.json",
+                version_key="ip/ucie/stable_20250608",
+                mode="adjacent",
+                old_version="initial_20250601",
+                diff_dir=diff_dir,
+                status="DIFF",
+            )
+            stored = find_catalog_version(out / "catalog.json", "ucie", "stable_20250608")["diff"]
+            self.assertEqual(stored["identity"]["digest"], "sha256:mixed")
+            self.assertEqual(stored["diff_id"], "mixed-identity")
+            self.assertEqual(stored["identity_source"], "mixed_evidence")
+            self.assertEqual(stored["identity_status"], "MIXED_EVIDENCE")
+            self.assertEqual(stored["identity_trust"], "NON_HOMOGENEOUS")
+            self.assertEqual(stored["identity_sources"]["old"]["trust"], "TRUSTED")
+
+            (diff_dir / "diff_meta.json").write_text(
+                json.dumps(
+                    {
+                        "identity": None,
+                        "diff_id": None,
+                        "identity_source": "missing_evidence",
+                        "identity_status": "UNAVAILABLE",
+                        "identity_trust": "UNAVAILABLE",
+                        "identity_sources": {
+                            "old": {"source": "missing_evidence", "trust": "UNAVAILABLE"},
+                            "new": {"source": "missing_evidence", "trust": "UNAVAILABLE"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            update_catalog_diff_status(
+                out / "catalog.json",
+                version_key="ip/ucie/stable_20250608",
+                mode="adjacent",
+                old_version="initial_20250601",
+                diff_dir=diff_dir,
+                status="DIFF",
+            )
+            cleared = find_catalog_version(out / "catalog.json", "ucie", "stable_20250608")["diff"]
+            self.assertIsNone(cleared["identity"])
+            self.assertIsNone(cleared["diff_id"])
+            self.assertEqual(cleared["identity_source"], "missing_evidence")
+            self.assertEqual(cleared["identity_status"], "UNAVAILABLE")
+            self.assertEqual(cleared["identity_sources"]["new"]["trust"], "UNAVAILABLE")
+
     def test_catalog_scan_does_not_promote_adjacent_to_previous_effective(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

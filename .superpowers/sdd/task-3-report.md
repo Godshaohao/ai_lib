@@ -70,3 +70,34 @@ Implementation: `90c6cee feat: make scan diff identity deterministic`.
 - File-difference algorithms, UI, and CLI commands are unchanged.
 - No dependencies or new CLI options were added.
 - `fix.md` was preserved and not staged.
+
+## Review Remediation
+
+The initial implementation treated absent evidence as empty deterministic inputs and did not preserve per-side provenance. The remediation keeps the diff algorithm unchanged while making identity availability explicit.
+
+- A side with neither `snapshot_identity.digest` nor `input_fingerprint.hash` now yields `identity_status: UNAVAILABLE`, `identity_source: missing_evidence`, `identity: null`, and `diff_id: null`.
+- `identity_sources` records independent `old` and `new` source/trust pairs. Snapshot evidence is `TRUSTED`; legacy fingerprint evidence is `LEGACY_FALLBACK`.
+- Mixed snapshot/fallback pairs yield `identity_status: MIXED_EVIDENCE`, `identity_source: mixed_evidence`, and `identity_trust: NON_HOMOGENEOUS`. The ordered side sources are included in `build_diff_identity()` policy input, so identical raw digests with opposite provenance directions cannot collide.
+- Catalog now passes through `identity_status`, `identity_source`, `identity_trust`, and `identity_sources` from a real `diff_meta.json`. When a newer diff has no identity or ID, it writes explicit `null` values so rebuild-time legacy merging cannot retain a stale trusted value.
+
+## Remediation TDD Evidence
+
+RED coverage was added before the remediation:
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_diff_scan_reports_inventory_and_summary_changes -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_catalog_timeline.CatalogTimelineTest.test_catalog_diff_status_passes_through_identity_provenance_and_clears_missing_identity -q
+```
+
+The first command failed because `identity_status` was absent. The second failed because catalog did not pass through the provenance fields; after the initial fix, it exposed stale `identity` and `diff_id` being reintroduced during catalog rebuild.
+
+GREEN focused checks passed after the remediation. The scan fixture covers trusted snapshot evidence, both mixed directions with identical raw digests, legacy fallback mutation, and changed inventories with missing evidence. The catalog fixture writes actual `diff_meta.json` files, verifies full provenance pass-through, then verifies that unavailable identity/ID replace cached trusted values with `null`.
+
+Final verification:
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_compile_pycache PYTHONPATH=src python3 -m compileall -q src
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_full_pycache PYTHONPATH=src python3 -m unittest discover -s src/lib_guard/test -p 'test*.py' -q
+```
+
+`compileall` completed successfully. The complete suite ran 368 tests and passed. `git diff --check` also completed successfully.

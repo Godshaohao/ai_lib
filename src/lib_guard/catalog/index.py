@@ -1671,14 +1671,24 @@ def update_catalog_diff_status(
     item = dict(runtime.get(version_key, {}) or {})
     diff = dict(item.get("diff", {}) or {})
     diff_meta = _read_json(Path(diff_dir) / "diff_meta.json", {}) or {}
-    if isinstance(diff_meta, Mapping):
-        identity = diff_meta.get("identity")
-        if isinstance(identity, Mapping):
-            diff["identity"] = dict(identity)
-        if diff_meta.get("diff_id"):
-            diff["diff_id"] = diff_meta["diff_id"]
-        if diff_meta.get("identity_source"):
-            diff["identity_source"] = diff_meta["identity_source"]
+    if not isinstance(diff_meta, Mapping):
+        diff_meta = {}
+    identity = diff_meta.get("identity")
+    if isinstance(identity, Mapping):
+        diff["identity"] = dict(identity)
+    else:
+        diff["identity"] = None
+    diff_id = diff_meta.get("diff_id")
+    if isinstance(diff_id, str) and diff_id:
+        diff["diff_id"] = diff_id
+    else:
+        diff["diff_id"] = None
+    for field in ("identity_source", "identity_status", "identity_trust", "identity_sources"):
+        if field not in diff_meta:
+            diff.pop(field, None)
+            continue
+        value = diff_meta[field]
+        diff[field] = dict(value) if field == "identity_sources" and isinstance(value, Mapping) else value
     if mode == "cumulative":
         diff.update({"cumulative_status": "DIFF_DONE", "cumulative_base_version": old_version, "cumulative_diff_dir": str(diff_dir), "cumulative_diff_html": str(diff_html) if diff_html else None})
     elif mode == "base":

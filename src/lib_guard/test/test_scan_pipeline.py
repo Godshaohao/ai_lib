@@ -1054,6 +1054,14 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(first_meta["diff_id"], second_meta["diff_id"])
             self.assertEqual(first_meta["identity"], second_meta["identity"])
             self.assertEqual(first_meta["identity_source"], "snapshot_identity")
+            self.assertEqual(first_meta["identity_status"], "TRUSTED")
+            self.assertEqual(
+                first_meta["identity_sources"],
+                {
+                    "old": {"source": "snapshot_identity", "trust": "TRUSTED"},
+                    "new": {"source": "snapshot_identity", "trust": "TRUSTED"},
+                },
+            )
 
             new_meta_path = new_out / "scan_meta.json"
             new_meta = json.loads(new_meta_path.read_text(encoding="utf-8"))
@@ -1074,6 +1082,7 @@ class ScanPipelineTest(unittest.TestCase):
             changed_old = json.loads((Path(td) / "changed_old_diff" / "diff_meta.json").read_text(encoding="utf-8"))
             self.assertNotEqual(first_meta["identity"], changed_old["identity"])
 
+            old_snapshot_identity = old_meta["snapshot_identity"]
             for scan in (old_out, new_out):
                 for artifact in ("scan_meta.json", "file_inventory.json"):
                     path = scan / artifact
@@ -1083,6 +1092,93 @@ class ScanPipelineTest(unittest.TestCase):
             diff_scan_outputs(old_out, new_out, out_path=Path(td) / "legacy_diff")
             legacy = json.loads((Path(td) / "legacy_diff" / "diff_meta.json").read_text(encoding="utf-8"))
             self.assertEqual(legacy["identity_source"], "input_fingerprint_fallback")
+            self.assertEqual(legacy["identity_status"], "LEGACY_FALLBACK")
+            self.assertEqual(
+                legacy["identity_sources"],
+                {
+                    "old": {"source": "input_fingerprint_fallback", "trust": "LEGACY_FALLBACK"},
+                    "new": {"source": "input_fingerprint_fallback", "trust": "LEGACY_FALLBACK"},
+                },
+            )
+
+            new_meta_path = new_out / "scan_meta.json"
+            new_meta = json.loads(new_meta_path.read_text(encoding="utf-8"))
+            new_meta["input_fingerprint"]["hash"] = "changed-legacy-fingerprint"
+            new_meta_path.write_text(json.dumps(new_meta), encoding="utf-8")
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "changed_legacy_diff")
+            changed_legacy = json.loads((Path(td) / "changed_legacy_diff" / "diff_meta.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(legacy["identity"], changed_legacy["identity"])
+            self.assertNotEqual(legacy["diff_id"], changed_legacy["diff_id"])
+
+            shared_digest = "sha256:shared-evidence"
+            for scan in (old_out, new_out):
+                for artifact in ("scan_meta.json", "file_inventory.json"):
+                    path = scan / artifact
+                    evidence = json.loads(path.read_text(encoding="utf-8"))
+                    evidence["input_fingerprint"]["hash"] = shared_digest
+                    path.write_text(json.dumps(evidence), encoding="utf-8")
+            shared_snapshot_identity = {**old_snapshot_identity, "digest": shared_digest}
+            for artifact in ("scan_meta.json", "file_inventory.json"):
+                path = old_out / artifact
+                evidence = json.loads(path.read_text(encoding="utf-8"))
+                evidence["snapshot_identity"] = shared_snapshot_identity
+                path.write_text(json.dumps(evidence), encoding="utf-8")
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "mixed_old_snapshot_diff")
+            mixed_old_snapshot = json.loads((Path(td) / "mixed_old_snapshot_diff" / "diff_meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(mixed_old_snapshot["identity_source"], "mixed_evidence")
+            self.assertEqual(mixed_old_snapshot["identity_status"], "MIXED_EVIDENCE")
+            self.assertEqual(mixed_old_snapshot["identity_trust"], "NON_HOMOGENEOUS")
+            self.assertEqual(mixed_old_snapshot["identity_sources"]["old"], {"source": "snapshot_identity", "trust": "TRUSTED"})
+            self.assertEqual(mixed_old_snapshot["identity_sources"]["new"], {"source": "input_fingerprint_fallback", "trust": "LEGACY_FALLBACK"})
+
+            for artifact in ("scan_meta.json", "file_inventory.json"):
+                path = old_out / artifact
+                evidence = json.loads(path.read_text(encoding="utf-8"))
+                evidence.pop("snapshot_identity", None)
+                path.write_text(json.dumps(evidence), encoding="utf-8")
+                path = new_out / artifact
+                evidence = json.loads(path.read_text(encoding="utf-8"))
+                evidence["snapshot_identity"] = shared_snapshot_identity
+                path.write_text(json.dumps(evidence), encoding="utf-8")
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "mixed_new_snapshot_diff")
+            mixed_new_snapshot = json.loads((Path(td) / "mixed_new_snapshot_diff" / "diff_meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(mixed_new_snapshot["identity_source"], "mixed_evidence")
+            self.assertEqual(mixed_new_snapshot["identity_status"], "MIXED_EVIDENCE")
+            self.assertEqual(mixed_new_snapshot["identity_sources"]["old"], {"source": "input_fingerprint_fallback", "trust": "LEGACY_FALLBACK"})
+            self.assertEqual(mixed_new_snapshot["identity_sources"]["new"], {"source": "snapshot_identity", "trust": "TRUSTED"})
+            self.assertNotEqual(mixed_old_snapshot["identity"], mixed_new_snapshot["identity"])
+
+            for scan in (old_out, new_out):
+                for artifact in ("scan_meta.json", "file_inventory.json"):
+                    path = scan / artifact
+                    evidence = json.loads(path.read_text(encoding="utf-8"))
+                    evidence.pop("snapshot_identity", None)
+                    evidence.pop("input_fingerprint", None)
+                    path.write_text(json.dumps(evidence), encoding="utf-8")
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "missing_evidence_diff")
+            missing_evidence = json.loads((Path(td) / "missing_evidence_diff" / "diff_meta.json").read_text(encoding="utf-8"))
+            self.assertIsNone(missing_evidence["identity"])
+            self.assertIsNone(missing_evidence["diff_id"])
+            self.assertEqual(missing_evidence["identity_source"], "missing_evidence")
+            self.assertEqual(missing_evidence["identity_status"], "UNAVAILABLE")
+            self.assertEqual(
+                missing_evidence["identity_sources"],
+                {
+                    "old": {"source": "missing_evidence", "trust": "UNAVAILABLE"},
+                    "new": {"source": "missing_evidence", "trust": "UNAVAILABLE"},
+                },
+            )
+            inventory_path = new_out / "file_inventory.json"
+            missing_inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+            missing_inventory["files"].append({"path": "untracked.txt", "file_type": "text", "size_bytes": 1, "hash": "x"})
+            inventory_path.write_text(json.dumps(missing_inventory), encoding="utf-8")
+            diff_scan_outputs(old_out, new_out, out_path=Path(td) / "missing_evidence_changed_inventory_diff")
+            missing_evidence_changed_inventory = json.loads(
+                (Path(td) / "missing_evidence_changed_inventory_diff" / "diff_meta.json").read_text(encoding="utf-8")
+            )
+            self.assertIsNone(missing_evidence_changed_inventory["identity"])
+            self.assertIsNone(missing_evidence_changed_inventory["diff_id"])
+            self.assertEqual(missing_evidence_changed_inventory["identity_status"], "UNAVAILABLE")
 
     def test_diff_scan_writes_p0_release_bundle_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
