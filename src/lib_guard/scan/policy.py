@@ -63,7 +63,13 @@ class ScanPolicy:
     def identity_payload(self, context: Any = None) -> dict[str, Any]:
         mode = str(_get(context, "scan_mode", "scan"))
         configured_policy = str(_get(self.config, "hash_policy", _get(self.config, "hash", "smart")) or "smart").lower()
-        effective_policy = "none" if mode in {"quick", "inventory"} else "full" if mode == "full" else configured_policy
+        effective_policy = (
+            "none"
+            if mode in {"quick", "inventory"} or configured_policy == "none"
+            else "full"
+            if mode == "full"
+            else configured_policy
+        )
         return {
             "schema_version": "scan_policy_identity.v1",
             "scan_mode": mode,

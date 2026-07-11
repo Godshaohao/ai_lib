@@ -185,11 +185,13 @@ class ScanPipelineTest(unittest.TestCase):
             scanned_meta, scanned_inventory = scan("scan")
             quick_meta, quick_inventory = scan("quick")
             inventory_meta, inventory_inventory = scan("inventory")
+            full_meta, full_inventory = scan("full")
 
         for meta, file_inventory in (
             (scanned_meta, scanned_inventory),
             (quick_meta, quick_inventory),
             (inventory_meta, inventory_inventory),
+            (full_meta, full_inventory),
         ):
             self.assertEqual(meta["snapshot_identity"]["payload"]["policy"]["hash_policy"], "none")
             self.assertEqual(meta["snapshot_identity"]["strength"], "metadata")
