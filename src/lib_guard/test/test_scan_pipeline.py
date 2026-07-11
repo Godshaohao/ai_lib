@@ -108,6 +108,96 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertEqual(first_meta["snapshot_identity"]["strength"], "full")
         self.assertEqual(first_meta["snapshot_identity"], first_inventory["snapshot_identity"])
 
+    def test_snapshot_identity_binds_content_digest_without_changing_catalog_fingerprint(self) -> None:
+        from lib_guard.scan.scanner import ScanRunner
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            root.mkdir()
+            source = root / "top.v"
+            base = dict(
+                root_path=str(root),
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="full",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+
+            source.write_text("module top; endmodule\n", encoding="utf-8")
+            os.utime(source, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+            first_out = Path(td) / "first"
+            ScanRunner(SimpleNamespace(**base, out_dir=str(first_out), scan_id="S1")).run()
+
+            source.write_text("module foo; endmodule\n", encoding="utf-8")
+            os.utime(source, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+            second_out = Path(td) / "second"
+            ScanRunner(SimpleNamespace(**base, out_dir=str(second_out), scan_id="S2")).run()
+
+            first_meta = json.loads((first_out / "scan_meta.json").read_text(encoding="utf-8"))
+            second_meta = json.loads((second_out / "scan_meta.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(first_meta["input_fingerprint"]["hash"], second_meta["input_fingerprint"]["hash"])
+        self.assertNotEqual(first_meta["snapshot_identity"]["digest"], second_meta["snapshot_identity"]["digest"])
+
+    def test_hash_policy_none_never_hashes_key_files(self) -> None:
+        from lib_guard.scan.scanner import ScanRunner
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            root.mkdir()
+            (root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+
+            def scan(mode: str) -> tuple[dict[str, object], dict[str, object]]:
+                out = Path(td) / mode
+                ScanRunner(
+                    SimpleNamespace(
+                        root_path=str(root),
+                        out_dir=str(out),
+                        library_type="ip",
+                        library_name="demo",
+                        version="v1",
+                        scan_mode=mode,
+                        scan_id=mode,
+                        hash_policy="none",
+                        state_dir=str(Path(td) / "state" / mode),
+                        cache_dir=str(Path(td) / "cache" / mode),
+                        skip_cache=True,
+                        no_cache=True,
+                        no_progress=True,
+                        parse_jobs=1,
+                        tool_version="0.5.0",
+                        schema_version="1.0",
+                    )
+                ).run()
+                return (
+                    json.loads((out / "scan_meta.json").read_text(encoding="utf-8")),
+                    json.loads((out / "file_inventory.json").read_text(encoding="utf-8")),
+                )
+
+            scanned_meta, scanned_inventory = scan("scan")
+            quick_meta, quick_inventory = scan("quick")
+            inventory_meta, inventory_inventory = scan("inventory")
+
+        for meta, file_inventory in (
+            (scanned_meta, scanned_inventory),
+            (quick_meta, quick_inventory),
+            (inventory_meta, inventory_inventory),
+        ):
+            self.assertEqual(meta["snapshot_identity"]["payload"]["policy"]["hash_policy"], "none")
+            self.assertEqual(meta["snapshot_identity"]["strength"], "metadata")
+            self.assertEqual(meta["hash_policy"]["policy"], "none")
+            self.assertEqual(meta["stats"]["hashed_files"], 0)
+            self.assertTrue(all(record["sha256"] is None for record in file_inventory["files"]))
+            self.assertTrue(all(record["hash_status"] == "NOT_REQUIRED" for record in file_inventory["files"]))
+
     def test_scan_snapshot_identity_reports_exact_evidence_strengths(self) -> None:
         from lib_guard.scan.scanner import ScanRunner
 

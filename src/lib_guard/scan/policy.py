@@ -86,6 +86,8 @@ class ScanPolicy:
         if mode in {"quick", "inventory"}:
             return {"policy": "none", "should_hash": False, "hash_status": "NOT_REQUIRED", "reason": "scan_mode"}
         policy = str(_get(self.config, "hash_policy", _get(self.config, "hash", "smart")) or "smart").lower()
+        if policy == "none":
+            return {"policy": "none", "should_hash": False, "hash_status": "NOT_REQUIRED", "reason": "hash_policy"}
         if mode == "full" or policy == "full":
             return {"policy": "full", "should_hash": True, "hash_status": "CALCULATED", "reason": "full_hash"}
         extension = str(_get(record, "extension", "") or "").lower()

@@ -86,9 +86,58 @@ def _input_fingerprint(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _evidence_strength(records: list[dict[str, Any]]) -> str:
-    hashed = sum(1 for record in records if record.get("sha256"))
-    return "full" if records and hashed == len(records) else ("mixed" if hashed else "metadata")
+def _snapshot_fingerprint(records: list[dict[str, Any]]) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for record in records:
+        path = str(record.get("path") or record.get("file") or record.get("rel_path") or "")
+        size = record.get("size_bytes")
+        mtime_ns = None
+        abs_path = record.get("abs_path")
+        if abs_path:
+            try:
+                stat = Path(str(abs_path)).stat()
+                mtime_ns = stat.st_mtime_ns
+                size = stat.st_size
+            except OSError:
+                mtime_ns = int(float(record.get("mtime") or 0) * 1_000_000_000) if record.get("mtime") is not None else None
+        elif record.get("mtime") is not None:
+            mtime_ns = int(float(record.get("mtime") or 0) * 1_000_000_000)
+        entries.append(
+            {
+                "path": path,
+                "size_bytes": size,
+                "mtime_ns": mtime_ns,
+                "file_type": str(record.get("file_type") or "unknown"),
+                "sha256": record.get("sha256"),
+                "hash_status": record.get("hash_status"),
+                "hash_policy": record.get("hash_policy"),
+            }
+        )
+    entries = sorted(
+        entries,
+        key=lambda item: (
+            str(item.get("path") or ""),
+            str(item.get("file_type") or ""),
+            str(item.get("size_bytes") or ""),
+            str(item.get("mtime_ns") or ""),
+        ),
+    )
+    hashed = sum(1 for item in entries if item.get("sha256"))
+    strength = "full" if entries and hashed == len(entries) else ("mixed" if hashed else "metadata")
+    raw = json.dumps(entries, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
+    return {
+        "schema_version": "scan_snapshot_fingerprint.v1",
+        "mode": "scan_inventory",
+        "hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "entry_count": len(entries),
+        "truncated": False,
+        "hash_coverage": {
+            "hashed": hashed,
+            "unhashed": len(entries) - hashed,
+            "total": len(entries),
+        },
+        "strength": strength,
+    }
 
 
 def _record_path(record: Any) -> str:
@@ -832,13 +881,14 @@ class ScanRunner:
 
         corner_summary = corner_filename_summary(inventory_files)
         fingerprint = _input_fingerprint(inventory_files)
+        snapshot_fingerprint = _snapshot_fingerprint(inventory_files)
         from lib_guard.identity import build_snapshot_identity
 
         snapshot_identity = build_snapshot_identity(
-            input_fingerprint=fingerprint,
+            input_fingerprint=snapshot_fingerprint,
             policy_identity=context.policy.identity_payload(context),
             tool_version=context.tool_version,
-            strength=_evidence_strength(inventory_files),
+            strength=str(snapshot_fingerprint["strength"]),
         )
         meta = {
             "schema_version": context.schema_version,
