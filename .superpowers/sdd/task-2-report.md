@@ -138,3 +138,34 @@ Catalog is not changed and does not recompute snapshot identity. Its stale compa
 ### Remediation Commit
 
 Implementation: `f13dc94 fix: bind content evidence to scan identity`.
+
+## Full-Mode `hash_policy=none` Boundary Fix
+
+### RED
+
+Extended `test_hash_policy_none_never_hashes_key_files` to cover `scan_mode=full`.
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_hash_policy_none_never_hashes_key_files -q
+```
+
+Result: failed as expected because `identity_payload()` reported `hash_policy=full` for `full + hash_policy=none`.
+
+### GREEN
+
+Aligned `identity_payload()` precedence with `hash_decision()`: quick/inventory, explicit configured `none`, full mode, then configured policy. The full-mode scan now performs no hashing and reports `metadata` evidence strength.
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_hash_policy_none_never_hashes_key_files src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_scan_policy_identity_uses_legacy_hash_and_mode_overrides -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline src.lib_guard.test.test_catalog_timeline -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m compileall -q src
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest discover -s src/lib_guard/test -p 'test*.py' -q
+```
+
+Result: focused `2 tests` passed; scan/timeline `112 tests` passed; compile completed successfully; full suite `367 tests` passed.
+
+### Commit
+
+Implementation: `199e33c fix: align scan identity hash policy precedence`.
+
+Changed files for this boundary fix: `src/lib_guard/scan/policy.py`, `src/lib_guard/test/test_scan_pipeline.py`, and this report.
