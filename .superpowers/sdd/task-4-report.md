@@ -120,3 +120,33 @@ Result: full suite ran `378 tests` and `OK`; compileall exited `0`.
 - `.superpowers/sdd/task-4-report.md`
 
 No command, page, dependency, or review-window selection policy was added or changed.
+
+## Approval Manifest Path Equivalence Follow-up
+
+`approval_integrity_for_manifest()` now accepts equivalent approval manifest references when one side is relative and the other absolute. Existing files are compared with `os.path.samefile()` first; unresolved references fall back to `Path.resolve(strict=False)`. Relative approval declarations are checked against both the current working directory and the approval file's directory, while distinct resolved paths remain mismatches.
+
+### RED/GREEN
+
+- Added regression coverage for relative approval declaration versus absolute validation path, and the reverse absolute declaration versus relative validation path.
+- The two tests failed on the original direct `Path` comparison and passed after the focused fix.
+
+### Verification
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest \
+  src.lib_guard.test.test_effective_pointer -q
+```
+
+Result: `Ran 10 tests` and `OK`.
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest \
+  src.lib_guard.test.test_effective_manifest \
+  src.lib_guard.test.test_effective_pointer \
+  src.lib_guard.test.test_window_intake -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m compileall -q src
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest discover \
+  -s src/lib_guard/test -p 'test*.py' -q
+```
+
+Result: related modules ran `42 tests` and `OK`; compileall completed successfully; full suite ran `380 tests` and `OK`.

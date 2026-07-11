@@ -256,6 +256,58 @@ class EffectivePointerTest(unittest.TestCase):
             self.assertEqual(pointer["effective_integrity_status"], "MATCH")
             self.assertEqual(pointer["approval_integrity_status"], "MISSING")
 
+    def test_approval_accepts_relative_declared_manifest_for_absolute_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_path = root / "effective_manifest.json"
+            manifest_path.write_text("manifest", encoding="utf-8")
+            approval_path = root / "review_approval.json"
+
+            from lib_guard.effective.pointer import approval_integrity_for_manifest, sha256_file
+
+            approval_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_effective_manifest": manifest_path.name,
+                        "candidate_effective_sha256": sha256_file(manifest_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(approval_integrity_for_manifest(approval_path, manifest_path), "MATCH")
+
+    def test_approval_accepts_absolute_declared_manifest_for_relative_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_path = root / "effective_manifest.json"
+            manifest_path.write_text("manifest", encoding="utf-8")
+            approval_path = root / "review_approval.json"
+
+            from lib_guard.effective.pointer import approval_integrity_for_manifest, sha256_file
+
+            approval_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_effective_manifest": str(manifest_path),
+                        "candidate_effective_sha256": sha256_file(manifest_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            previous_cwd = Path.cwd()
+            try:
+                import os
+
+                os.chdir(root)
+                self.assertEqual(
+                    approval_integrity_for_manifest(approval_path, Path("effective_manifest.json")),
+                    "MATCH",
+                )
+            finally:
+                os.chdir(previous_cwd)
+
 
 if __name__ == "__main__":
     unittest.main()

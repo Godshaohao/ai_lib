@@ -121,6 +121,42 @@ def _pointer_identity_status(pointer: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
+def _manifest_paths_equivalent(
+    declared_manifest: str | Path,
+    candidate_manifest: str | Path,
+    approval_path: str | Path,
+) -> bool:
+    candidate = Path(candidate_manifest)
+    candidate_paths = [candidate] if candidate.is_absolute() else [Path.cwd() / candidate]
+
+    declared = Path(declared_manifest)
+    if declared.is_absolute():
+        declared_paths = [declared]
+    else:
+        approval_parent = Path(approval_path).resolve(strict=False).parent
+        declared_paths = [Path.cwd() / declared, approval_parent / declared]
+
+    unresolved_pairs: list[tuple[Path, Path]] = []
+    for declared_path in declared_paths:
+        for candidate_path in candidate_paths:
+            if declared_path.exists() and candidate_path.exists():
+                try:
+                    if os.path.samefile(declared_path, candidate_path):
+                        return True
+                    continue
+                except OSError:
+                    pass
+            unresolved_pairs.append((declared_path, candidate_path))
+
+    for declared_path, candidate_path in unresolved_pairs:
+        try:
+            if declared_path.resolve(strict=False) == candidate_path.resolve(strict=False):
+                return True
+        except (OSError, RuntimeError):
+            continue
+    return False
+
+
 def approval_integrity_for_manifest(
     approval_path: str | Path,
     manifest_path: str | Path,
@@ -136,7 +172,7 @@ def approval_integrity_for_manifest(
         return "MISMATCH"
     approval = read_json(path, {}) or {}
     declared_manifest = str(approval.get("candidate_effective_manifest") or "")
-    if declared_manifest and Path(declared_manifest) != candidate_path:
+    if declared_manifest and not _manifest_paths_equivalent(declared_manifest, candidate_path, path):
         return "MISMATCH"
     candidate_sha = str(approval.get("candidate_effective_sha256") or "")
     if candidate_sha and candidate_sha.removeprefix("sha256:") != sha256_file(candidate_path):
