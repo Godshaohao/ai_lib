@@ -63,3 +63,41 @@ Implementation: `d482136 feat: bind scan evidence to snapshot identity`.
 
 - `metadata` evidence intentionally does not establish full content equivalence; consumers must retain the reported strength when making release decisions.
 - Catalog runtime separation into a sidecar is intentionally deferred to Task 5; this task preserves the current runtime-state storage and only persists the scan-provided identity.
+
+## Independent Review Remediation
+
+### Fixed Boundaries
+
+- Restored the original `version_input_fingerprint.v1` payload on both ScanRunner and Catalog discovery. Hash coverage and strength are not catalog fingerprint fields.
+- Derive identity strength from scan records only, with exact `full`, `mixed`, and `metadata` outcomes. An empty inventory is `metadata`.
+- Bind policy identity to the actual scan context, including the legacy `config.hash` fallback and quick/inventory/full mode overrides.
+- Catalog continues to store the ScanRunner-provided snapshot identity without recomputing it.
+
+### RED
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_scan_snapshot_identity_reports_exact_evidence_strengths src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_scan_policy_identity_uses_legacy_hash_and_mode_overrides src.lib_guard.test.test_catalog_timeline.CatalogTimelineTest.test_catalog_sampled_refresh_keeps_real_scan_identity_current -q
+```
+
+Result: failed as expected. Policy identity rejected the scan context, a full-mode identity reported `smart`, and unchanged RAW became `STALE_SCAN` after a sampled Catalog refresh.
+
+### GREEN
+
+The same focused command ran `3 tests` and passed.
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline src.lib_guard.test.test_catalog_timeline -q
+```
+
+Result: `Ran 110 tests` and `OK` (the prior 107-test baseline plus three independent-review regressions).
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m compileall -q src
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest discover -s src/lib_guard/test -p 'test*.py' -q
+```
+
+Result: compile completed successfully; `Ran 365 tests` and `OK`.
+
+### Remediation Commit
+
+Implementation: `496d28f fix: preserve scan identity catalog compatibility`.
