@@ -65,9 +65,6 @@ def _input_fingerprint(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "size_bytes": size,
                 "mtime_ns": mtime_ns,
                 "file_type": str(record.get("file_type") or "unknown"),
-                "sha256": record.get("sha256"),
-                "hash_status": record.get("hash_status"),
-                "hash_policy": record.get("hash_policy"),
             }
         )
     entries = sorted(
@@ -80,21 +77,18 @@ def _input_fingerprint(records: list[dict[str, Any]]) -> dict[str, Any]:
         ),
     )
     raw = json.dumps(entries, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
-    hashed = sum(1 for item in entries if item.get("sha256"))
-    strength = "full" if entries and hashed == len(entries) else ("mixed" if hashed else "metadata")
     return {
         "schema_version": "version_input_fingerprint.v1",
         "mode": "scan_inventory",
         "hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         "entry_count": len(entries),
         "truncated": False,
-        "hash_coverage": {
-            "hashed": hashed,
-            "unhashed": len(entries) - hashed,
-            "total": len(entries),
-        },
-        "strength": strength,
     }
+
+
+def _evidence_strength(records: list[dict[str, Any]]) -> str:
+    hashed = sum(1 for record in records if record.get("sha256"))
+    return "full" if records and hashed == len(records) else ("mixed" if hashed else "metadata")
 
 
 def _record_path(record: Any) -> str:
@@ -842,9 +836,9 @@ class ScanRunner:
 
         snapshot_identity = build_snapshot_identity(
             input_fingerprint=fingerprint,
-            policy_identity=context.policy.identity_payload(),
+            policy_identity=context.policy.identity_payload(context),
             tool_version=context.tool_version,
-            strength=str(fingerprint["strength"]),
+            strength=_evidence_strength(inventory_files),
         )
         meta = {
             "schema_version": context.schema_version,

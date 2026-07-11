@@ -105,8 +105,67 @@ class ScanPipelineTest(unittest.TestCase):
             first_inventory = json.loads((first / "file_inventory.json").read_text(encoding="utf-8"))
 
         self.assertEqual(first_meta["snapshot_identity"]["digest"], second_meta["snapshot_identity"]["digest"])
-        self.assertIn(first_meta["snapshot_identity"]["strength"], {"full", "mixed", "metadata"})
+        self.assertEqual(first_meta["snapshot_identity"]["strength"], "full")
         self.assertEqual(first_meta["snapshot_identity"], first_inventory["snapshot_identity"])
+
+    def test_scan_snapshot_identity_reports_exact_evidence_strengths(self) -> None:
+        from lib_guard.scan.scanner import ScanRunner
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            root.mkdir()
+            (root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            (root / "block.lef").write_text("MACRO B\nEND B\n", encoding="utf-8")
+
+            def scan(name: str, mode: str, raw: Path = root) -> dict[str, object]:
+                out = Path(td) / f"scan_{name}"
+                ScanRunner(
+                    SimpleNamespace(
+                        root_path=str(raw),
+                        out_dir=str(out),
+                        library_type="ip",
+                        library_name="demo",
+                        version="v1",
+                        scan_mode=mode,
+                        scan_id=name,
+                        state_dir=str(Path(td) / "state" / name),
+                        cache_dir=str(Path(td) / "cache" / name),
+                        skip_cache=True,
+                        no_cache=True,
+                        no_progress=True,
+                        parse_jobs=1,
+                        tool_version="0.5.0",
+                        schema_version="1.0",
+                    )
+                ).run()
+                return json.loads((out / "scan_meta.json").read_text(encoding="utf-8"))["snapshot_identity"]
+
+            full = scan("full", "full")
+            mixed = scan("mixed", "scan")
+            metadata = scan("metadata", "quick")
+            empty_root = Path(td) / "empty"
+            empty_root.mkdir()
+            empty = scan("empty", "scan", empty_root)
+
+        self.assertEqual(full["strength"], "full")
+        self.assertEqual(full["payload"]["policy"]["hash_policy"], "full")
+        self.assertEqual(mixed["strength"], "mixed")
+        self.assertEqual(metadata["strength"], "metadata")
+        self.assertEqual(empty["strength"], "metadata")
+
+    def test_scan_policy_identity_uses_legacy_hash_and_mode_overrides(self) -> None:
+        from lib_guard.scan.policy import ScanPolicy
+
+        legacy = ScanPolicy({"hash": "full"}).identity_payload(SimpleNamespace(scan_mode="scan"))
+        quick = ScanPolicy({"hash_policy": "smart"}).identity_payload(SimpleNamespace(scan_mode="quick"))
+        inventory = ScanPolicy({"hash_policy": "smart"}).identity_payload(SimpleNamespace(scan_mode="inventory"))
+        full = ScanPolicy({"hash_policy": "smart"}).identity_payload(SimpleNamespace(scan_mode="full"))
+
+        self.assertEqual(legacy["hash_policy"], "full")
+        self.assertEqual(legacy["scan_mode"], "scan")
+        self.assertEqual(quick["hash_policy"], "none")
+        self.assertEqual(inventory["hash_policy"], "none")
+        self.assertEqual(full["hash_policy"], "full")
 
     def test_scan_fatal_error_is_written_to_progress_latest(self) -> None:
         from lib_guard.scan.scanner import ScanRunner

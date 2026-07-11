@@ -60,10 +60,14 @@ class ScanPolicy:
     def should_hash(self, record: Any, context: Any) -> bool:
         return self.hash_decision(record, context)["should_hash"]
 
-    def identity_payload(self) -> dict[str, Any]:
+    def identity_payload(self, context: Any = None) -> dict[str, Any]:
+        mode = str(_get(context, "scan_mode", "scan"))
+        configured_policy = str(_get(self.config, "hash_policy", _get(self.config, "hash", "smart")) or "smart").lower()
+        effective_policy = "none" if mode in {"quick", "inventory"} else "full" if mode == "full" else configured_policy
         return {
             "schema_version": "scan_policy_identity.v1",
-            "hash_policy": str(_get(self.config, "hash_policy", "smart") or "smart").lower(),
+            "scan_mode": mode,
+            "hash_policy": effective_policy,
             "small_file_sha256_max_bytes": int(
                 _get(self.config, "small_file_sha256_max_bytes", self.DEFAULT_SMALL_FILE_MAX_BYTES)
                 or self.DEFAULT_SMALL_FILE_MAX_BYTES

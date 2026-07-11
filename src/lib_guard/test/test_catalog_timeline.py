@@ -627,6 +627,55 @@ class CatalogTimelineTest(unittest.TestCase):
             version_item = find_catalog_version(out / "catalog.json", "ucie", "stable_20250608")
             self.assertEqual(version_item["scan"]["snapshot_identity"], snapshot_identity)
 
+    def test_catalog_sampled_refresh_keeps_real_scan_identity_current(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            catalog_out = root / "catalog"
+            version = raw / "ucie" / "stable_20250608"
+            version.mkdir(parents=True)
+            (version / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+
+            from lib_guard.catalog.index import find_catalog_version, scan_catalog, update_catalog_scan_status
+            from lib_guard.scan.scanner import ScanRunner
+
+            scan_catalog(raw, out_dir=catalog_out, library_type="ip", collect_evidence=True)
+            scan = ScanRunner(
+                Namespace(
+                    root_path=str(version),
+                    out_dir=str(root / "scan"),
+                    library_type="ip",
+                    library_name="ucie",
+                    version="stable_20250608",
+                    scan_mode="scan",
+                    scan_id="S1",
+                    state_dir=str(root / "state"),
+                    cache_dir=str(root / "cache"),
+                    skip_cache=True,
+                    no_cache=True,
+                    no_progress=True,
+                    parse_jobs=1,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+            update_catalog_scan_status(
+                catalog_out / "catalog.json",
+                version_key="ip/ucie/stable_20250608",
+                scan_dir=scan.out_dir,
+                scan_id=scan.scan_id,
+                status=scan.status,
+                input_fingerprint=scan.bundle.scan_meta["input_fingerprint"],
+                snapshot_identity=scan.bundle.scan_meta["snapshot_identity"],
+            )
+
+            refreshed = scan_catalog(raw, out_dir=catalog_out, library_type="ip", collect_evidence=True, force=True)
+            version_item = find_catalog_version(catalog_out / "catalog.json", "ucie", "stable_20250608")
+
+        self.assertEqual(refreshed["evidence_mode"], "sampled")
+        self.assertEqual(version_item["scan"]["status"], "SCANNED")
+        self.assertNotIn("stale_reason", version_item["scan"])
+
     def test_catalog_marks_scan_stale_when_version_fingerprint_changes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
