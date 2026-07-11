@@ -346,8 +346,24 @@ def validate_effective_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
             "evidence_trust": "LEGACY_FALLBACK",
         }
 
+    components = manifest.get("components", [])
+    if (
+        not isinstance(components, Sequence)
+        or isinstance(components, (str, bytes, bytearray))
+        or not all(isinstance(component, Mapping) for component in components)
+    ):
+        return {
+            "integrity_status": "MISMATCH",
+            "valid": False,
+            "digest": "",
+            "identity": {},
+            "identity_source": "effective_manifest_identity",
+            "evidence_status": "UNAVAILABLE",
+            "evidence_source": "invalid_components",
+            "evidence_trust": "UNAVAILABLE",
+        }
+
     recomputed_identity = build_effective_identity(manifest)
-    components = manifest.get("components", []) or []
     provenance = _effective_identity_provenance(components)
     stored_provenance = (
         str(manifest.get("identity_status") or ""),

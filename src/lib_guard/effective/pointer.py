@@ -174,6 +174,18 @@ def approval_integrity_for_manifest(
     declared_manifest = str(approval.get("candidate_effective_manifest") or "")
     if declared_manifest and not _manifest_paths_equivalent(declared_manifest, candidate_path, path):
         return "MISMATCH"
+    declared_compare = str(approval.get("compare_manifest") or "")
+    if declared_compare:
+        compare_path = Path(declared_compare)
+        if not compare_path.is_absolute():
+            compare_path = path.resolve(strict=False).parent / compare_path
+        if not compare_path.exists() or not compare_path.is_file():
+            return "MISSING"
+        compare_sha = str(approval.get("compare_manifest_sha256") or "")
+        if not compare_sha:
+            return "MISSING"
+        if compare_sha.removeprefix("sha256:") != sha256_file(compare_path):
+            return "MISMATCH"
     candidate_sha = str(approval.get("candidate_effective_sha256") or "")
     if candidate_sha and candidate_sha.removeprefix("sha256:") != sha256_file(candidate_path):
         return "MISMATCH"

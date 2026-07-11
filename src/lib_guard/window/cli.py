@@ -450,6 +450,49 @@ def _target_effective_digest(value: Any) -> str:
     return ""
 
 
+def _target_type(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("type") or value.get("target_type") or "").strip().lower()
+    return _target_label(value).split(":", 1)[0].strip().lower()
+
+
+def _validate_effective_compare_target(side: str, value: Any) -> tuple[Path, dict[str, str | bool]] | None:
+    if _target_type(value) != "effective":
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{side} effective target must include manifest and locks; rebuild compare evidence before accept-window")
+    target_id = str(value.get("id") or value.get("target_id") or "").strip()
+    label = _target_label(value)
+    if not target_id or label != f"effective:{target_id}":
+        raise ValueError(f"{side} effective target label is invalid; rebuild compare evidence before accept-window")
+    manifest_path = Path(str(value.get("manifest") or ""))
+    if not str(manifest_path) or not manifest_path.exists() or not manifest_path.is_file():
+        raise ValueError(f"{side} effective target manifest is missing; rebuild compare evidence before accept-window")
+    expected_effective_digest = _target_effective_digest(value).strip()
+    expected_manifest_sha256 = _target_digest(value).strip()
+    if not expected_effective_digest or not expected_manifest_sha256:
+        raise ValueError(
+            f"{side} effective target must include effective_digest and manifest_sha256; "
+            "rebuild compare evidence before accept-window"
+        )
+    manifest = read_json(manifest_path, {}) or {}
+    identity = effective_identity_for_manifest(manifest_path, manifest)
+    if not identity["valid"]:
+        raise ValueError(f"{side} effective target manifest identity is invalid; rebuild compare evidence before accept-window")
+    actual_id = str(manifest.get("effective_id") or manifest_path.parent.name)
+    if actual_id != target_id:
+        raise ValueError(f"{side} effective target manifest does not match target label; rebuild compare evidence before accept-window")
+    if str(identity["digest"]) != expected_effective_digest:
+        raise ValueError(
+            f"{side} effective digest changed after compare; rebuild compare evidence before accept-window"
+        )
+    if sha256_file(manifest_path) != expected_manifest_sha256.removeprefix("sha256:"):
+        raise ValueError(
+            f"{side} effective manifest digest changed after compare; rebuild compare evidence before accept-window"
+        )
+    return manifest_path, identity
+
+
 def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path) -> None:
     compare = window.get("compare") if isinstance(window.get("compare"), dict) else {}
     expected_old = str(compare.get("old") or (window.get("base_effective") or {}).get("target") or "")
@@ -469,18 +512,6 @@ def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path
         raise ValueError("compare manifest missing valid new_target; rebuild compare evidence before accept-window")
     actual_old = _target_label(actual_old_raw)
     actual_new = _target_label(actual_new_raw)
-    new_target_type = (
-        str(actual_new_raw.get("type") or actual_new_raw.get("target_type") or "").strip().lower()
-        if isinstance(actual_new_raw, dict)
-        else actual_new.split(":", 1)[0].strip().lower()
-    )
-    if new_target_type == "effective" and not (
-        _target_effective_digest(actual_new_raw).strip() or _target_digest(actual_new_raw).strip()
-    ):
-        raise ValueError(
-            "new effective target must include effective_digest or manifest_sha256; "
-            "rebuild compare evidence before accept-window"
-        )
     if expected_old and actual_old and actual_old != expected_old:
         raise ValueError(
             "compare evidence does not match pending window: "
@@ -491,6 +522,8 @@ def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path
             "compare evidence does not match pending window: "
             f"new target is {actual_new}, expected {expected_new}"
         )
+    _validate_effective_compare_target("old", actual_old_raw)
+    _validate_effective_compare_target("new", actual_new_raw)
     candidate_manifest = str(candidate.get("manifest") or "")
     expected_effective_digest = _target_effective_digest(actual_new_raw)
     if candidate_manifest and Path(candidate_manifest).exists():

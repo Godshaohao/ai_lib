@@ -183,3 +183,31 @@ PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest disco
 Result: compileall exited `0`; full suite ran `381 tests` and `OK`.
 
 Changed for this follow-up: `src/lib_guard/window/cli.py`, `src/lib_guard/test/test_window_intake.py`, and this report. `fix.md` remains untracked and was not changed.
+
+## Final Review Remediation
+
+| Final review finding | Fix | Regression coverage |
+| --- | --- | --- |
+| An `effective -> effective` compare locked only the candidate, so replacing the old manifest in place with a different self-consistent identity could still be accepted. | `_validate_accept_compare()` now validates both effective targets: canonical target label, manifest path, manifest identity, `effective_digest`, and `manifest_sha256`. Missing locks direct the operator to rebuild compare evidence. Raw targets remain exempt from effective locks. | A real effective-to-effective compare replaces the old manifest at the same path with the same effective ID and a different digest while leaving pointer ID/revision unchanged; `cmd_accept()` rejects it. Normal first accept uses complete two-ended effective evidence. |
+| Approval integrity did not bind the declared compare artifact. | `approval_integrity_for_manifest()` verifies a declared `compare_manifest` exists and its SHA-256 matches. A declared compare path without a SHA is `MISSING`; approvals with no compare declaration retain the established candidate-SHA fallback. | Pointer status changes from `MATCH` to `MISSING` after compare deletion and to `MISMATCH` after compare tampering. The real accept path rejects a tampered declared compare approval. |
+| Malformed manifest `components` could reach identity construction and raise `AttributeError`. | `validate_effective_manifest()` validates that components is a non-string sequence of mappings before recomputing identity. | Mapping and non-mapping component sequences return `valid=False` and `integrity_status=MISMATCH` without raising. |
+
+### RED/GREEN
+
+- The focused final-review regressions failed on HEAD `1a3cfef`: malformed components raised `AttributeError`; a deleted declared compare artifact still returned `MATCH`; and a rebuilt old effective manifest was accepted.
+- After the focused fixes, the three new regressions and the existing related coverage ran successfully (`46` tests).
+
+### Final Verification
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest \
+  src.lib_guard.test.test_effective_manifest \
+  src.lib_guard.test.test_effective_pointer \
+  src.lib_guard.test.test_window_intake -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m compileall -q src
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest discover \
+  -s src/lib_guard/test -p 'test*.py' -q
+git diff --check
+```
+
+Result: related modules ran `46 tests` and `OK`; compileall exited `0`; the full suite ran `384 tests` and `OK`; `git diff --check` was clean.

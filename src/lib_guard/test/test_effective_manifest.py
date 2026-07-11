@@ -109,6 +109,24 @@ class EffectiveManifestTest(unittest.TestCase):
         tampered_component_provenance["components"][1]["identity_source"] = "missing_evidence"
         self.assertEqual(validate_effective_manifest(tampered_component_provenance)["integrity_status"], "MISMATCH")
 
+    def test_effective_manifest_validator_rejects_malformed_component_sequences(self) -> None:
+        from lib_guard.effective.manifest import build_effective_manifest, validate_effective_manifest
+
+        manifest = build_effective_manifest(
+            self._lock_catalog(snapshots={"full": "sha256:full", "fix1": "sha256:fix1"}),
+            "demo",
+            "full",
+            [("fix1", ["lef"])],
+            effective_id="E1",
+        )
+        for components in ({"not": "a sequence"}, ["not a mapping"]):
+            with self.subTest(components=components):
+                malformed = json.loads(json.dumps(manifest))
+                malformed["components"] = components
+                validation = validate_effective_manifest(malformed)
+                self.assertFalse(validation["valid"])
+                self.assertEqual(validation["integrity_status"], "MISMATCH")
+
     def test_pointer_and_approval_bind_effective_digest_and_detect_mismatch(self) -> None:
         from lib_guard.effective.manifest import build_effective_manifest
         from lib_guard.effective.pointer import load_current_pointer, write_current_pointer

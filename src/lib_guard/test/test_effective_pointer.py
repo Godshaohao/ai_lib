@@ -308,6 +308,67 @@ class EffectivePointerTest(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
+    def test_declared_compare_manifest_controls_approval_and_pointer_integrity(self) -> None:
+        from lib_guard.effective.pointer import (
+            approval_integrity_for_manifest,
+            load_current_pointer,
+            sha256_file,
+            write_current_pointer,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            effective_dir = root / "libraries" / "ip_ucie" / "effective" / "E1"
+            effective_dir.mkdir(parents=True)
+            manifest_path = effective_dir / "effective_manifest.json"
+            manifest_path.write_text(json.dumps(self._manifest()), encoding="utf-8")
+            compare_path = root / "compare_manifest.json"
+            compare_path.write_text(json.dumps({"compare_id": "cmp1"}), encoding="utf-8")
+            approval_path = effective_dir / "review_approval.json"
+            approval_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_effective_manifest": str(manifest_path),
+                        "candidate_effective_sha256": sha256_file(manifest_path),
+                        "compare_manifest": str(compare_path),
+                        "compare_manifest_sha256": sha256_file(compare_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_current_pointer(
+                manifest_path,
+                review_approval=approval_path,
+                approval_sha256=sha256_file(approval_path),
+            )
+
+            self.assertEqual(approval_integrity_for_manifest(approval_path, manifest_path), "MATCH")
+            self.assertEqual(load_current_pointer(root, "ip/ucie")["approval_integrity_status"], "MATCH")
+
+            compare_path.unlink()
+            self.assertEqual(approval_integrity_for_manifest(approval_path, manifest_path), "MISSING")
+            self.assertEqual(load_current_pointer(root, "ip/ucie")["approval_integrity_status"], "MISSING")
+
+            compare_path.write_text(json.dumps({"compare_id": "cmp1", "tampered": True}), encoding="utf-8")
+            self.assertEqual(approval_integrity_for_manifest(approval_path, manifest_path), "MISMATCH")
+            self.assertEqual(load_current_pointer(root, "ip/ucie")["approval_integrity_status"], "MISMATCH")
+
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            del approval["compare_manifest_sha256"]
+            approval_path.write_text(json.dumps(approval), encoding="utf-8")
+            self.assertEqual(approval_integrity_for_manifest(approval_path, manifest_path), "MISSING")
+
+            approval_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_effective_manifest": str(manifest_path),
+                        "candidate_effective_sha256": sha256_file(manifest_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(approval_integrity_for_manifest(approval_path, manifest_path), "MATCH")
+
 
 if __name__ == "__main__":
     unittest.main()
