@@ -16,6 +16,18 @@ class ArtifactIdentityTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             canonical_digest({"unsupported": {"value"}})
 
+    def test_canonical_digest_rejects_nan(self):
+        with self.assertRaises(TypeError):
+            canonical_digest({"non_finite": float("nan")})
+
+    def test_canonical_digest_rejects_positive_infinity(self):
+        with self.assertRaises(TypeError):
+            canonical_digest({"non_finite": float("inf")})
+
+    def test_canonical_digest_rejects_negative_infinity(self):
+        with self.assertRaises(TypeError):
+            canonical_digest({"non_finite": float("-inf")})
+
     def test_snapshot_identity_contains_expected_payload(self):
         identity = build_snapshot_identity(
             input_fingerprint={"source": "sha256:input"},

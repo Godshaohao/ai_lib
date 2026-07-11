@@ -6,12 +6,16 @@ from typing import Any, Mapping
 
 
 def canonical_digest(value: Any) -> str:
-    raw = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    try:
+        raw = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except ValueError as exc:
+        raise TypeError("identity values must be strict JSON-like values") from exc
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
