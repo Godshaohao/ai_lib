@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import json
+import os
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -188,6 +189,8 @@ class EffectivePointerTest(unittest.TestCase):
             self.assertEqual(load_current_pointer(root, "ip/ucie")["effective_integrity_status"], "MISMATCH")
 
     def test_pointer_reports_approval_integrity_independently(self) -> None:
+        from lib_guard.effective.pointer import load_current_pointer, sha256_file, write_current_pointer
+
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             effective = root / "libraries" / "ip_ucie" / "effective"
@@ -195,6 +198,8 @@ class EffectivePointerTest(unittest.TestCase):
             manifest_path.parent.mkdir(parents=True)
             manifest = self._manifest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            compare_path = effective / "compare_manifest.json"
+            compare_path.write_text(json.dumps({"compare_id": "cmp1"}), encoding="utf-8")
             approval_path = manifest_path.parent / "review_approval.json"
             approval_path.write_text(
                 json.dumps(
@@ -202,12 +207,12 @@ class EffectivePointerTest(unittest.TestCase):
                         "candidate_effective_manifest": str(manifest_path),
                         "candidate_effective_sha256": "wrong",
                         "candidate_effective_digest": manifest["identity"]["digest"],
+                        "compare_manifest": str(compare_path),
+                        "compare_manifest_sha256": sha256_file(compare_path),
                     }
                 ),
                 encoding="utf-8",
             )
-
-            from lib_guard.effective.pointer import load_current_pointer, sha256_file, write_current_pointer
 
             write_current_pointer(
                 manifest_path,
@@ -224,6 +229,8 @@ class EffectivePointerTest(unittest.TestCase):
                         "candidate_effective_manifest": str(manifest_path),
                         "candidate_effective_sha256": sha256_file(manifest_path),
                         "candidate_effective_digest": "sha256:wrong",
+                        "compare_manifest": str(compare_path),
+                        "compare_manifest_sha256": sha256_file(compare_path),
                     }
                 ),
                 encoding="utf-8",
@@ -368,6 +375,98 @@ class EffectivePointerTest(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(approval_integrity_for_manifest(approval_path, manifest_path), "MATCH")
+
+    def test_digest_approval_requires_complete_candidate_and_compare_locks(self) -> None:
+        from lib_guard.effective.pointer import approval_integrity_for_manifest, sha256_file
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_path = root / "effective_manifest.json"
+            manifest_path.write_text(json.dumps(self._manifest()), encoding="utf-8")
+            compare_path = root / "compare_manifest.json"
+            compare_path.write_text(json.dumps({"compare_id": "cmp1"}), encoding="utf-8")
+            approval_path = root / "review_approval.json"
+            complete = {
+                "candidate_effective_manifest": str(manifest_path),
+                "candidate_effective_sha256": sha256_file(manifest_path),
+                "candidate_effective_digest": self._manifest()["identity"]["digest"],
+                "compare_manifest": str(compare_path),
+                "compare_manifest_sha256": sha256_file(compare_path),
+            }
+
+            for missing in [
+                "candidate_effective_manifest",
+                "candidate_effective_sha256",
+                "compare_manifest",
+                "compare_manifest_sha256",
+            ]:
+                with self.subTest(missing=missing):
+                    approval = dict(complete)
+                    del approval[missing]
+                    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+                    self.assertEqual(
+                        approval_integrity_for_manifest(
+                            approval_path,
+                            manifest_path,
+                            effective_digest=complete["candidate_effective_digest"],
+                        ),
+                        "MISSING",
+                    )
+
+    def test_legacy_relative_compare_manifest_supports_both_historical_bases(self) -> None:
+        from lib_guard.effective.pointer import approval_integrity_for_manifest, sha256_file
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            approval_dir = root / "approval"
+            approval_dir.mkdir()
+            manifest_path = approval_dir / "effective_manifest.json"
+            manifest_path.write_text("manifest", encoding="utf-8")
+            approval_path = approval_dir / "review_approval.json"
+            cwd_compare = root / "cwd_compare.json"
+            cwd_compare.write_text("cwd compare", encoding="utf-8")
+            approval_compare = approval_dir / "approval_compare.json"
+            approval_compare.write_text("approval compare", encoding="utf-8")
+
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                for declared, compare_path in [
+                    (cwd_compare.name, cwd_compare),
+                    (approval_compare.name, approval_compare),
+                ]:
+                    with self.subTest(declared=declared):
+                        approval_path.write_text(
+                            json.dumps(
+                                {
+                                    "candidate_effective_sha256": sha256_file(manifest_path),
+                                    "compare_manifest": declared,
+                                    "compare_manifest_sha256": sha256_file(compare_path),
+                                }
+                            ),
+                            encoding="utf-8",
+                        )
+                        self.assertEqual(
+                            approval_integrity_for_manifest(approval_path, manifest_path),
+                            "MATCH",
+                        )
+
+                approval_path.write_text(
+                    json.dumps(
+                        {
+                            "candidate_effective_sha256": sha256_file(manifest_path),
+                            "compare_manifest": cwd_compare.name,
+                            "compare_manifest_sha256": sha256_file(approval_compare),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    approval_integrity_for_manifest(approval_path, manifest_path),
+                    "MISMATCH",
+                )
+            finally:
+                os.chdir(previous_cwd)
 
 
 if __name__ == "__main__":

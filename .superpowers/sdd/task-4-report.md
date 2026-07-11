@@ -211,3 +211,37 @@ git diff --check
 ```
 
 Result: related modules ran `46 tests` and `OK`; compileall exited `0`; the full suite ran `384 tests` and `OK`; `git diff --check` was clean.
+
+## Latest Final Review Remediation
+
+Baseline: `2cf3dd9`
+
+| Final review finding | Fix | Regression coverage |
+| --- | --- | --- |
+| Dict compare targets with only `label`/`spec=effective:<id>` bypassed effective validation. | `_target_type()` now infers the type from `label`/`spec`, and `_validate_effective_compare_target()` infers the target ID from the same canonical label before requiring manifest, effective digest, and manifest SHA-256 locks. | Label-only and spec-only effective candidates are rejected instead of reaching accept; complete two-ended effective evidence remains valid. |
+| Accept derived the expected revision from the live pointer, weakening compare-and-swap protection. | Resolver snapshots `pointer_revision` into `base_effective` (`0` without a pointer/raw baseline) and preserves it while a pending window remains open. `cmd_accept()` passes only the window's ID/revision expectations to `write_current_pointer()`. | First-window concurrent pointer creation and same-ID revision changes are rejected. Historical windows with an ID but no revision retain ID-only CAS; historical first accepts without ID/revision require revision `0` and still pass normally. |
+| Digest-bearing approvals could return `MATCH` with incomplete candidate/compare evidence. | An approval with `candidate_effective_digest` now requires candidate manifest, candidate SHA-256, compare manifest, and compare SHA-256 before digest comparison. Historical approvals without the digest retain candidate-SHA fallback, and any declared compare still requires its SHA. | A table-driven test removes each required new-format field and requires `MISSING`; historical candidate-SHA and declared-compare behavior remains covered. |
+| New approval paths were not guaranteed canonical, while historical relative compare paths had only one resolution base. | New approvals write resolved absolute candidate and compare paths. Historical relative compare paths are checked against both the current working directory and approval directory, with the declared SHA selecting the actual artifact; a different file is `MISMATCH`. | Approval output asserts canonical absolute paths. Relative compare tests cover both historical bases and reject a different file digest. |
+| Normal and historical acceptance compatibility needed explicit protection after CAS and approval hardening. | No CLI, page, policy, or dependency was added. Existing ID-only pending windows and first-accept behavior use explicit compatibility branches. | Existing normal accept advances revision, the historical no-revision current-ID path passes, and a first accept without a pointer writes revision `1`. |
+
+### Latest RED/GREEN
+
+- Focused RED produced nine expected behavior failures plus two missing `pointer_revision` key errors: label/spec targets were accepted, live pointer revisions were trusted, digest-only approvals matched, cwd-relative compare references failed, and resolver windows lacked revision snapshots.
+- After the minimal implementation and compatibility fixture updates, the related effective manifest, pointer, and window intake modules ran `51 tests` and passed.
+
+### Latest Verification
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest \
+  src.lib_guard.test.test_effective_manifest \
+  src.lib_guard.test.test_effective_pointer \
+  src.lib_guard.test.test_window_intake -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest discover \
+  -s src/lib_guard/test -p 'test*.py' -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m compileall -q src
+git diff --check
+```
+
+Result: related modules ran `51 tests` and `OK`; the full suite ran `389 tests` and `OK`; compileall and `git diff --check` exited `0`.
+
+Changed for this remediation: `effective/pointer.py`, `window/cli.py`, `window/resolver.py`, `test_effective_pointer.py`, `test_window_intake.py`, and this report. `fix.md` remains untracked and unchanged.

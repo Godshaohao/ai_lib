@@ -158,6 +158,7 @@ def _current_anchor(pointer: Mapping[str, Any], library_row: Mapping[str, Any], 
             "accepted_updates": accepted_updates,
             "checkpoint_version": checkpoint,
             "current_effective_id": current_effective_id,
+            "pointer_revision": int(pointer.get("revision") or 0),
             "manifest": manifest,
         }
 
@@ -170,6 +171,7 @@ def _current_anchor(pointer: Mapping[str, Any], library_row: Mapping[str, Any], 
             "accepted_updates": [],
             "checkpoint_version": explicit,
             "current_effective_id": "",
+            "pointer_revision": 0,
             "manifest": "",
         }
 
@@ -183,6 +185,7 @@ def _current_anchor(pointer: Mapping[str, Any], library_row: Mapping[str, Any], 
                 "accepted_updates": [],
                 "checkpoint_version": vid,
                 "current_effective_id": "",
+                "pointer_revision": 0,
                 "manifest": "",
             }
     if versions:
@@ -194,6 +197,7 @@ def _current_anchor(pointer: Mapping[str, Any], library_row: Mapping[str, Any], 
             "accepted_updates": [],
             "checkpoint_version": vid,
             "current_effective_id": "",
+            "pointer_revision": 0,
             "manifest": "",
         }
     raise ValueError("library has no versions")
@@ -371,6 +375,9 @@ def resolve_review_window(
                 "accepted_updates": base.get("accepted_updates") or anchor.get("accepted_updates", []),
                 "checkpoint_version": pending.get("last_seen_version") or anchor.get("checkpoint_version"),
                 "source": base.get("source") or anchor.get("source"),
+                "current_effective_id": base.get("current_effective_id", anchor.get("current_effective_id")),
+                "pointer_revision": base.get("pointer_revision") if "pointer_revision" in base else None,
+                "manifest": base.get("manifest", anchor.get("manifest")),
             }
         )
         existing_ids = [str(item.get("version") or item.get("version_id") or "") for item in pending.get("items", []) or []]
@@ -397,6 +404,7 @@ def resolve_review_window(
                     "accepted_updates": list(anchor.get("accepted_updates", []) or []),
                     "checkpoint_version": anchor.get("checkpoint_version"),
                     "current_effective_id": anchor.get("current_effective_id"),
+                    "pointer_revision": anchor.get("pointer_revision"),
                     "manifest": anchor.get("manifest"),
                 },
                 "last_seen_version": anchor.get("checkpoint_version"),
@@ -477,6 +485,7 @@ def resolve_review_window(
             "accepted_updates": list(anchor.get("accepted_updates", []) or []),
             "checkpoint_version": anchor.get("checkpoint_version"),
             "current_effective_id": anchor.get("current_effective_id"),
+            "pointer_revision": anchor.get("pointer_revision"),
             "manifest": anchor.get("manifest"),
         },
         "last_seen_version": item_ids[-1],

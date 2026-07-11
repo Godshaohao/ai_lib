@@ -452,7 +452,11 @@ def _target_effective_digest(value: Any) -> str:
 
 def _target_type(value: Any) -> str:
     if isinstance(value, dict):
-        return str(value.get("type") or value.get("target_type") or "").strip().lower()
+        explicit = str(value.get("type") or value.get("target_type") or "").strip().lower()
+        if explicit:
+            return explicit
+        label = _target_label(value)
+        return label.split(":", 1)[0].strip().lower() if ":" in label else ""
     return _target_label(value).split(":", 1)[0].strip().lower()
 
 
@@ -461,12 +465,15 @@ def _validate_effective_compare_target(side: str, value: Any) -> tuple[Path, dic
         return None
     if not isinstance(value, dict):
         raise ValueError(f"{side} effective target must include manifest and locks; rebuild compare evidence before accept-window")
-    target_id = str(value.get("id") or value.get("target_id") or "").strip()
     label = _target_label(value)
+    target_id = str(value.get("id") or value.get("target_id") or "").strip()
+    if not target_id and label.startswith("effective:"):
+        target_id = label.split(":", 1)[1].strip()
     if not target_id or label != f"effective:{target_id}":
         raise ValueError(f"{side} effective target label is invalid; rebuild compare evidence before accept-window")
-    manifest_path = Path(str(value.get("manifest") or ""))
-    if not str(manifest_path) or not manifest_path.exists() or not manifest_path.is_file():
+    manifest_ref = str(value.get("manifest") or "")
+    manifest_path = Path(manifest_ref)
+    if not manifest_ref or not manifest_path.exists() or not manifest_path.is_file():
         raise ValueError(f"{side} effective target manifest is missing; rebuild compare evidence before accept-window")
     expected_effective_digest = _target_effective_digest(value).strip()
     expected_manifest_sha256 = _target_digest(value).strip()
@@ -522,8 +529,6 @@ def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path
             "compare evidence does not match pending window: "
             f"new target is {actual_new}, expected {expected_new}"
         )
-    _validate_effective_compare_target("old", actual_old_raw)
-    _validate_effective_compare_target("new", actual_new_raw)
     candidate_manifest = str(candidate.get("manifest") or "")
     expected_effective_digest = _target_effective_digest(actual_new_raw)
     if candidate_manifest and Path(candidate_manifest).exists():
@@ -543,6 +548,8 @@ def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path
                 "compare evidence does not match pending window: "
                 "candidate effective manifest digest changed after compare"
             )
+    _validate_effective_compare_target("new", actual_new_raw)
+    _validate_effective_compare_target("old", actual_old_raw)
 
 
 def _effective_conflict_count(manifest: dict[str, Any]) -> int:
@@ -588,11 +595,11 @@ def _write_review_approval(
         "old_effective_id": _expected_current_effective(window) or "",
         "old_effective_target": base.get("target") or "",
         "candidate_effective_id": candidate.get("effective_id") or manifest.get("effective_id") or manifest_path.parent.name,
-        "candidate_effective_manifest": str(manifest_path),
+        "candidate_effective_manifest": str(manifest_path.resolve()),
         "candidate_effective_sha256": sha256_file(manifest_path),
         "candidate_effective_digest": identity["digest"],
         "candidate_effective_identity_source": identity["source"],
-        "compare_manifest": str(compare_manifest_path),
+        "compare_manifest": str(compare_manifest_path.resolve()),
         "compare_manifest_sha256": sha256_file(compare_manifest_path),
         "conflict_count": conflict_count,
         "approved_by": accepted_by,
@@ -830,10 +837,14 @@ def cmd_accept(args: argparse.Namespace) -> int:
             "effective manifest has unresolved conflicts; "
             f"conflict_count={conflict_count}. Fix effective composition before accept."
         )
-    pointer_path = default_pointer_path_for_effective(manifest_path)
-    existing_pointer = read_json(pointer_path, {}) or {}
-    expected_current = _expected_current_effective(data)
-    expected_revision = int(existing_pointer.get("revision") or 0) if expected_current is not None else None
+    base = data.get("base_effective") if isinstance(data.get("base_effective"), dict) else {}
+    expected_current = _expected_current_effective(data) or ""
+    if base.get("pointer_revision") not in {None, ""}:
+        expected_revision = int(base["pointer_revision"])
+    elif expected_current:
+        expected_revision = None
+    else:
+        expected_revision = 0
     approval_path, approval_sha256 = _write_review_approval(
         window=data,
         manifest_path=manifest_path,

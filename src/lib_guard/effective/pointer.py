@@ -157,6 +157,14 @@ def _manifest_paths_equivalent(
     return False
 
 
+def _approval_reference_paths(reference: str | Path, approval_path: str | Path) -> list[Path]:
+    path = Path(reference)
+    if path.is_absolute():
+        return [path]
+    approval_parent = Path(approval_path).resolve(strict=False).parent
+    return [Path.cwd() / path, approval_parent / path]
+
+
 def approval_integrity_for_manifest(
     approval_path: str | Path,
     manifest_path: str | Path,
@@ -172,24 +180,24 @@ def approval_integrity_for_manifest(
         return "MISMATCH"
     approval = read_json(path, {}) or {}
     declared_manifest = str(approval.get("candidate_effective_manifest") or "")
+    candidate_sha = str(approval.get("candidate_effective_sha256") or "")
+    approved_digest = str(approval.get("candidate_effective_digest") or "")
+    declared_compare = str(approval.get("compare_manifest") or "")
+    compare_sha = str(approval.get("compare_manifest_sha256") or "")
+    if approved_digest and not all([declared_manifest, candidate_sha, declared_compare, compare_sha]):
+        return "MISSING"
     if declared_manifest and not _manifest_paths_equivalent(declared_manifest, candidate_path, path):
         return "MISMATCH"
-    declared_compare = str(approval.get("compare_manifest") or "")
     if declared_compare:
-        compare_path = Path(declared_compare)
-        if not compare_path.is_absolute():
-            compare_path = path.resolve(strict=False).parent / compare_path
-        if not compare_path.exists() or not compare_path.is_file():
-            return "MISSING"
-        compare_sha = str(approval.get("compare_manifest_sha256") or "")
         if not compare_sha:
             return "MISSING"
-        if compare_sha.removeprefix("sha256:") != sha256_file(compare_path):
+        compare_paths = [candidate for candidate in _approval_reference_paths(declared_compare, path) if candidate.is_file()]
+        if not compare_paths:
+            return "MISSING"
+        if not any(compare_sha.removeprefix("sha256:") == sha256_file(candidate) for candidate in compare_paths):
             return "MISMATCH"
-    candidate_sha = str(approval.get("candidate_effective_sha256") or "")
     if candidate_sha and candidate_sha.removeprefix("sha256:") != sha256_file(candidate_path):
         return "MISMATCH"
-    approved_digest = str(approval.get("candidate_effective_digest") or "")
     if approved_digest:
         return "MATCH" if effective_digest and approved_digest == effective_digest else "MISMATCH"
     if candidate_sha:
