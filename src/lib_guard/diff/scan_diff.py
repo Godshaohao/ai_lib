@@ -1069,7 +1069,6 @@ def diff_scan_outputs(
         "schema_version": "1.0",
         "diff_type": "scan_output_diff",
         "status": status,
-        "diff_meta": meta,
         "old_scan": str(old),
         "new_scan": str(new),
         "version_relation": relation,

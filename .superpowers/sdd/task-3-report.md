@@ -101,3 +101,26 @@ PYTHONPYCACHEPREFIX=/tmp/ai_lib_full_pycache PYTHONPATH=src python3 -m unittest 
 ```
 
 `compileall` completed successfully. The complete suite ran 368 tests and passed. `git diff --check` also completed successfully.
+
+## Follow-up: CLI JSON Contract
+
+The `diff_scan_outputs()` return value must keep the original CLI JSON shape: identity metadata is not returned as `diff_meta`. Identity is persisted only in the generated `diff_meta.json`; Catalog continues to load that file when updating diff status.
+
+RED coverage was added to `test_diff_scan_reports_inventory_and_summary_changes`:
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_task3_red PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_diff_scan_reports_inventory_and_summary_changes -q
+```
+
+The test failed because the returned result contained the injected top-level `diff_meta` field. The minimal fix removed that field from the return dictionary while leaving the persisted output payload unchanged.
+
+GREEN and regression verification:
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_task3_green PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_diff_scan_reports_inventory_and_summary_changes -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_task3_related3 PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline src.lib_guard.test.test_catalog_timeline src.lib_guard.test.test_artifact_identity -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_task3_compile2 PYTHONPATH=src python3 -m compileall -q src
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_task3_full3 PYTHONPATH=src python3 -m unittest discover -s src/lib_guard/test -p 'test*.py' -q
+```
+
+Results: focused test passed; related suite ran 123 tests and passed; `compileall` passed; full suite ran 368 tests and passed.

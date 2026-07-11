@@ -1046,6 +1046,7 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("block.lef", result["inventory"]["added"])
             self.assertIn("top.v", result["inventory"]["changed"])
             self.assertTrue(result["summary"]["changed_files"] >= 1)
+            self.assertNotIn("diff_meta", result)
 
             diff_scan_outputs(old_out, new_out, out_path=Path(td) / "first_diff")
             diff_scan_outputs(old_out, new_out, out_path=Path(td) / "second_diff")
