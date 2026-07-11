@@ -101,3 +101,40 @@ Result: compile completed successfully; `Ran 365 tests` and `OK`.
 ### Remediation Commit
 
 Implementation: `496d28f fix: preserve scan identity catalog compatibility`.
+
+## Second Independent Review Remediation
+
+### Fixed Boundaries
+
+- Kept `scan_meta.input_fingerprint` and `file_inventory.input_fingerprint` on the unchanged `version_input_fingerprint.v1` metadata contract used by Catalog stale comparison.
+- Added a private `scan_snapshot_fingerprint.v1` summary for snapshot identity only. It hashes normalized path, size, mtime, file type, SHA-256, hash status, and hash policy, then persists only the resulting digest, coverage, count, and strength in the identity payload.
+- Made `hash_policy=none` an explicit no-hash decision. Key files now retain `sha256: null`, `hash_status: NOT_REQUIRED`, and metadata evidence strength. Quick and inventory modes retain their effective `none` policy.
+- `scan_meta` and `file_inventory` continue to carry the exact same `snapshot_identity` object.
+
+### RED
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_snapshot_identity_binds_content_digest_without_changing_catalog_fingerprint src.lib_guard.test.test_scan_pipeline.ScanPipelineTest.test_hash_policy_none_never_hashes_key_files -q
+```
+
+Result: failed as expected. Same path/size/mtime scans with distinct successful SHA-256 values produced an identical snapshot digest, and `hash_policy=none` incorrectly produced `full` evidence.
+
+### GREEN
+
+The same focused command ran `2 tests` and passed.
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest src.lib_guard.test.test_scan_pipeline src.lib_guard.test.test_catalog_timeline -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m compileall -q src
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest discover -s src/lib_guard/test -p 'test*.py' -q
+```
+
+Result: scan/timeline regression ran `112 tests` and passed; compile completed successfully; full suite ran `367 tests` and passed.
+
+### Compatibility Rationale
+
+Catalog is not changed and does not recompute snapshot identity. Its stale comparison continues to read the legacy metadata-only `input_fingerprint.hash`, so preserved metadata snapshots remain comparable. Snapshot identity receives the compact content-aware fingerprint instead, separating content equivalence from the Catalog metadata contract without embedding the file inventory in identity JSON.
+
+### Remediation Commit
+
+Implementation: `f13dc94 fix: bind content evidence to scan identity`.
