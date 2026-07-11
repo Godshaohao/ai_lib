@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from lib_guard.atomic import atomic_write_json
+from lib_guard.identity import build_effective_identity
 
 POINTER_SCHEMA = "current_effective.v1"
 
@@ -39,6 +40,53 @@ def sha256_file(path: str | Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def effective_identity_for_manifest(
+    manifest_path: str | Path,
+    manifest: Mapping[str, Any] | None = None,
+) -> dict[str, str | bool]:
+    path = Path(manifest_path)
+    data = dict(manifest) if isinstance(manifest, Mapping) else read_json(path, {}) or {}
+    stored_identity = data.get("identity")
+    if isinstance(stored_identity, Mapping) and str(stored_identity.get("digest") or ""):
+        recomputed_digest = build_effective_identity(data)["digest"]
+        stored_digest = str(stored_identity["digest"])
+        return {
+            "digest": recomputed_digest,
+            "source": "effective_manifest_identity",
+            "valid": stored_digest == recomputed_digest,
+            "manifest_status": str(data.get("identity_status") or "TRUSTED"),
+        }
+    manifest_digest = sha256_file(path) if path.exists() else ""
+    return {
+        "digest": f"sha256:{manifest_digest}" if manifest_digest else "",
+        "source": "manifest_sha256_fallback",
+        "valid": bool(manifest_digest),
+        "manifest_status": "LEGACY_FALLBACK",
+    }
+
+
+def _pointer_identity_status(pointer: Mapping[str, Any]) -> dict[str, str]:
+    manifest_path = str(pointer.get("manifest") or "")
+    if not manifest_path or not Path(manifest_path).exists():
+        return {"effective_identity_status": "MANIFEST_MISSING"}
+    identity = effective_identity_for_manifest(manifest_path)
+    if not identity["valid"]:
+        return {
+            "effective_identity_status": "MANIFEST_IDENTITY_MISMATCH",
+            "effective_identity_source": str(identity["source"]),
+        }
+    pointer_digest = str(pointer.get("effective_digest") or "")
+    if not pointer_digest:
+        return {
+            "effective_identity_status": "POINTER_DIGEST_MISSING",
+            "effective_identity_source": str(identity["source"]),
+        }
+    return {
+        "effective_identity_status": "MATCH" if pointer_digest == identity["digest"] else "MISMATCH",
+        "effective_identity_source": str(identity["source"]),
+    }
 
 
 def normalize_effective_ref(value: str) -> str:
@@ -139,6 +187,9 @@ def make_current_pointer(
 ) -> dict[str, Any]:
     manifest_path = Path(effective_manifest)
     manifest = read_json(manifest_path, {}) or {}
+    identity = effective_identity_for_manifest(manifest_path, manifest)
+    if not identity["valid"]:
+        raise ValueError("effective manifest identity does not match its recomputed digest")
     effective_id = str(manifest.get("effective_id") or manifest_path.parent.name)
     library_id = str(manifest.get("library_id") or manifest.get("library_name") or "")
     html_path = Path(html) if html else manifest_path.parent / "index.html"
@@ -153,6 +204,9 @@ def make_current_pointer(
         "status": status,
         "manifest": str(manifest_path),
         "manifest_sha256": sha256_file(manifest_path) if manifest_path.exists() else "",
+        "effective_digest": identity["digest"],
+        "effective_identity_source": identity["source"],
+        "effective_identity_status": identity["manifest_status"],
         "html": str(html_path) if html_path.exists() or html else "",
         "release_preview": str(release_html) if release_html.exists() or release_preview else "",
         "review_approval": str(review_approval) if review_approval else "",
@@ -236,6 +290,7 @@ def load_current_pointer(out: str | Path, lib_id: str) -> dict[str, Any]:
         data = read_json(path, {}) or {}
         if data:
             data["_pointer_path"] = str(path)
+            data.update(_pointer_identity_status(data))
             return data
     return {}
 

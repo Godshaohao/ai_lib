@@ -7,7 +7,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from lib_guard.effective.pointer import default_pointer_path_for_effective, safe_name, sha256_file, write_current_pointer
+from lib_guard.effective.pointer import (
+    default_pointer_path_for_effective,
+    effective_identity_for_manifest,
+    safe_name,
+    sha256_file,
+    write_current_pointer,
+)
 from lib_guard.cli_commands.common import render_impacted_catalog_html
 from lib_guard.plan.engine import build_plan_from_window, execute_plan, load_plan, plan_path_for, save_plan
 from lib_guard.render.impact import impacts_for_versions
@@ -422,6 +428,14 @@ def _target_digest(value: Any) -> str:
     return ""
 
 
+def _target_effective_digest(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ["effective_digest", "identity_digest"]:
+            if value.get(key):
+                return str(value[key])
+    return ""
+
+
 def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path) -> None:
     compare = window.get("compare") if isinstance(window.get("compare"), dict) else {}
     expected_old = str(compare.get("old") or (window.get("base_effective") or {}).get("target") or "")
@@ -453,6 +467,16 @@ def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path
             raise ValueError(
                 "compare evidence does not match pending window: "
                 "candidate effective manifest digest changed after compare"
+            )
+    expected_effective_digest = _target_effective_digest(actual_new_raw)
+    if candidate_manifest and Path(candidate_manifest).exists():
+        identity = effective_identity_for_manifest(candidate_manifest)
+        if not identity["valid"]:
+            raise ValueError("candidate effective manifest identity does not match its recomputed digest")
+        if expected_effective_digest and identity["digest"] != expected_effective_digest:
+            raise ValueError(
+                "compare evidence does not match pending window: "
+                "candidate effective digest changed after compare"
             )
 
 
@@ -486,6 +510,9 @@ def _write_review_approval(
     note: str,
 ) -> tuple[Path, str]:
     manifest = read_json(manifest_path, {}) or {}
+    identity = effective_identity_for_manifest(manifest_path, manifest)
+    if not identity["valid"]:
+        raise ValueError("candidate effective manifest identity does not match its recomputed digest")
     candidate = window.get("candidate_effective") if isinstance(window.get("candidate_effective"), dict) else {}
     base = window.get("base_effective") if isinstance(window.get("base_effective"), dict) else {}
     conflict_count = _effective_conflict_count(manifest)
@@ -498,6 +525,8 @@ def _write_review_approval(
         "candidate_effective_id": candidate.get("effective_id") or manifest.get("effective_id") or manifest_path.parent.name,
         "candidate_effective_manifest": str(manifest_path),
         "candidate_effective_sha256": sha256_file(manifest_path),
+        "candidate_effective_digest": identity["digest"],
+        "candidate_effective_identity_source": identity["source"],
         "compare_manifest": str(compare_manifest_path),
         "compare_manifest_sha256": sha256_file(compare_manifest_path),
         "conflict_count": conflict_count,
@@ -507,6 +536,18 @@ def _write_review_approval(
     }
     write_json(approval_path, approval)
     return approval_path, sha256_file(approval_path)
+
+
+def _validate_review_approval(window: dict[str, Any], effective_digest: str) -> None:
+    candidate = window.get("candidate_effective") if isinstance(window.get("candidate_effective"), dict) else {}
+    approval_refs = [window.get("review_approval"), candidate.get("review_approval")]
+    for approval_ref in approval_refs:
+        if not approval_ref:
+            continue
+        approval = read_json(str(approval_ref), {}) or {}
+        approved_digest = str(approval.get("candidate_effective_digest") or "")
+        if approved_digest and approved_digest != effective_digest:
+            raise ValueError("approval effective digest does not match candidate effective manifest")
 
 
 def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], window: dict[str, Any], reason: str) -> None:
@@ -701,6 +742,10 @@ def cmd_accept(args: argparse.Namespace) -> int:
         raise ValueError("accept-window requires fresh effective compare evidence; run lg next <LIBRARY> --apply --rebuild")
     _validate_accept_compare(data, compare_manifest_path)
     effective_manifest = read_json(manifest_path, {}) or {}
+    identity = effective_identity_for_manifest(manifest_path, effective_manifest)
+    if not identity["valid"]:
+        raise ValueError("candidate effective manifest identity does not match its recomputed digest")
+    _validate_review_approval(data, str(identity["digest"]))
     conflict_count = _effective_conflict_count(effective_manifest)
     if conflict_count:
         raise ValueError(

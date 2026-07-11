@@ -7,6 +7,157 @@ from pathlib import Path
 
 
 class EffectiveManifestTest(unittest.TestCase):
+    @staticmethod
+    def _lock_catalog(*, snapshots: dict[str, str] | None = None, fingerprints: dict[str, str] | None = None) -> dict[str, object]:
+        snapshots = snapshots or {}
+        fingerprints = fingerprints or {}
+        versions = []
+        for version_id in ("full", "fix1", "fix2"):
+            scan: dict[str, object] = {}
+            if version_id in snapshots:
+                scan["snapshot_identity"] = {
+                    "digest": snapshots[version_id],
+                    "strength": "full",
+                }
+            if version_id in fingerprints:
+                scan["input_fingerprint"] = {"hash": fingerprints[version_id]}
+            versions.append({"version_id": version_id, "scan": scan})
+        return {"libraries": [{"library_id": "ip/demo", "library_name": "demo", "versions": versions}]}
+
+    def test_effective_digest_binds_component_order_and_snapshots(self) -> None:
+        from lib_guard.effective.manifest import build_effective_manifest
+
+        catalog = self._lock_catalog(
+            snapshots={"full": "sha256:full", "fix1": "sha256:fix1", "fix2": "sha256:fix2"},
+        )
+        first = build_effective_manifest(catalog, "demo", "full", [("fix1", ["lef"]), ("fix2", ["lef"])])
+        repeated = build_effective_manifest(catalog, "demo", "full", [("fix1", ["lef"]), ("fix2", ["lef"])])
+        reordered = build_effective_manifest(catalog, "demo", "full", [("fix2", ["lef"]), ("fix1", ["lef"])])
+        changed_catalog = self._lock_catalog(
+            snapshots={"full": "sha256:full", "fix1": "sha256:changed", "fix2": "sha256:fix2"},
+        )
+        changed_snapshot = build_effective_manifest(
+            changed_catalog,
+            "demo",
+            "full",
+            [("fix1", ["lef"]), ("fix2", ["lef"])],
+        )
+
+        self.assertEqual(first["identity"]["digest"], repeated["identity"]["digest"])
+        self.assertNotEqual(first["identity"]["digest"], reordered["identity"]["digest"])
+        self.assertNotEqual(first["identity"]["digest"], changed_snapshot["identity"]["digest"])
+        self.assertEqual(first["components"][1]["snapshot_digest"], "sha256:fix1")
+        self.assertEqual(first["components"][1]["evidence_strength"], "full")
+
+    def test_effective_digest_excludes_created_at_and_paths(self) -> None:
+        from lib_guard.effective.manifest import build_effective_manifest
+        from lib_guard.identity import build_effective_identity
+
+        catalog = self._lock_catalog(snapshots={"full": "sha256:full", "fix1": "sha256:fix1"})
+        manifest = build_effective_manifest(catalog, "demo", "full", [("fix1", ["lef"])])
+        audit_only = {
+            **manifest,
+            "created_at": "2099-01-01T00:00:00Z",
+            "manifest_path": "/other-host/effective_manifest.json",
+            "effective_files": {"lef/demo.lef": {"source_path": "/other-host/demo.lef"}},
+        }
+
+        self.assertEqual(manifest["identity"]["digest"], build_effective_identity(audit_only)["digest"])
+
+    def test_effective_components_mark_legacy_and_missing_evidence(self) -> None:
+        from lib_guard.effective.manifest import build_effective_manifest
+
+        legacy = build_effective_manifest(
+            self._lock_catalog(fingerprints={"full": "legacy-full", "fix1": "legacy-fix"}),
+            "demo",
+            "full",
+            [("fix1", ["lef"])],
+        )
+        missing = build_effective_manifest(self._lock_catalog(), "demo", "full", [("fix1", ["lef"])])
+
+        self.assertEqual(legacy["components"][0]["snapshot_digest"], "legacy-full")
+        self.assertEqual(legacy["components"][0]["identity_source"], "legacy_input_fingerprint")
+        self.assertEqual(legacy["identity_status"], "LEGACY_FALLBACK")
+        self.assertEqual(missing["components"][1]["identity_source"], "missing_evidence")
+        self.assertEqual(missing["components"][1]["evidence_strength"], "unavailable")
+        self.assertEqual(missing["identity_status"], "UNAVAILABLE")
+
+    def test_pointer_and_approval_bind_effective_digest_and_detect_mismatch(self) -> None:
+        from lib_guard.effective.manifest import build_effective_manifest
+        from lib_guard.effective.pointer import load_current_pointer, write_current_pointer
+        from lib_guard.window.cli import _validate_accept_compare, _validate_review_approval, _write_review_approval
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            effective_dir = root / "libraries" / "ip_demo" / "effective" / "E1"
+            effective_dir.mkdir(parents=True)
+            manifest_path = effective_dir / "effective_manifest.json"
+            manifest = build_effective_manifest(
+                self._lock_catalog(snapshots={"full": "sha256:full", "fix1": "sha256:fix1"}),
+                "demo",
+                "full",
+                [("fix1", ["lef"])],
+                effective_id="E1",
+            )
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            pointer_path = write_current_pointer(manifest_path)
+            pointer = load_current_pointer(root, "ip/demo")
+            self.assertEqual(pointer["effective_digest"], manifest["identity"]["digest"])
+            self.assertEqual(pointer["effective_identity_status"], "MATCH")
+
+            compare_dir = root / "compare"
+            compare_dir.mkdir()
+            compare_manifest = compare_dir / "compare_manifest.json"
+            compare_manifest.write_text(
+                json.dumps(
+                    {
+                        "old_target": {"spec": "effective:E0"},
+                        "new_target": {
+                            "spec": "effective:E1",
+                            "effective_digest": manifest["identity"]["digest"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            window = {
+                "library": "demo",
+                "base_effective": {"target": "effective:E0"},
+                "candidate_effective": {"effective_id": "E1", "manifest": str(manifest_path)},
+                "compare": {"old": "effective:E0", "new": "effective:E1"},
+            }
+            approval_path, _ = _write_review_approval(
+                window=window,
+                manifest_path=manifest_path,
+                compare_manifest_path=compare_manifest,
+                accepted_by="owner",
+                note="reviewed",
+            )
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            self.assertEqual(approval["candidate_effective_digest"], manifest["identity"]["digest"])
+            approval["candidate_effective_digest"] = "sha256:wrong"
+            approval_path.write_text(json.dumps(approval), encoding="utf-8")
+            window["review_approval"] = str(approval_path)
+            with self.assertRaisesRegex(ValueError, "approval effective digest"):
+                _validate_review_approval(window, manifest["identity"]["digest"])
+
+            pointer_data = json.loads(pointer_path.read_text(encoding="utf-8"))
+            pointer_data["effective_digest"] = "sha256:wrong"
+            pointer_path.write_text(json.dumps(pointer_data), encoding="utf-8")
+            self.assertEqual(load_current_pointer(root, "ip/demo")["effective_identity_status"], "MISMATCH")
+
+            compare_manifest.write_text(
+                json.dumps(
+                    {
+                        "old_target": {"spec": "effective:E0"},
+                        "new_target": {"spec": "effective:E1", "effective_digest": "sha256:wrong"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "effective digest changed after compare"):
+                _validate_accept_compare(window, compare_manifest)
+
     def test_build_manifest_release_preview_and_html_for_partial_update(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

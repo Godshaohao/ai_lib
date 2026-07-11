@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from lib_guard.atomic import atomic_write_json
+from lib_guard.identity import build_effective_identity
 from lib_guard.release.bundle import normalize_release_relpath
 
 SCHEMA_VERSION = "effective_manifest.v2"
@@ -258,14 +259,64 @@ def _file_records(version_id: str, version: Mapping[str, Any]) -> list[dict[str,
     return records
 
 
-def _component(version_id: str, role: str, scope: Sequence[str] | str | None, order: int) -> dict[str, Any]:
-    return {
+def _component(
+    version_id: str,
+    role: str,
+    scope: Sequence[str] | str | None,
+    order: int,
+    version: Mapping[str, Any],
+) -> dict[str, Any]:
+    component = {
         "version_id": version_id,
         "version_short": short_name(version_id),
         "role": role,
         "scope": normalize_scope(scope) or (["all"] if role == "base_full" else []),
         "order": order,
     }
+    scan = version.get("scan", {}) or {}
+    snapshot_identity = scan.get("snapshot_identity") if isinstance(scan, Mapping) else None
+    if not isinstance(snapshot_identity, Mapping):
+        snapshot_identity = version.get("snapshot_identity")
+    if isinstance(snapshot_identity, Mapping) and str(snapshot_identity.get("digest") or ""):
+        component.update(
+            {
+                "snapshot_digest": str(snapshot_identity["digest"]),
+                "evidence_strength": str(snapshot_identity.get("strength") or "unknown"),
+                "identity_source": "snapshot_identity",
+            }
+        )
+        return component
+    fingerprint = scan.get("input_fingerprint") if isinstance(scan, Mapping) else None
+    if not isinstance(fingerprint, Mapping):
+        fingerprint = version.get("input_fingerprint")
+    if isinstance(fingerprint, Mapping) and str(fingerprint.get("hash") or ""):
+        component.update(
+            {
+                "snapshot_digest": str(fingerprint["hash"]),
+                "evidence_strength": "legacy",
+                "identity_source": "legacy_input_fingerprint",
+            }
+        )
+        return component
+    component.update(
+        {
+            "snapshot_digest": None,
+            "evidence_strength": "unavailable",
+            "identity_source": "missing_evidence",
+        }
+    )
+    return component
+
+
+def _effective_identity_provenance(components: Sequence[Mapping[str, Any]]) -> tuple[str, str, str]:
+    sources = {str(component.get("identity_source") or "missing_evidence") for component in components}
+    if "missing_evidence" in sources:
+        return "UNAVAILABLE", "missing_evidence", "UNAVAILABLE"
+    if sources == {"snapshot_identity"}:
+        return "TRUSTED", "snapshot_identity", "HOMOGENEOUS_TRUSTED"
+    if sources == {"legacy_input_fingerprint"}:
+        return "LEGACY_FALLBACK", "legacy_input_fingerprint", "HOMOGENEOUS_LEGACY_FALLBACK"
+    return "MIXED_EVIDENCE", "mixed_evidence", "NON_HOMOGENEOUS"
 
 
 def _version_evidence(version_id: str, role: str, version: Mapping[str, Any]) -> dict[str, Any]:
@@ -324,7 +375,7 @@ def build_effective_manifest(
     library_id = str(lib.get("library_id") or lib.get("library_name") or library)
     base = find_version(lib, base_full_version)
     effective_files: dict[str, dict[str, Any]] = {}
-    components: list[dict[str, Any]] = [_component(base_full_version, "base_full", ["all"], 0)]
+    components: list[dict[str, Any]] = [_component(base_full_version, "base_full", ["all"], 0, base)]
     evidence_components: list[dict[str, Any]] = [_version_evidence(base_full_version, "base_full", base)]
     conflicts: list[dict[str, Any]] = []
     replacement_counts: Counter[str] = Counter()
@@ -340,7 +391,7 @@ def build_effective_manifest(
     for order, (version_id, scope) in enumerate(includes, start=1):
         version = find_version(lib, version_id)
         scope_list = normalize_scope(scope) or normalize_scope(version.get("update_scope"))
-        components.append(_component(version_id, "accepted_update", scope_list, order))
+        components.append(_component(version_id, "accepted_update", scope_list, order, version))
         evidence_components.append(_version_evidence(version_id, "accepted_update", version))
         records = _file_records(version_id, version)
         actual_types = {r["file_type"] for r in records}
@@ -401,7 +452,7 @@ def build_effective_manifest(
         last = includes[-1][0] if includes else base_full_version
         effective_id = f"effective_{short_name(last, 18, 8)}"
 
-    return {
+    manifest = {
         "schema_version": SCHEMA_VERSION,
         "library_id": library_id,
         "library_name": lib.get("library_name") or library,
@@ -427,6 +478,19 @@ def build_effective_manifest(
         "note": note or "",
         "created_at": now_iso(),
     }
+    identity_status, identity_source, identity_trust = _effective_identity_provenance(components)
+    manifest["identity"] = build_effective_identity(
+        {
+            "library_id": library_id,
+            "base_full_version": base_full_version,
+            "components": components,
+            "tombstones": tombstones,
+        }
+    )
+    manifest["identity_status"] = identity_status
+    manifest["identity_source"] = identity_source
+    manifest["identity_trust"] = identity_trust
+    return manifest
 
 
 def add_update_to_manifest(
