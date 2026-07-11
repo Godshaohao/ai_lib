@@ -150,3 +150,36 @@ PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest disco
 ```
 
 Result: related modules ran `42 tests` and `OK`; compileall completed successfully; full suite ran `380 tests` and `OK`.
+
+## Minimal Compare Intake Safety Follow-up
+
+The accept validator now rejects an empty or non-object compare manifest, missing or invalid `old_target`/`new_target`, and an effective `new_target` with neither `effective_digest` nor `manifest_sha256`. Each error directs the operator to rebuild compare evidence before accepting the window. Validation remains before approval and pointer writes, so rejected compare evidence cannot create or replace either artifact.
+
+New compare artifacts already produced by `effective/compare.py` contain both `effective_digest` and `manifest_sha256` for effective targets. The validator accepts either lock for compatibility with valid historical evidence, while still verifying any supplied lock against the candidate manifest.
+
+### RED/GREEN
+
+- Added one table-driven accept-path regression covering empty compare data, missing `old_target`, missing `new_target`, and an unlocked effective candidate; each case asserts approval absence and an unchanged current pointer.
+- The new test failed before the validator change because all four cases could reach acceptance and write artifacts.
+- After the change, the focused regression passed and the existing hand-written compare fixtures were updated with the required candidate manifest SHA where they represent valid acceptance evidence.
+
+### Follow-up Verification
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest \
+  src.lib_guard.test.test_effective_manifest \
+  src.lib_guard.test.test_effective_pointer \
+  src.lib_guard.test.test_window_intake -q
+```
+
+Result: `Ran 43 tests` and `OK`.
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m compileall -q src
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest discover \
+  -s src/lib_guard/test -p 'test*.py' -q
+```
+
+Result: compileall exited `0`; full suite ran `381 tests` and `OK`.
+
+Changed for this follow-up: `src/lib_guard/window/cli.py`, `src/lib_guard/test/test_window_intake.py`, and this report. `fix.md` remains untracked and was not changed.

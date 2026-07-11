@@ -75,6 +75,45 @@ class WindowIntakeTest(unittest.TestCase):
         path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
+    def _write_accept_fixture(self, root: Path, compare_manifest: dict[str, object]) -> tuple[Path, Path, Path, Path]:
+        window = root / "pending_window.json"
+        effective_dir = root / "effective" / "candidate_fix1"
+        effective_dir.mkdir(parents=True)
+        manifest = effective_dir / "effective_manifest.json"
+        manifest.write_text(
+            json.dumps({"effective_id": "candidate_fix1", "summary": {"conflict_count": 0}}),
+            encoding="utf-8",
+        )
+        pointer = effective_dir.parent / "current_effective.json"
+        pointer.write_text(json.dumps({"current_effective_id": "E0", "revision": 3}), encoding="utf-8")
+        compare_dir = root / "compare"
+        compare_dir.mkdir()
+        (compare_dir / "compare_manifest.json").write_text(json.dumps(compare_manifest), encoding="utf-8")
+        window.write_text(
+            json.dumps(
+                {
+                    "state": "PENDING",
+                    "base_effective": {"target": "effective:E0", "current_effective_id": "E0"},
+                    "candidate_effective": {"effective_id": "candidate_fix1", "manifest": str(manifest)},
+                    "compare": {
+                        "old": "effective:E0",
+                        "new": "effective:candidate_fix1",
+                        "out_dir": str(compare_dir),
+                    },
+                    "items": [{"version": "fix1", "kind": "PARTIAL_UPDATE"}],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        plan_dir = root / "work" / "state" / "ucie"
+        plan_dir.mkdir(parents=True)
+        (plan_dir / "current_plan.json").write_text(
+            json.dumps({"library": "ucie", "state": "DONE", "tasks": [{"id": "effective-compare", "status": "DONE"}]}),
+            encoding="utf-8",
+        )
+        return window, manifest, pointer, effective_dir / "review_approval.json"
+
     def test_latest_full_fallback_becomes_review_base(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -792,6 +831,62 @@ class WindowIntakeTest(unittest.TestCase):
                     )
                 )
 
+    def test_accept_window_rejects_incomplete_compare_before_writing_side_effects(self) -> None:
+        cases = [
+            (
+                "empty compare manifest",
+                {},
+                "compare manifest is empty or invalid; rebuild compare",
+            ),
+            (
+                "missing old target",
+                {
+                    "new_target": {
+                        "type": "effective",
+                        "id": "candidate_fix1",
+                        "spec": "effective:candidate_fix1",
+                    }
+                },
+                "compare manifest missing valid old_target; rebuild compare",
+            ),
+            (
+                "missing new target",
+                {"old_target": {"type": "effective", "id": "E0", "spec": "effective:E0"}},
+                "compare manifest missing valid new_target; rebuild compare",
+            ),
+            (
+                "effective candidate without lock",
+                {
+                    "old_target": {"type": "effective", "id": "E0", "spec": "effective:E0"},
+                    "new_target": {"type": "effective", "id": "candidate_fix1", "spec": "effective:candidate_fix1"},
+                },
+                "new effective target must include effective_digest or manifest_sha256; rebuild compare",
+            ),
+        ]
+
+        for name, compare_manifest, error in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                window, _manifest, pointer, approval = self._write_accept_fixture(root, compare_manifest)
+                pointer_before = pointer.read_text(encoding="utf-8")
+                from lib_guard.window.cli import cmd_accept
+
+                with self.assertRaisesRegex(ValueError, error):
+                    cmd_accept(
+                        argparse.Namespace(
+                            catalog=None,
+                            library="ucie",
+                            workdir=str(root / "work"),
+                            catalog_html_out=str(root / "catalog" / "html"),
+                            window_file=str(window),
+                            accepted_by="owner",
+                            note="review passed",
+                        )
+                    )
+
+                self.assertFalse(approval.exists())
+                self.assertEqual(pointer.read_text(encoding="utf-8"), pointer_before)
+
     def test_accept_window_rejects_compare_for_different_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -805,7 +900,12 @@ class WindowIntakeTest(unittest.TestCase):
                     {
                         "compare_id": "cmp1",
                         "old_target": "effective:E0",
-                        "new_target": "effective:stale_candidate",
+                        "new_target": {
+                            "type": "effective",
+                            "id": "stale_candidate",
+                            "spec": "effective:stale_candidate",
+                            "manifest_sha256": "sha256:stale",
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -955,12 +1055,19 @@ class WindowIntakeTest(unittest.TestCase):
             pointer.write_text(json.dumps({"current_effective_id": "E0", "revision": 3}), encoding="utf-8")
             compare_dir = root / "compare"
             compare_dir.mkdir()
+            from lib_guard.effective.pointer import sha256_file
+
             (compare_dir / "compare_manifest.json").write_text(
                 json.dumps(
                     {
                         "compare_id": "cmp1",
                         "old_target": {"type": "effective", "id": "E0", "spec": "effective:E0"},
-                        "new_target": {"type": "effective", "id": "candidate_fix1", "spec": "effective:candidate_fix1"},
+                        "new_target": {
+                            "type": "effective",
+                            "id": "candidate_fix1",
+                            "spec": "effective:candidate_fix1",
+                            "manifest_sha256": sha256_file(manifest),
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -989,7 +1096,6 @@ class WindowIntakeTest(unittest.TestCase):
                 json.dumps({"library": "ucie", "state": "DONE", "tasks": [{"id": "effective-compare", "status": "DONE"}]}),
                 encoding="utf-8",
             )
-            from lib_guard.effective.pointer import sha256_file
             from lib_guard.window.cli import cmd_accept
 
             with contextlib.redirect_stdout(io.StringIO()):
