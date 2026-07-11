@@ -42,6 +42,87 @@ raw delivery
 | HTML 渲染 | `src/lib_guard/render/` |
 | CLI 入口 | `src/lib_guard/cli.py`, `src/lib_guard/short_cli.py`, `src/lib_guard/cli_commands/` |
 
+## 主流程文件地图
+
+这一节回答“改问题时先看哪里”。`lib_guard` 的源码文件不少，但日常主流程只围绕下面几条线走。
+其他文件多是支撑模块、测试或兼容层，不应该先从那里下手。
+
+### 入口层
+
+| 入口 | 核心文件 | 作用 | 维护原则 |
+| --- | --- | --- | --- |
+| 小白/日常短命令 | `src/lib_guard/short_cli.py` | 把 `lg next/scan/cmp/cat/rel` 展开成底层 CLI 命令 | 只做参数解析和命令编排，不写业务事实 |
+| 短命令配置 | `src/lib_guard/short_cli_config.py` | 读取 `lib_guard.yml`、规范化 workspace 路径、生成默认配置 | 所有短命令配置路径逻辑集中在这里 |
+| 底层自动化 CLI | `src/lib_guard/cli.py` | `python -m lib_guard.cli ...` 的正式工程入口 | 提供稳定机器接口，不承载 UI 体验 |
+| 底层命令 handler | `src/lib_guard/cli_commands/` | catalog、scan、diff、review、release 等命令实现 | 每个文件只处理一类命令，不互相偷写状态 |
+
+### 入库与 Catalog
+
+| 阶段 | 核心文件 | 输入 | 输出 | 说明 |
+| --- | --- | --- | --- | --- |
+| 发现候选 | `src/lib_guard/library_registry.py`, `src/lib_guard/discovery.py` | RAW 根目录 | `config/library_candidates/latest.*` | 只生成候选，不自动成为正式库 |
+| 人工确认库 | `src/lib_guard/library_registry.py` | accept/add/override | `config/library_registry.tsv` | 人工确认库根的事实源 |
+| 生成正式库 map | `src/lib_guard/library_registry.py` | registry | `config/library_catalog.yml` | catalog/scan/diff 的正式库来源 |
+| Catalog 刷新 | `src/lib_guard/cli_commands/catalog.py`, `src/lib_guard/catalog/` | library catalog、RAW | `catalog/catalog.json` | 库和版本资产地图；不要手改运行时字段 |
+
+### Scan
+
+| 阶段 | 核心文件 | 输入 | 输出 | 说明 |
+| --- | --- | --- | --- | --- |
+| 文件扫描 | `src/lib_guard/scan/scanner.py` | 单版本 RAW 路径 | `scan_out/**/file_inventory.json` | 负责走目录、分类、hash 策略和进度 |
+| 文件类型口径 | `src/lib_guard/view_types.py`, `src/lib_guard/project_config.py` | 后缀、路径、策略 | canonical file/view type | scan/diff/render 必须共用这一套口径 |
+| Parser | `src/lib_guard/scan/parsers/` | 允许解析的轻量文件 | parser results | 大文件/二进制不要在这里强行全文解析 |
+| 人工证据汇总 | `src/lib_guard/scan/evidence_export.py`, `src/lib_guard/scan/report.py` | inventory/parser/readiness | review TSV / scan HTML | JSON 是机器事实，TSV/HTML 才适合人工读 |
+
+### Diff / Compare
+
+| 阶段 | 核心文件 | 输入 | 输出 | 说明 |
+| --- | --- | --- | --- | --- |
+| 版本对比 | `src/lib_guard/diff/scan_diff.py` | old/new scan evidence | `diff/**/*.json` | 只消费 scan 事实，不反向修改 scan |
+| 文件匹配 | `src/lib_guard/diff/file_match.py` | old/new file identity | match reason/confidence | 只能叫匹配证据，不能直接宣称真实 rename |
+| 文件级 diff | `src/lib_guard/diff/file_diff.py`, `src/lib_guard/diff/pairwise.py` | 显式文件或推荐 lane | `file_diff/**` | 专家下钻入口，不是默认审查主线 |
+| compare 命令 | `src/lib_guard/cli_commands/diff.py` | catalog、base、target | compare html/json | `cmp` 是手动对比/调试入口 |
+
+### Review Window / Effective
+
+| 阶段 | 核心文件 | 输入 | 输出 | 说明 |
+| --- | --- | --- | --- | --- |
+| 新版本窗口判断 | `src/lib_guard/window/resolver.py` | catalog versions、package type、current effective | pending window plan | 决定 FULL/FIX/无新版本的接入关系 |
+| Window CLI | `src/lib_guard/window/cli.py` | `lg next/intake/accept-window` | window/effective/approval artifacts | 小白流程的主要编排层 |
+| 当前有效版指针 | `src/lib_guard/effective/pointer.py` | review approval、candidate manifest | `current_effective.json` | 带 revision 和 digest 的事实指针 |
+| Review Gate | `src/lib_guard/review/` | scan/diff/release readiness/overrides | review gate/model | 记录人工 accept/waive，不替代 scan/diff |
+
+### Version Detail / Render
+
+| 阶段 | 核心文件 | 输入 | 输出 | 说明 |
+| --- | --- | --- | --- | --- |
+| 审查上下文 | `src/lib_guard/render/version_detail_context.py` | catalog、window、effective、diff、scan | context model | 第一屏说明当前在审查什么 |
+| IP 使用者模型 | `src/lib_guard/render/version_review_model.py` | update detail/diff/evidence | lightweight user view model | 默认面向 IP 使用者，而不是 debug 用户 |
+| Version Detail 页面 | `src/lib_guard/render/version_detail_report.py`, `src/lib_guard/render/version_review_render.py` | review model | version detail HTML | 唯一主审查投影 |
+| 局部刷新 | `src/lib_guard/render/impact.py`, `src/lib_guard/render/version_detail_fast.py` | affected library/version | 局部 HTML 更新 | scan/cmp 后避免全量 render |
+| Catalog/库工作台 | `src/lib_guard/render/catalog_report.py`, `src/lib_guard/render/catalog_workspace_report.py` | catalog state/report index | index/library HTML | 导航投影，不作为事实源 |
+
+### Release
+
+| 阶段 | 核心文件 | 输入 | 输出 | 说明 |
+| --- | --- | --- | --- | --- |
+| Release 检查 | `src/lib_guard/release/checker.py`, `src/lib_guard/release/explain.py` | current effective 或 raw version | release check result | 判断是否能发布，不负责链接 |
+| Release manifest | `src/lib_guard/release/bundle.py` | effective manifest/catalog version | `release_manifest.json` | 发布文件清单事实源 |
+| Link/verify | `src/lib_guard/release/linker.py`, `src/lib_guard/release/postcheck.py` | manifest | symlink release + verify result | release 用 link 方式，不复制大库 |
+| Release 报告 | `src/lib_guard/render/release_report.py` | release result | HTML | 投影，不回写 release 事实 |
+
+### 修改入口速查
+
+| 你要改的问题 | 先看 | 不要先改 |
+| --- | --- | --- |
+| `lg` 命令太难用、参数太多 | `short_cli.py`, `short_cli_config.py`, `docs/cli_reference.md` | `scan/`, `diff/`, `render/` |
+| `lg next` 选错 FULL/FIX/base | `window/resolver.py`, `library_registry.py`, `project_config.py` | HTML 字符串 |
+| scan 慢、scan 失败、进度不清楚 | `scan/scanner.py`, `cli_commands/catalog.py` | Version Detail renderer |
+| diff 数量不可信、路径迁移误判 | `diff/scan_diff.py`, `diff/file_match.py`, `view_types.py` | Catalog 页面 |
+| Version Detail 信息太乱 | `version_review_model.py`, `version_detail_context.py`, `version_review_render.py` | scan parser |
+| scan/cmp 后页面没有刷新 | `render/impact.py`, `version_detail_fast.py`, `cli_commands/common.py` | 全量 catalog render |
+| release 内容不对或 link 方式不对 | `release/bundle.py`, `release/linker.py`, `release/checker.py` | review gate |
+
 ## 事实源边界
 
 系统当前有五类关键事实或投影。它们必须按下面的职责使用：

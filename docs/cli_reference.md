@@ -325,31 +325,36 @@ lg.csh action <LIBRARY>
 ## Release
 
 ```csh
-lg.csh rel <LIBRARY> <VERSION>
+lg.csh rel <LIBRARY>
 lg.csh rel <LIBRARY> <VERSION> --explain
-lg.csh rel <LIBRARY> <VERSION> --apply
-lg.csh rel <LIBRARY> <VERSION> --apply --overwrite
+lg.csh rel <LIBRARY> --apply
+lg.csh rel <LIBRARY> --apply --overwrite
 ```
 
-`rel <LIBRARY> <VERSION>` 默认先执行 release-check，再生成 symlink release 规划；
-不会自动 apply。
+`rel <LIBRARY>` 默认发布已接受的 current effective：读取 `current_effective.json` 指向的
+`effective_manifest.json`，生成 file-level release manifest，再生成 symlink release 规划；
+不会自动 apply。`rel <LIBRARY> <VERSION>` 是专家 raw catalog version 入口，会先执行
+release-check。
 
 release batch 默认 fail-closed：没有当前 `PASS` / `PASS_WITH_WARNING` 检查状态的版本不会被
 选择。`BLOCK` / `FAILED` 会停止短命令链路；只有显式 `--force --force-reason --force-by`
-会走审计绕过。
+会走审计绕过。Force 路径会直接进入 release batch，避免被前置 check 的非零退出码提前中止。
 
-注意：`rel <LIBRARY> <VERSION>` 发布的是 catalog raw version 入口。若库采用
-FULL + FIX/HOTFIX 组合，发布前必须确认 manifest 与已接受的 current effective 对齐。
+注意：显式写 VERSION 时发布的是 catalog raw version。若库采用 FULL + FIX/HOTFIX
+组合，普通流程应使用不带 VERSION 的 `rel <LIBRARY>`，避免把单个 FIX raw 包误当完整组合。
 
 `--overwrite` 只替换 manifest 中列出的目标文件，不会清空 release root 中其他库文件。
 
 强制发布必须写明原因和操作者：
 
 ```csh
-lg.csh rel <LIBRARY> <VERSION> --apply --force \
+lg.csh rel <LIBRARY> --apply --force \
   --force-reason "owner accepted metadata-only change" \
   --force-by <USER>
 ```
+
+`--apply` 会立即执行 postcheck。link/copy 成功但 postcheck 失败时，顶层 `status=FAILED`
+且退出码非零；自动化脚本不能只看 link 阶段是否成功。
 
 ## 不推荐继续使用的入口
 

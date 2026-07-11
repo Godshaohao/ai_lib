@@ -90,20 +90,10 @@ def build_library_report_index_entry(
     }
 
 
-def _safe(value: Any) -> str:
-    return common.safe(value)
-
-
-def _write_text(path: Path, text: str) -> None:
-    common.write_text(path, text)
-
-
-def _href(path: Any) -> str:
-    return common.href(path)
-
-
-def _short_path(path: Any, limit: int = 72) -> str:
-    return common.short_path(path, limit)
+_safe = common.safe
+_write_text = common.write_text
+_href = common.href
+_short_path = common.short_path
 
 
 def _version_display_text(version: Mapping[str, Any]) -> str:

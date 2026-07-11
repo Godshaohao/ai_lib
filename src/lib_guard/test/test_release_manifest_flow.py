@@ -10,6 +10,50 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class ReleaseManifestFlowTest(unittest.TestCase):
+    def test_effective_manifest_release_manifest_is_file_level_and_hashed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "raw" / "full" / "lef" / "macro.lef"
+            source.parent.mkdir(parents=True)
+            source.write_text("MACRO U\nEND U\n", encoding="utf-8")
+            effective_manifest = root / "effective_manifest.json"
+            effective_manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "effective_manifest.v2",
+                        "effective_id": "E_full_fix",
+                        "library_type": "ip",
+                        "library_name": "ucie",
+                        "base_full_version": "full",
+                        "accepted_updates": ["fix"],
+                        "effective_files": {
+                            "lef/macro.lef": {
+                                "source_path": str(source),
+                                "source_version": "fix",
+                                "operation": "replace",
+                                "file_type": "lef",
+                                "hash": "abc123",
+                                "size_bytes": source.stat().st_size,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            out = root / "release_run" / "release_manifest.json"
+
+            from lib_guard.release.bundle import create_manifest_from_effective_manifest, iter_release_files
+
+            manifest = create_manifest_from_effective_manifest(effective_manifest, out, release_root=root / "release")
+            planned = iter_release_files(manifest)
+
+            self.assertEqual(manifest["source_kind"], "current_effective")
+            self.assertEqual(manifest["effective_id"], "E_full_fix")
+            self.assertEqual(manifest["files"][0]["sha256"], "abc123")
+            self.assertEqual(manifest["files"][0]["operation"], "replace")
+            self.assertEqual(planned[0]["sha256"], "abc123")
+            self.assertEqual(planned[0]["source_effective_id"], "E_full_fix")
+
     def _write_manifest(self, path: Path, release_root: Path, ucie: Path, ddr: Path) -> dict:
         manifest = {
             "schema_version": "1.0",

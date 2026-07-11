@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +31,14 @@ def read_json(path: str | Path, default: Any = None) -> Any:
 
 def write_json(path: str | Path, data: Mapping[str, Any]) -> Path:
     return atomic_write_json(path, data, lock=True)
+
+
+def sha256_file(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def normalize_effective_ref(value: str) -> str:
@@ -121,6 +131,11 @@ def make_current_pointer(
     status: str = "accepted",
     accepted_by: str = "manual",
     note: str | None = None,
+    revision: int = 1,
+    previous_effective_id: str = "",
+    previous_revision: int = 0,
+    review_approval: str | Path | None = None,
+    approval_sha256: str = "",
 ) -> dict[str, Any]:
     manifest_path = Path(effective_manifest)
     manifest = read_json(manifest_path, {}) or {}
@@ -132,10 +147,16 @@ def make_current_pointer(
         "schema_version": POINTER_SCHEMA,
         "library_id": library_id,
         "current_effective_id": effective_id,
+        "revision": revision,
+        "previous_effective_id": previous_effective_id,
+        "previous_revision": previous_revision,
         "status": status,
         "manifest": str(manifest_path),
+        "manifest_sha256": sha256_file(manifest_path) if manifest_path.exists() else "",
         "html": str(html_path) if html_path.exists() or html else "",
         "release_preview": str(release_html) if release_html.exists() or release_preview else "",
+        "review_approval": str(review_approval) if review_approval else "",
+        "approval_sha256": approval_sha256,
         "base_full_version": manifest.get("base_full_version"),
         "accepted_updates": list(manifest.get("accepted_updates", []) or []),
         "summary": manifest.get("summary", {}) or {},
@@ -154,7 +175,25 @@ def write_current_pointer(
     status: str = "accepted",
     accepted_by: str = "manual",
     note: str | None = None,
+    expected_previous_effective_id: str | None = None,
+    expected_revision: int | None = None,
+    review_approval: str | Path | None = None,
+    approval_sha256: str = "",
 ) -> Path:
+    out_path = Path(out) if out else default_pointer_path_for_effective(effective_manifest)
+    existing = read_json(out_path, {}) or {}
+    previous_effective_id = str(existing.get("current_effective_id") or "")
+    previous_revision = int(existing.get("revision") or 0)
+    if expected_previous_effective_id is not None and previous_effective_id != str(expected_previous_effective_id or ""):
+        raise ValueError(
+            "current effective changed; rerun lg next <LIBRARY> --apply to rebuild compare evidence "
+            f"(expected {expected_previous_effective_id or '-'}, found {previous_effective_id or '-'})"
+        )
+    if expected_revision is not None and previous_revision != int(expected_revision):
+        raise ValueError(
+            "current effective changed; rerun lg next <LIBRARY> --apply to rebuild compare evidence "
+            f"(expected revision {expected_revision}, found {previous_revision})"
+        )
     pointer = make_current_pointer(
         effective_manifest,
         html=html,
@@ -162,8 +201,12 @@ def write_current_pointer(
         status=status,
         accepted_by=accepted_by,
         note=note,
+        revision=previous_revision + 1,
+        previous_effective_id=previous_effective_id,
+        previous_revision=previous_revision,
+        review_approval=review_approval,
+        approval_sha256=approval_sha256,
     )
-    out_path = Path(out) if out else default_pointer_path_for_effective(effective_manifest)
     return write_json(out_path, pointer)
 
 

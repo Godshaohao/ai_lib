@@ -286,7 +286,7 @@ class WindowIntakeTest(unittest.TestCase):
                 )
             self.assertEqual(code, 0)
             plan_json = json.loads(stdout.getvalue())
-            self.assertEqual(plan_json["accept_command"], "无需执行：没有 candidate effective，不能运行 accept-window")
+            self.assertEqual(plan_json["accept_command"], "无需执行：没有 candidate effective，不能接受新有效版")
             self.assertNotIn("lg accept-window", plan_json["accept_command"])
 
     def test_window_output_contains_human_review_table_and_fix_commands(self) -> None:
@@ -546,10 +546,10 @@ class WindowIntakeTest(unittest.TestCase):
 
             self.assertEqual(code, 0)
             output = json.loads(stdout.getvalue())
-            self.assertEqual(output["confirm_command"], "lg intake ucie")
+            self.assertEqual(output["confirm_command"], "lg next ucie --apply")
             self.assertIn("lg mark ucie <VERSION> --type FULL", output["relation_fix_commands"])
             self.assertIn("lg library override ucie <FIX_VERSION>", output["relation_fix_commands"][1])
-            self.assertIn("lg accept-window ucie", output["accept_command"])
+            self.assertIn("lg next ucie --accept", output["accept_command"])
 
     def test_intake_plan_only_text_keeps_base_and_next_action_visible(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -589,7 +589,7 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertIn("当前Base：raw:full1", text)
             self.assertIn("版本选择表", text)
             self.assertIn("执行计划", text)
-            self.assertIn("确认执行：lg intake ucie", text)
+            self.assertIn("确认执行：lg next ucie --apply", text)
 
     def test_intake_plan_text_explains_full_and_incremental_flow(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -780,6 +780,239 @@ class WindowIntakeTest(unittest.TestCase):
             from lib_guard.window.cli import cmd_accept
 
             with self.assertRaisesRegex(ValueError, "plan.*DONE"):
+                cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
+
+    def test_accept_window_rejects_compare_for_different_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            window = root / "pending_window.json"
+            manifest = root / "effective_manifest.json"
+            manifest.write_text(json.dumps({"effective_id": "candidate_fix1"}), encoding="utf-8")
+            compare_dir = root / "compare"
+            compare_dir.mkdir()
+            (compare_dir / "compare_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "compare_id": "cmp1",
+                        "old_target": "effective:E0",
+                        "new_target": "effective:stale_candidate",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            window.write_text(
+                json.dumps(
+                    {
+                        "state": "PENDING",
+                        "base_effective": {"target": "effective:E0"},
+                        "candidate_effective": {"effective_id": "candidate_fix1", "manifest": str(manifest)},
+                        "compare": {
+                            "compare_id": "cmp1",
+                            "old": "effective:E0",
+                            "new": "effective:candidate_fix1",
+                            "out_dir": str(compare_dir),
+                            "html": str(compare_dir / "index.html"),
+                        },
+                        "items": [{"version": "fix1", "kind": "PARTIAL_UPDATE"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            plan_dir = root / "work" / "state" / "ucie"
+            plan_dir.mkdir(parents=True)
+            (plan_dir / "current_plan.json").write_text(
+                json.dumps(
+                    {
+                        "library": "ucie",
+                        "state": "DONE",
+                        "tasks": [{"id": "effective-compare", "status": "DONE"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            from lib_guard.window.cli import cmd_accept
+
+            with self.assertRaisesRegex(ValueError, "compare evidence does not match pending window"):
+                cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
+
+    def test_accept_window_writes_review_approval_and_pointer_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            window = root / "pending_window.json"
+            effective_dir = root / "effective" / "candidate_fix1"
+            effective_dir.mkdir(parents=True)
+            manifest = effective_dir / "effective_manifest.json"
+            manifest.write_text(
+                json.dumps({"effective_id": "candidate_fix1", "summary": {"conflict_count": 0}}),
+                encoding="utf-8",
+            )
+            pointer = effective_dir.parent / "current_effective.json"
+            pointer.write_text(json.dumps({"current_effective_id": "E0", "revision": 3}), encoding="utf-8")
+            compare_dir = root / "compare"
+            compare_dir.mkdir()
+            (compare_dir / "compare_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "compare_id": "cmp1",
+                        "old_target": {"type": "effective", "id": "E0", "spec": "effective:E0"},
+                        "new_target": {"type": "effective", "id": "candidate_fix1", "spec": "effective:candidate_fix1"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            window.write_text(
+                json.dumps(
+                    {
+                        "state": "PENDING",
+                        "base_effective": {"target": "effective:E0", "current_effective_id": "E0"},
+                        "candidate_effective": {"effective_id": "candidate_fix1", "manifest": str(manifest)},
+                        "compare": {
+                            "compare_id": "cmp1",
+                            "old": "effective:E0",
+                            "new": "effective:candidate_fix1",
+                            "out_dir": str(compare_dir),
+                        },
+                        "items": [{"version": "fix1", "kind": "PARTIAL_UPDATE"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            plan_dir = root / "work" / "state" / "ucie"
+            plan_dir.mkdir(parents=True)
+            (plan_dir / "current_plan.json").write_text(
+                json.dumps({"library": "ucie", "state": "DONE", "tasks": [{"id": "effective-compare", "status": "DONE"}]}),
+                encoding="utf-8",
+            )
+            from lib_guard.effective.pointer import sha256_file
+            from lib_guard.window.cli import cmd_accept
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
+
+            self.assertEqual(code, 0)
+            pointer_data = json.loads(pointer.read_text(encoding="utf-8"))
+            approval_path = Path(pointer_data["review_approval"])
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            self.assertEqual(pointer_data["revision"], 4)
+            self.assertEqual(pointer_data["previous_effective_id"], "E0")
+            self.assertEqual(pointer_data["manifest_sha256"], sha256_file(manifest))
+            self.assertEqual(pointer_data["approval_sha256"], sha256_file(approval_path))
+            self.assertEqual(approval["candidate_effective_sha256"], sha256_file(manifest))
+            self.assertEqual(approval["compare_manifest_sha256"], sha256_file(compare_dir / "compare_manifest.json"))
+
+    def test_accept_window_rejects_conflicted_effective_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            window = root / "pending_window.json"
+            manifest = root / "effective_manifest.json"
+            manifest.write_text(json.dumps({"effective_id": "candidate_fix1", "summary": {"conflict_count": 1}}), encoding="utf-8")
+            compare_dir = root / "compare"
+            compare_dir.mkdir()
+            (compare_dir / "compare_manifest.json").write_text(
+                json.dumps({"old_target": {"spec": "effective:E0"}, "new_target": {"spec": "effective:candidate_fix1"}}),
+                encoding="utf-8",
+            )
+            window.write_text(
+                json.dumps(
+                    {
+                        "state": "PENDING",
+                        "base_effective": {"target": "effective:E0"},
+                        "candidate_effective": {"effective_id": "candidate_fix1", "manifest": str(manifest)},
+                        "compare": {"old": "effective:E0", "new": "effective:candidate_fix1", "out_dir": str(compare_dir)},
+                        "items": [{"version": "fix1", "kind": "PARTIAL_UPDATE"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            plan_dir = root / "work" / "state" / "ucie"
+            plan_dir.mkdir(parents=True)
+            (plan_dir / "current_plan.json").write_text(json.dumps({"state": "DONE", "tasks": []}), encoding="utf-8")
+            from lib_guard.window.cli import cmd_accept
+
+            with self.assertRaisesRegex(ValueError, "effective manifest has unresolved conflicts"):
+                cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
+
+    def test_accept_window_rejects_when_current_effective_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            effective_dir = root / "effective" / "candidate_fix1"
+            effective_dir.mkdir(parents=True)
+            manifest = effective_dir / "effective_manifest.json"
+            manifest.write_text(json.dumps({"effective_id": "candidate_fix1", "summary": {"conflict_count": 0}}), encoding="utf-8")
+            (effective_dir.parent / "current_effective.json").write_text(
+                json.dumps({"current_effective_id": "E2", "revision": 8}),
+                encoding="utf-8",
+            )
+            compare_dir = root / "compare"
+            compare_dir.mkdir()
+            (compare_dir / "compare_manifest.json").write_text(
+                json.dumps({"old_target": {"spec": "effective:E0"}, "new_target": {"spec": "effective:candidate_fix1"}}),
+                encoding="utf-8",
+            )
+            window = root / "pending_window.json"
+            window.write_text(
+                json.dumps(
+                    {
+                        "state": "PENDING",
+                        "base_effective": {"target": "effective:E0", "current_effective_id": "E0"},
+                        "candidate_effective": {"effective_id": "candidate_fix1", "manifest": str(manifest)},
+                        "compare": {"old": "effective:E0", "new": "effective:candidate_fix1", "out_dir": str(compare_dir)},
+                        "items": [{"version": "fix1", "kind": "PARTIAL_UPDATE"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            plan_dir = root / "work" / "state" / "ucie"
+            plan_dir.mkdir(parents=True)
+            (plan_dir / "current_plan.json").write_text(json.dumps({"state": "DONE", "tasks": []}), encoding="utf-8")
+            from lib_guard.window.cli import cmd_accept
+
+            with self.assertRaisesRegex(ValueError, "current effective changed"):
                 cmd_accept(
                     argparse.Namespace(
                         catalog=None,

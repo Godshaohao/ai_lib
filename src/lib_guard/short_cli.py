@@ -4,25 +4,23 @@ from argparse import ArgumentParser, Namespace, RawDescriptionHelpFormatter, SUP
 from pathlib import Path
 from typing import Any
 import json
-import os
 import shlex
 import sys
 
 from lib_guard.project_config import (
     BINARY_METADATA_ONLY_TYPES,
-    CATALOG_POLICY_FILE,
     CONFIG_NAME,
-    DEFAULT_LIBRARY_TYPE,
     DEFAULT_FILE_DIFF_TYPES,
-    DEFAULT_PARSE_JOBS,
-    DEFAULT_SCAN_MODE,
     PROJECT_CONFIG_DIR,
-    RELEASE_POLICY_FILE,
     SCAN_STRATEGY_CONFIG_KEYS,
     SUMMARY_ONLY_TYPES,
-    project_policy_path,
-    workspace_config_file_defaults,
-    workspace_defaults,
+)
+from lib_guard.short_cli_config import (
+    find_config as _find_config,
+    load_config as _load_config,
+    norm as _norm,
+    parse_config as _parse_config,
+    write_default_config,
 )
 from lib_guard.user_errors import format_user_error
 
@@ -43,169 +41,6 @@ LEGACY_SHORT_COMMAND_REWRITES = {
     "rv-accept": ["rv", "accept"],
     "rv-waive": ["rv", "waive"],
 }
-
-
-def _norm(path: str | Path) -> str:
-    return str(Path(path))
-
-
-def write_default_config(
-    workspace: str | Path,
-    *,
-    raw_root: str | Path | None = None,
-    library_type: str = DEFAULT_LIBRARY_TYPE,
-) -> Path:
-    root = Path(workspace).expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    raw = Path(raw_root).expanduser().resolve() if raw_root is not None else None
-    cfg = workspace_defaults(root, raw_root=raw, library_type=library_type)
-    ordered_keys = [
-        "workspace",
-        "raw_root",
-        "catalog",
-        "catalog_html",
-        "reports",
-        "diff",
-        "file_diff",
-        "release_root",
-        "versions",
-        "actions_dir",
-        "library_type",
-        "mode",
-        "parse_jobs",
-    ]
-    lines = [
-        "# lib_guard short command workspace",
-        *[f"{key}: {cfg[key]}" for key in ordered_keys],
-    ]
-    path = root / CONFIG_NAME
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return path
-
-
-def _parse_config(path: Path) -> dict[str, str]:
-    data: dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        data[key.strip()] = value.strip().strip("\"'")
-    return data
-
-
-def _find_config(cwd: str | Path, explicit: str | Path | None = None) -> Path:
-    configured = explicit or os.environ.get("LIB_GUARD_CONFIG")
-    if configured:
-        path = Path(configured)
-        if not path.exists():
-            raise FileNotFoundError(f"config not found: {path}")
-        return path
-    current = Path(cwd).resolve()
-    for item in [current, *current.parents]:
-        candidate = item / CONFIG_NAME
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(f"{CONFIG_NAME} not found. Run init once or set LIB_GUARD_CONFIG to the config path.")
-
-
-def _load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[str, str]:
-    path = _find_config(cwd, explicit)
-    cfg = _parse_config(path)
-    project_root = os.environ.get("LIB_GUARD_PROJECT_ROOT") or Path(__file__).resolve().parents[2]
-    default_catalog_policy = project_policy_path(project_root, CATALOG_POLICY_FILE)
-    default_release_policy = project_policy_path(project_root, RELEASE_POLICY_FILE)
-    cwd_root = Path(cwd).resolve()
-    workspace_text = cfg.get("workspace") or ""
-    workspace_value = Path(workspace_text).expanduser() if workspace_text else path.parent
-    if workspace_value.is_absolute():
-        workspace_root = workspace_value.resolve()
-    else:
-        cwd_candidate = (cwd_root / workspace_value).resolve()
-        if (cwd_candidate / CONFIG_NAME) == path.resolve():
-            workspace_root = cwd_candidate
-        elif path.parent.name == workspace_value.name:
-            workspace_root = path.parent.resolve()
-        else:
-            workspace_root = (path.parent / workspace_value).resolve()
-    cfg["workspace"] = str(workspace_root)
-    defaults = workspace_defaults(workspace_root, library_type=cfg.get("library_type", DEFAULT_LIBRARY_TYPE))
-    derived_config_keys = {"config_dir", "library_list", "library_registry", "library_candidates", "library_catalog", "library_versions", "versions"}
-    for key, value in defaults.items():
-        if key in derived_config_keys:
-            continue
-        cfg.setdefault(key, value)
-    config_defaults = workspace_config_file_defaults(workspace_root, cfg.get("config_dir") or defaults["config_dir"])
-    for key, value in config_defaults.items():
-        cfg.setdefault(key, value)
-    if cfg.get("versions"):
-        cfg.setdefault("library_versions", cfg["versions"])
-    else:
-        cfg.setdefault("library_versions", config_defaults["library_versions"])
-    cfg.setdefault("versions", cfg["library_versions"])
-    workspace_prefix = Path(workspace_text).expanduser() if workspace_text else None
-
-    def normalize_workspace_path(key: str) -> None:
-        value = cfg.get(key)
-        if not value:
-            return
-        p = Path(value).expanduser()
-        if p.is_absolute():
-            cfg[key] = str(p.resolve())
-            return
-        if workspace_prefix and not workspace_prefix.is_absolute():
-            try:
-                rel = p.relative_to(workspace_prefix)
-                cfg[key] = str((workspace_root / rel).resolve())
-                return
-            except ValueError:
-                pass
-        cfg[key] = str((workspace_root / p).resolve())
-
-    def normalize_existing_or_cwd_path(key: str) -> None:
-        value = cfg.get(key)
-        if not value:
-            return
-        p = Path(value).expanduser()
-        if p.is_absolute():
-            cfg[key] = str(p.resolve())
-            return
-        for base in [cwd_root, Path(project_root).resolve(), path.parent.resolve()]:
-            candidate = (base / p).resolve()
-            if candidate.exists():
-                cfg[key] = str(candidate)
-                return
-        cfg[key] = str((cwd_root / p).resolve())
-
-    for key in [
-        "catalog",
-        "catalog_html",
-        "reports",
-        "diff",
-        "file_diff",
-        "release_root",
-        "versions",
-        "actions_dir",
-        "config_dir",
-        "library_list",
-        "library_registry",
-        "library_candidates",
-        "library_catalog",
-        "library_versions",
-    ]:
-        normalize_workspace_path(key)
-    normalize_existing_or_cwd_path("raw_root")
-    if "catalog_policy" not in cfg:
-        library_catalog = Path(cfg["library_catalog"])
-        if library_catalog.exists():
-            cfg["catalog_policy"] = str(library_catalog)
-        elif default_catalog_policy and default_catalog_policy.exists():
-            cfg["catalog_policy"] = str(default_catalog_policy)
-    if "release_policy" not in cfg and default_release_policy and default_release_policy.exists():
-        cfg["release_policy"] = str(default_release_policy)
-    cfg.setdefault("mode", DEFAULT_SCAN_MODE)
-    cfg.setdefault("parse_jobs", DEFAULT_PARSE_JOBS)
-    return cfg
 
 
 def _safe_path_name(value: str) -> str:
@@ -756,7 +591,8 @@ def _build_parser() -> ArgumentParser:
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
     lg.csh rv check ucie stable_20250608 --gate current
     lg.csh rv accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason accepted
-    lg.csh rel ucie stable_20250608       # 默认先 release-check，再生成 symlink release 规划
+    lg.csh rel ucie                       # 发布已接受 current effective 的规划
+    lg.csh rel ucie stable_20250608 --explain  # 专家 raw version release-check 解释
 
   Action 文件批处理:
     lg.csh scan ucie --missing
@@ -888,7 +724,7 @@ def _build_parser() -> ArgumentParser:
 
     p = sub.add_parser("rel", help="对已扫描版本执行 release check/link/verify 规划；不会运行 scan")
     p.add_argument("library")
-    p.add_argument("version")
+    p.add_argument("version", nargs="?")
     p.add_argument("--alias", default="current")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--overwrite", action="store_true")
@@ -1506,6 +1342,27 @@ def _current_effective_id(cfg: dict[str, str], library: str) -> str | None:
     return str(data.get("current_effective_id") or "") or None
 
 
+def _current_effective_manifest(cfg: dict[str, str], library: str) -> str:
+    current_path = Path(cfg["catalog_html"]) / "libraries" / _library_report_key(cfg, library) / "effective" / "current_effective.json"
+    if not current_path.exists():
+        raise ValueError(
+            f"lg rel {library} 需要已接受的当前有效版；先运行 lg next {library} --apply 和 "
+            f"lg next {library} --accept，或显式传入 raw VERSION 走专家入口。"
+        )
+    data = json.loads(current_path.read_text(encoding="utf-8"))
+    manifest = str(data.get("manifest") or "")
+    if not manifest:
+        effective_id = str(data.get("current_effective_id") or "")
+        if effective_id:
+            manifest = str(current_path.parent / effective_id / "effective_manifest.json")
+    if not manifest or not Path(manifest).exists():
+        raise ValueError(
+            f"lg rel {library} 找不到当前有效版 manifest；请重新执行 lg next {library} --apply/--accept，"
+            "或显式传入 raw VERSION 走专家入口。"
+        )
+    return manifest
+
+
 def _resolve_review_version(token: str, refs: dict[str, str]) -> str:
     return refs.get(token, token)
 
@@ -1845,35 +1702,40 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
     if args.short_command == "rel":
         if args.force and not args.force_reason:
             raise ValueError("lg rel --force requires --force-reason")
+        effective_manifest = ""
+        if not args.version:
+            if args.explain or args.check_only:
+                raise ValueError(f"lg rel {args.library} --explain/--check-only 仍需 raw VERSION；不带 VERSION 的 rel 会发布当前 accepted effective。")
+            effective_manifest = _current_effective_manifest(cfg, args.library)
         commands: list[list[str]] = []
-        check_cmd = [
-            "catalog",
-            "release-check",
-            "--catalog",
-            catalog,
-            "--library",
-            args.library,
-            "--version",
-            args.version,
-            "--policy",
-            cfg["release_policy"],
-            "--alias",
-            args.alias,
-        ]
-        if args.explain:
-            check_cmd.append("--explain")
-            return [check_cmd]
-        if args.check_only:
-            return [check_cmd]
-        commands.append(check_cmd)
+        if args.version:
+            check_cmd = [
+                "catalog",
+                "release-check",
+                "--catalog",
+                catalog,
+                "--library",
+                args.library,
+                "--version",
+                args.version,
+                "--policy",
+                cfg["release_policy"],
+                "--alias",
+                args.alias,
+            ]
+            if args.explain:
+                check_cmd.append("--explain")
+                return [check_cmd]
+            if args.check_only:
+                return [check_cmd]
+            if not args.force:
+                commands.append(check_cmd)
         command = [
             "release-batch",
             "--catalog",
             catalog,
             "--library",
             args.library,
-            "--version",
-            args.version,
             "--release-root",
             cfg["release_root"],
             "--policy",
@@ -1885,6 +1747,10 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             "--catalog-html-out",
             html,
         ]
+        if args.version:
+            command.extend(["--version", args.version])
+        else:
+            command.extend(["--effective-manifest", effective_manifest])
         if args.apply:
             command.append("--apply")
         if args.overwrite:
@@ -1928,7 +1794,7 @@ def _print_post_command_hint(args: Any) -> None:
         if bool(getattr(args, "refresh_catalog", False)):
             print(
                 "[NEXT] registry/library_catalog.yml 和 catalog 投影已更新；运行 "
-                f"`lg intake {args.library_id} --plan-only` 预演新版本接入窗口。",
+                f"`lg next {args.library_id} --plan-only` 预演新版本接入窗口。",
                 file=sys.stderr,
             )
             return

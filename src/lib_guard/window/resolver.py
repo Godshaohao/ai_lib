@@ -457,7 +457,7 @@ def resolve_review_window(
 
     warnings: list[str] = []
     if candidate.get("unknown_package_versions"):
-        warnings.append("存在 UNKNOWN package_type；请先用 lg mark 或 lg library override 确认类型，再执行 intake 或 accept-window。")
+        warnings.append("存在 UNKNOWN package_type；请先用 lg mark 或 lg library override 确认类型，再执行 lg next --plan-only / --apply。")
     if candidate.get("intermediate_items"):
         warnings.append("Versions before the latest FULL are kept as window evidence and are not overlaid on the candidate FULL.")
 

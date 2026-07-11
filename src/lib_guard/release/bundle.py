@@ -158,6 +158,9 @@ def iter_release_files(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
             "version_id": entry.get("version_id") or manifest.get("snapshot_id"),
             "version_key": entry.get("version_key"),
             "snapshot_id": entry.get("snapshot_id") or manifest.get("snapshot_id"),
+            "source_version": entry.get("source_version"),
+            "source_effective_id": entry.get("source_effective_id") or manifest.get("effective_id"),
+            "operation": entry.get("operation"),
             "source_package": entry.get("source_package"),
             "source_kind": entry.get("source_kind"),
             "source_root": str(source.parent),
@@ -166,6 +169,8 @@ def iter_release_files(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
             "target_path": str(release_dir_for(manifest) / rel_text),
             "file_type": entry.get("file_type") or (_classify_file_type(source.parent, source) if source.exists() else None),
             "view": entry.get("view") or (rel_text.split("/", 1)[0] if rel_text else None),
+            "sha256": entry.get("sha256") or entry.get("source_sha256") or entry.get("content_sha256"),
+            "size_bytes": entry.get("size_bytes") or entry.get("size"),
             "scan_html": entry.get("scan_html"),
             "diff_html": entry.get("diff_html"),
         }
@@ -351,6 +356,72 @@ def create_manifest_from_snapshot(
         "base_package": snapshot.get("base_package"),
         "updates": snapshot.get("updates", []),
         "resolved_views": snapshot.get("resolved_views", {}),
+        "files": files,
+        "libraries": [],
+    }
+    write_json(out_path, manifest)
+    return manifest
+
+
+def create_manifest_from_effective_manifest(
+    effective_manifest_path: str | Path,
+    out_path: str | Path,
+    *,
+    release_root: str | Path,
+    alias: str = "current",
+    release_id: str | None = None,
+    created_by: str | None = None,
+) -> dict[str, Any]:
+    effective = read_json(effective_manifest_path, {}) or {}
+    effective_id = str(effective.get("effective_id") or Path(effective_manifest_path).parent.name)
+    library_type = str(effective.get("library_type") or "unknown")
+    library_name = str(effective.get("library_name") or effective.get("library_id") or "unknown")
+    files = []
+    for relpath, info in sorted((effective.get("effective_files") or {}).items()):
+        if not isinstance(info, Mapping):
+            continue
+        if str(info.get("operation") or "").lower() == "delete":
+            continue
+        source_path = info.get("source_abs") or info.get("absolute_path") or info.get("source_path")
+        raw_root = str(info.get("raw_root") or "")
+        if source_path and raw_root and not str(source_path).startswith("/"):
+            source_path = str(Path(raw_root) / str(source_path))
+        target_relpath = normalize_release_relpath(str(relpath), file_type=info.get("file_type")).as_posix()
+        files.append(
+            {
+                "target_relpath": target_relpath,
+                "source_path": source_path,
+                "source_version": info.get("source_version"),
+                "source_effective_id": effective_id,
+                "source_package": info.get("source_version"),
+                "source_kind": info.get("operation") or "effective",
+                "operation": info.get("operation") or "effective",
+                "library_type": library_type,
+                "library_name": library_name,
+                "version_id": effective_id,
+                "snapshot_id": effective_id,
+                "file_type": info.get("file_type"),
+                "view": release_view_dir(info.get("file_type")),
+                "sha256": info.get("sha256") or info.get("hash") or info.get("content_hash"),
+                "size_bytes": info.get("size_bytes") or info.get("size"),
+            }
+        )
+    if not files:
+        raise ValueError(f"effective manifest has no releasable files: {effective_manifest_path}")
+    manifest = {
+        "schema_version": "release_manifest.v1",
+        "release_id": release_id or f"{str(alias).upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        "alias": alias,
+        "release_root": str(release_root),
+        "created_by": created_by or getpass.getuser(),
+        "created_at": utc_now(),
+        "source_kind": "current_effective",
+        "effective_manifest": str(effective_manifest_path),
+        "effective_id": effective_id,
+        "library_type": library_type,
+        "library_name": library_name,
+        "base_full_version": effective.get("base_full_version"),
+        "accepted_updates": list(effective.get("accepted_updates", []) or []),
         "files": files,
         "libraries": [],
     }

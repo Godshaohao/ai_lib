@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
 
-from lib_guard.effective.pointer import safe_name, write_current_pointer
+from lib_guard.effective.pointer import default_pointer_path_for_effective, safe_name, sha256_file, write_current_pointer
 from lib_guard.cli_commands.common import render_impacted_catalog_html
 from lib_guard.plan.engine import build_plan_from_window, execute_plan, load_plan, plan_path_for, save_plan
 from lib_guard.render.impact import impacts_for_versions
@@ -61,17 +62,17 @@ def _plan_followup_commands(library: str, window: dict[str, Any] | None = None) 
         return {
             "confirm_command": "无需执行：当前没有新的待审查版本",
             "relation_fix_commands": [],
-            "accept_command": "无需执行：没有 candidate effective，不能运行 accept-window",
-            "review_hint": "当前只有已识别的基线版本；新版本到来后再运行 lg next/window/intake。",
+            "accept_command": "无需执行：没有 candidate effective，不能接受新有效版",
+            "review_hint": "当前只有已识别的基线版本；新版本到来后再运行 lg next。",
         }
     return {
-        "confirm_command": f"lg intake {lib}",
+        "confirm_command": f"lg next {lib} --apply",
         "relation_fix_commands": [
             f"lg mark {lib} <VERSION> --type FULL",
             f"lg library override {lib} <FIX_VERSION> --package-type PARTIAL_UPDATE --base-full <BASE_FULL_VERSION> --compare-default full_baseline --note 'confirmed fix baseline'",
         ],
-        "accept_command": f"lg accept-window {lib} --accepted-by <USER> --note 'review passed'",
-        "review_hint": "先确认 candidate/base/scan_versions；关系不对先运行 mark 或 library override，再重新 plan。",
+        "accept_command": f"lg next {lib} --accept --by <USER> --note 'review passed'",
+        "review_hint": "先确认 candidate/base/scan_versions；关系不对先运行 mark 或 library override，再重新执行 lg next --plan-only。",
     }
 
 
@@ -392,6 +393,122 @@ def _unknown_package_versions(window: dict[str, Any]) -> list[str]:
     return unknowns
 
 
+def _compare_value(data: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = data.get(key)
+        if value is not None and str(value):
+            return value
+    return ""
+
+
+def _target_label(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ["spec", "label"]:
+            if value.get(key):
+                return str(value.get(key))
+        target_type = str(value.get("type") or value.get("target_type") or "")
+        target_id = str(value.get("id") or value.get("target_id") or "")
+        if target_type and target_id:
+            return f"{target_type}:{target_id}"
+        return target_id or str(value)
+    return str(value or "")
+
+
+def _target_digest(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ["manifest_sha256", "sha256", "digest"]:
+            if value.get(key):
+                return str(value.get(key))
+    return ""
+
+
+def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path) -> None:
+    compare = window.get("compare") if isinstance(window.get("compare"), dict) else {}
+    expected_old = str(compare.get("old") or (window.get("base_effective") or {}).get("target") or "")
+    expected_new = str(compare.get("new") or "")
+    candidate = window.get("candidate_effective") if isinstance(window.get("candidate_effective"), dict) else {}
+    if not expected_new and candidate.get("effective_id"):
+        expected_new = f"effective:{candidate.get('effective_id')}"
+
+    manifest = read_json(compare_manifest_path, {}) or {}
+    actual_old_raw = _compare_value(manifest, "old_target", "old")
+    actual_new_raw = _compare_value(manifest, "new_target", "new")
+    actual_old = _target_label(actual_old_raw)
+    actual_new = _target_label(actual_new_raw)
+    if expected_old and actual_old and actual_old != expected_old:
+        raise ValueError(
+            "compare evidence does not match pending window: "
+            f"old target is {actual_old}, expected {expected_old}"
+        )
+    if expected_new and actual_new and actual_new != expected_new:
+        raise ValueError(
+            "compare evidence does not match pending window: "
+            f"new target is {actual_new}, expected {expected_new}"
+        )
+    expected_digest = _target_digest(actual_new_raw)
+    candidate_manifest = str(candidate.get("manifest") or "")
+    if expected_digest and candidate_manifest and Path(candidate_manifest).exists():
+        actual_digest = sha256_file(candidate_manifest)
+        if actual_digest != expected_digest:
+            raise ValueError(
+                "compare evidence does not match pending window: "
+                "candidate effective manifest digest changed after compare"
+            )
+
+
+def _effective_conflict_count(manifest: dict[str, Any]) -> int:
+    summary = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
+    try:
+        count = int(summary.get("conflict_count") or manifest.get("conflict_count") or 0)
+    except Exception:
+        count = 0
+    conflicts = manifest.get("conflicts") if isinstance(manifest.get("conflicts"), list) else []
+    return max(count, len(conflicts))
+
+
+def _expected_current_effective(window: dict[str, Any]) -> str | None:
+    base = window.get("base_effective") if isinstance(window.get("base_effective"), dict) else {}
+    current = str(base.get("current_effective_id") or "")
+    if current:
+        return current
+    target = str(base.get("target") or "")
+    if target.startswith("effective:"):
+        return target.split(":", 1)[1]
+    return None
+
+
+def _write_review_approval(
+    *,
+    window: dict[str, Any],
+    manifest_path: Path,
+    compare_manifest_path: Path,
+    accepted_by: str,
+    note: str,
+) -> tuple[Path, str]:
+    manifest = read_json(manifest_path, {}) or {}
+    candidate = window.get("candidate_effective") if isinstance(window.get("candidate_effective"), dict) else {}
+    base = window.get("base_effective") if isinstance(window.get("base_effective"), dict) else {}
+    conflict_count = _effective_conflict_count(manifest)
+    approval_path = manifest_path.parent / "review_approval.json"
+    approval = {
+        "schema_version": "review_approval.v1",
+        "library": window.get("library"),
+        "old_effective_id": _expected_current_effective(window) or "",
+        "old_effective_target": base.get("target") or "",
+        "candidate_effective_id": candidate.get("effective_id") or manifest.get("effective_id") or manifest_path.parent.name,
+        "candidate_effective_manifest": str(manifest_path),
+        "candidate_effective_sha256": sha256_file(manifest_path),
+        "compare_manifest": str(compare_manifest_path),
+        "compare_manifest_sha256": sha256_file(compare_manifest_path),
+        "conflict_count": conflict_count,
+        "approved_by": accepted_by,
+        "approved_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "note": note,
+    }
+    write_json(approval_path, approval)
+    return approval_path, sha256_file(approval_path)
+
+
 def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], window: dict[str, Any], reason: str) -> None:
     if not getattr(args, "catalog", None) or not getattr(args, "library", None) or not getattr(args, "catalog_html_out", None):
         return
@@ -579,19 +696,51 @@ def cmd_accept(args: argparse.Namespace) -> int:
         raise ValueError("accept-window requires intake plan DONE; unfinished tasks: " + ", ".join(unfinished[:8]))
     compare = data.get("compare") if isinstance(data.get("compare"), dict) else {}
     compare_dir = Path(str(compare.get("out_dir") or "")) if compare.get("out_dir") else None
-    if not compare or not compare_dir or not (compare_dir / "compare_manifest.json").exists():
+    compare_manifest_path = compare_dir / "compare_manifest.json" if compare_dir else None
+    if not compare or not compare_manifest_path or not compare_manifest_path.exists():
         raise ValueError("accept-window requires fresh effective compare evidence; run lg next <LIBRARY> --apply --rebuild")
+    _validate_accept_compare(data, compare_manifest_path)
+    effective_manifest = read_json(manifest_path, {}) or {}
+    conflict_count = _effective_conflict_count(effective_manifest)
+    if conflict_count:
+        raise ValueError(
+            "effective manifest has unresolved conflicts; "
+            f"conflict_count={conflict_count}. Fix effective composition before accept."
+        )
+    pointer_path = default_pointer_path_for_effective(manifest_path)
+    existing_pointer = read_json(pointer_path, {}) or {}
+    expected_current = _expected_current_effective(data)
+    expected_revision = int(existing_pointer.get("revision") or 0) if expected_current is not None else None
+    approval_path, approval_sha256 = _write_review_approval(
+        window=data,
+        manifest_path=manifest_path,
+        compare_manifest_path=compare_manifest_path,
+        accepted_by=args.accepted_by,
+        note=args.note or "accepted from review window",
+    )
     pointer = write_current_pointer(
         manifest_path,
         status="accepted",
         accepted_by=args.accepted_by,
         note=args.note or "accepted from review window",
+        expected_previous_effective_id=expected_current,
+        expected_revision=expected_revision,
+        review_approval=approval_path,
+        approval_sha256=approval_sha256,
     )
     data["state"] = "ACCEPTED"
     data["accepted_by"] = args.accepted_by
     data["current_effective_pointer"] = str(pointer)
+    data["review_approval"] = str(approval_path)
+    data["approval_sha256"] = approval_sha256
     write_json(args.window_file, data)
-    output = {"status": "PASS", "current_effective": str(pointer), "window": args.window_file}
+    output = {
+        "status": "PASS",
+        "current_effective": str(pointer),
+        "review_approval": str(approval_path),
+        "approval_sha256": approval_sha256,
+        "window": args.window_file,
+    }
     _attach_render_impact(args, output, data, "window_accept_updated")
     _print_json(output)
     return 0

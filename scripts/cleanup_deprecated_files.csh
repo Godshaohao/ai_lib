@@ -81,7 +81,9 @@ endif
 
 set removed = 0
 
-set pycache_dirs = (`find src/lib_guard tests -type d -name __pycache__ -print`)
+set scan_roots = (src/lib_guard)
+if (-d tests) set scan_roots = ($scan_roots tests)
+set pycache_dirs = (`find $scan_roots -type d -name __pycache__ -print`)
 foreach target ($pycache_dirs)
   if (-e "$target") then
     echo "deprecated cache: $target"
@@ -101,6 +103,7 @@ set explicit_targets = ( \
   "lib_guard_ip_user_patch_v2" \
   "er view test contract" \
   "1" \
+  ".pytest_cache" \
 )
 
 foreach target ($explicit_targets)

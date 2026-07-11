@@ -14,11 +14,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 import json
-import os
 import re
 
 from lib_guard.review import build_review_state, build_review_tasks
-from lib_guard.review.io import as_file_href, read_json, write_json
+from lib_guard.review.io import read_json, write_json
 from lib_guard.render import catalog_render_common as common
 from lib_guard.render import product_theme as ui
 
@@ -30,44 +29,16 @@ except Exception:  # pragma: no cover - optional effective workflow import
     mark_current_effective_items = None
 
 
-def _safe(value: Any) -> str:
-    return common.safe(value)
-
-
-def _write_text(path: Path, text: str) -> None:
-    common.write_text(path, text)
-
-
-def _version_links(version: Mapping[str, Any]) -> Mapping[str, Any]:
-    return common.version_links(version)
-
-
-def _href(path: Any) -> str:
-    return common.href(path)
-
-
-def _rel_href(base: Path, path: Any) -> str:
-    return common.rel_href(base, path)
-
-
-def _status_key(value: Any) -> str:
-    return common.status_key(value)
-
-
-def _truthy(value: Any) -> bool:
-    return common.truthy(value)
-
-
-def _short_path(path: Any, limit: int = 72) -> str:
-    return common.short_path(path, limit)
-
-
-def _short_name(value: Any, head: int = 26, tail: int = 18) -> str:
-    return common.short_name(value, head, tail)
-
-
-def _package_type(version: Mapping[str, Any]) -> str:
-    return common.package_type(version)
+_safe = common.safe
+_write_text = common.write_text
+_version_links = common.version_links
+_href = common.href
+_rel_href = common.rel_href
+_status_key = common.status_key
+_truthy = common.truthy
+_short_path = common.short_path
+_short_name = common.short_name
+_package_type = common.package_type
 
 
 def _package_label(version: Mapping[str, Any]) -> tuple[str, str]:
@@ -92,24 +63,11 @@ def _package_label(version: Mapping[str, Any]) -> tuple[str, str]:
     return pkg, labels.get(pkg, ui.status_label(pkg) or pkg)
 
 
-def _base_full_version(version: Mapping[str, Any]) -> str | None:
-    return common.base_full_version(version)
-
-
-def _previous_effective_version(version: Mapping[str, Any]) -> str | None:
-    return common.previous_effective_version(version)
-
-
-def _is_full_baseline(version: Mapping[str, Any]) -> bool:
-    return common.is_full_baseline(version)
-
-
-def _relation_status(version: Mapping[str, Any]) -> str:
-    return common.relation_status(version)
-
-
-def _relation_label(status: str) -> str:
-    return common.relation_label(status)
+_base_full_version = common.base_full_version
+_previous_effective_version = common.previous_effective_version
+_is_full_baseline = common.is_full_baseline
+_relation_status = common.relation_status
+_relation_label = common.relation_label
 
 
 def _release_is_visible(version: Mapping[str, Any], lib: Mapping[str, Any] | None = None) -> bool:
@@ -158,12 +116,8 @@ def _file_review_recommendation(version: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _file_review_text(version: Mapping[str, Any]) -> str:
-    return common.file_review_text(version)
-
-
-def _file_review_status(version: Mapping[str, Any]) -> str:
-    return common.file_review_status(version)
+_file_review_text = common.file_review_text
+_file_review_status = common.file_review_status
 
 
 def _version_tags(version: Mapping[str, Any]) -> set[str]:

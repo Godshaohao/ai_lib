@@ -639,6 +639,7 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--release-root", required=True)
     p.add_argument("--alias", default="current")
     p.add_argument("--release-id")
+    p.add_argument("--effective-manifest", help="Release an accepted effective manifest instead of raw catalog versions.")
     p.add_argument("--out", help="Release run directory. Defaults beside the catalog work area.")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--overwrite", action="store_true", help="Allow replacing listed targets. Does not remove unlisted files unless manifest sets mirror_release_root=true.")

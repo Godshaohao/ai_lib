@@ -991,41 +991,11 @@ def run_catalog_release_link(args: Namespace) -> int:
 
 def run_catalog_release_batch(args: Namespace) -> int:
     from lib_guard.catalog.index import update_catalog_release_status
-    from lib_guard.release.bundle import create_manifest_template_from_catalog
+    from lib_guard.release.bundle import create_manifest_from_effective_manifest, create_manifest_template_from_catalog
     from lib_guard.release.linker import link_release_from_manifest
     from lib_guard.release.postcheck import verify_release_manifest
     from lib_guard.release.result import release_result_from_link, write_release_result
 
-    requested_versions = set(args.version or [])
-    selected = []
-    for item in _catalog_versions(args.catalog, args.library):
-        if requested_versions and item.get("version_id") not in requested_versions and item.get("version_key") not in requested_versions:
-            continue
-        if args.stage and item.get("stage") != args.stage:
-            continue
-        if not item.get("scan", {}).get("scan_dir"):
-            continue
-        release = item.get("release", {}) or {}
-        check_status = str(release.get("check_status") or "")
-        if not getattr(args, "force", False) and check_status not in RELEASE_CHECK_PASS_STATUSES:
-            continue
-        if args.only_checked and check_status not in RELEASE_CHECK_PASS_STATUSES:
-            continue
-        if args.only_ready:
-            if item.get("manual_review") or check_status in {"BLOCK", "FAILED"}:
-                continue
-        selected.append(item)
-        if args.limit and len(selected) >= args.limit:
-            break
-    if not requested_versions:
-        latest_by_library: dict[str, dict[str, Any]] = {}
-        for item in selected:
-            latest_by_library[str(item.get("library_id") or item.get("library_name"))] = item
-        selected = list(latest_by_library.values())
-    if not selected:
-        output = {"status": "FAILED", "selected": 0, "message": "no scanned catalog versions selected for release"}
-        print_json(output)
-        return 2
     catalog_path = Path(args.catalog)
     release_id = getattr(args, "release_id", None) or f"{str(args.alias).upper()}_{auto_scan_id()}"
     if getattr(args, "out", None):
@@ -1035,16 +1005,56 @@ def run_catalog_release_batch(args: Namespace) -> int:
     else:
         run_dir = catalog_path.parent / "release_runs" / release_id
     manifest_path = run_dir / "release_manifest.json"
-    selected_keys = [str(item["version_key"]) for item in selected]
-    manifest = create_manifest_template_from_catalog(
-        args.catalog,
-        manifest_path,
-        release_root=args.release_root,
-        alias=args.alias,
-        release_id=release_id,
-        library=args.library,
-        versions=selected_keys,
-    )
+    effective_manifest = getattr(args, "effective_manifest", None)
+    selected: list[dict[str, Any]] = []
+    if effective_manifest:
+        manifest = create_manifest_from_effective_manifest(
+            effective_manifest,
+            manifest_path,
+            release_root=args.release_root,
+            alias=args.alias,
+            release_id=release_id,
+        )
+    else:
+        requested_versions = set(args.version or [])
+        for item in _catalog_versions(args.catalog, args.library):
+            if requested_versions and item.get("version_id") not in requested_versions and item.get("version_key") not in requested_versions:
+                continue
+            if args.stage and item.get("stage") != args.stage:
+                continue
+            if not item.get("scan", {}).get("scan_dir"):
+                continue
+            release = item.get("release", {}) or {}
+            check_status = str(release.get("check_status") or "")
+            if not getattr(args, "force", False) and check_status not in RELEASE_CHECK_PASS_STATUSES:
+                continue
+            if args.only_checked and check_status not in RELEASE_CHECK_PASS_STATUSES:
+                continue
+            if args.only_ready:
+                if item.get("manual_review") or check_status in {"BLOCK", "FAILED"}:
+                    continue
+            selected.append(item)
+            if args.limit and len(selected) >= args.limit:
+                break
+        if not requested_versions:
+            latest_by_library: dict[str, dict[str, Any]] = {}
+            for item in selected:
+                latest_by_library[str(item.get("library_id") or item.get("library_name"))] = item
+            selected = list(latest_by_library.values())
+        if not selected:
+            output = {"status": "FAILED", "selected": 0, "message": "no scanned catalog versions selected for release"}
+            print_json(output)
+            return 2
+        selected_keys = [str(item["version_key"]) for item in selected]
+        manifest = create_manifest_template_from_catalog(
+            args.catalog,
+            manifest_path,
+            release_root=args.release_root,
+            alias=args.alias,
+            release_id=release_id,
+            library=args.library,
+            versions=selected_keys,
+        )
     link_result = link_release_from_manifest(
         manifest_path,
         apply=bool(args.apply),
@@ -1064,7 +1074,15 @@ def run_catalog_release_batch(args: Namespace) -> int:
     if verify_result and verify_result.get("html"):
         release_html = str((verify_result.get("html") or {}).get("index_html") or "")
     write_release_result(release_result_path, release_result_from_link(link_result, verify_result=verify_result, html=release_html))
+    link_status = str(link_result.get("status") or "UNKNOWN")
+    verify_status = str((verify_result or {}).get("status") or "")
+    final_status = verify_status or link_status
+    success_statuses = {"PASS", "PASS_WITH_WARNING", "APPLIED", "FORCED_APPLIED", "DRY_RUN", "FORCE_DRY_RUN"}
+    release_failed = final_status not in success_statuses
     failures = list(link_result.get("failed_links", []) or [])
+    verify_issues = list((verify_result or {}).get("issues", []) or [])
+    if verify_result and release_failed and not failures:
+        failures = verify_issues
     for item in selected:
         postcheck_path = Path(verify_result["postcheck_path"]) if verify_result else None
         html_path = Path((verify_result.get("html") or {}).get("index_html")) if verify_result and verify_result.get("html") else None
@@ -1082,10 +1100,14 @@ def run_catalog_release_batch(args: Namespace) -> int:
         )
     catalog_html = refresh_catalog_html(args)
     output = {
-        "status": "PASS" if not failures else "FAILED",
+        "status": "PASS" if not release_failed else "FAILED",
+        "phase": "postcheck" if verify_result and release_failed else "link",
+        "link_status": link_status,
+        "verify_status": verify_status or None,
         "release_id": release_id,
-        "selected": len(selected),
+        "selected": len(selected) if not effective_manifest else 1,
         "manifest": str(manifest_path),
+        "manifest_source": "current_effective" if effective_manifest else "catalog_raw_version",
         "dry_run": not bool(args.apply),
         "release_root": args.release_root,
         "alias": args.alias,
@@ -1093,9 +1115,10 @@ def run_catalog_release_batch(args: Namespace) -> int:
         "link_result": link_result,
         "verify_result": verify_result,
         "failures": failures,
+        "verify_issues": verify_issues,
         "library_count": len(manifest.get("libraries", []) or []),
     }
     if catalog_html:
         output["catalog_html"] = catalog_html
     print_json(output)
-    return 0 if not failures else 2
+    return 0 if not release_failed else 2
