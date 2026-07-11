@@ -581,6 +581,25 @@ def _write_review_approval(
     accepted_by: str,
     note: str,
 ) -> tuple[Path, str]:
+    approval_path, approval = _build_review_approval(
+        window=window,
+        manifest_path=manifest_path,
+        compare_manifest_path=compare_manifest_path,
+        accepted_by=accepted_by,
+        note=note,
+    )
+    write_json(approval_path, approval)
+    return approval_path, sha256_file(approval_path)
+
+
+def _build_review_approval(
+    *,
+    window: dict[str, Any],
+    manifest_path: Path,
+    compare_manifest_path: Path,
+    accepted_by: str,
+    note: str,
+) -> tuple[Path, dict[str, Any]]:
     manifest = read_json(manifest_path, {}) or {}
     identity = effective_identity_for_manifest(manifest_path, manifest)
     if not identity["valid"]:
@@ -606,8 +625,7 @@ def _write_review_approval(
         "approved_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "note": note,
     }
-    write_json(approval_path, approval)
-    return approval_path, sha256_file(approval_path)
+    return approval_path, approval
 
 
 def _validate_review_approval(window: dict[str, Any], effective_digest: str, manifest_path: Path | None = None) -> None:
@@ -845,7 +863,7 @@ def cmd_accept(args: argparse.Namespace) -> int:
         expected_revision = None
     else:
         expected_revision = 0
-    approval_path, approval_sha256 = _write_review_approval(
+    approval_path, approval = _build_review_approval(
         window=data,
         manifest_path=manifest_path,
         compare_manifest_path=compare_manifest_path,
@@ -860,8 +878,9 @@ def cmd_accept(args: argparse.Namespace) -> int:
         expected_previous_effective_id=expected_current,
         expected_revision=expected_revision,
         review_approval=approval_path,
-        approval_sha256=approval_sha256,
+        review_approval_data=approval,
     )
+    approval_sha256 = str((read_json(pointer, {}) or {}).get("approval_sha256") or "")
     data["state"] = "ACCEPTED"
     data["accepted_by"] = args.accepted_by
     data["current_effective_pointer"] = str(pointer)

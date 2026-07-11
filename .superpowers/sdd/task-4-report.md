@@ -245,3 +245,61 @@ git diff --check
 Result: related modules ran `51 tests` and `OK`; the full suite ran `389 tests` and `OK`; compileall and `git diff --check` exited `0`.
 
 Changed for this remediation: `effective/pointer.py`, `window/cli.py`, `window/resolver.py`, `test_effective_pointer.py`, `test_window_intake.py`, and this report. `fix.md` remains untracked and unchanged.
+
+## Concurrent Pointer Transaction Remediation
+
+Baseline: `03bfd20`
+
+### Root Cause
+
+`write_current_pointer()` read the existing pointer and evaluated the ID/revision CAS before entering `atomic.py`'s pointer-file lock. Two writers with the same expectations could therefore both pass CAS and both write the same next revision. `cmd_accept()` also wrote `review_approval.json` before calling the pointer CAS, so a losing accept could create or overwrite approval evidence.
+
+### RED
+
+Barrier-driven thread tests patched only the pointer read boundary to align both legacy readers; they do not use `sleep`. On the baseline implementation:
+
+- both concurrent `write_current_pointer()` calls returned success instead of one CAS failure;
+- both concurrent `cmd_accept()` calls returned success instead of one winner;
+- a stale accept created `review_approval.json` before its pointer CAS failed.
+
+The focused RED run failed both concurrency tests with `2 != 1` successful writers.
+
+### GREEN
+
+- `write_current_pointer()` now acquires the exact `.<pointer-name>.lock` used by `atomic_write_json(..., lock=True)` before reading existing state. Existing read, ID/revision CAS, revision increment, optional approval write, and pointer replacement all run inside that critical section.
+- The pointer replacement calls `atomic_write_json(..., lock=False)` while the outer pointer lock is held, avoiding nested acquisition of the same `flock`.
+- `cmd_accept()` builds approval data without writing it and passes it to the pointer transaction. CAS failure therefore cannot create or overwrite approval evidence.
+- Approval SHA-256 is computed from the file written inside the transaction and stored in the winner pointer.
+- Approval-write failure leaves the pointer unchanged. Pointer-write failure restores the previous approval bytes, or removes the newly created approval, before releasing the pointer lock.
+- Existing single-call `write_current_pointer()` behavior and the historical `_write_review_approval()` helper remain compatible when no transactional approval payload is supplied.
+
+### Regression Coverage
+
+- Same expected ID/revision: exactly one pointer writer succeeds; final revision is `8`, based on revision `7`.
+- Same pending window: exactly one accept succeeds; final revision is `4`, and pointer `approval_sha256` matches the actual winner file.
+- Stale accept CAS: approval remains absent and pointer bytes remain unchanged.
+- Injected approval write failure: approval remains absent and pointer bytes remain unchanged.
+- Injected pointer write failure: prior approval content is restored and the previous pointer remains unchanged.
+- Both barrier concurrency tests passed five consecutive focused runs.
+
+### Verification
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest \
+  src.lib_guard.test.test_effective_manifest \
+  src.lib_guard.test.test_effective_pointer \
+  src.lib_guard.test.test_window_intake -q
+```
+
+Result: `Ran 56 tests` and `OK`.
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest discover \
+  -s src/lib_guard/test -p 'test*.py' -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m compileall -q src
+git diff --check
+```
+
+Result: full suite ran `394 tests` and `OK`; compileall exited `0`; final diff check is recorded with the commit verification below.
+
+Changed for this remediation: `effective/pointer.py`, `window/cli.py`, `test_effective_pointer.py`, `test_window_intake.py`, and this report only. No command, page, database, dependency, or historical path behavior changed. `fix.md` remains untracked and unchanged.

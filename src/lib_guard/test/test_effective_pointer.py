@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -107,6 +110,129 @@ class EffectivePointerTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "current effective changed"):
                 write_current_pointer(manifest, expected_previous_effective_id="E0", expected_revision=7)
+
+    def test_concurrent_pointer_cas_allows_exactly_one_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            effective_dir = root / "effective" / "E1"
+            effective_dir.mkdir(parents=True)
+            manifest = effective_dir / "effective_manifest.json"
+            manifest.write_text(json.dumps({"effective_id": "E1", "library_id": "ip/ucie"}), encoding="utf-8")
+            pointer_path = effective_dir.parent / "current_effective.json"
+            pointer_path.write_text(json.dumps({"current_effective_id": "E0", "revision": 7}), encoding="utf-8")
+
+            import lib_guard.effective.pointer as pointer_module
+
+            original_read_json = pointer_module.read_json
+            reads_aligned = threading.Barrier(2)
+
+            def synchronized_read_json(path: str | Path, default: object = None) -> object:
+                data = original_read_json(path, default)
+                if Path(path) == pointer_path:
+                    try:
+                        reads_aligned.wait(timeout=0.5)
+                    except threading.BrokenBarrierError:
+                        pass
+                return data
+
+            start = threading.Barrier(2)
+
+            def write_once() -> str:
+                start.wait()
+                try:
+                    pointer_module.write_current_pointer(
+                        manifest,
+                        expected_previous_effective_id="E0",
+                        expected_revision=7,
+                    )
+                except ValueError as exc:
+                    return str(exc)
+                return "PASS"
+
+            with mock.patch.object(pointer_module, "read_json", side_effect=synchronized_read_json):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(lambda _: write_once(), range(2)))
+
+            self.assertEqual(results.count("PASS"), 1)
+            self.assertEqual(sum("current effective changed" in result for result in results), 1)
+            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+            self.assertEqual(pointer["current_effective_id"], "E1")
+            self.assertEqual(pointer["previous_revision"], 7)
+            self.assertEqual(pointer["revision"], 8)
+
+    def test_pointer_write_failure_restores_existing_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            effective_dir = root / "effective" / "E1"
+            effective_dir.mkdir(parents=True)
+            manifest = effective_dir / "effective_manifest.json"
+            manifest.write_text(json.dumps({"effective_id": "E1", "library_id": "ip/ucie"}), encoding="utf-8")
+            approval_path = effective_dir / "review_approval.json"
+            old_approval = '{"approved_by": "previous"}\n'
+            approval_path.write_text(old_approval, encoding="utf-8")
+            pointer_path = effective_dir.parent / "current_effective.json"
+            original_pointer = {
+                "current_effective_id": "E0",
+                "revision": 7,
+                "review_approval": str(approval_path),
+            }
+            pointer_path.write_text(json.dumps(original_pointer), encoding="utf-8")
+
+            import lib_guard.effective.pointer as pointer_module
+
+            original_atomic_write_json = pointer_module.atomic_write_json
+
+            def fail_pointer_write(path: str | Path, data: object, **kwargs: object) -> Path:
+                if Path(path) == pointer_path:
+                    raise OSError("injected pointer write failure")
+                return original_atomic_write_json(path, data, **kwargs)
+
+            with mock.patch.object(pointer_module, "atomic_write_json", side_effect=fail_pointer_write):
+                with self.assertRaisesRegex(OSError, "injected pointer write failure"):
+                    pointer_module.write_current_pointer(
+                        manifest,
+                        expected_previous_effective_id="E0",
+                        expected_revision=7,
+                        review_approval=approval_path,
+                        review_approval_data={"approved_by": "new"},
+                    )
+
+            self.assertEqual(json.loads(pointer_path.read_text(encoding="utf-8")), original_pointer)
+            self.assertEqual(approval_path.read_text(encoding="utf-8"), old_approval)
+
+    def test_approval_write_failure_leaves_pointer_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            effective_dir = root / "effective" / "E1"
+            effective_dir.mkdir(parents=True)
+            manifest = effective_dir / "effective_manifest.json"
+            manifest.write_text(json.dumps({"effective_id": "E1", "library_id": "ip/ucie"}), encoding="utf-8")
+            approval_path = effective_dir / "review_approval.json"
+            pointer_path = effective_dir.parent / "current_effective.json"
+            original_pointer = '{"current_effective_id": "E0", "revision": 7}\n'
+            pointer_path.write_text(original_pointer, encoding="utf-8")
+
+            import lib_guard.effective.pointer as pointer_module
+
+            original_atomic_write_json = pointer_module.atomic_write_json
+
+            def fail_approval_write(path: str | Path, data: object, **kwargs: object) -> Path:
+                if Path(path) == approval_path:
+                    raise OSError("injected approval write failure")
+                return original_atomic_write_json(path, data, **kwargs)
+
+            with mock.patch.object(pointer_module, "atomic_write_json", side_effect=fail_approval_write):
+                with self.assertRaisesRegex(OSError, "injected approval write failure"):
+                    pointer_module.write_current_pointer(
+                        manifest,
+                        expected_previous_effective_id="E0",
+                        expected_revision=7,
+                        review_approval=approval_path,
+                        review_approval_data={"approved_by": "new"},
+                    )
+
+            self.assertEqual(pointer_path.read_text(encoding="utf-8"), original_pointer)
+            self.assertFalse(approval_path.exists())
 
     def test_pointer_keeps_integrity_separate_from_unavailable_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as td:

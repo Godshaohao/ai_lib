@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from lib_guard.atomic import atomic_write_json
+from lib_guard.atomic import atomic_write_json, atomic_write_text, file_lock
 from lib_guard.effective.manifest import validate_effective_manifest
 
 POINTER_SCHEMA = "current_effective.v1"
@@ -370,35 +370,58 @@ def write_current_pointer(
     expected_revision: int | None = None,
     review_approval: str | Path | None = None,
     approval_sha256: str = "",
+    review_approval_data: Mapping[str, Any] | None = None,
 ) -> Path:
     out_path = Path(out) if out else default_pointer_path_for_effective(effective_manifest)
-    existing = read_json(out_path, {}) or {}
-    previous_effective_id = str(existing.get("current_effective_id") or "")
-    previous_revision = int(existing.get("revision") or 0)
-    if expected_previous_effective_id is not None and previous_effective_id != str(expected_previous_effective_id or ""):
-        raise ValueError(
-            "current effective changed; rerun lg next <LIBRARY> --apply to rebuild compare evidence "
-            f"(expected {expected_previous_effective_id or '-'}, found {previous_effective_id or '-'})"
-        )
-    if expected_revision is not None and previous_revision != int(expected_revision):
-        raise ValueError(
-            "current effective changed; rerun lg next <LIBRARY> --apply to rebuild compare evidence "
-            f"(expected revision {expected_revision}, found {previous_revision})"
-        )
-    pointer = make_current_pointer(
-        effective_manifest,
-        html=html,
-        release_preview=release_preview,
-        status=status,
-        accepted_by=accepted_by,
-        note=note,
-        revision=previous_revision + 1,
-        previous_effective_id=previous_effective_id,
-        previous_revision=previous_revision,
-        review_approval=review_approval,
-        approval_sha256=approval_sha256,
-    )
-    return write_json(out_path, pointer)
+    lock_path = out_path.with_name(f".{out_path.name}.lock")
+    with file_lock(lock_path):
+        existing = read_json(out_path, {}) or {}
+        previous_effective_id = str(existing.get("current_effective_id") or "")
+        previous_revision = int(existing.get("revision") or 0)
+        if expected_previous_effective_id is not None and previous_effective_id != str(expected_previous_effective_id or ""):
+            raise ValueError(
+                "current effective changed; rerun lg next <LIBRARY> --apply to rebuild compare evidence "
+                f"(expected {expected_previous_effective_id or '-'}, found {previous_effective_id or '-'})"
+            )
+        if expected_revision is not None and previous_revision != int(expected_revision):
+            raise ValueError(
+                "current effective changed; rerun lg next <LIBRARY> --apply to rebuild compare evidence "
+                f"(expected revision {expected_revision}, found {previous_revision})"
+            )
+
+        approval_path = Path(review_approval) if review_approval else None
+        previous_approval: str | None = None
+        approval_written = False
+        try:
+            if review_approval_data is not None:
+                if approval_path is None:
+                    raise ValueError("review_approval is required when review_approval_data is provided")
+                previous_approval = approval_path.read_text(encoding="utf-8") if approval_path.is_file() else None
+                atomic_write_json(approval_path, review_approval_data, lock=True)
+                approval_sha256 = sha256_file(approval_path)
+                approval_written = True
+            pointer = make_current_pointer(
+                effective_manifest,
+                html=html,
+                release_preview=release_preview,
+                status=status,
+                accepted_by=accepted_by,
+                note=note,
+                revision=previous_revision + 1,
+                previous_effective_id=previous_effective_id,
+                previous_revision=previous_revision,
+                review_approval=review_approval,
+                approval_sha256=approval_sha256,
+            )
+            atomic_write_json(out_path, pointer, lock=False)
+        except Exception:
+            if approval_written and approval_path is not None:
+                if previous_approval is None:
+                    approval_path.unlink(missing_ok=True)
+                else:
+                    atomic_write_text(approval_path, previous_approval, lock=True)
+            raise
+    return out_path
 
 
 def pointer_search_paths(out: str | Path, lib_id: str) -> list[Path]:

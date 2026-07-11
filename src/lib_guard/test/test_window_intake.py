@@ -6,8 +6,11 @@ import argparse
 import contextlib
 import io
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 
 class WindowIntakeTest(unittest.TestCase):
@@ -1343,6 +1346,171 @@ class WindowIntakeTest(unittest.TestCase):
                         note="review passed",
                     )
                 )
+
+    def test_concurrent_accept_writes_only_winner_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "effective" / "candidate_fix1" / "effective_manifest.json"
+            old_manifest = root / "effective" / "E0" / "effective_manifest.json"
+            manifest.parent.mkdir(parents=True)
+            old_manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({"effective_id": "candidate_fix1", "summary": {"conflict_count": 0}}), encoding="utf-8")
+            old_manifest.write_text(json.dumps({"effective_id": "E0", "summary": {"conflict_count": 0}}), encoding="utf-8")
+            pointer_path = root / "effective" / "current_effective.json"
+            pointer_path.write_text(json.dumps({"current_effective_id": "E0", "revision": 3}), encoding="utf-8")
+            compare_dir = root / "compare"
+            compare_dir.mkdir()
+
+            from lib_guard.effective.pointer import sha256_file
+
+            (compare_dir / "compare_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "old_target": {
+                            "type": "effective",
+                            "id": "E0",
+                            "spec": "effective:E0",
+                            "manifest": str(old_manifest),
+                            "effective_digest": f"sha256:{sha256_file(old_manifest)}",
+                            "manifest_sha256": sha256_file(old_manifest),
+                        },
+                        "new_target": {
+                            "type": "effective",
+                            "id": "candidate_fix1",
+                            "spec": "effective:candidate_fix1",
+                            "manifest": str(manifest),
+                            "effective_digest": f"sha256:{sha256_file(manifest)}",
+                            "manifest_sha256": sha256_file(manifest),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            window = root / "pending_window.json"
+            window.write_text(
+                json.dumps(
+                    {
+                        "library": "ucie",
+                        "state": "PENDING",
+                        "base_effective": {
+                            "target": "effective:E0",
+                            "current_effective_id": "E0",
+                            "pointer_revision": 3,
+                        },
+                        "candidate_effective": {"effective_id": "candidate_fix1", "manifest": str(manifest)},
+                        "compare": {
+                            "old": "effective:E0",
+                            "new": "effective:candidate_fix1",
+                            "out_dir": str(compare_dir),
+                        },
+                        "items": [{"version": "fix1", "kind": "PARTIAL_UPDATE"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan_dir = root / "work" / "state" / "ucie"
+            plan_dir.mkdir(parents=True)
+            (plan_dir / "current_plan.json").write_text(
+                json.dumps({"state": "DONE", "tasks": [{"id": "effective-compare", "status": "DONE"}]}),
+                encoding="utf-8",
+            )
+
+            import lib_guard.effective.pointer as pointer_module
+            from lib_guard.window.cli import cmd_accept
+
+            original_read_json = pointer_module.read_json
+            reads_aligned = threading.Barrier(2)
+
+            def synchronized_read_json(path: str | Path, default: object = None) -> object:
+                data = original_read_json(path, default)
+                if Path(path) == pointer_path:
+                    try:
+                        reads_aligned.wait(timeout=0.5)
+                    except threading.BrokenBarrierError:
+                        pass
+                return data
+
+            start = threading.Barrier(2)
+
+            def accept_once(index: int) -> str:
+                start.wait()
+                try:
+                    cmd_accept(
+                        argparse.Namespace(
+                            catalog=None,
+                            library="ucie",
+                            workdir=str(root / "work"),
+                            catalog_html_out=str(root / "catalog" / "html"),
+                            window_file=str(window),
+                            accepted_by=f"owner-{index}",
+                            note="review passed",
+                        )
+                    )
+                except ValueError as exc:
+                    return str(exc)
+                return "PASS"
+
+            with mock.patch.object(pointer_module, "read_json", side_effect=synchronized_read_json), mock.patch(
+                "lib_guard.window.cli._print_json"
+            ):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(accept_once, range(2)))
+
+            self.assertEqual(results.count("PASS"), 1)
+            self.assertEqual(sum("current effective changed" in result for result in results), 1)
+            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+            approval_path = Path(pointer["review_approval"])
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            self.assertEqual(pointer["revision"], 4)
+            self.assertEqual(pointer["approval_sha256"], sha256_file(approval_path))
+            self.assertIn(approval["approved_by"], {"owner-0", "owner-1"})
+
+    def test_accept_cas_failure_does_not_create_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "effective" / "candidate_fix1" / "effective_manifest.json"
+            window, manifest, pointer, approval_path = self._write_accept_fixture(
+                root,
+                {
+                    "old_target": {"type": "raw", "id": "E0", "spec": "raw:E0"},
+                    "new_target": {
+                        "type": "effective",
+                        "id": "candidate_fix1",
+                        "spec": "effective:candidate_fix1",
+                        "manifest": str(manifest),
+                    },
+                },
+            )
+            from lib_guard.effective.pointer import sha256_file
+
+            compare_path = root / "compare" / "compare_manifest.json"
+            compare_evidence = json.loads(compare_path.read_text(encoding="utf-8"))
+            compare_evidence["new_target"]["effective_digest"] = f"sha256:{sha256_file(manifest)}"
+            compare_evidence["new_target"]["manifest_sha256"] = sha256_file(manifest)
+            compare_path.write_text(json.dumps(compare_evidence), encoding="utf-8")
+            pending = json.loads(window.read_text(encoding="utf-8"))
+            pending["base_effective"] = {"target": "raw:E0", "pointer_revision": 0}
+            pending["compare"]["old"] = "raw:E0"
+            window.write_text(json.dumps(pending), encoding="utf-8")
+            original_pointer = pointer.read_text(encoding="utf-8")
+
+            from lib_guard.window.cli import cmd_accept
+
+            with self.assertRaisesRegex(ValueError, "current effective changed"):
+                cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
+
+            self.assertFalse(approval_path.exists())
+            self.assertEqual(pointer.read_text(encoding="utf-8"), original_pointer)
 
     def test_accept_window_rejects_conflicted_effective_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
