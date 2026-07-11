@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from lib_guard.atomic import atomic_write_json
-from lib_guard.identity import build_effective_identity
+from lib_guard.effective.manifest import validate_effective_manifest
 
 POINTER_SCHEMA = "current_effective.v1"
 
@@ -48,45 +48,122 @@ def effective_identity_for_manifest(
 ) -> dict[str, str | bool]:
     path = Path(manifest_path)
     data = dict(manifest) if isinstance(manifest, Mapping) else read_json(path, {}) or {}
-    stored_identity = data.get("identity")
-    if isinstance(stored_identity, Mapping) and str(stored_identity.get("digest") or ""):
-        recomputed_digest = build_effective_identity(data)["digest"]
-        stored_digest = str(stored_identity["digest"])
+    validation = validate_effective_manifest(data)
+    if data.get("identity") is not None:
         return {
-            "digest": recomputed_digest,
+            "digest": str(validation["digest"]),
             "source": "effective_manifest_identity",
-            "valid": stored_digest == recomputed_digest,
-            "manifest_status": str(data.get("identity_status") or "TRUSTED"),
+            "valid": bool(validation["valid"]),
+            "integrity_status": str(validation["integrity_status"]),
+            "manifest_status": str(validation["evidence_status"]),
+            "evidence_source": str(validation["evidence_source"]),
+            "evidence_trust": str(validation["evidence_trust"]),
         }
     manifest_digest = sha256_file(path) if path.exists() else ""
     return {
         "digest": f"sha256:{manifest_digest}" if manifest_digest else "",
         "source": "manifest_sha256_fallback",
         "valid": bool(manifest_digest),
+        "integrity_status": "MATCH" if manifest_digest else "MISSING",
         "manifest_status": "LEGACY_FALLBACK",
+        "evidence_source": "manifest_sha256_fallback",
+        "evidence_trust": "LEGACY_FALLBACK",
     }
+
+
+def _evidence_status(value: Any) -> str:
+    status = str(value or "UNAVAILABLE")
+    return "MIXED" if status == "MIXED_EVIDENCE" else status
 
 
 def _pointer_identity_status(pointer: Mapping[str, Any]) -> dict[str, str]:
     manifest_path = str(pointer.get("manifest") or "")
     if not manifest_path or not Path(manifest_path).exists():
-        return {"effective_identity_status": "MANIFEST_MISSING"}
+        return {
+            "effective_identity_status": "MANIFEST_MISSING",
+            "effective_integrity_status": "MISSING",
+            "effective_evidence_status": "UNAVAILABLE",
+            "effective_evidence_source": "missing_manifest",
+            "effective_evidence_trust": "UNAVAILABLE",
+        }
     identity = effective_identity_for_manifest(manifest_path)
+    evidence = {
+        "effective_evidence_status": _evidence_status(identity["manifest_status"]),
+        "effective_evidence_source": str(identity["evidence_source"]),
+        "effective_evidence_trust": str(identity["evidence_trust"]),
+    }
     if not identity["valid"]:
         return {
             "effective_identity_status": "MANIFEST_IDENTITY_MISMATCH",
+            "effective_integrity_status": "MISMATCH",
             "effective_identity_source": str(identity["source"]),
+            **evidence,
         }
-    pointer_digest = str(pointer.get("effective_digest") or "")
-    if not pointer_digest:
+    if identity["source"] == "manifest_sha256_fallback":
+        expected = str(pointer.get("manifest_sha256") or pointer.get("manifest_sha256_fallback") or "")
+        actual = sha256_file(manifest_path)
+        status = "MISSING" if not expected else ("MATCH" if expected.removeprefix("sha256:") == actual else "MISMATCH")
+    else:
+        expected = str(pointer.get("effective_digest") or "")
+        status = "MISSING" if not expected else ("MATCH" if expected == identity["digest"] else "MISMATCH")
+    if status == "MISSING":
         return {
             "effective_identity_status": "POINTER_DIGEST_MISSING",
+            "effective_integrity_status": status,
             "effective_identity_source": str(identity["source"]),
+            **evidence,
         }
     return {
-        "effective_identity_status": "MATCH" if pointer_digest == identity["digest"] else "MISMATCH",
+        "effective_identity_status": status,
+        "effective_integrity_status": status,
         "effective_identity_source": str(identity["source"]),
+        **evidence,
     }
+
+
+def approval_integrity_for_manifest(
+    approval_path: str | Path,
+    manifest_path: str | Path,
+    *,
+    approval_sha256: str = "",
+    effective_digest: str = "",
+) -> str:
+    path = Path(approval_path)
+    candidate_path = Path(manifest_path)
+    if not path.exists() or not path.is_file():
+        return "MISSING"
+    if approval_sha256 and approval_sha256.removeprefix("sha256:") != sha256_file(path):
+        return "MISMATCH"
+    approval = read_json(path, {}) or {}
+    declared_manifest = str(approval.get("candidate_effective_manifest") or "")
+    if declared_manifest and Path(declared_manifest) != candidate_path:
+        return "MISMATCH"
+    candidate_sha = str(approval.get("candidate_effective_sha256") or "")
+    if candidate_sha and candidate_sha.removeprefix("sha256:") != sha256_file(candidate_path):
+        return "MISMATCH"
+    approved_digest = str(approval.get("candidate_effective_digest") or "")
+    if approved_digest:
+        return "MATCH" if effective_digest and approved_digest == effective_digest else "MISMATCH"
+    if candidate_sha:
+        return "MATCH"
+    return "MISSING"
+
+
+def _pointer_approval_status(pointer: Mapping[str, Any]) -> dict[str, str]:
+    approval_path = str(pointer.get("review_approval") or "")
+    if not approval_path:
+        return {"approval_integrity_status": "NOT_DECLARED"}
+    manifest_path = str(pointer.get("manifest") or "")
+    if not manifest_path or not Path(manifest_path).exists():
+        return {"approval_integrity_status": "MISSING"}
+    identity = effective_identity_for_manifest(manifest_path)
+    status = approval_integrity_for_manifest(
+        approval_path,
+        manifest_path,
+        approval_sha256=str(pointer.get("approval_sha256") or ""),
+        effective_digest=str(identity.get("digest") or ""),
+    )
+    return {"approval_integrity_status": status}
 
 
 def normalize_effective_ref(value: str) -> str:
@@ -207,6 +284,10 @@ def make_current_pointer(
         "effective_digest": identity["digest"],
         "effective_identity_source": identity["source"],
         "effective_identity_status": identity["manifest_status"],
+        "effective_integrity_status": identity["integrity_status"],
+        "effective_evidence_status": _evidence_status(identity["manifest_status"]),
+        "effective_evidence_source": identity["evidence_source"],
+        "effective_evidence_trust": identity["evidence_trust"],
         "html": str(html_path) if html_path.exists() or html else "",
         "release_preview": str(release_html) if release_html.exists() or release_preview else "",
         "review_approval": str(review_approval) if review_approval else "",
@@ -291,6 +372,7 @@ def load_current_pointer(out: str | Path, lib_id: str) -> dict[str, Any]:
         if data:
             data["_pointer_path"] = str(path)
             data.update(_pointer_identity_status(data))
+            data.update(_pointer_approval_status(data))
             return data
     return {}
 

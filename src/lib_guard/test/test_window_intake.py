@@ -857,6 +857,89 @@ class WindowIntakeTest(unittest.TestCase):
                     )
                 )
 
+    def test_accept_window_rejects_rebuilt_manifest_after_real_compare_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = {
+                "libraries": [
+                    {
+                        "library_id": "ip/ucie",
+                        "library_name": "ucie",
+                        "versions": [
+                            {"version_id": "full1", "scan": {"snapshot_identity": {"digest": "sha256:full", "strength": "full"}}},
+                            {"version_id": "fix1", "scan": {"snapshot_identity": {"digest": "sha256:fix-a", "strength": "full"}}},
+                        ],
+                    }
+                ]
+            }
+            from lib_guard.effective.compare import build_compare_manifest, write_compare_manifest
+            from lib_guard.effective.manifest import build_effective_manifest
+
+            manifest_path = root / "libraries" / "ip_ucie" / "effective" / "candidate_fix1" / "effective_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            original = build_effective_manifest(catalog, "ucie", "full1", [("fix1", ["lef"])], effective_id="candidate_fix1")
+            manifest_path.write_text(json.dumps(original), encoding="utf-8")
+            compare_dir = root / "compare"
+            compare_manifest = build_compare_manifest(
+                catalog,
+                "ucie",
+                "raw:full1",
+                "effective:candidate_fix1",
+                search_roots=[root],
+                compare_id="cmp1",
+            )
+            compare_path = write_compare_manifest(compare_dir, compare_manifest)
+            self.assertEqual(compare_manifest["new_target"]["effective_digest"], original["identity"]["digest"])
+
+            changed_catalog = json.loads(json.dumps(catalog))
+            changed_catalog["libraries"][0]["versions"][1]["scan"]["snapshot_identity"]["digest"] = "sha256:fix-b"
+            replacement = build_effective_manifest(
+                changed_catalog,
+                "ucie",
+                "full1",
+                [("fix1", ["lef"])],
+                effective_id="candidate_fix1",
+            )
+            manifest_path.write_text(json.dumps(replacement), encoding="utf-8")
+
+            window = root / "pending_window.json"
+            window.write_text(
+                json.dumps(
+                    {
+                        "library": "ucie",
+                        "state": "PENDING",
+                        "base_effective": {"target": "raw:full1"},
+                        "candidate_effective": {"effective_id": "candidate_fix1", "manifest": str(manifest_path)},
+                        "compare": {"old": "raw:full1", "new": "effective:candidate_fix1", "out_dir": str(compare_dir)},
+                        "items": [{"version": "fix1", "kind": "PARTIAL_UPDATE"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan_dir = root / "work" / "state" / "ucie"
+            plan_dir.mkdir(parents=True)
+            (plan_dir / "current_plan.json").write_text(
+                json.dumps({"state": "DONE", "tasks": [{"id": "effective-compare", "status": "DONE"}]}),
+                encoding="utf-8",
+            )
+
+            from lib_guard.window.cli import cmd_accept
+
+            with self.assertRaisesRegex(ValueError, "effective digest changed after compare"):
+                cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
+
+            self.assertTrue(compare_path.exists())
+
     def test_accept_window_writes_review_approval_and_pointer_revision(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -932,6 +1015,56 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertEqual(pointer_data["approval_sha256"], sha256_file(approval_path))
             self.assertEqual(approval["candidate_effective_sha256"], sha256_file(manifest))
             self.assertEqual(approval["compare_manifest_sha256"], sha256_file(compare_dir / "compare_manifest.json"))
+            self.assertTrue(approval["candidate_effective_digest"])
+
+            accepted_window = json.loads(window.read_text(encoding="utf-8"))
+            accepted_window["review_approval"] = str(root / "missing_approval.json")
+            window.write_text(json.dumps(accepted_window), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "approval integrity is MISSING"):
+                cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
+
+            accepted_window["review_approval"] = str(approval_path)
+            accepted_window["approval_sha256"] = "wrong"
+            window.write_text(json.dumps(accepted_window), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "approval integrity is MISMATCH"):
+                cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
+
+            approval["candidate_effective_digest"] = "sha256:wrong"
+            approval_path.write_text(json.dumps(approval), encoding="utf-8")
+            accepted_window["approval_sha256"] = sha256_file(approval_path)
+            window.write_text(json.dumps(accepted_window), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "approval integrity is MISMATCH"):
+                cmd_accept(
+                    argparse.Namespace(
+                        catalog=None,
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        window_file=str(window),
+                        accepted_by="owner",
+                        note="review passed",
+                    )
+                )
 
     def test_accept_window_rejects_conflicted_effective_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from lib_guard.effective.pointer import (
+    approval_integrity_for_manifest,
     default_pointer_path_for_effective,
     effective_identity_for_manifest,
     safe_name,
@@ -459,15 +460,7 @@ def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path
             "compare evidence does not match pending window: "
             f"new target is {actual_new}, expected {expected_new}"
         )
-    expected_digest = _target_digest(actual_new_raw)
     candidate_manifest = str(candidate.get("manifest") or "")
-    if expected_digest and candidate_manifest and Path(candidate_manifest).exists():
-        actual_digest = sha256_file(candidate_manifest)
-        if actual_digest != expected_digest:
-            raise ValueError(
-                "compare evidence does not match pending window: "
-                "candidate effective manifest digest changed after compare"
-            )
     expected_effective_digest = _target_effective_digest(actual_new_raw)
     if candidate_manifest and Path(candidate_manifest).exists():
         identity = effective_identity_for_manifest(candidate_manifest)
@@ -477,6 +470,14 @@ def _validate_accept_compare(window: dict[str, Any], compare_manifest_path: Path
             raise ValueError(
                 "compare evidence does not match pending window: "
                 "candidate effective digest changed after compare"
+            )
+    expected_digest = _target_digest(actual_new_raw)
+    if expected_digest and candidate_manifest and Path(candidate_manifest).exists():
+        actual_digest = sha256_file(candidate_manifest)
+        if actual_digest != expected_digest:
+            raise ValueError(
+                "compare evidence does not match pending window: "
+                "candidate effective manifest digest changed after compare"
             )
 
 
@@ -538,16 +539,29 @@ def _write_review_approval(
     return approval_path, sha256_file(approval_path)
 
 
-def _validate_review_approval(window: dict[str, Any], effective_digest: str) -> None:
+def _validate_review_approval(window: dict[str, Any], effective_digest: str, manifest_path: Path | None = None) -> None:
     candidate = window.get("candidate_effective") if isinstance(window.get("candidate_effective"), dict) else {}
-    approval_refs = [window.get("review_approval"), candidate.get("review_approval")]
-    for approval_ref in approval_refs:
+    approval_refs = [
+        (window.get("review_approval"), window.get("approval_sha256")),
+        (candidate.get("review_approval"), candidate.get("approval_sha256")),
+    ]
+    for approval_ref, approval_sha256 in approval_refs:
         if not approval_ref:
             continue
-        approval = read_json(str(approval_ref), {}) or {}
-        approved_digest = str(approval.get("candidate_effective_digest") or "")
-        if approved_digest and approved_digest != effective_digest:
-            raise ValueError("approval effective digest does not match candidate effective manifest")
+        if manifest_path is None:
+            approval = read_json(str(approval_ref), {}) or {}
+            approved_digest = str(approval.get("candidate_effective_digest") or "")
+            if not approval or (approved_digest and approved_digest != effective_digest):
+                raise ValueError("approval effective digest does not match candidate effective manifest")
+            continue
+        status = approval_integrity_for_manifest(
+            approval_ref,
+            manifest_path,
+            approval_sha256=str(approval_sha256 or ""),
+            effective_digest=effective_digest,
+        )
+        if status != "MATCH":
+            raise ValueError(f"approval integrity is {status}; approval does not match candidate effective manifest")
 
 
 def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], window: dict[str, Any], reason: str) -> None:
@@ -745,7 +759,7 @@ def cmd_accept(args: argparse.Namespace) -> int:
     identity = effective_identity_for_manifest(manifest_path, effective_manifest)
     if not identity["valid"]:
         raise ValueError("candidate effective manifest identity does not match its recomputed digest")
-    _validate_review_approval(data, str(identity["digest"]))
+    _validate_review_approval(data, str(identity["digest"]), manifest_path)
     conflict_count = _effective_conflict_count(effective_manifest)
     if conflict_count:
         raise ValueError(

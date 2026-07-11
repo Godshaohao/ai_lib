@@ -82,6 +82,33 @@ class EffectiveManifestTest(unittest.TestCase):
         self.assertEqual(missing["components"][1]["evidence_strength"], "unavailable")
         self.assertEqual(missing["identity_status"], "UNAVAILABLE")
 
+    def test_effective_manifest_validation_recomputes_full_identity_and_provenance(self) -> None:
+        from lib_guard.effective.manifest import build_effective_manifest, validate_effective_manifest
+
+        manifest = build_effective_manifest(
+            self._lock_catalog(snapshots={"full": "sha256:full", "fix1": "sha256:fix1"}),
+            "demo",
+            "full",
+            [("fix1", ["lef"])],
+        )
+        self.assertEqual(validate_effective_manifest(manifest)["integrity_status"], "MATCH")
+
+        tampered_payload = json.loads(json.dumps(manifest))
+        tampered_payload["identity"]["payload"]["resolver_version"] = "effective.tampered"
+        self.assertEqual(validate_effective_manifest(tampered_payload)["integrity_status"], "MISMATCH")
+
+        tampered_schema = json.loads(json.dumps(manifest))
+        tampered_schema["identity"]["schema_version"] = "effective_identity.tampered"
+        self.assertEqual(validate_effective_manifest(tampered_schema)["integrity_status"], "MISMATCH")
+
+        tampered_provenance = json.loads(json.dumps(manifest))
+        tampered_provenance["identity_status"] = "UNAVAILABLE"
+        self.assertEqual(validate_effective_manifest(tampered_provenance)["integrity_status"], "MISMATCH")
+
+        tampered_component_provenance = json.loads(json.dumps(manifest))
+        tampered_component_provenance["components"][1]["identity_source"] = "missing_evidence"
+        self.assertEqual(validate_effective_manifest(tampered_component_provenance)["integrity_status"], "MISMATCH")
+
     def test_pointer_and_approval_bind_effective_digest_and_detect_mismatch(self) -> None:
         from lib_guard.effective.manifest import build_effective_manifest
         from lib_guard.effective.pointer import load_current_pointer, write_current_pointer

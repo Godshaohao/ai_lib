@@ -71,3 +71,52 @@ Result: compileall completed successfully; full suite ran `372 tests` and `OK`.
 
 - Implementation: `a6b9edd feat: lock effective compositions to evidence digests`
 - Report: recorded in the follow-up documentation commit.
+
+## Independent Review Remediation
+
+Baseline: `86ea67d`
+
+| Review finding | Fix | Regression coverage |
+| --- | --- | --- |
+| 1. Generated compare targets did not bind the effective identity | `effective/compare.py` now validates the resolved effective manifest and records its recomputed `effective_digest`, manifest SHA-256, identity source/status, and evidence provenance. `accept-window` checks the effective digest before the file SHA lock. | A real `build_effective_manifest()` -> `build_compare_manifest()` -> `cmd_accept()` path replaces the manifest with the same effective ID but a different self-consistent snapshot and is rejected. |
+| 2. Manifest validation compared only the digest | `effective/manifest.py::validate_effective_manifest()` is the central validator. It compares the complete stored identity object (`schema_version`, `digest`, and `payload`), validates component provenance coherence, and recomputes the top-level status/source/trust tuple. Pointer, compare, and window consume this result. | Tests tamper identity payload, schema, top-level provenance, and component provenance independently and require `MISMATCH`. |
+| 3. Pointer integrity and evidence status were conflated | Pointer output now has `effective_integrity_status` plus independent `effective_evidence_status/source/trust`. `MIXED_EVIDENCE` remains the manifest compatibility value while the new pointer status is `MIXED`; `UNAVAILABLE` remains visible when integrity is `MATCH`. Existing `effective_identity_*` fields retain their read/write compatibility behavior. | Pointer tests cover trusted, mixed, and unavailable evidence without allowing `MATCH` to overwrite evidence state. |
+| 4. Historical pointers did not reliably validate the actual manifest file | Identity-less manifests use actual file SHA-256. Old pointers validate either `manifest_sha256` or `manifest_sha256_fallback` and return `MATCH`, `MISMATCH`, or `MISSING`. | A historical manifest/pointer regression validates both field names, then mutates the file and requires `MISMATCH`. |
+| 5. Declared approvals could fail silently | Approval validation is shared in `effective/pointer.py`. Missing files, approval hash mismatch, candidate manifest SHA mismatch, and candidate effective digest mismatch produce an independent `approval_integrity_status`; `cmd_accept()` rejects every declared non-`MATCH` approval. Historical approvals without an effective digest remain valid when `candidate_effective_sha256` matches the manifest. Newly written approvals always include `candidate_effective_digest`. | Pointer tests cover candidate SHA, candidate digest, approval SHA, missing file, and historical fallback. The real accept path rejects missing, hash-mismatched, and digest-mismatched approvals. |
+| 6. Accept did not consistently consume the hardened validators | `cmd_accept()` validates generated compare identity evidence, centralized manifest integrity/provenance, and any declared approval before conflict checks or pointer mutation. Window selection and command surface are unchanged. | Window intake tests exercise real compare generation and real accept calls. |
+
+### Follow-up RED
+
+The first focused run failed five tests for the missing central validator, missing pointer status fields, missing legacy SHA fallback behavior, missing approval status, and missing generated compare digest. A second focused run failed the mixed-evidence normalization assertion (`MIXED_EVIDENCE` versus `MIXED`).
+
+### Follow-up GREEN
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest \
+  src.lib_guard.test.test_effective_manifest \
+  src.lib_guard.test.test_effective_pointer \
+  src.lib_guard.test.test_window_intake -q
+```
+
+Result: `Ran 40 tests` and `OK`.
+
+```sh
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m unittest discover \
+  -s src/lib_guard/test -p 'test*.py' -q
+PYTHONPYCACHEPREFIX=/tmp/ai_lib_pycache PYTHONPATH=src python3 -m compileall -q src
+```
+
+Result: full suite ran `378 tests` and `OK`; compileall exited `0`.
+
+### Follow-up Changed Files
+
+- `src/lib_guard/effective/manifest.py`
+- `src/lib_guard/effective/pointer.py`
+- `src/lib_guard/effective/compare.py`
+- `src/lib_guard/window/cli.py`
+- `src/lib_guard/test/test_effective_manifest.py`
+- `src/lib_guard/test/test_effective_pointer.py`
+- `src/lib_guard/test/test_window_intake.py`
+- `.superpowers/sdd/task-4-report.md`
+
+No command, page, dependency, or review-window selection policy was added or changed.

@@ -319,6 +319,59 @@ def _effective_identity_provenance(components: Sequence[Mapping[str, Any]]) -> t
     return "MIXED_EVIDENCE", "mixed_evidence", "NON_HOMOGENEOUS"
 
 
+def _component_provenance_is_valid(component: Mapping[str, Any]) -> bool:
+    source = str(component.get("identity_source") or "missing_evidence")
+    digest = str(component.get("snapshot_digest") or "")
+    strength = str(component.get("evidence_strength") or "")
+    if source == "snapshot_identity":
+        return bool(digest) and strength not in {"", "legacy", "unavailable"}
+    if source == "legacy_input_fingerprint":
+        return bool(digest) and strength == "legacy"
+    if source == "missing_evidence":
+        return not digest and strength == "unavailable"
+    return False
+
+
+def validate_effective_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Recompute and validate the complete effective identity and evidence provenance."""
+    stored_identity = manifest.get("identity")
+    if stored_identity is None:
+        return {
+            "integrity_status": "MISSING",
+            "valid": False,
+            "digest": "",
+            "identity_source": "manifest_sha256_fallback",
+            "evidence_status": "LEGACY_FALLBACK",
+            "evidence_source": "manifest_sha256_fallback",
+            "evidence_trust": "LEGACY_FALLBACK",
+        }
+
+    recomputed_identity = build_effective_identity(manifest)
+    components = manifest.get("components", []) or []
+    provenance = _effective_identity_provenance(components)
+    stored_provenance = (
+        str(manifest.get("identity_status") or ""),
+        str(manifest.get("identity_source") or ""),
+        str(manifest.get("identity_trust") or ""),
+    )
+    valid = (
+        isinstance(stored_identity, Mapping)
+        and dict(stored_identity) == recomputed_identity
+        and all(isinstance(component, Mapping) and _component_provenance_is_valid(component) for component in components)
+        and stored_provenance == provenance
+    )
+    return {
+        "integrity_status": "MATCH" if valid else "MISMATCH",
+        "valid": valid,
+        "digest": recomputed_identity["digest"],
+        "identity": recomputed_identity,
+        "identity_source": "effective_manifest_identity",
+        "evidence_status": provenance[0],
+        "evidence_source": provenance[1],
+        "evidence_trust": provenance[2],
+    }
+
+
 def _version_evidence(version_id: str, role: str, version: Mapping[str, Any]) -> dict[str, Any]:
     scan = version.get("scan", {}) or {}
     diff = version.get("diff", {}) or {}

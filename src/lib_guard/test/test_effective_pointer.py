@@ -10,6 +10,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class EffectivePointerTest(unittest.TestCase):
+    @staticmethod
+    def _manifest(*, snapshot: str | None = "sha256:full") -> dict[str, object]:
+        from lib_guard.effective.manifest import build_effective_manifest
+
+        scan = {"snapshot_identity": {"digest": snapshot, "strength": "full"}} if snapshot else {}
+        catalog = {
+            "libraries": [
+                {
+                    "library_id": "ip/ucie",
+                    "library_name": "ucie",
+                    "versions": [{"version_id": "full1", "scan": scan}],
+                }
+            ]
+        }
+        return build_effective_manifest(catalog, "ucie", "full1", [], effective_id="E1")
+
     def test_normalize_effective_ref_uses_canonical_prefixes(self) -> None:
         from lib_guard.effective.pointer import normalize_effective_ref
 
@@ -90,6 +106,155 @@ class EffectivePointerTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "current effective changed"):
                 write_current_pointer(manifest, expected_previous_effective_id="E0", expected_revision=7)
+
+    def test_pointer_keeps_integrity_separate_from_unavailable_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_path = root / "libraries" / "ip_ucie" / "effective" / "E1" / "effective_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(json.dumps(self._manifest(snapshot=None)), encoding="utf-8")
+
+            from lib_guard.effective.pointer import load_current_pointer, write_current_pointer
+
+            write_current_pointer(manifest_path)
+            pointer = load_current_pointer(root, "ip/ucie")
+
+            self.assertEqual(pointer["effective_integrity_status"], "MATCH")
+            self.assertEqual(pointer["effective_evidence_status"], "UNAVAILABLE")
+            self.assertEqual(pointer["effective_evidence_source"], "missing_evidence")
+            self.assertEqual(pointer["effective_evidence_trust"], "UNAVAILABLE")
+            self.assertEqual(pointer["effective_identity_status"], "MATCH")
+
+    def test_pointer_normalizes_mixed_evidence_without_changing_manifest_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_path = root / "libraries" / "ip_ucie" / "effective" / "E1" / "effective_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            from lib_guard.effective.manifest import build_effective_manifest
+
+            catalog = {
+                "libraries": [
+                    {
+                        "library_id": "ip/ucie",
+                        "library_name": "ucie",
+                        "versions": [
+                            {"version_id": "full1", "scan": {"snapshot_identity": {"digest": "sha256:full", "strength": "full"}}},
+                            {"version_id": "fix1", "scan": {"input_fingerprint": {"hash": "legacy-fix"}}},
+                        ],
+                    }
+                ]
+            }
+            manifest = build_effective_manifest(catalog, "ucie", "full1", [("fix1", ["lef"])], effective_id="E1")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            from lib_guard.effective.pointer import load_current_pointer, write_current_pointer
+
+            write_current_pointer(manifest_path)
+            pointer = load_current_pointer(root, "ip/ucie")
+            self.assertEqual(manifest["identity_status"], "MIXED_EVIDENCE")
+            self.assertEqual(pointer["effective_integrity_status"], "MATCH")
+            self.assertEqual(pointer["effective_evidence_status"], "MIXED")
+
+    def test_legacy_pointer_validates_manifest_sha256_and_fallback_field(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            effective = root / "libraries" / "ip_ucie" / "effective"
+            manifest_path = effective / "E1" / "effective_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(json.dumps({"effective_id": "E1", "library_id": "ip/ucie"}), encoding="utf-8")
+
+            from lib_guard.effective.pointer import load_current_pointer, sha256_file
+
+            pointer_path = effective / "current_effective.json"
+            pointer_path.write_text(
+                json.dumps({"current_effective_id": "E1", "manifest": str(manifest_path), "manifest_sha256": sha256_file(manifest_path)}),
+                encoding="utf-8",
+            )
+            self.assertEqual(load_current_pointer(root, "ip/ucie")["effective_integrity_status"], "MATCH")
+
+            pointer_path.write_text(
+                json.dumps(
+                    {
+                        "current_effective_id": "E1",
+                        "manifest": str(manifest_path),
+                        "manifest_sha256_fallback": sha256_file(manifest_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(load_current_pointer(root, "ip/ucie")["effective_integrity_status"], "MATCH")
+
+            manifest_path.write_text(json.dumps({"effective_id": "E1", "library_id": "ip/changed"}), encoding="utf-8")
+            self.assertEqual(load_current_pointer(root, "ip/ucie")["effective_integrity_status"], "MISMATCH")
+
+    def test_pointer_reports_approval_integrity_independently(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            effective = root / "libraries" / "ip_ucie" / "effective"
+            manifest_path = effective / "E1" / "effective_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest = self._manifest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            approval_path = manifest_path.parent / "review_approval.json"
+            approval_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_effective_manifest": str(manifest_path),
+                        "candidate_effective_sha256": "wrong",
+                        "candidate_effective_digest": manifest["identity"]["digest"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.effective.pointer import load_current_pointer, sha256_file, write_current_pointer
+
+            write_current_pointer(
+                manifest_path,
+                review_approval=approval_path,
+                approval_sha256=sha256_file(approval_path),
+            )
+            pointer = load_current_pointer(root, "ip/ucie")
+            self.assertEqual(pointer["effective_integrity_status"], "MATCH")
+            self.assertEqual(pointer["approval_integrity_status"], "MISMATCH")
+
+            approval_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_effective_manifest": str(manifest_path),
+                        "candidate_effective_sha256": sha256_file(manifest_path),
+                        "candidate_effective_digest": "sha256:wrong",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            pointer_path = effective / "current_effective.json"
+            pointer_data = json.loads(pointer_path.read_text(encoding="utf-8"))
+            pointer_data["approval_sha256"] = sha256_file(approval_path)
+            pointer_path.write_text(json.dumps(pointer_data), encoding="utf-8")
+            self.assertEqual(load_current_pointer(root, "ip/ucie")["approval_integrity_status"], "MISMATCH")
+
+            approval_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_effective_manifest": str(manifest_path),
+                        "candidate_effective_sha256": sha256_file(manifest_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            pointer_data["approval_sha256"] = sha256_file(approval_path)
+            pointer_path.write_text(json.dumps(pointer_data), encoding="utf-8")
+            self.assertEqual(load_current_pointer(root, "ip/ucie")["approval_integrity_status"], "MATCH")
+
+            pointer_data["approval_sha256"] = "wrong"
+            pointer_path.write_text(json.dumps(pointer_data), encoding="utf-8")
+            self.assertEqual(load_current_pointer(root, "ip/ucie")["approval_integrity_status"], "MISMATCH")
+
+            approval_path.unlink()
+            pointer = load_current_pointer(root, "ip/ucie")
+            self.assertEqual(pointer["effective_integrity_status"], "MATCH")
+            self.assertEqual(pointer["approval_integrity_status"], "MISSING")
 
 
 if __name__ == "__main__":

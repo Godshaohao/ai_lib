@@ -18,7 +18,7 @@ from lib_guard.effective.manifest import (
     short_name,
     write_json,
 )
-from lib_guard.effective.pointer import safe_name
+from lib_guard.effective.pointer import effective_identity_for_manifest, safe_name, sha256_file
 
 COMPARE_SCHEMA_VERSION = "effective_compare.v1"
 
@@ -170,6 +170,9 @@ def target_file_map(
     if ttype == "effective":
         path = find_effective_manifest_path(library, tid, search_roots)
         manifest = read_json(path)
+        identity = effective_identity_for_manifest(path, manifest)
+        if not identity["valid"]:
+            raise ValueError("effective manifest identity does not match its recomputed identity and provenance")
         effective_id = str(manifest.get("effective_id") or path.parent.name)
         meta = {
             "type": "effective",
@@ -179,6 +182,12 @@ def target_file_map(
             "html": str(path.parent / "index.html") if (path.parent / "index.html").exists() else "",
             "base_full_version": manifest.get("base_full_version"),
             "accepted_updates": list(manifest.get("accepted_updates", []) or []),
+            "manifest_sha256": sha256_file(path),
+            "effective_digest": identity["digest"],
+            "effective_identity_source": identity["source"],
+            "effective_identity_status": identity["manifest_status"],
+            "effective_evidence_source": identity["evidence_source"],
+            "effective_evidence_trust": identity["evidence_trust"],
         }
         return meta, _effective_file_records(manifest)
     if ttype == "release":
