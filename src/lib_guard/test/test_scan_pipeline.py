@@ -946,7 +946,10 @@ class ScanPipelineTest(unittest.TestCase):
             )
 
             self.assertEqual(forced["status"], "FORCED_DONE")
-            self.assertTrue((release_root / "ip" / "demo" / "hotfix_v1.0.1").exists())
+            immutable = release_root / "releases" / "hotfix_v1.0.1"
+            self.assertTrue((immutable / "RTL" / "empty.v").exists())
+            self.assertTrue((release_root / "current").is_symlink())
+            self.assertEqual((release_root / "current").resolve(), immutable.resolve())
             override = json.loads((scan / "release" / "release_override.json").read_text(encoding="utf-8"))
             self.assertTrue(override["force"])
             self.assertEqual(override["force_reason"], "manual waiver approved for emergency hotfix")

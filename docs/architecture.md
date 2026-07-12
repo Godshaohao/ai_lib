@@ -63,7 +63,7 @@ raw delivery
 | 发现候选 | `src/lib_guard/library_registry.py`, `src/lib_guard/discovery.py` | RAW 根目录 | `config/library_candidates/latest.*` | 只生成候选，不自动成为正式库 |
 | 人工确认库 | `src/lib_guard/library_registry.py` | accept/add/override | `config/library_registry.tsv` | 人工确认库根的事实源 |
 | 生成正式库 map | `src/lib_guard/library_registry.py` | registry | `config/library_catalog.yml` | catalog/scan/diff 的正式库来源 |
-| Catalog 刷新 | `src/lib_guard/cli_commands/catalog.py`, `src/lib_guard/catalog/` | library catalog、RAW | `catalog/catalog.json` | 库和版本资产地图；不要手改运行时字段 |
+| Catalog 刷新 | `src/lib_guard/cli_commands/catalog.py`, `src/lib_guard/catalog/` | library catalog、RAW | `catalog/catalog.json` + `catalog/catalog_runtime.json` | `catalog.json` 是资产快照；运行状态写入 sidecar |
 
 ### Scan
 
@@ -108,7 +108,7 @@ raw delivery
 | --- | --- | --- | --- | --- |
 | Release 检查 | `src/lib_guard/release/checker.py`, `src/lib_guard/release/explain.py` | current effective 或 raw version | release check result | 判断是否能发布，不负责链接 |
 | Release manifest | `src/lib_guard/release/bundle.py` | effective manifest/catalog version | `release_manifest.json` | 发布文件清单事实源 |
-| Link/verify | `src/lib_guard/release/linker.py`, `src/lib_guard/release/postcheck.py` | manifest | symlink release + verify result | release 用 link 方式，不复制大库 |
+| Link/verify | `src/lib_guard/release/linker.py`, `src/lib_guard/release/postcheck.py` | manifest | staging、immutable release、alias symlink、verify result | 先验证 staging，再原子切换；不复制大库 |
 | Release 报告 | `src/lib_guard/render/release_report.py` | release result | HTML | 投影，不回写 release 事实 |
 
 ### 修改入口速查
@@ -130,7 +130,8 @@ raw delivery
 | 层级 | Artifact | 职责 | 允许写入者 | 允许读取者 | 禁止事项 |
 | --- | --- | --- | --- | --- | --- |
 | 人工确认 | `config/library_registry.tsv`, `config/library_catalog.yml`, overrides | 正式库根、人工确认关系、包类型/Base 修正 | `library add/accept/apply/override`, `mark` | catalog、short CLI、intake | 不允许 scan/render 自动覆盖人工确认 |
-| 资产地图 | `catalog/catalog.json` | 库、版本、raw path 和合并后的运行时指针 | catalog refresh、scan/cmp 状态更新 | list、scan、cmp、render、intake | 不手改 scan/diff/release 字段 |
+| 资产快照 | `catalog/catalog.json` | 库、版本和 raw path | catalog refresh | list、scan、cmp、render、intake | 不把运行时状态写回资产快照 |
+| Catalog 运行状态 | `catalog/catalog_runtime.json` | scan/diff/release 运行结果；旧 catalog 可内嵌回退 | scan/cmp/release status update | `load_catalog_view()`、review/render、window、release manifest | 不作为新的库发现来源 |
 | 单版本事实 | `scan_out/**` | 文件清单、parser 任务、scan review TSV、release readiness | scan pipeline | diff、Version Detail、release check | 不把 raw JSON 直接作为人工主页面 |
 | 变化事实 | `diff/**`, `file_diff/**` | 相对可信 base 的 view/file/release 差异 | compare、fd | Version Detail、Comparison Review | 缺 diff 不能显示成“无变化” |
 | 有效版/窗口 | `catalog/html/libraries/**/effective`, `window`, `current_effective.json` | 候选组合、当前 effective 指针、接入窗口 | intake、accept-window、effective rollback | Version Detail、library workspace、release | 不替代 scan/diff 事实 |

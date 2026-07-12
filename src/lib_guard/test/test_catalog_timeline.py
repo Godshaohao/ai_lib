@@ -15,6 +15,161 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class CatalogTimelineTest(unittest.TestCase):
+    def test_runtime_updates_write_sidecar_without_changing_catalog_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            version = raw / "ucie" / "stable_20250608"
+            version.mkdir(parents=True)
+            (version / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            scan_dir = root / "scan" / "stable_20250608"
+            diff_dir = root / "diff" / "stable_20250608"
+            release_result = root / "release" / "release_check.json"
+            scan_dir.mkdir(parents=True)
+            diff_dir.mkdir(parents=True)
+            release_result.parent.mkdir(parents=True)
+            release_result.write_text("{}", encoding="utf-8")
+
+            from lib_guard.catalog.index import (
+                scan_catalog,
+                update_catalog_diff_status,
+                update_catalog_release_status,
+                update_catalog_scan_status,
+            )
+
+            scan_catalog(raw, out_dir=out, library_type="ip")
+            catalog_path = out / "catalog.json"
+            asset_before = catalog_path.read_bytes()
+            version_key = "ip/ucie/stable_20250608"
+            update_catalog_scan_status(
+                catalog_path,
+                version_key=version_key,
+                scan_dir=scan_dir,
+                scan_id="scan_1",
+                status="PASS",
+            )
+            update_catalog_diff_status(
+                catalog_path,
+                version_key=version_key,
+                mode="adjacent",
+                old_version="stable_20250601",
+                diff_dir=diff_dir,
+                status="DIFF",
+            )
+            update_catalog_release_status(
+                catalog_path,
+                version_key=version_key,
+                action="check",
+                status="PASS",
+                result_path=release_result,
+            )
+
+            self.assertEqual(catalog_path.read_bytes(), asset_before)
+            runtime_path = out / "catalog_runtime.json"
+            runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+            state = runtime["runtime_state"][version_key]
+            self.assertEqual(state["scan"]["scan_id"], "scan_1")
+            self.assertEqual(state["diff"]["adjacent_status"], "DIFF_DONE")
+            self.assertEqual(state["release"]["check_status"], "PASS")
+
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            view = load_catalog_view(catalog_path)
+            version_view = view["libraries"][0]["versions"][0]
+            self.assertEqual(version_view["scan"]["scan_id"], "scan_1")
+            self.assertEqual(version_view["diff"]["adjacent_diff_dir"], str(diff_dir))
+            self.assertEqual(version_view["release"]["check_status"], "PASS")
+
+    def test_catalog_refresh_does_not_mirror_sidecar_runtime_into_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "catalog"
+            version = raw / "ucie" / "stable_20250608"
+            version.mkdir(parents=True)
+            (version / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            scan_dir = root / "scan" / "stable_20250608"
+            scan_dir.mkdir(parents=True)
+
+            from lib_guard.catalog.index import scan_catalog, update_catalog_scan_status
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            scan_catalog(raw, out_dir=out, library_type="ip")
+            catalog_path = out / "catalog.json"
+            version_key = "ip/ucie/stable_20250608"
+            update_catalog_scan_status(
+                catalog_path,
+                version_key=version_key,
+                scan_dir=scan_dir,
+                scan_id="scan_1",
+                status="PASS",
+            )
+
+            scan_catalog(raw, out_dir=out, library_type="ip", force=True)
+
+            asset = json.loads(catalog_path.read_text(encoding="utf-8"))
+            self.assertNotIn("runtime_state", asset)
+            asset_version = asset["libraries"][0]["versions"][0]
+            self.assertIsNone(asset_version.get("scan", {}).get("scan_id"))
+            self.assertIsNone(asset_version.get("scan", {}).get("last_scan_at"))
+
+            view = load_catalog_view(catalog_path)
+            view_version = view["libraries"][0]["versions"][0]
+            self.assertEqual(view["runtime_state"][version_key]["scan"]["scan_id"], "scan_1")
+            self.assertEqual(view_version["scan"]["scan_id"], "scan_1")
+
+    def test_catalog_view_prefers_sidecar_and_falls_back_to_embedded_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog_path = root / "catalog.json"
+            version_key = "ip/ucie/stable_20250608"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "library_name": "ucie",
+                                "versions": [
+                                    {
+                                        "version_id": "stable_20250608",
+                                        "version_key": version_key,
+                                        "scan": {"status": "SCANNED", "scan_id": "legacy"},
+                                    }
+                                ],
+                            }
+                        ],
+                        "runtime_state": {
+                            version_key: {"scan": {"status": "SCANNED", "scan_id": "legacy"}}
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            runtime_path = root / "catalog_runtime.json"
+            runtime_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "catalog_runtime.v1",
+                        "runtime_state": {
+                            version_key: {"scan": {"status": "PASS", "scan_id": "sidecar"}}
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            sidecar_view = load_catalog_view(catalog_path)
+            self.assertEqual(sidecar_view["libraries"][0]["versions"][0]["scan"]["scan_id"], "sidecar")
+            runtime_path.unlink()
+            legacy_view = load_catalog_view(catalog_path)
+            self.assertEqual(legacy_view["libraries"][0]["versions"][0]["scan"]["scan_id"], "legacy")
+
     def test_catalog_diff_status_passes_through_identity_provenance_and_clears_missing_identity(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -642,7 +797,9 @@ class CatalogTimelineTest(unittest.TestCase):
                 scan_id="scan_1",
                 status="PASS",
             )
-            after_runtime_write = json.loads((out / "catalog.json").read_text(encoding="utf-8"))
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            after_runtime_write = load_catalog_view(out / "catalog.json")
             after_names = {lib["library_name"]: lib for lib in after_runtime_write["libraries"]}
             self.assertEqual(set(after_names), {"pcie", "ucie"})
             self.assertEqual(
@@ -1784,7 +1941,9 @@ class CatalogTimelineTest(unittest.TestCase):
                     0,
                 )
 
-            data = json.loads(catalog.read_text(encoding="utf-8"))
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            data = load_catalog_view(catalog)
             versions = {
                 version["version_id"]: version
                 for lib in data["libraries"]
@@ -1812,7 +1971,9 @@ class CatalogTimelineTest(unittest.TestCase):
                 ),
                 0,
             )
-            data = json.loads(catalog.read_text(encoding="utf-8"))
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            data = load_catalog_view(catalog)
             new_version = {
                 version["version_id"]: version
                 for lib in data["libraries"]
@@ -1851,7 +2012,9 @@ class CatalogTimelineTest(unittest.TestCase):
                 ),
                 0,
             )
-            data = json.loads(catalog.read_text(encoding="utf-8"))
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            data = load_catalog_view(catalog)
             new_version = {
                 version["version_id"]: version
                 for lib in data["libraries"]
@@ -1950,7 +2113,9 @@ class CatalogTimelineTest(unittest.TestCase):
                 0,
             )
 
-            data = json.loads(catalog.read_text(encoding="utf-8"))
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            data = load_catalog_view(catalog)
             lib = data["libraries"][0]
             versions = {version["version_id"]: version for version in lib["versions"]}
             new_version = versions[adhoc.name]
@@ -2243,7 +2408,9 @@ class CatalogTimelineTest(unittest.TestCase):
                 result_path=release_json,
             )
 
-            catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            catalog = load_catalog_view(catalog_path)
             self.assertEqual(catalog.get("manual_overrides", {}).get("ip/ucie/stable_20250608", {}).get("package_type"), "PARTIAL_UPDATE")
             state = catalog["runtime_state"]["ip/ucie/stable_20250608"]
             self.assertEqual(state["scan"]["scan_html"], str(scan_html))
@@ -2414,7 +2581,9 @@ class CatalogTimelineTest(unittest.TestCase):
             catalog_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
             rebuilt = scan_catalog(raw.parent, out_dir=out, library_type="ip", force=False)
-            rebuilt_data = json.loads(Path(rebuilt["catalog_path"]).read_text(encoding="utf-8"))
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            rebuilt_data = load_catalog_view(rebuilt["catalog_path"])
             self.assertNotIn("console_html", rebuilt_data["runtime_state"][version_key]["scan"])
             self.assertNotIn("console_html", rebuilt_data["libraries"][0]["versions"][0]["scan"])
 
@@ -2965,7 +3134,9 @@ class CatalogTimelineTest(unittest.TestCase):
                 0,
             )
 
-            data = json.loads(catalog.read_text(encoding="utf-8"))
+            from lib_guard.catalog.runtime import load_catalog_view
+
+            data = load_catalog_view(catalog)
             runtime = data["runtime_state"]["ip/ucie/stable_20250608"]
             self.assertTrue(runtime["scan"]["scan_html"].endswith("index.html"))
             self.assertNotIn("console_html", runtime["scan"])

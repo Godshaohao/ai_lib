@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from lib_guard.catalog.runtime import load_catalog_view
 from lib_guard.effective.compare import build_compare_manifest, write_compare_manifest
 from lib_guard.effective.manifest import (
     add_update_to_manifest,
@@ -45,7 +46,7 @@ def _normalized_link_mode(value: str) -> str:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    catalog = read_json(args.catalog)
+    catalog = load_catalog_view(args.catalog)
     manifest = build_effective_manifest(
         catalog,
         args.library,
@@ -70,7 +71,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 def cmd_add(args: argparse.Namespace) -> int:
-    catalog = read_json(args.catalog)
+    catalog = load_catalog_view(args.catalog)
     current = read_json(args.current)
     manifest = add_update_to_manifest(current, catalog, args.library, args.version, args.scope, effective_id=args.effective_id)
     write_json(args.out, manifest)
@@ -131,7 +132,7 @@ def cmd_current(args: argparse.Namespace) -> int:
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
-    catalog = read_json(args.catalog) if args.catalog else None
+    catalog = load_catalog_view(args.catalog) if args.catalog else None
     search_roots = args.search_root or []
     if args.out_dir:
         out_dir_path = Path(args.out_dir)

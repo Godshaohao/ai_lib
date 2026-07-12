@@ -82,6 +82,52 @@ class ReviewStateFastRenderTest(unittest.TestCase):
         self.assertIn("review_gate", enriched_version)
         self.assertEqual(enriched_version["version_id"], "fix11")
 
+    def test_render_version_detail_only_reads_runtime_sidecar_without_embedded_runtime(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog_path = root / "catalog.json"
+            catalog = self._catalog()
+            for version in catalog["libraries"][0]["versions"]:
+                version.pop("scan", None)
+                version.pop("diff", None)
+            import json
+
+            catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+            (root / "catalog_runtime.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "catalog_runtime.v1",
+                        "runtime_state": {
+                            "Vendor_A_模拟IP_UVIP_ucie:fix11": {
+                                "scan": {
+                                    "status": "SCANNED",
+                                    "scan_id": "sidecar-scan",
+                                    "scan_dir": str(root / "scan" / "fix11"),
+                                },
+                                "diff": {"adjacent_status": "DIFF"},
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with patch("lib_guard.render.version_detail_report.render_version_detail_page") as render_page:
+                render_page.return_value = str(root / "out.html")
+                result = render_version_detail_only(
+                    catalog_path=catalog_path,
+                    out_dir=root / "html",
+                    library="ucie",
+                    version="fix11",
+                )
+
+        self.assertEqual(result["status"], "PASS")
+        args, _kwargs = render_page.call_args
+        _out_dir, _lib, enriched_version = args
+        self.assertEqual(enriched_version["scan_status"], "SCAN_PASS")
+        self.assertEqual(enriched_version["scan"]["scan_id"], "sidecar-scan")
+        self.assertEqual(enriched_version["diff"]["adjacent_status"], "DIFF")
+
     def test_render_impacted_version_details_defers_navigation_pages(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

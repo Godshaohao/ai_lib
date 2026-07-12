@@ -11,6 +11,8 @@ import os
 import re
 import tempfile
 
+from .runtime import load_catalog_runtime, load_catalog_view, write_catalog_runtime
+
 
 STAGES = ["initial", "stable", "final", "ad-hoc", "dated", "unknown"]
 DEFAULT_IGNORE_DIRS = [
@@ -1251,9 +1253,9 @@ def _summary(libraries: list[dict[str, Any]], tasks: list[dict[str, Any]]) -> di
     }
 
 
-def _rebuild_catalog(data: dict[str, Any]) -> dict[str, Any]:
+def _rebuild_catalog(data: dict[str, Any], *, include_runtime: bool = True) -> dict[str, Any]:
     overrides = data.get("manual_overrides", {}) if isinstance(data.get("manual_overrides"), Mapping) else {}
-    runtime_state = _collect_runtime_state(data)
+    runtime_state = _collect_runtime_state(data) if include_runtime else {}
     discovered = data.get("_discovered", {}) if isinstance(data.get("_discovered"), Mapping) else {}
     libraries = [
         _build_library(lib_type, lib_name, list(items), overrides, runtime_state)
@@ -1268,9 +1270,10 @@ def _rebuild_catalog(data: dict[str, Any]) -> dict[str, Any]:
         "policy_path": data.get("policy_path"),
         "libraries": libraries,
         "manual_overrides": overrides,
-        "runtime_state": runtime_state,
         "_discovered": discovered,
     }
+    if include_runtime:
+        shell["runtime_state"] = runtime_state
     shell["issues"] = _build_issues(shell)
     shell["recommended_tasks"] = _build_tasks(shell)
     shell["summary"] = _summary(libraries, shell["recommended_tasks"])
@@ -1349,23 +1352,27 @@ def scan_catalog(
 ) -> dict[str, Any]:
     root_path = Path(root)
     out = Path(out_dir)
-    previous = _read_json(out / "catalog.json", {}) or {}
+    catalog_path = out / "catalog.json"
+    previous_asset = _read_json(catalog_path, {}) or {}
+    previous = load_catalog_view(catalog_path)
+    legacy_runtime = load_catalog_runtime(catalog_path, previous_asset)
+    if legacy_runtime and not (out / "catalog_runtime.json").exists():
+        # Migrate legacy embedded runtime once, then keep the new asset snapshot clean.
+        write_catalog_runtime(catalog_path, legacy_runtime)
+    runtime_state = load_catalog_runtime(catalog_path, previous_asset)
     state_path = out / "catalog_state.json"
     previous_state = _read_json(state_path, {}) or {}
     policy_hash = _sha256_file(policy_path)
     if not force and not library and isinstance(previous, Mapping) and previous.get("libraries") and isinstance(previous_state, Mapping):
         if _catalog_state_unchanged(previous_state, root_path, policy_hash, collect_evidence=collect_evidence):
-            catalog = _clean_catalog_legacy_fields(previous)
-            if catalog != previous:
-                _write_json(out / "catalog.json", catalog)
+            catalog = dict(previous)
             catalog["incremental_refresh"] = {
                 "mode": "skipped",
                 "reason": "raw_root_policy_and_library_roots_unchanged",
                 "state_path": str(state_path),
             }
-            return {"status": "PASS", "catalog_path": str(out / "catalog.json"), "state_path": str(state_path), "skipped": True, "evidence_mode": "sampled" if collect_evidence else "fast", "catalog": catalog}
-    overrides = previous.get("manual_overrides", {}) if isinstance(previous, Mapping) else {}
-    runtime_state = _collect_runtime_state(previous) if isinstance(previous, Mapping) else {}
+            return {"status": "PASS", "catalog_path": str(catalog_path), "state_path": str(state_path), "skipped": True, "evidence_mode": "sampled" if collect_evidence else "fast", "catalog": catalog}
+    overrides = previous_asset.get("manual_overrides", {}) if isinstance(previous_asset, Mapping) else {}
     policy = _load_policy(policy_path)
     resolved_library_type = str(policy.get("library_type") or library_type or "ip")
     library_filter = str(library or "").strip()
@@ -1388,16 +1395,15 @@ def scan_catalog(
             "root": str(root_path),
             "policy_path": str(policy_path) if policy_path else None,
             "manual_overrides": overrides,
-            "runtime_state": runtime_state,
             "_discovered": discovered,
-        }
+        }, include_runtime=False
     )
     if library_filter and isinstance(previous, Mapping):
         refreshed_names = {str(lib.get("library_name")) for lib in catalog.get("libraries", []) or []}
         refreshed_ids = {str(lib.get("library_id")) for lib in catalog.get("libraries", []) or []}
         merged_libraries = [
             lib
-            for lib in previous.get("libraries", []) or []
+            for lib in previous_asset.get("libraries", []) or []
             if library_filter not in {str(lib.get("library_name")), str(lib.get("library_id"))}
             and str(lib.get("library_name")) not in refreshed_names
             and str(lib.get("library_id")) not in refreshed_ids
@@ -1409,7 +1415,7 @@ def scan_catalog(
         catalog["recommended_tasks"] = _build_tasks(catalog)
         catalog["summary"] = _summary(merged_libraries, catalog["recommended_tasks"])
         catalog["partial_refresh"] = {"library": library_filter, "refreshed_library_count": len(refreshed_names)}
-        previous_discovered = previous.get("_discovered", {}) if isinstance(previous.get("_discovered"), Mapping) else {}
+        previous_discovered = previous_asset.get("_discovered", {}) if isinstance(previous_asset.get("_discovered"), Mapping) else {}
         refreshed_discovered = catalog.get("_discovered", {}) if isinstance(catalog.get("_discovered"), Mapping) else {}
         refreshed_discovered_names = {str(key).split("/", 1)[-1] for key in refreshed_discovered}
         merged_discovered = {
@@ -1448,7 +1454,29 @@ def scan_catalog(
                     }
                 ),
             }
-    _write_json(out / "catalog.json", catalog)
+    if runtime_state:
+        runtime_catalog = _rebuild_catalog(
+            {
+                **catalog,
+                "runtime_state": runtime_state,
+            },
+            include_runtime=True,
+        )
+        refreshed_runtime: dict[str, Any] = {}
+        for library in runtime_catalog.get("libraries", []) or []:
+            for version in library.get("versions", []) or []:
+                version_key = str(version.get("version_key") or version.get("version_uid") or "")
+                if not version_key:
+                    continue
+                sections = {
+                    key: dict(version[key])
+                    for key in ("scan", "diff", "release")
+                    if isinstance(version.get(key), Mapping)
+                }
+                if sections:
+                    refreshed_runtime[version_key] = sections
+        write_catalog_runtime(catalog_path, refreshed_runtime)
+    _write_json(catalog_path, catalog)
     state = _build_catalog_state(root_path, policy_hash, catalog, collect_evidence=collect_evidence)
     _write_json(state_path, state)
     for lib in catalog["libraries"]:
@@ -1456,7 +1484,7 @@ def scan_catalog(
     _write_json(out / "reports" / "catalog_summary.json", catalog["summary"])
     _write_json(out / "reports" / "scan_candidates.json", [t for t in catalog["recommended_tasks"] if t["task_type"] == "scan"])
     _write_json(out / "reports" / "diff_candidates.json", [t for t in catalog["recommended_tasks"] if t["task_type"].startswith("diff")])
-    return {"status": "PASS", "catalog_path": str(out / "catalog.json"), "state_path": str(state_path), "evidence_mode": "sampled" if collect_evidence else "fast", "catalog": catalog}
+    return {"status": "PASS", "catalog_path": str(catalog_path), "state_path": str(state_path), "evidence_mode": "sampled" if collect_evidence else "fast", "catalog": load_catalog_view(catalog_path)}
 
 
 def apply_catalog_override(
@@ -1549,7 +1577,7 @@ def _select_catalog_library(catalog: Mapping[str, Any], library: str) -> Mapping
 
 def find_catalog_version(catalog_path: str | Path, library: str, version: str) -> dict[str, Any]:
     """Return one catalog version enriched with library identity fields."""
-    catalog = _read_json(catalog_path, {}) or {}
+    catalog = load_catalog_view(catalog_path)
     lib = _select_catalog_library(catalog, library)
     for item in lib.get("versions", []) or []:
         if version not in {item.get("version_id"), item.get("version_key")}:
@@ -1632,8 +1660,8 @@ def update_catalog_scan_status(
     snapshot_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     path = Path(catalog_path)
-    data = _read_json(path, {}) or {}
-    runtime = data.setdefault("runtime_state", {})
+    data = load_catalog_view(path)
+    runtime = load_catalog_runtime(path, data)
     item = dict(runtime.get(version_key, {}) or {})
     item["scan"] = {
         "status": "SCANNED" if status not in {"FAILED", "BLOCK"} else status,
@@ -1649,9 +1677,8 @@ def update_catalog_scan_status(
     item["updated_by"] = "lib_guard.run"
     item["updated_at"] = _now()
     runtime[version_key] = item
-    catalog = _rebuild_catalog(data)
-    _write_json(path, catalog)
-    return {"status": "PASS", "catalog_path": str(path), "catalog": catalog}
+    write_catalog_runtime(path, runtime)
+    return {"status": "PASS", "catalog_path": str(path), "catalog": load_catalog_view(path)}
 
 
 def update_catalog_diff_status(
@@ -1666,8 +1693,8 @@ def update_catalog_diff_status(
     base_source: str | None = None,
 ) -> dict[str, Any]:
     path = Path(catalog_path)
-    data = _read_json(path, {}) or {}
-    runtime = data.setdefault("runtime_state", {})
+    data = load_catalog_view(path)
+    runtime = load_catalog_runtime(path, data)
     item = dict(runtime.get(version_key, {}) or {})
     diff = dict(item.get("diff", {}) or {})
     diff_meta = _read_json(Path(diff_dir) / "diff_meta.json", {}) or {}
@@ -1704,9 +1731,8 @@ def update_catalog_diff_status(
     item["updated_by"] = "lib_guard.compare"
     item["updated_at"] = _now()
     runtime[version_key] = item
-    catalog = _rebuild_catalog(data)
-    _write_json(path, catalog)
-    return {"status": "PASS", "catalog_path": str(path), "catalog": catalog}
+    write_catalog_runtime(path, runtime)
+    return {"status": "PASS", "catalog_path": str(path), "catalog": load_catalog_view(path)}
 
 
 def update_catalog_release_status(
@@ -1723,8 +1749,8 @@ def update_catalog_release_status(
     html_path: str | Path | None = None,
 ) -> dict[str, Any]:
     path = Path(catalog_path)
-    data = _read_json(path, {}) or {}
-    runtime = data.setdefault("runtime_state", {})
+    data = load_catalog_view(path)
+    runtime = load_catalog_runtime(path, data)
     item = dict(runtime.get(version_key, {}) or {})
     release = dict(item.get("release", {}) or {})
     if action == "link":
@@ -1768,9 +1794,8 @@ def update_catalog_release_status(
     item["updated_by"] = f"lib_guard.release.{action}"
     item["updated_at"] = _now()
     runtime[version_key] = item
-    catalog = _rebuild_catalog(data)
-    _write_json(path, catalog)
-    return {"status": "PASS", "catalog_path": str(path), "catalog": catalog}
+    write_catalog_runtime(path, runtime)
+    return {"status": "PASS", "catalog_path": str(path), "catalog": load_catalog_view(path)}
 
 def render_catalog_html(
     catalog_path: str | Path,

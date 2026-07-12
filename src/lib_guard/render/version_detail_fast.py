@@ -17,18 +17,11 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from lib_guard.catalog.runtime import load_catalog_view
 from lib_guard.render.impact import RenderImpact, dedup_impacts, serialize_impacts
 
 
 DEFERRED_FILE = "render_deferred.json"
-
-
-def _read_json(path: str | Path) -> dict[str, Any]:
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def _write_json(path: str | Path, data: Mapping[str, Any]) -> None:
@@ -55,7 +48,7 @@ def render_version_detail_only(
     from lib_guard.review.state import build_review_version_state
     from lib_guard.render.version_detail_report import render_version_detail_page
 
-    catalog = _read_json(catalog_path)
+    catalog = load_catalog_view(catalog_path)
     lib_state, version_state = build_review_version_state(
         catalog,
         out_dir=out_dir,

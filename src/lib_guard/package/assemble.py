@@ -5,11 +5,8 @@ from pathlib import Path
 from typing import Any, Mapping
 import json
 
+from lib_guard.catalog.runtime import load_catalog_view
 from .classifier import file_type_to_view
-
-
-def _read_json(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def _write_json(path: str | Path, data: Mapping[str, Any]) -> None:
@@ -81,7 +78,7 @@ def assemble_snapshot(
     out_path: str | Path | None = None,
     snapshot_id: str | None = None,
 ) -> dict[str, Any]:
-    catalog = _read_json(catalog_path)
+    catalog = load_catalog_view(catalog_path)
     rows = _versions(catalog, library)
     base = _find_version(rows, base_version)
     update_items = [_find_version(rows, item) for item in updates]

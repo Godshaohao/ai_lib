@@ -230,7 +230,7 @@ class ShortCliForceTest(unittest.TestCase):
                 no_catalog_render=True,
             )
             link_result = {
-                "status": "PASS",
+                "status": "APPLIED",
                 "release_dir": str(release_root),
                 "release_root": str(release_root),
                 "manifest_path": str(run_dir / "release_manifest.json"),
@@ -243,11 +243,12 @@ class ShortCliForceTest(unittest.TestCase):
                 "summary": {"failed_files": 1},
                 "issues": [{"level": "ERROR", "category": "hash_mismatch"}],
             }
+            link_result["verify"] = verify_result
 
             from lib_guard.cli_commands.catalog import run_catalog_release_batch
 
             with patch("lib_guard.release.linker.link_release_from_manifest", return_value=link_result):
-                with patch("lib_guard.release.postcheck.verify_release_manifest", return_value=verify_result):
+                with patch("lib_guard.release.postcheck.verify_release_manifest", side_effect=AssertionError("catalog must use linker transaction verification")):
                     stdout = StringIO()
                     with redirect_stdout(stdout):
                         code = run_catalog_release_batch(args)
@@ -256,7 +257,7 @@ class ShortCliForceTest(unittest.TestCase):
             output = json.loads(stdout.getvalue())
             self.assertEqual(output["status"], "FAILED")
             self.assertEqual(output["phase"], "postcheck")
-            self.assertEqual(output["link_status"], "PASS")
+            self.assertEqual(output["link_status"], "APPLIED")
             self.assertEqual(output["verify_status"], "FAILED")
 
 

@@ -8,6 +8,12 @@ import json
 
 from .common import auto_scan_id, print_json
 
+RELEASE_FAILURE_STATUSES = {"BLOCK", "BLOCKED", "MIGRATION_REQUIRED", "FAILED", "FORCE_FAILED"}
+
+
+def _release_failed(status: object) -> bool:
+    return str(status or "") in RELEASE_FAILURE_STATUSES
+
 
 def run_release_check(args: Namespace) -> int:
     from lib_guard.history.index import resolve_scan_dir, HistoryIndex
@@ -39,7 +45,7 @@ def run_release_check(args: Namespace) -> int:
             summary=result.get("summary", {}),
         )
     print_json(result)
-    return 0 if result.get("release_check_status") not in {"FAILED", "BLOCK"} else 2
+    return 2 if _release_failed(result.get("release_check_status")) else 0
 
 
 def run_release_link(args: Namespace) -> int:
@@ -57,7 +63,7 @@ def run_release_link(args: Namespace) -> int:
             force_reason=getattr(args, "force_reason", None),
         )
         print_json(result)
-        return 0 if result.get("status") not in {"FAILED"} else 2
+        return 2 if _release_failed(result.get("status")) else 0
 
     from lib_guard.history.index import resolve_scan_dir
     from lib_guard.release.linker import link_release_from_scan
@@ -79,7 +85,7 @@ def run_release_link(args: Namespace) -> int:
         diff_dir=getattr(args, "diff", None),
     )
     print_json(result)
-    return 0 if result.get("status") not in {"FAILED", "BLOCKED"} else 2
+    return 2 if _release_failed(result.get("status")) else 0
 
 
 def run_release_manifest_template(args: Namespace) -> int:

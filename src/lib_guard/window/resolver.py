@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from lib_guard.atomic import atomic_write_json
+from lib_guard.catalog.runtime import load_catalog_view
 from lib_guard.effective.pointer import load_current_pointer, safe_name
 
 SCHEMA_VERSION = "review_window.v1"
@@ -349,7 +350,7 @@ def resolve_review_window(
     parse_file_types: str = "",
     parse_exclude_file_types: str = "",
 ) -> dict[str, Any]:
-    catalog = read_json(catalog_path, {}) or {}
+    catalog = load_catalog_view(catalog_path)
     library_row = find_library(catalog, library)
     versions = [item for item in library_row.get("versions", []) or [] if isinstance(item, Mapping) and version_id(item)]
     versions_by_id = version_map(versions)

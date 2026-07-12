@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from lib_guard.catalog.runtime import load_catalog_view
 from lib_guard.effective.pointer import (
     approval_integrity_for_manifest,
     default_pointer_path_for_effective,
@@ -663,7 +664,7 @@ def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], wind
 
 
 def cmd_worklist(args: argparse.Namespace) -> int:
-    catalog = read_json(args.catalog, {}) or {}
+    catalog = load_catalog_view(args.catalog)
     rows: list[dict[str, Any]] = []
     for lib in catalog.get("libraries", []) or []:
         if not isinstance(lib, dict):
@@ -790,7 +791,7 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 
 def cmd_rollback(args: argparse.Namespace) -> int:
-    catalog = read_json(args.catalog, {}) or {}
+    catalog = load_catalog_view(args.catalog)
     library_row = find_library(catalog, args.library)
     library_key = safe_name(str(library_row.get("library_id") or library_row.get("library_name") or args.library))
     effective_id = str(args.to or "")

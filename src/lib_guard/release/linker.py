@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from contextlib import nullcontext
 from datetime import datetime, timezone
 import json
 import os
@@ -18,7 +17,16 @@ import uuid
 from lib_guard.atomic import atomic_write_json, file_lock
 from .checker import ReleaseChecker
 from .config import ReleasePolicy
-from .bundle import iter_release_files, load_release_manifest, manifest_run_dir, release_dir_for, utc_now
+from .bundle import (
+    immutable_release_dir_for,
+    iter_release_files,
+    load_release_manifest,
+    manifest_run_dir,
+    release_alias_for,
+    release_dir_for,
+    release_staging_dir_for,
+    utc_now,
+)
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -67,8 +75,31 @@ class ReleaseLinker:
         library_name = str(scan_meta.get("library_name") or "unknown")
         version = str(scan_meta.get("release_version") or "unknown")
 
-        target_version_dir = release_root_path / library_type / library_name / version
-        target_alias = release_root_path / library_type / library_name / alias
+        manifest = {
+            "schema_version": "release_manifest.v1",
+            "release_id": version,
+            "alias": alias,
+            "release_root": str(release_root_path),
+            "created_by": os.environ.get("USER") or os.environ.get("USERNAME") or "unknown",
+            "source_kind": "scan",
+            "scan_dir": str(scan),
+            "libraries": [
+                {
+                    "library_type": library_type,
+                    "library_name": library_name,
+                    "version_id": version,
+                    "version_key": f"{library_type}/{library_name}/{version}",
+                    "scan_dir": str(scan),
+                    "source_path": str(scan_meta.get("root_path") or ""),
+                    "manual_accept": True,
+                }
+            ],
+            "files": [],
+        }
+        manifest_path = out / "release_manifest.json"
+        _write_json(manifest_path, manifest)
+        target_version_dir = release_root_path / "releases" / version
+        target_alias = release_root_path / alias
         link_mode = mode or self.policy.release_link_mode
         dir_check = self._inspect_targets(target_version_dir, target_alias)
 
@@ -89,22 +120,27 @@ class ReleaseLinker:
             actions.append({"action": "force_override", "reason": force_reason, "release_check_status": check.get("release_check_status")})
 
         status = "DRY_RUN" if dry_run else "DONE"
+        linked: dict[str, Any] | None = None
         blocked_by_gate = check.get("release_check_status") in {"BLOCK", "FAILED"} or check.get("allowed_to_apply") is False
         blocked_by_existing_target = bool(dir_check.get("target_exists")) and not overwrite
         if blocked_by_gate and not force:
             status = "BLOCKED"
         elif blocked_by_existing_target:
             status = "BLOCKED"
-        elif not dry_run:
-            with file_lock(_release_lock_path(release_root_path)):
-                if link_mode == "symlink":
-                    self._link_symlink(source_root, target_version_dir, target_alias, overwrite=overwrite)
-                elif link_mode == "copy":
-                    self._copy_tree(source_root, target_version_dir, target_alias, overwrite=overwrite)
-                else:
-                    raise ValueError(f"Unsupported release link mode: {link_mode}")
-            if blocked_by_gate and force:
-                status = "FORCED_DONE"
+        else:
+            linked = link_release_from_manifest(
+                manifest_path,
+                apply=not dry_run,
+                mode=link_mode,
+                overwrite=overwrite,
+                force=force,
+                force_reason=force_reason,
+                release_check_path=out / "release_check.json",
+            )
+            status = {
+                "APPLIED": "FORCED_DONE" if force else "DONE",
+                "FORCED_APPLIED": "FORCED_DONE",
+            }.get(str(linked.get("status")), linked.get("status", "FAILED"))
 
         result = {
             "schema_version": "1.0",
@@ -124,8 +160,12 @@ class ReleaseLinker:
             "release_check": check,
             "block_reasons": check.get("block_reasons", []),
             "actions": actions,
+            "manifest_path": str(manifest_path),
         }
-        if force:
+        if linked is not None:
+            result.update({key: value for key, value in linked.items() if key not in result})
+            result["status"] = status
+        if force and linked is None:
             _write_json(
                 out / "release_override.json",
                 {
@@ -319,6 +359,120 @@ def _force_selected_versions(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return selected
 
 
+def _path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _rebase_link_paths(items: list[dict[str, Any]], root: Path) -> None:
+    for item in items:
+        relative_path = item.get("relative_path")
+        if relative_path:
+            item["link_path"] = str(root / str(relative_path))
+
+
+def _move_to_backup(path: Path) -> Path | None:
+    if not _path_exists(path):
+        return None
+    backup = _tmp_sibling(path)
+    os.replace(path, backup)
+    return backup
+
+
+def _restore_backup(path: Path, backup: Path | None) -> None:
+    _remove_path(path)
+    if backup is not None and _path_exists(backup):
+        os.replace(backup, path)
+
+
+def _promotion_legacy_paths(release_root: Path, staging_dir: Path, active_alias: Path) -> list[Path]:
+    if not staging_dir.exists():
+        return []
+    return [
+        release_root / child.name
+        for child in staging_dir.iterdir()
+        if child.is_dir() and release_root / child.name != active_alias
+    ]
+
+
+def _rollback_promotion(state: dict[str, Any]) -> None:
+    for path, backup in reversed(state.get("legacy_backups", [])):
+        _restore_backup(path, backup)
+    _restore_backup(state["active_alias"], state.get("alias_backup"))
+    _restore_backup(state["immutable_dir"], state.get("immutable_backup"))
+
+
+def _finalize_promotion(state: dict[str, Any]) -> None:
+    for _path, backup in state.get("legacy_backups", []):
+        if backup is not None:
+            _remove_path(backup)
+    for backup_key in ("alias_backup", "immutable_backup"):
+        backup = state.get(backup_key)
+        if backup is not None:
+            _remove_path(backup)
+
+
+def _promote_staging(
+    staging_dir: Path,
+    immutable_dir: Path,
+    active_alias: Path,
+    *,
+    overwrite: bool,
+    release_root: Path | None = None,
+) -> dict[str, Any]:
+    """Promote a verified tree while retaining rollback state until postcheck passes."""
+
+    root = release_root or immutable_dir.parent.parent
+    immutable_dir.parent.mkdir(parents=True, exist_ok=True)
+    active_alias.parent.mkdir(parents=True, exist_ok=True)
+    state: dict[str, Any] = {
+        "immutable_dir": immutable_dir,
+        "active_alias": active_alias,
+        "immutable_backup": None,
+        "alias_backup": None,
+        "legacy_backups": [],
+    }
+    try:
+        if _path_exists(immutable_dir):
+            if not overwrite:
+                raise FileExistsError(f"immutable release already exists: {immutable_dir}")
+            state["immutable_backup"] = _move_to_backup(immutable_dir)
+        if _path_exists(active_alias):
+            state["alias_backup"] = _move_to_backup(active_alias)
+        for legacy_path in _promotion_legacy_paths(root, staging_dir, active_alias):
+            backup = _move_to_backup(legacy_path)
+            state["legacy_backups"].append((legacy_path, backup))
+
+        os.replace(staging_dir, immutable_dir)
+        tmp_alias = _tmp_sibling(active_alias)
+        try:
+            tmp_alias.symlink_to(immutable_dir.resolve(strict=False), target_is_directory=True)
+            os.replace(tmp_alias, active_alias)
+        finally:
+            _remove_path(tmp_alias)
+        _publish_legacy_view_links(root, active_alias, immutable_dir)
+        return state
+    except Exception:
+        _rollback_promotion(state)
+        raise
+
+
+def _publish_legacy_view_links(release_root: Path, active_alias: Path, immutable_dir: Path) -> None:
+    """Keep existing root/view readers working without copying or deleting trees."""
+
+    if not immutable_dir.exists():
+        return
+    for view_dir in immutable_dir.iterdir():
+        if not view_dir.is_dir():
+            continue
+        legacy_path = release_root / view_dir.name
+        if _path_exists(legacy_path) and not legacy_path.is_symlink():
+            continue
+        tmp_legacy = _tmp_sibling(legacy_path)
+        _remove_path(tmp_legacy)
+        tmp_legacy.symlink_to((active_alias / view_dir.name).absolute(), target_is_directory=True)
+        os.replace(tmp_legacy, legacy_path)
+
+
 def link_release_from_manifest(
     manifest_path: str | Path,
     *,
@@ -335,6 +489,7 @@ def link_release_from_manifest(
     release_check_path: str | Path | None = None,
     verify_skipped: bool = False,
     verify_skip_reason: str = "",
+    render: bool = False,
 ) -> dict[str, Any]:
     """Link a human-approved release manifest into the release area.
 
@@ -355,13 +510,27 @@ def link_release_from_manifest(
     created: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     removed: list[dict[str, Any]] = []
-    release_dir = release_dir_for(manifest)
-    planned = iter_release_files(manifest)
-    expected_targets = {Path(str(item["target_path"])) for item in planned if item.get("target_path") and not item.get("error")}
+    verify_result: dict[str, Any] | None = None
+    release_root_path = release_dir_for(manifest)
+    staging_dir = release_staging_dir_for(manifest)
+    immutable_dir = immutable_release_dir_for(manifest)
+    active_alias = release_alias_for(manifest)
+    planned = iter_release_files(manifest, target_root=staging_dir)
+    final_planned = iter_release_files(manifest, target_root=immutable_dir)
+    alias_exists = _path_exists(active_alias)
+    alias_is_symlink = active_alias.is_symlink()
+    immutable_exists = _path_exists(immutable_dir)
+    migration_required = bool(apply and alias_exists and not alias_is_symlink)
+    blocked_by_existing_release = bool(immutable_exists and not overwrite)
 
-    lock_context = file_lock(_release_lock_path(release_dir)) if apply else nullcontext()
-    with lock_context:
-        release_dir.mkdir(parents=True, exist_ok=True) if apply else None
+    def _status_for_failure() -> str:
+        return "FORCE_FAILED" if force else "FAILED"
+
+    if migration_required:
+        status = "MIGRATION_REQUIRED"
+    elif blocked_by_existing_release:
+        status = "BLOCKED"
+    elif dry_run:
         for plan in planned:
             source = Path(str(plan.get("source_path") or ""))
             target = Path(str(plan.get("target_path") or ""))
@@ -386,36 +555,152 @@ def link_release_from_manifest(
                     raise ValueError(str(plan.get("error")))
                 if not source.exists():
                     raise FileNotFoundError(f"release source does not exist: {source}")
-                if dry_run:
-                    exists = target.exists() or target.is_symlink()
-                    item["status"] = "WOULD_REPLACE" if exists and overwrite else ("TARGET_EXISTS" if exists else "WOULD_LINK")
-                    if exists and not overwrite:
-                        item["warning"] = "target exists; apply would fail without overwrite"
-                    created.append(item)
-                    continue
-                item["status"] = _copy_or_link_source(source, target, mode=mode, overwrite=overwrite)
+                exists = _path_exists(target)
+                item["status"] = "WOULD_REPLACE" if exists and overwrite else ("TARGET_EXISTS" if exists else "WOULD_LINK")
+                if exists and not overwrite:
+                    item["warning"] = "target exists; apply would fail without overwrite"
                 created.append(item)
             except Exception as exc:
                 failed_item = dict(item)
                 failed_item["status"] = "FAILED"
                 failed_item["error"] = str(exc)
                 failed.append(failed_item)
-
-        if apply and overwrite and mirror_release_root and not failed:
-            for existing in _release_existing_files(release_dir):
-                if existing in expected_targets:
-                    continue
-                removed.append({"relative_path": existing.relative_to(release_dir).as_posix(), "path": str(existing), "status": "REMOVED"})
-                _remove_path(existing)
-
-    if force and dry_run:
-        status = "FORCE_DRY_RUN"
-    elif force and failed:
-        status = "FORCE_FAILED"
-    elif force:
-        status = "FORCED_APPLIED"
+        status = _status_for_failure() if failed else ("FORCE_DRY_RUN" if force else "DRY_RUN")
     else:
-        status = "DRY_RUN" if dry_run else ("FAILED" if failed else "APPLIED")
+        with file_lock(_release_lock_path(release_root_path)):
+            release_root_path.mkdir(parents=True, exist_ok=True)
+            _remove_path(staging_dir)
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            for plan in planned:
+                source = Path(str(plan.get("source_path") or ""))
+                target = Path(str(plan.get("target_path") or ""))
+                item = {
+                    "library_type": plan.get("library_type"),
+                    "library_name": plan.get("library_name"),
+                    "version_id": plan.get("version_id"),
+                    "version_key": plan.get("version_key"),
+                    "relative_path": plan.get("relative_path"),
+                    "link_path": str(target),
+                    "target_path": str(source),
+                    "file_type": plan.get("file_type"),
+                    "view": plan.get("view"),
+                    "snapshot_id": plan.get("snapshot_id"),
+                    "source_package": plan.get("source_package"),
+                    "source_kind": plan.get("source_kind"),
+                    "mode": mode,
+                    "overwrite": overwrite,
+                }
+                try:
+                    if plan.get("error"):
+                        raise ValueError(str(plan.get("error")))
+                    if not source.exists():
+                        raise FileNotFoundError(f"release source does not exist: {source}")
+                    item["status"] = _copy_or_link_source(source, target, mode=mode, overwrite=overwrite)
+                    created.append(item)
+                except Exception as exc:
+                    failed_item = dict(item)
+                    failed_item["status"] = "FAILED"
+                    failed_item["error"] = str(exc)
+                    failed.append(failed_item)
+
+            if failed:
+                _remove_path(staging_dir)
+                status = _status_for_failure()
+            else:
+                from .postcheck import verify_release_manifest
+
+                try:
+                    verify_result = verify_release_manifest(
+                        manifest_path,
+                        link_result={"created_links": created, "failed_links": failed},
+                        candidate_root=staging_dir,
+                    )
+                except Exception as exc:
+                    verify_result = {
+                        "status": "FAILED",
+                        "summary": {},
+                        "issues": [
+                            {
+                                "severity": "error",
+                                "category": "verification_error",
+                                "library_name": None,
+                                "message": str(exc),
+                            }
+                        ],
+                    }
+                if verify_result.get("status") not in {"PASS", "PASS_WITH_WARNING"}:
+                    _remove_path(staging_dir)
+                    status = _status_for_failure()
+                else:
+                    promotion_state: dict[str, Any] | None = None
+                    try:
+                        promotion_state = _promote_staging(
+                            staging_dir,
+                            immutable_dir,
+                            active_alias,
+                            overwrite=overwrite,
+                            release_root=release_root_path,
+                        )
+                        _rebase_link_paths(created, immutable_dir)
+                        try:
+                            post_verify = verify_release_manifest(
+                                manifest_path,
+                                link_result={"created_links": created, "failed_links": failed},
+                                candidate_root=immutable_dir,
+                            )
+                        except Exception as exc:
+                            post_verify = {
+                                "status": "FAILED",
+                                "summary": {},
+                                "issues": [
+                                    {
+                                        "severity": "error",
+                                        "category": "verification_error",
+                                        "library_name": None,
+                                        "message": str(exc),
+                                    }
+                                ],
+                            }
+                        verify_result = post_verify
+                        if verify_result.get("status") not in {"PASS", "PASS_WITH_WARNING"}:
+                            _rollback_promotion(promotion_state)
+                            promotion_state = None
+                            status = _status_for_failure()
+                        else:
+                            verify_result["release_dir"] = str(immutable_dir)
+                            verify_result["candidate_root"] = str(immutable_dir)
+                            if render:
+                                from lib_guard.render.release_report import render_release_html
+
+                                verify_result["html"] = render_release_html(verify_result, run_dir)
+                            _finalize_promotion(promotion_state)
+                            promotion_state = None
+                            status = "FORCED_APPLIED" if force else "APPLIED"
+                    except Exception as exc:
+                        if promotion_state is not None:
+                            _rollback_promotion(promotion_state)
+                        verify_result = {
+                            "status": "FAILED",
+                            "summary": {},
+                            "issues": [
+                                {
+                                    "severity": "error",
+                                    "category": "promotion_error",
+                                    "library_name": None,
+                                    "message": str(exc),
+                                }
+                            ],
+                        }
+                        failed.append(
+                            {
+                                "status": "FAILED",
+                                "error": str(exc),
+                                "relative_path": None,
+                                "link_path": str(immutable_dir),
+                            }
+                        )
+                        _remove_path(staging_dir)
+                        status = _status_for_failure()
     if force and override_path:
         _write_json(
             override_path,
@@ -441,8 +726,12 @@ def link_release_from_manifest(
         "release_id": manifest.get("release_id"),
         "alias": manifest.get("alias"),
         "release_root": manifest.get("release_root"),
-        "release_dir": str(release_dir),
-        "release_lock": str(_release_lock_path(release_dir)),
+        "release_container": str(release_root_path),
+        "release_dir": str(immutable_dir),
+        "staging_dir": str(staging_dir),
+        "immutable_release_dir": str(immutable_dir),
+        "target_alias": str(active_alias),
+        "release_lock": str(_release_lock_path(release_root_path)),
         "manifest_path": str(Path(manifest_path)),
         "status": status,
         "dry_run": dry_run,
@@ -457,7 +746,7 @@ def link_release_from_manifest(
         "verify_skipped": bool(verify_skipped),
         "verify_skip_reason": verify_skip_reason,
         "created_at": utc_now(),
-        "planned_files": planned,
+        "planned_files": final_planned,
         "created_links": created,
         "removed_links": removed,
         "failed_links": failed,
@@ -467,6 +756,7 @@ def link_release_from_manifest(
             "removed_files": len(removed),
             "failed_files": len(failed),
         },
+        "verify": verify_result,
     }
     _write_json(run_dir / "release_link_result.json", result)
     from lib_guard.release.result import release_result_from_link

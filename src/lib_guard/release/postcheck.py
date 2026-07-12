@@ -8,7 +8,15 @@ from collections import Counter
 import hashlib
 import os
 
-from .bundle import iter_release_files, load_release_manifest, manifest_run_dir, release_dir_for, read_json, write_json
+from .bundle import (
+    immutable_release_dir_for,
+    iter_release_files,
+    load_release_manifest,
+    manifest_run_dir,
+    read_json,
+    release_dir_for,
+    write_json,
+)
 
 
 def _norm(path: Any) -> str:
@@ -78,18 +86,24 @@ def verify_release_manifest(
     manifest_path: str | Path,
     *,
     link_result_path: str | Path | None = None,
+    link_result: Mapping[str, Any] | None = None,
+    candidate_root: str | Path | None = None,
     out_dir: str | Path | None = None,
     render: bool = False,
     html_out: str | Path | None = None,
 ) -> dict[str, Any]:
     manifest = load_release_manifest(manifest_path)
     run_dir = manifest_run_dir(manifest_path, out_dir)
-    release_dir = release_dir_for(manifest)
+    if candidate_root is not None:
+        release_dir = Path(candidate_root)
+    else:
+        immutable_release = immutable_release_dir_for(manifest)
+        release_dir = immutable_release if immutable_release.exists() else release_dir_for(manifest)
     link_json = Path(link_result_path) if link_result_path else run_dir / "release_link_result.json"
-    link_result = read_json(link_json, {}) or {}
-    link_by_rel = _link_result_by_relative_path(link_result)
+    link_data = dict(link_result) if link_result is not None else (read_json(link_json, {}) or {})
+    link_by_rel = _link_result_by_relative_path(link_data)
 
-    planned = [item for item in iter_release_files(manifest) if item.get("relative_path")]
+    planned = [item for item in iter_release_files(manifest, target_root=release_dir) if item.get("relative_path")]
     expected = {str(item.get("relative_path")): item for item in planned}
     actual_files = {
         item.relative_to(release_dir).as_posix(): item
@@ -179,6 +193,7 @@ def verify_release_manifest(
         "alias": manifest.get("alias"),
         "release_root": manifest.get("release_root"),
         "release_dir": str(release_dir),
+        "candidate_root": str(release_dir),
         "manifest_path": str(Path(manifest_path)),
         "link_result_path": str(link_json) if link_json.exists() else None,
         "postcheck_path": str(run_dir / "release_postcheck.json"),

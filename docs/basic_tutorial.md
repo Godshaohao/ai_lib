@@ -15,7 +15,7 @@ Status: current
 | 目标读者 | 库管理员、IP 使用者、首次接入新版本的人 |
 | 目标判断 | 新库/新版本是否能进入审查、是否能成为当前有效版、是否能 release |
 | 允许输入 | RAW 库根、人工确认的库名/版本名、package type/Base 修正、review 决策 |
-| 主要输出 | `catalog.json`、scan evidence、diff evidence、Version Detail、current effective、release manifest |
+| 主要输出 | `catalog.json`、`catalog_runtime.json`、scan evidence、diff evidence、Version Detail、current effective、release manifest |
 | 禁止做法 | 手改生成 HTML、手改 `catalog.json` 的 scan/diff 字段、用全量 discover 代替已知库入库 |
 
 底层 `python -m lib_guard.cli` 是自动化和调试入口；日常使用优先用
@@ -117,8 +117,9 @@ $WORK/config/library_catalog.yml
 | 大型内网库 | 先单库 `library add`，再 `next <LIBRARY>` | 避免 5000 个误候选和长时间递归 |
 | 新增一个库 | 不重跑全量 discover | 已确认 registry 才是事实源 |
 
-`library_catalog.yml` 是 catalog 的正式输入；`catalog.json` 是它的投影和运行时状态。
-如果二者不一致，先检查 registry/apply，不要手改 `catalog.json`。
+`library_catalog.yml` 是 Catalog 的正式输入；`catalog.json` 是资产快照，
+`catalog_runtime.json` 保存 scan/diff/release 运行状态。业务读取时会自动合并两者；
+如果二者不一致，先检查 registry/apply 和 runtime artifact，不要手改生成文件。
 
 大 RAW 树上不要把 discover 当成日常刷新。默认 discover 是浅层、有上限的候选发现：
 
@@ -827,6 +828,10 @@ GDS/
 
 raw 包里的 `upstream_xxx/lef/...`、`source_package/lef/...` 不会进入正式 release
 路径。
+
+Release 先写入 `<release_root>/.staging/<release_id>`，验证通过后提升为不可变目录
+`<release_root>/releases/<release_id>`，最后原子更新 `<release_root>/current` 软链接。
+使用者应通过 `current/LEF/...`、`current/RTL/...` 等路径读取，不要直接依赖临时目录。
 
 ## 12. 落地 Release 和覆盖
 

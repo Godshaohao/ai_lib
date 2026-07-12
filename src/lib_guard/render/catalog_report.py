@@ -17,6 +17,7 @@ import json
 import re
 
 from lib_guard.review import build_review_state, build_review_tasks
+from lib_guard.catalog.runtime import load_catalog_view
 from lib_guard.review.io import read_json, write_json
 from lib_guard.render import catalog_render_common as common
 from lib_guard.render import product_theme as ui
@@ -1867,7 +1868,7 @@ def render_catalog_html(
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    catalog = read_json(catalog_json, default={}) or {}
+    catalog = load_catalog_view(catalog_json)
     state = build_review_state(catalog, out_dir=out)
     state["schema_version"] = "catalog_state.v1"
     tasks = build_review_tasks(state)

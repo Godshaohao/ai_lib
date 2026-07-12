@@ -11,9 +11,11 @@ import time
 
 from .common import auto_scan_id, default_cache_dir, default_state_dir, print_json, refresh_catalog_html, render_impacted_catalog_html
 from .scan import split_strategy_list
+from lib_guard.catalog.runtime import load_catalog_view
 from lib_guard.render.impact import impacts_for_versions
 
 RELEASE_CHECK_PASS_STATUSES = {"PASS", "PASS_WITH_WARNING"}
+RELEASE_LINK_FAILURE_STATUSES = {"BLOCKED", "MIGRATION_REQUIRED", "FAILED", "FORCE_FAILED"}
 
 
 def _read_json(path: str | Path) -> dict[str, Any]:
@@ -22,6 +24,10 @@ def _read_json(path: str | Path) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _read_catalog(path: str | Path) -> dict[str, Any]:
+    return load_catalog_view(path)
 
 
 def run_catalog_scan(args: Namespace) -> int:
@@ -66,7 +72,7 @@ def _library_match_names(lib: dict[str, Any]) -> set[str]:
 
 
 def _latest_version_for_library(catalog_path: str | Path, library: str) -> str:
-    data = _read_json(catalog_path)
+    data = _read_catalog(catalog_path)
     for lib in data.get("libraries", []) or []:
         if not isinstance(lib, dict):
             continue
@@ -188,7 +194,7 @@ def _effective_list_rows(data: dict[str, Any], args: Namespace) -> list[dict[str
 
 
 def run_catalog_list(args: Namespace) -> int:
-    data = json.loads(Path(args.catalog).read_text(encoding="utf-8"))
+    data = _read_catalog(args.catalog)
     if getattr(args, "plain", False) and not getattr(args, "effective", False):
         names: list[str] = []
         for lib in data.get("libraries", []) or []:
@@ -643,7 +649,7 @@ def run_catalog_compare(args: Namespace) -> int:
 
 
 def _catalog_versions(catalog_path: str | Path, library: str | None = None) -> list[dict[str, Any]]:
-    data = json.loads(Path(catalog_path).read_text(encoding="utf-8"))
+    data = _read_catalog(catalog_path)
     rows: list[dict[str, Any]] = []
     for lib in data.get("libraries", []) or []:
         if library and library not in _library_match_names(lib):
@@ -675,7 +681,7 @@ def _review_gate_for_catalog_version(args: Namespace) -> tuple[str | None, dict[
     explicit = getattr(args, "review_gate", None)
     if explicit:
         return str(explicit), read_json(explicit, {}) or {}
-    catalog = json.loads(Path(args.catalog).read_text(encoding="utf-8"))
+    catalog = _read_catalog(args.catalog)
     out_dir = _default_catalog_html_out(args.catalog)
     state = build_review_state(catalog, out_dir=out_dir)
     for lib in state.get("libraries", []) or []:
@@ -987,14 +993,13 @@ def run_catalog_release_link(args: Namespace) -> int:
         manifest_path=manifest_path,
     )
     print_json(result)
-    return 0 if result.get("status") not in {"FAILED", "BLOCKED"} else 2
+    return 2 if str(result.get("status") or "") in RELEASE_LINK_FAILURE_STATUSES else 0
 
 
 def run_catalog_release_batch(args: Namespace) -> int:
     from lib_guard.catalog.index import update_catalog_release_status
     from lib_guard.release.bundle import create_manifest_from_effective_manifest, create_manifest_template_from_catalog
     from lib_guard.release.linker import link_release_from_manifest
-    from lib_guard.release.postcheck import verify_release_manifest
     from lib_guard.release.result import release_result_from_link, write_release_result
 
     catalog_path = Path(args.catalog)
@@ -1066,10 +1071,15 @@ def run_catalog_release_batch(args: Namespace) -> int:
         force_by=getattr(args, "force_by", None),
         verify_skipped=bool(getattr(args, "no_verify", False)),
         verify_skip_reason="no_verify requested" if getattr(args, "no_verify", False) else "",
+        render=bool(args.apply) and not getattr(args, "no_render", False),
     )
-    verify_result = None
-    if bool(args.apply) and not getattr(args, "no_verify", False):
-        verify_result = verify_release_manifest(manifest_path, render=not getattr(args, "no_render", False))
+    verify_result = link_result.get("verify") if bool(args.apply) and not getattr(args, "no_verify", False) else None
+    if bool(args.apply) and not getattr(args, "no_verify", False) and str(link_result.get("status") or "") in {"APPLIED", "FORCED_APPLIED"} and verify_result is None:
+        verify_result = {
+            "status": "FAILED",
+            "summary": {},
+            "issues": [{"severity": "error", "category": "verification_missing", "message": "release linker did not return transaction verification"}],
+        }
     release_result_path = run_dir / "release_result.json"
     release_html = ""
     if verify_result and verify_result.get("html"):

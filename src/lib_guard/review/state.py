@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from lib_guard.catalog.runtime import merge_catalog_runtime
 from .commands import derive_next_action
 from .evidence_state import build_version_evidence_state
 from .io import read_json, utc_now
@@ -436,6 +437,7 @@ def build_review_gate_for_version(
 
 
 def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None = None) -> dict[str, Any]:
+    catalog = merge_catalog_runtime(catalog)
     libraries = []
     for lib in catalog.get("libraries", []) or []:
         formal_library_id = str(lib.get("formal_library_id") or lib.get("library_name") or lib.get("library_id") or "unknown")
@@ -667,6 +669,7 @@ def build_review_version_state(
     the correct dependency for hot-path Version Detail renders.
     """
 
+    catalog = merge_catalog_runtime(catalog)
     selected_lib: Mapping[str, Any] | None = None
     for lib in catalog.get("libraries", []) or []:
         if isinstance(lib, Mapping) and _selector_matches(_library_selector_aliases(lib), library):

@@ -106,6 +106,18 @@ def release_dir_for(manifest: Mapping[str, Any]) -> Path:
     return Path(str(manifest.get("release_root")))
 
 
+def release_staging_dir_for(manifest: Mapping[str, Any]) -> Path:
+    return release_dir_for(manifest) / ".staging" / str(manifest.get("release_id"))
+
+
+def immutable_release_dir_for(manifest: Mapping[str, Any]) -> Path:
+    return release_dir_for(manifest) / "releases" / str(manifest.get("release_id"))
+
+
+def release_alias_for(manifest: Mapping[str, Any]) -> Path:
+    return release_dir_for(manifest) / str(manifest.get("alias") or "current")
+
+
 def target_for_library(manifest: Mapping[str, Any], library: Mapping[str, Any]) -> Path:
     return release_dir_for(manifest) / str(library.get("library_name") or "unknown")
 
@@ -146,9 +158,14 @@ def release_relative_path(source_root: str | Path, file_path: str | Path) -> Pat
     return normalize_release_relpath(rel, file_type=file_type)
 
 
-def iter_release_files(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+def iter_release_files(
+    manifest: Mapping[str, Any],
+    *,
+    target_root: str | Path | None = None,
+) -> list[dict[str, Any]]:
     planned: list[dict[str, Any]] = []
     seen_targets: dict[str, dict[str, Any]] = {}
+    release_target_root = Path(target_root) if target_root is not None else release_dir_for(manifest)
     for entry in manifest.get("files", []) or []:
         rel_text = str(entry.get("target_relpath") or entry.get("relative_path") or "").replace("\\", "/")
         source = Path(str(entry.get("source_path") or ""))
@@ -166,7 +183,7 @@ def iter_release_files(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
             "source_root": str(source.parent),
             "source_path": str(source),
             "relative_path": rel_text,
-            "target_path": str(release_dir_for(manifest) / rel_text),
+            "target_path": str(release_target_root / rel_text),
             "file_type": entry.get("file_type") or (_classify_file_type(source.parent, source) if source.exists() else None),
             "view": entry.get("view") or (rel_text.split("/", 1)[0] if rel_text else None),
             "sha256": entry.get("sha256") or entry.get("source_sha256") or entry.get("content_sha256"),
@@ -210,7 +227,7 @@ def iter_release_files(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "source_root": str(source),
                 "source_path": str(file_path),
                 "relative_path": rel_text,
-                "target_path": str(release_dir_for(manifest) / rel),
+                "target_path": str(release_target_root / rel),
                 "file_type": file_type,
                 "scan_html": entry.get("scan_html"),
                 "diff_html": entry.get("diff_html"),

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -123,12 +124,14 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             self.assertEqual(applied["status"], "APPLIED")
             applied_result = json.loads((run_dir / "release_result.json").read_text(encoding="utf-8"))
             self.assertEqual(applied_result["status"], "APPLIED")
-            self.assertTrue((release_root / "RTL" / "top.v").exists())
-            self.assertTrue((release_root / "DOC" / "README.md").exists())
-            self.assertTrue((release_root / "LEF" / "block.lef").exists())
+            immutable_release = release_root / "releases" / "PD_LIB_CURRENT_20260618"
+            self.assertTrue((immutable_release / "RTL" / "top.v").exists())
+            self.assertTrue((immutable_release / "DOC" / "README.md").exists())
+            self.assertTrue((immutable_release / "LEF" / "block.lef").exists())
+            self.assertTrue((release_root / "current").is_symlink())
+            self.assertEqual((release_root / "current").resolve(), immutable_release.resolve())
             self.assertFalse((release_root / "rtl").exists())
             self.assertFalse((release_root / "lef").exists())
-            self.assertFalse((release_root / "current").exists())
             self.assertFalse((release_root / "ucie").exists())
 
             verified = verify_release_manifest(manifest_path, render=True)
@@ -215,9 +218,12 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             ddr.mkdir(parents=True)
             (ucie / "rtl" / "new_top.v").write_text("module new_top; endmodule\n", encoding="utf-8")
             (ddr / "ddr.v").write_text("module ddr; endmodule\n", encoding="utf-8")
-            (release_root / "RTL").mkdir(parents=True)
-            (release_root / "RTL" / "new_top.v").write_text("old target\n", encoding="utf-8")
-            (release_root / "RTL" / "old_top.v").write_text("keep me\n", encoding="utf-8")
+            old_release = release_root / "releases" / "old_release"
+            (old_release / "RTL").mkdir(parents=True)
+            (old_release / "RTL" / "new_top.v").write_text("old target\n", encoding="utf-8")
+            (old_release / "RTL" / "old_top.v").write_text("keep me\n", encoding="utf-8")
+            release_root.mkdir(parents=True, exist_ok=True)
+            (release_root / "current").symlink_to(old_release)
             self._write_manifest(manifest_path, release_root, ucie, ddr)
 
             from lib_guard.release.linker import link_release_from_manifest
@@ -225,10 +231,287 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             result = link_release_from_manifest(manifest_path, apply=True, mode="copy", overwrite=True)
             self.assertEqual(result["status"], "APPLIED")
             self.assertTrue(Path(result["release_lock"]).exists())
-            self.assertEqual((release_root / "RTL" / "new_top.v").read_text(encoding="utf-8"), "module new_top; endmodule\n")
-            self.assertTrue((release_root / "RTL" / "ddr.v").exists())
-            self.assertTrue((release_root / "RTL" / "old_top.v").exists())
+            immutable_release = release_root / "releases" / "PD_LIB_CURRENT_20260618"
+            self.assertEqual((immutable_release / "RTL" / "new_top.v").read_text(encoding="utf-8"), "module new_top; endmodule\n")
+            self.assertTrue((immutable_release / "RTL" / "ddr.v").exists())
+            self.assertFalse((immutable_release / "RTL" / "old_top.v").exists())
+            self.assertEqual((old_release / "RTL" / "new_top.v").read_text(encoding="utf-8"), "old target\n")
+            self.assertTrue((old_release / "RTL" / "old_top.v").exists())
+            self.assertEqual((release_root / "current").resolve(), immutable_release.resolve())
             self.assertEqual(result["summary"]["removed_files"], 0)
+
+    def test_manifest_release_failure_keeps_current_alias_and_immutable_release(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            ucie = base / "raw" / "ucie" / "stable_20260620"
+            ddr = base / "raw" / "ddr" / "final_20260601"
+            release_root = base / "release_area"
+            run_dir = base / "release_runs" / "PD_LIB_CURRENT_20260620"
+            manifest_path = run_dir / "release_manifest.json"
+            (ucie / "rtl").mkdir(parents=True)
+            ddr.mkdir(parents=True)
+            (ucie / "rtl" / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            (ddr / "ddr.v").write_text("module ddr; endmodule\n", encoding="utf-8")
+            old_release = release_root / "releases" / "old_release"
+            (old_release / "RTL").mkdir(parents=True)
+            (old_release / "RTL" / "top.v").write_text("old release\n", encoding="utf-8")
+            release_root.mkdir(parents=True, exist_ok=True)
+            (release_root / "current").symlink_to(old_release)
+            current_before = (release_root / "current").resolve()
+            self._write_manifest(manifest_path, release_root, ucie, ddr)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["release_id"] = "broken"
+            manifest["files"] = [
+                {
+                    "library_type": "ip",
+                    "library_name": "ucie",
+                    "version_id": "broken",
+                    "source_path": str(base / "missing.lef"),
+                    "target_relpath": "LEF/missing.lef",
+                    "file_type": "lef",
+                }
+            ]
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            from lib_guard.release.linker import link_release_from_manifest
+
+            result = link_release_from_manifest(manifest_path, apply=True, mode="copy", overwrite=True)
+
+            self.assertEqual(result["status"], "FAILED")
+            self.assertEqual(current_before, (release_root / "current").resolve())
+            self.assertEqual((old_release / "RTL" / "top.v").read_text(encoding="utf-8"), "old release\n")
+            self.assertFalse((release_root / "releases" / "broken").exists())
+            self.assertFalse((release_root / ".staging" / "broken").exists())
+            self.assertFalse((release_root / "RTL").exists())
+
+    def test_manifest_legacy_view_failure_keeps_previous_alias_and_release(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "raw" / "ucie" / "new.v"
+            source.parent.mkdir(parents=True)
+            source.write_text("module new; endmodule\n", encoding="utf-8")
+            release_root = base / "release_area"
+            old_release = release_root / "releases" / "old_release"
+            (old_release / "RTL").mkdir(parents=True)
+            (old_release / "RTL" / "old.v").write_text("old release\n", encoding="utf-8")
+            release_root.mkdir(parents=True, exist_ok=True)
+            alias = release_root / "current"
+            alias.symlink_to(old_release)
+            legacy_view = release_root / "RTL"
+            legacy_view.symlink_to(alias / "RTL", target_is_directory=True)
+            old_alias_target = alias.resolve()
+            old_legacy_target = legacy_view.readlink()
+            manifest_path = base / "release_runs" / "new_release" / "release_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "release_id": "new_release",
+                        "alias": "current",
+                        "release_root": str(release_root),
+                        "files": [
+                            {
+                                "library_name": "ucie",
+                                "version_id": "v2",
+                                "source_path": str(source),
+                                "target_relpath": "RTL/new.v",
+                                "file_type": "verilog",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.release.linker import link_release_from_manifest
+
+            with patch("lib_guard.release.linker._publish_legacy_view_links", side_effect=RuntimeError("legacy view failed")):
+                result = link_release_from_manifest(manifest_path, apply=True, mode="copy", overwrite=True)
+
+            self.assertEqual(result["status"], "FAILED")
+            self.assertEqual(alias.resolve(), old_alias_target)
+            self.assertEqual(legacy_view.readlink(), old_legacy_target)
+            self.assertEqual((old_release / "RTL" / "old.v").read_text(encoding="utf-8"), "old release\n")
+            self.assertFalse((release_root / "releases" / "new_release").exists())
+            self.assertFalse((release_root / ".staging" / "new_release").exists())
+
+    def test_manifest_post_promotion_verify_failure_keeps_previous_alias_and_release(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "raw" / "ucie" / "new.v"
+            source.parent.mkdir(parents=True)
+            source.write_text("module new; endmodule\n", encoding="utf-8")
+            release_root = base / "release_area"
+            old_release = release_root / "releases" / "old_release"
+            old_release.mkdir(parents=True)
+            (old_release / "sentinel.txt").write_text("keep\n", encoding="utf-8")
+            release_root.mkdir(parents=True, exist_ok=True)
+            alias = release_root / "current"
+            alias.symlink_to(old_release)
+            manifest_path = base / "release_runs" / "post_verify_failure" / "release_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "release_id": "post_verify_failure",
+                        "alias": "current",
+                        "release_root": str(release_root),
+                        "files": [
+                            {
+                                "library_name": "ucie",
+                                "version_id": "v2",
+                                "source_path": str(source),
+                                "target_relpath": "RTL/new.v",
+                                "file_type": "verilog",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.release.linker import link_release_from_manifest
+
+            with patch(
+                "lib_guard.release.postcheck.verify_release_manifest",
+                side_effect=[{"status": "PASS"}, RuntimeError("post-promotion verify failed")],
+            ) as verify:
+                result = link_release_from_manifest(manifest_path, apply=True, mode="copy", overwrite=True)
+
+            self.assertEqual(result["status"], "FAILED")
+            self.assertEqual(verify.call_count, 2)
+            self.assertEqual(alias.resolve(), old_release.resolve())
+            self.assertTrue((old_release / "sentinel.txt").exists())
+            self.assertFalse((release_root / "releases" / "post_verify_failure").exists())
+            self.assertFalse((release_root / ".staging" / "post_verify_failure").exists())
+
+    def test_manifest_hash_failure_removes_only_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "raw" / "ucie" / "top.lef"
+            source.parent.mkdir(parents=True)
+            source.write_text("MACRO U\nEND U\n", encoding="utf-8")
+            release_root = base / "release_area"
+            old_release = release_root / "releases" / "old_release"
+            old_release.mkdir(parents=True)
+            (old_release / "sentinel.txt").write_text("keep\n", encoding="utf-8")
+            release_root.mkdir(parents=True, exist_ok=True)
+            (release_root / "current").symlink_to(old_release)
+            run_dir = base / "release_runs" / "hash_broken"
+            manifest_path = run_dir / "release_manifest.json"
+            manifest = {
+                "schema_version": "1.0",
+                "release_id": "hash_broken",
+                "alias": "current",
+                "release_root": str(release_root),
+                "files": [
+                    {
+                        "library_type": "ip",
+                        "library_name": "ucie",
+                        "version_id": "v1",
+                        "source_path": str(source),
+                        "target_relpath": "LEF/top.lef",
+                        "file_type": "lef",
+                        "sha256": "0" * 64,
+                    }
+                ],
+            }
+            run_dir.mkdir(parents=True)
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            from lib_guard.release.linker import link_release_from_manifest
+
+            result = link_release_from_manifest(manifest_path, apply=True, mode="symlink", overwrite=True)
+
+            self.assertEqual(result["status"], "FAILED")
+            self.assertIn("hash_mismatch", {item["category"] for item in result["verify"]["issues"]})
+            self.assertEqual((release_root / "current").resolve(), old_release.resolve())
+            self.assertTrue((old_release / "sentinel.txt").exists())
+            self.assertFalse((release_root / "releases" / "hash_broken").exists())
+            self.assertFalse((release_root / ".staging" / "hash_broken").exists())
+
+    def test_manifest_apply_cleans_stale_staging_before_build(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "raw" / "ucie" / "top.v"
+            source.parent.mkdir(parents=True)
+            source.write_text("module top; endmodule\n", encoding="utf-8")
+            release_root = base / "release_area"
+            staging = release_root / ".staging" / "stale_release"
+            staging.mkdir(parents=True)
+            (staging / "stale.txt").write_text("must not publish\n", encoding="utf-8")
+            manifest_path = base / "release_runs" / "stale_release" / "release_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "release_id": "stale_release",
+                        "alias": "current",
+                        "release_root": str(release_root),
+                        "files": [
+                            {
+                                "library_name": "ucie",
+                                "version_id": "v1",
+                                "source_path": str(source),
+                                "target_relpath": "RTL/top.v",
+                                "file_type": "verilog",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.release.linker import link_release_from_manifest
+
+            result = link_release_from_manifest(manifest_path, apply=True, mode="copy")
+
+            self.assertEqual(result["status"], "APPLIED")
+            immutable_release = release_root / "releases" / "stale_release"
+            self.assertTrue((immutable_release / "RTL" / "top.v").exists())
+            self.assertFalse((immutable_release / "stale.txt").exists())
+            self.assertFalse(staging.exists())
+
+    def test_manifest_apply_requires_migration_for_real_alias_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "raw" / "ucie" / "top.v"
+            source.parent.mkdir(parents=True)
+            source.write_text("module top; endmodule\n", encoding="utf-8")
+            release_root = base / "release_area"
+            alias = release_root / "current"
+            alias.mkdir(parents=True)
+            (alias / "legacy.txt").write_text("legacy\n", encoding="utf-8")
+            manifest_path = base / "release_runs" / "migration" / "release_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "release_id": "migration",
+                        "alias": "current",
+                        "release_root": str(release_root),
+                        "files": [
+                            {
+                                "library_name": "ucie",
+                                "version_id": "v1",
+                                "source_path": str(source),
+                                "target_relpath": "RTL/top.v",
+                                "file_type": "verilog",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.release.linker import link_release_from_manifest
+
+            result = link_release_from_manifest(manifest_path, apply=True, mode="copy")
+
+            self.assertEqual(result["status"], "MIGRATION_REQUIRED")
+            self.assertTrue(alias.is_dir())
+            self.assertTrue((alias / "legacy.txt").exists())
+            self.assertFalse((release_root / "releases" / "migration").exists())
 
     def test_release_manifest_rejects_unknown_package_type(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -260,8 +543,11 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             ddr.mkdir(parents=True)
             (ucie / "rtl" / "new_top.v").write_text("module new_top; endmodule\n", encoding="utf-8")
             (ddr / "ddr.v").write_text("module ddr; endmodule\n", encoding="utf-8")
-            (release_root / "RTL").mkdir(parents=True)
-            (release_root / "RTL" / "old_top.v").write_text("remove me\n", encoding="utf-8")
+            old_release = release_root / "releases" / "old_release"
+            (old_release / "RTL").mkdir(parents=True)
+            (old_release / "RTL" / "old_top.v").write_text("remove me\n", encoding="utf-8")
+            release_root.mkdir(parents=True, exist_ok=True)
+            (release_root / "current").symlink_to(old_release)
             manifest = self._write_manifest(manifest_path, release_root, ucie, ddr)
             manifest["mirror_release_root"] = True
             manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -270,10 +556,12 @@ class ReleaseManifestFlowTest(unittest.TestCase):
 
             result = link_release_from_manifest(manifest_path, apply=True, mode="copy", overwrite=True)
             self.assertEqual(result["status"], "APPLIED")
-            self.assertTrue((release_root / "RTL" / "new_top.v").exists())
-            self.assertTrue((release_root / "RTL" / "ddr.v").exists())
-            self.assertFalse((release_root / "RTL" / "old_top.v").exists())
-            self.assertEqual(result["summary"]["removed_files"], 1)
+            immutable_release = release_root / "releases" / "PD_LIB_CURRENT_20260618"
+            self.assertTrue((immutable_release / "RTL" / "new_top.v").exists())
+            self.assertTrue((immutable_release / "RTL" / "ddr.v").exists())
+            self.assertFalse((immutable_release / "RTL" / "old_top.v").exists())
+            self.assertTrue((old_release / "RTL" / "old_top.v").exists())
+            self.assertEqual(result["summary"]["removed_files"], 0)
 
     def test_release_relative_path_strips_package_prefix_and_uses_uppercase_view_dir(self) -> None:
         with tempfile.TemporaryDirectory() as td:

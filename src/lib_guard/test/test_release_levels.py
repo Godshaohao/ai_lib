@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -173,6 +174,42 @@ class ReleaseLevelTest(unittest.TestCase):
             self.assertFalse(result["release_check"]["allowed_to_apply"])
             self.assertIn("approved requires P2 deep diff", result["block_reasons"])
             self.assertFalse((release_root / "ip" / "demo" / "approved").exists())
+
+    def test_scan_release_link_uses_manifest_staging_and_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "raw" / "demo" / "top.v"
+            source.parent.mkdir(parents=True)
+            source.write_text("module top; endmodule\n", encoding="utf-8")
+            scan = base / "scan"
+            scan.mkdir()
+            (scan / "scan_meta.json").write_text(
+                json.dumps(
+                    {
+                        "root_path": str(source.parent),
+                        "library_type": "ip",
+                        "library_name": "demo",
+                        "release_version": "v1",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            release_root = base / "release_root"
+
+            from lib_guard.release.linker import link_release_from_scan
+
+            with patch(
+                "lib_guard.release.linker.ReleaseChecker.check",
+                return_value={"release_check_status": "PASS", "allowed_to_apply": True, "block_reasons": []},
+            ):
+                result = link_release_from_scan(scan, release_root, dry_run=False)
+
+            self.assertEqual(result["status"], "DONE")
+            immutable = release_root / "releases" / "v1"
+            self.assertTrue((immutable / "RTL" / "top.v").exists())
+            self.assertTrue((release_root / "current").is_symlink())
+            self.assertEqual((release_root / "current").resolve(), immutable.resolve())
+            self.assertFalse((release_root / ".staging" / "v1").exists())
 
 
 if __name__ == "__main__":

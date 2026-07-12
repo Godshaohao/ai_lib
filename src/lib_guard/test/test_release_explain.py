@@ -258,6 +258,54 @@ class ReleaseExplainTest(unittest.TestCase):
         create_manifest.assert_not_called()
         link_release.assert_not_called()
 
+    def test_release_link_cli_returns_nonzero_for_migration_required(self) -> None:
+        from lib_guard.cli_commands.release import run_release_link
+
+        args = Namespace(
+            manifest="release_manifest.json",
+            scan=None,
+            latest=False,
+            library_id=None,
+            mode="scan",
+            workdir="work",
+            release_root=None,
+            alias="current",
+            apply=True,
+            overwrite=False,
+            link_mode="symlink",
+            force=False,
+            force_reason=None,
+            force_by=None,
+            policy=None,
+            diff=None,
+        )
+        for status in ("BLOCKED", "MIGRATION_REQUIRED", "FAILED"):
+            with self.subTest(status=status), patch("lib_guard.release.linker.link_release_from_manifest", return_value={"status": status}):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(run_release_link(args), 2)
+
+    def test_catalog_release_link_cli_returns_nonzero_for_migration_required(self) -> None:
+        from lib_guard.cli_commands.catalog import run_catalog_release_link
+
+        args = Namespace(
+            catalog="catalog.json",
+            library="ucie",
+            version="v1",
+            release_root="release_area",
+            alias="current",
+            apply=True,
+            overwrite=False,
+            link_mode="symlink",
+            force=False,
+            force_reason=None,
+            force_by=None,
+        )
+        item = {"version_key": "ip/ucie/v1", "scan": {"scan_dir": "scan"}}
+        for status in ("BLOCKED", "MIGRATION_REQUIRED", "FAILED"):
+            with self.subTest(status=status), patch("lib_guard.catalog.index.find_catalog_version", return_value=item), patch("lib_guard.release.bundle.create_manifest_template_from_catalog"), patch("lib_guard.release.linker.link_release_from_manifest", return_value={"status": status}), patch("lib_guard.release.result.write_release_result"), patch("lib_guard.catalog.index.update_catalog_release_status"):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(run_catalog_release_link(args), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,45 @@ from unittest import mock
 
 
 class WindowIntakeTest(unittest.TestCase):
+    def test_review_window_reads_scan_evidence_from_catalog_runtime_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(
+                root,
+                [
+                    {"version_id": "full1", "version_key": "ip/ucie/full1", "package_type": "FULL_PACKAGE"},
+                    {"version_id": "fix1", "version_key": "ip/ucie/fix1", "package_type": "PARTIAL_UPDATE"},
+                ],
+            )
+            scan_dir = root / "scan" / "full1"
+            scan_dir.mkdir(parents=True)
+            (catalog.parent / "catalog_runtime.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "catalog_runtime.v1",
+                        "runtime_state": {
+                            "ip/ucie/full1": {
+                                "scan": {"status": "PASS", "scan_dir": str(scan_dir)}
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.window.resolver import resolve_review_window
+
+            window = resolve_review_window(
+                catalog_path=catalog,
+                library="ucie",
+                workdir=root / "work",
+                catalog_html_out=root / "catalog" / "html",
+            )
+
+            self.assertEqual(window["base_effective"]["target"], "raw:full1")
+            self.assertNotIn("full1", window["scan_versions"])
+
     def _write_catalog(self, root: Path, versions: list[dict[str, object]]) -> Path:
         catalog = {
             "libraries": [

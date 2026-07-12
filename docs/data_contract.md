@@ -9,7 +9,7 @@ Status: current
 
 ```text
 人工确认配置
-  -> catalog.json
+  -> catalog.json + catalog_runtime.json
   -> scan_out/review TSV
   -> diff/compare JSON
   -> review/effective/window 派生模型
@@ -33,7 +33,8 @@ TSV/HTML 表和默认页面展示口径见
 | --- | --- | --- |
 | `config/library_registry.tsv` | user / library commands | library apply | 人工确认库根，不由 discover 自动覆盖 |
 | `config/library_catalog.yml` | library apply | catalog refresh | 正式库 map，catalog 的库来源 |
-| `catalog/catalog.json` | catalog refresh and runtime updates | short CLI, scan, compare, renderer, intake | 库/版本资产地图和运行时指针；用户不手改 |
+| `catalog/catalog.json` | catalog refresh | short CLI, scan, compare, renderer, intake | 库/版本资产快照；不承载新的运行时写入 |
+| `catalog/catalog_runtime.json` | scan/diff/release status updates | `load_catalog_view`, review/render, window, release manifest | 运行时状态 sidecar；sidecar 优先，旧嵌入字段回退 |
 | `scan_out/**/file_inventory.json` | scan | Version Detail, readiness, diff | 单版本文件事实 |
 | `scan_out/**/parser_manifest.json` | scan | parser executor, Version Detail | parser 任务事实 |
 | `scan_out/**/parser_results.json` | parser executor | summary, diff, Version Detail | 机器结果；默认不作为人工主界面 |
@@ -81,8 +82,10 @@ HTML 永远不能反向成为 scan、diff 或 release 的输入。
 生成，是 catalog/scan/diff 的库 map 来源。`library_candidates/latest.tsv` 只是 discover
 候选审查队列；只有 accept/apply 后才成为事实。
 
-`catalog.json` 是生成的 catalog index 加运行时指针。用户不应手改其中 scan/diff/release
-字段；人工修正必须通过 `library override`、`mark`、review command 或 policy，使模型可重建。
+`catalog.json` 是生成的 Catalog 资产快照；`catalog_runtime.json` 是 scan/diff/release
+运行状态 sidecar。业务代码通过 `load_catalog_view()` 读取合并视图，sidecar 优先，旧
+`catalog.json` 内嵌 runtime 只作为迁移期回退。用户不应手改生成文件；人工修正必须通过
+`library override`、`mark`、review command 或 policy，使模型可重建。
 
 Catalog 内部命名契约。日常命令和主 UI 只展示“库名”和“版本名”；下面字段用于
 内部索引、兼容和报告路径，不要求用户记忆。

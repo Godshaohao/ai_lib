@@ -5,13 +5,11 @@ from typing import Any, Mapping
 import json
 from datetime import datetime, timezone
 
+from lib_guard.catalog.runtime import load_catalog_view
+
 
 def _now() -> str:
     return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _read_json(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def _write_json(path: str | Path, data: Mapping[str, Any]) -> None:
@@ -31,7 +29,7 @@ def attach_base(
     base_version: str,
     updated_by: str = "package.attach",
 ) -> dict[str, Any]:
-    data = _read_json(catalog_path)
+    data = load_catalog_view(catalog_path)
     found: dict[str, Any] | None = None
     for lib in data.get("libraries", []) or []:
         for version in lib.get("versions", []) or []:

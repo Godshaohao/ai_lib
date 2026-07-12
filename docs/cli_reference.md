@@ -345,6 +345,12 @@ release batch 默认 fail-closed：没有当前 `PASS` / `PASS_WITH_WARNING` 检
 
 `--overwrite` 只替换 manifest 中列出的目标文件，不会清空 release root 中其他库文件。
 
+Release apply 使用 staging -> immutable release -> alias 的事务顺序：
+`<release_root>/.staging/<release_id>` 验证成功后变为
+`<release_root>/releases/<release_id>`，并原子更新 `<release_root>/current`。如果
+`current` 已经是实体目录而不是软链接，命令返回 `MIGRATION_REQUIRED`，不会自动删除或
+改名旧目录。
+
 强制发布必须写明原因和操作者：
 
 ```csh
