@@ -322,6 +322,19 @@ def _files_by_view_rows(rows_in: list[Mapping[str, Any]], limit: int = 800) -> l
     return rows
 
 
+def _representative_file_rows(rows_in: list[Mapping[str, Any]], *, per_view: int = 12, limit: int = 120) -> list[Mapping[str, Any]]:
+    """Keep the main page bounded while preserving a path sample for every view."""
+    selected: list[Mapping[str, Any]] = []
+    counts: Counter[str] = Counter()
+    for item in rows_in:
+        view_type = str(item.get("view_type") or item.get("view_label") or "unknown")
+        if counts[view_type] >= per_view or len(selected) >= limit:
+            continue
+        selected.append(item)
+        counts[view_type] += 1
+    return selected
+
+
 def _unknown_file_rows(rows_in: list[Mapping[str, Any]], limit: int = 300) -> list[str]:
     from lib_guard.render import product_theme as ui
 
@@ -452,23 +465,57 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     counts = _type_counts(inventory, parser_manifest, dashboard)
     corner_summary = inventory.get("corner_filename_summary") or {}
     parser_summary = _parser_summary(parser_manifest, parser_quality)
+    if not (review_dir / "scan_review.md").exists():
+        from lib_guard.scan.evidence_export import build_scan_review_markdown
+
+        review_dir.mkdir(parents=True, exist_ok=True)
+        legacy_review = review_scan or {
+            "library": _library_name(meta),
+            "version": _version_name(meta),
+            "status": meta.get("status"),
+            "total_files": sum(counts.values()),
+            "view_count": len([name for name, count in counts.items() if count]),
+            "unknown_files": len(review_unknown_files),
+            "large_metadata_files": len(review_large_metadata),
+            "parser_failed": 0,
+            "required_missing": [],
+        }
+        review_dir.joinpath("scan_review.md").write_text(
+            build_scan_review_markdown(
+                {
+                    "scan_review": legacy_review,
+                    "view_coverage": review_view_rows,
+                    "unknown_files": review_unknown_files,
+                    "large_metadata_files": review_large_metadata,
+                    "parser_evidence": review_parser_evidence,
+                }
+            ),
+            encoding="utf-8",
+        )
     review = _scan_review_model(scan, out, meta, counts, issue_items, release_readiness, corner_summary, parser_summary)
     write_json(out / "scan_review.json", review)
 
     attention = [(x.get("level"), x.get("category"), x.get("message"), "scan_review.json") for x in (review.get("blockers") or []) + (review.get("warnings") or [])]
+    evidence_status = "AVAILABLE" if review["decision"] != "SCAN_BLOCKED" else "BLOCKED"
     rail = ui.status_rail([
-        ("库目录", "DISCOVERED", "版本已进入库目录"),
         ("扫描", review["decision"], review["headline"]),
-        ("对比", "COMPARE_READY" if review["decision"] != "SCAN_BLOCKED" else "NOT_READY", "下一步进入版本对比"),
-        ("文件深度对比", "PAIRWISE_EMPTY", "由对比发现变化后生成"),
-        ("发布", "RELEASE_CHECK_REQUIRED", "发布前再检查"),
+        ("人工证据", evidence_status, "已生成视图、文件和问题清单" if evidence_status == "AVAILABLE" else "先处理扫描阻塞项"),
+        ("当前判断", "READY" if evidence_status == "AVAILABLE" else "BLOCKED", "Scan 结果可供下一步判断" if evidence_status == "AVAILABLE" else "当前证据不能继续使用"),
     ])
+    inline_file_rows = _representative_file_rows(review_files_by_view, per_view=12, limit=120)
+    if not inline_file_rows and files:
+        inline_file_rows = files[:120]
+    file_evidence_note = (
+        f"主页面展示 {len(inline_file_rows)} 条代表文件，共 {len(review_files_by_view) or len(files)} 条；"
+        "完整路径清单请打开 review/files_by_view.tsv。每类视图至少保留一组代表路径。"
+    )
+    large_counts = Counter(str(item.get("evidence_level") or "unknown") for item in review_large_metadata)
     body = (
         ui.panel(
             "扫描结论",
             "只保留是否可继续审阅、缺失视图、注意项和下一步。数量明细放在证据区。",
             ui.metric_grid([
-                ("Package", review.get("package_type"), "交付类型", "PASS" if review.get("package_type") != "UNKNOWN" else "WARNING"),
+                ("交付类型", review.get("package_type"), "扫描识别的包类型", "PASS" if review.get("package_type") != "UNKNOWN" else "WARNING"),
                 ("核心视图缺失", len(review["required_views"]["missing"]), "LEF / Liberty / Verilog", "WARNING" if review["required_views"]["missing"] else "PASS"),
                 ("元数据/摘要文件", int((review_scan or {}).get("large_metadata_files", len(review_large_metadata)) or 0), "summary-only / metadata-only", "INFO" if review_large_metadata else "PASS"),
                 ("注意项", len(attention), review["headline"], review["decision"]),
@@ -479,10 +526,10 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         )
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["decision"])
         + ui.panel(
-            "View 覆盖矩阵",
+            "视图覆盖矩阵",
             "先看每类交付视图是否存在、证据等级是什么；数量可以在下方文件证据表展开。",
             ui.table(
-                ["View", "状态", "数量", "必需", "证据等级", "审查含义"],
+                ["视图", "状态", "数量", "必需", "证据等级", "审查含义"],
                 _scan_view_rows_from_review(review_view_rows) if review_view_rows else _scan_view_rows(counts),
                 "暂无视图信息",
             ),
@@ -490,21 +537,21 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         + ui.panel("优先关注", "只显示会影响继续对比 / 使用判断的注意项。", ui.attention_items(attention))
         + ui.panel(
             "文件证据表",
-            "数量必须能追到文件。这里按 View 聚合列出路径、角色、证据等级；大表默认支持筛选。",
-            ui.filterable_table(
-                "files-by-view-table",
-                ["View", "file_type", "role", "size", "证据等级", "path"],
-                _files_by_view_rows(review_files_by_view) if review_files_by_view else _file_rows(files),
+                "数量必须能追到文件。这里按视图列出具体路径、角色和证据等级；大表支持筛选。",
+                ui.filterable_table(
+                    "files-by-view-table",
+                ["视图", "文件类型", "角色", "大小", "证据等级", "文件路径"],
+                _files_by_view_rows(inline_file_rows) if review_files_by_view else _file_rows(inline_file_rows),
                 "暂无文件证据",
-                "筛选 View / file_type / path",
-            ),
+                "筛选视图 / 文件类型 / 文件路径",
+            ) + ui.callout("文件清单范围", file_evidence_note, "INFO"),
         )
         + ui.collapsible_panel(
             "Unknown 文件",
             "未识别文件不应被数量淹没；这里集中列出需要分类或确认可忽略的文件。",
             ui.filterable_table(
                 "unknown-file-table",
-                ["path", "extension", "size", "建议动作", "原因"],
+                ["文件路径", "扩展名", "大小", "建议动作", "原因"],
                 _unknown_file_rows(review_unknown_files),
                 "没有 unknown 文件",
                 "筛选 unknown 文件",
@@ -513,14 +560,14 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         )
         + ui.collapsible_panel(
             "摘要级 / 元数据级文件",
-            "大文件不是没审查，而是按证据等级审查；这里解释每个文件为什么不默认深读。",
-            ui.filterable_table(
-                "large-metadata-table",
-                ["View", "证据等级", "size", "path", "审查策略"],
-                _large_metadata_rows(review_large_metadata),
-                "没有摘要级或元数据级文件",
-                "筛选大文件 / 证据等级",
-            ),
+            "大文件不是没审查，而是按证据等级审查；主页面只保留计数和完整清单入口。",
+            ui.metric_grid([
+                ("摘要级", large_counts.get("summary_only", 0), "完整清单见 large_metadata_files.tsv", "INFO"),
+                ("元数据级", large_counts.get("metadata_only", 0), "完整清单见 large_metadata_files.tsv", "INFO"),
+            ])
+            + ui.trace_link_list([
+                ("review/large_metadata_files.tsv", _file_href(review_dir / "large_metadata_files.tsv"), "大文件完整路径、大小和审查策略"),
+            ]),
             open=False,
         )
         + ui.collapsible_panel(
@@ -528,8 +575,9 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             "原始 JSON、cache、progress 和机器清单只作为追溯证据；人工审查优先看上面的证据表。",
             ui.trace_link_list([
                 ("review/scan_review.json", _file_href(review_dir / "scan_review.json"), "scan 人工证据摘要"),
+                ("review/scan_review.md", _file_href(review_dir / "scan_review.md"), "人工可读的一页摘要"),
                 ("review/view_coverage.tsv", _file_href(review_dir / "view_coverage.tsv"), "View 覆盖表"),
-                ("review/files_by_view.tsv", _file_href(review_dir / "files_by_view.tsv"), "按 View 聚合的文件证据表"),
+                ("review/files_by_view.tsv", _file_href(review_dir / "files_by_view.tsv"), "按视图聚合的文件证据表"),
                 ("review/unknown_files.tsv", _file_href(review_dir / "unknown_files.tsv"), "未识别文件表"),
                 ("review/large_metadata_files.tsv", _file_href(review_dir / "large_metadata_files.tsv"), "摘要级 / 元数据级文件表"),
                 ("review/parser_evidence.tsv", _file_href(review_dir / "parser_evidence.tsv"), "Parser 证据表"),
@@ -539,8 +587,8 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
                 ("scan_issues.json", _file_href(scan / "scan_issues.json"), "扫描原始问题"),
                 ("release_readiness.json", _file_href(scan / "summary" / "release_readiness.json"), "后续发布检查参考"),
             ])
-            + ui.filterable_table("file-type-table", ["领域", "file_type", "数量", "说明"], _file_type_rows(counts), "暂无 file_type", "筛选 file_type / 领域")
-            + ui.collapsible_panel("旧版完整文件列表", "兼容旧 scan JSON；新审查优先看 files_by_view.tsv。", ui.filterable_table("file-list", ["file_type", "role", "size", "path"], _file_rows(files), "暂无文件", "筛选文件路径"), open=False),
+            + ui.filterable_table("file-type-table", ["领域", "文件类型", "数量", "说明"], _file_type_rows(counts), "暂无文件类型", "筛选文件类型 / 领域")
+            + ui.callout("完整文件清单", "请使用上面的文件证据表或打开 review/files_by_view.tsv。这里不再重复嵌入整份 inventory。", "INFO"),
             open=False,
         )
     )
@@ -548,25 +596,27 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     corner = review.get("corner_summary") or {}
     parser = review.get("parser_summary") or {}
     body += (
-        ui.panel(
+        ui.collapsible_panel(
             "大文件计数与 Corner 摘要",
-            "大体量时序、寄生和二进制视图只按路径/文件名计数和归类；普通 scan 不读取它们的内容。",
+            "大体量时序、寄生和二进制视图只按路径、文件名和工艺角归类；普通扫描不读取它们的内容。",
             ui.metric_grid([
                 ("计数文件", count_only.get("total_files", 0), ", ".join(f"{k}:{v}" for k, v in (count_only.get("file_type_counts") or {}).items()) or "无", "INFO" if count_only.get("total_files") else "PASS"),
-                ("Process corners", len(corner.get("process_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("process_counts") or {}).items()) or "none", "PASS" if corner.get("process_counts") else "INFO"),
-                ("Voltage corners", len(corner.get("voltage_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("voltage_counts") or {}).items()) or "none", "PASS" if corner.get("voltage_counts") else "INFO"),
-                ("Temperature corners", len(corner.get("temperature_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("temperature_counts") or {}).items()) or "none", "PASS" if corner.get("temperature_counts") else "INFO"),
+                ("工艺角", len(corner.get("process_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("process_counts") or {}).items()) or "无", "PASS" if corner.get("process_counts") else "INFO"),
+                ("电压角", len(corner.get("voltage_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("voltage_counts") or {}).items()) or "无", "PASS" if corner.get("voltage_counts") else "INFO"),
+                ("温度角", len(corner.get("temperature_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("temperature_counts") or {}).items()) or "无", "PASS" if corner.get("temperature_counts") else "INFO"),
             ])
-            + ui.table(["file_type", "Process", "Voltage", "Temp", "Path"], _corner_rows(corner), "没有文件名 corner 线索"),
+            + ui.table(["文件类型", "工艺角", "电压角", "温度角", "文件路径"], _corner_rows(corner), "没有文件名 corner 线索"),
+            open=False,
         )
-        + ui.panel(
+        + ui.collapsible_panel(
             "解析器摘要",
             "默认运行的轻量解析器只提供结构摘要，作为版本审查证据。",
             ui.table(
-                ["file_type", "状态", "任务", "已解析", "空结果", "失败"],
+                ["文件类型", "状态", "任务", "已解析", "空结果", "失败"],
                 _parser_evidence_rows_from_review(review_parser_evidence) if review_parser_evidence else _parser_summary_rows(parser),
                 "没有解析器任务",
             ),
+            open=False,
         )
     )
     html_text = ui.review_page_shell(
@@ -576,11 +626,15 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         body,
         decision=review["decision"],
         rail=rail,
-        nav="<a class='active' href='#'>扫描</a><a href='#'>对比</a><a href='#'>文件深度对比</a><a href='#'>发布</a>",
+        nav="<a class='active' href='#'>扫描摘要</a><a href='#'>人工证据</a>",
         meta=ui.compact_meta([("包类型", review.get("package_type")), ("文件总数", review.get("total_files")), ("未知", review.get("unknown_files"))]),
     )
     atomic_write_text(out / "index.html", html_text)
-    atomic_write_text(out / "scan_report.html", html_text)
+    atomic_write_text(
+        out / "scan_report.html",
+        "<!doctype html><meta charset='utf-8'><meta http-equiv='refresh' content='0; url=index.html'>"
+        "<link rel='canonical' href='index.html'><p>扫描报告已迁移到 <a href='index.html'>index.html</a>。</p>",
+    )
     return {"status": "PASS", "index_html": str(out / "index.html"), "scan_report_html": str(out / "scan_report.html"), "scan_review": str(out / "scan_review.json")}
 
 

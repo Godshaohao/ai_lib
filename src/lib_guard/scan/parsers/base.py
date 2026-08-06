@@ -105,7 +105,7 @@ def make_parser_envelope(
         'schema_version': schema_version,
         'result_type': 'parser_result',
         'parser_name': resolved_parser_name,
-        'parser_version': '2.0',
+        'parser_version': parser_version,
         'parser_schema_version': parser_schema_version,
         'file': file,
         'abs_path': abs_path,
@@ -162,4 +162,3 @@ class BaseParser:
 
     def parse(self, record: Any, context: Any) -> dict[str, Any]:
         raise NotImplementedError
-

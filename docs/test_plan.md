@@ -10,6 +10,8 @@ Status: current
 | 最小目标 | 证明代码可 import、单元测试通过、短命令 help 可用、关键 HTML 投影不 stale |
 | 禁止做法 | 只看静态 diff 就声称完成；只测 UI 不测数据模型；只测单命令不测 scan/cmp/render 联动 |
 
+完整的代码修改、真实库演练、数据不覆盖、Version Detail、有效版本和 Release 验收清单见仓库根目录 [check.list](../check.list)。
+
 ## 基础回归
 
 每轮代码或文档整理后至少跑：

@@ -188,7 +188,9 @@ def _rebuild_parser_summaries(
     exclude: list[str] | None,
     policy_path: str | Path | None,
 ) -> list[str]:
-    parser_results = read_json(scan_dir / "parser_results.json", default={}) or {}
+    from lib_guard.scan.report import load_parser_results
+
+    parser_results = load_parser_results(scan_dir)
     inventory = read_json(scan_dir / "file_inventory.json", default={}) or {}
     records = list(inventory.get("files") or [])
     selected = _normalize_summary_requests(types, all_summaries, exclude, policy_path)

@@ -62,10 +62,36 @@ def _window_versions(window: dict[str, Any]) -> list[str]:
     return versions
 
 
+def _candidate_ready_for_acceptance(window: dict[str, Any]) -> bool:
+    """Return whether the candidate has the two artifacts acceptance validates."""
+
+    candidate = window.get("candidate_effective") if isinstance(window.get("candidate_effective"), dict) else {}
+    compare = window.get("compare") if isinstance(window.get("compare"), dict) else {}
+    manifest = Path(str(candidate.get("manifest") or ""))
+    compare_dir = Path(str(compare.get("out_dir") or ""))
+    return bool(candidate.get("effective_id")) and manifest.is_file() and (compare_dir / "compare_manifest.json").is_file()
+
+
+def _presentation_plan_status(plan: dict[str, Any], window: dict[str, Any]) -> tuple[str, str]:
+    """Translate a command plan into the one action a reviewer should take next."""
+
+    if str(plan.get("state") or "") in {"EMPTY", "DONE"} and _candidate_ready_for_acceptance(window):
+        return "READY_TO_ACCEPT", "accept_candidate"
+    return str(plan.get("state") or ""), str(plan.get("next_action") or "")
+
+
 def _plan_followup_commands(library: str, window: dict[str, Any] | None = None) -> dict[str, Any]:
     lib = _quote(library)
     state = str((window or {}).get("state") or "").upper()
     candidate = (window or {}).get("candidate_effective") if isinstance((window or {}).get("candidate_effective"), dict) else {}
+    correction_commands = _suggested_fix_commands(library, window or {})
+    if state == "NEEDS_FULL_BASE":
+        return {
+            "confirm_command": "先确认完整包：使用 lg next <LIBRARY> --fix 查看修正建议",
+            "relation_fix_commands": [f"lg mark {lib} <FULL_VERSION> --type FULL"],
+            "accept_command": "不可接受：缺少完整包基线",
+            "review_hint": "当前库没有已确认的 FULL 包；先标记完整包，再重新运行 lg next。",
+        }
     if state == "EMPTY" or not candidate:
         return {
             "confirm_command": "无需执行：当前没有新的待审查版本",
@@ -73,23 +99,33 @@ def _plan_followup_commands(library: str, window: dict[str, Any] | None = None) 
             "accept_command": "无需执行：没有 candidate effective，不能接受新有效版",
             "review_hint": "当前只有已识别的基线版本；新版本到来后再运行 lg next。",
         }
+    if correction_commands:
+        return {
+            "confirm_command": "先确认未识别包的类型；确认后重新运行 lg next。",
+            "relation_fix_commands": correction_commands,
+            "accept_command": "不可接受：存在未确认包类型",
+            "review_hint": "只需修正列出的 UNKNOWN 包类型；无需覆盖当前 Base。",
+        }
+    if _candidate_ready_for_acceptance(window or {}):
+        accept = f"lg next {lib} --accept --by <USER> --note 'review passed'"
+        return {
+            "confirm_command": accept,
+            "relation_fix_commands": [],
+            "accept_command": accept,
+            "review_hint": "候选组合、扫描和对比证据已生成；人工审查通过后即可接受为当前有效版。",
+        }
     return {
         "confirm_command": f"lg next {lib} --apply",
-        "relation_fix_commands": [
-            f"lg mark {lib} <VERSION> --type FULL",
-            f"lg library override {lib} <FIX_VERSION> --package-type PARTIAL_UPDATE --base-full <BASE_FULL_VERSION> --compare-default full_baseline --note 'confirmed fix baseline'",
-        ],
+        "relation_fix_commands": [],
         "accept_command": f"lg next {lib} --accept --by <USER> --note 'review passed'",
-        "review_hint": "先确认 candidate/base/scan_versions；关系不对先运行 mark 或 library override，再重新执行 lg next --plan-only。",
+        "review_hint": "确认 candidate、Base 和需扫描版本后执行；当前没有需要修正的包类型或 Base。",
     }
 
 
 def _base_source_label(source: str) -> str:
     labels = {
         "current_effective_pointer": "当前Effective指针",
-        "catalog_summary": "Catalog已确认引用",
-        "latest_full_fallback": "自动回退到最新FULL",
-        "first_catalog_version": "自动回退到首个版本",
+        "uninitialized": "尚未建立有效版",
     }
     return labels.get(source, source or "未知")
 
@@ -98,16 +134,16 @@ def _base_review(window: dict[str, Any]) -> dict[str, Any]:
     base = window.get("base_effective") if isinstance(window.get("base_effective"), dict) else {}
     source = str(base.get("source") or "")
     target = str(base.get("target") or "")
-    fallback_sources = {"latest_full_fallback", "first_catalog_version"}
+    uninitialized = source == "uninitialized"
     unknowns = _unknown_package_versions(window)
     return {
-        "状态": "需确认" if source in fallback_sources or unknowns else "已确认",
-        "当前Base": target or "未识别",
+        "状态": "需建立" if uninitialized else "需确认" if unknowns else "已确认",
+        "当前Base": target or "未建立有效版" if uninitialized else target or "未识别",
         "来源": _base_source_label(source),
         "完整包基线": base.get("base_full") or "",
-        "确认说明": "自动回退结果不能当作事实；如不符合预期，请用 mark/library override 修正。"
-        if source in fallback_sources
-        else "来自已接受指针或人工 catalog 信息。",
+        "确认说明": "尚未写入 current_effective.json；最新 FULL 仅作为初始接入候选，不是当前有效版。"
+        if uninitialized
+        else "来自已接受的 current_effective.json。",
     }
 
 
@@ -145,8 +181,6 @@ def _version_review_table(window: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _suggested_fix_commands(library: str, window: dict[str, Any]) -> list[str]:
     lib = _quote(library)
-    base = window.get("base_effective") if isinstance(window.get("base_effective"), dict) else {}
-    base_full = str(base.get("base_full") or "")
     commands: list[str] = []
     for item in window.get("items", []) or []:
         if not isinstance(item, dict):
@@ -164,16 +198,6 @@ def _suggested_fix_commands(library: str, window: dict[str, Any]) -> list[str]:
                 commands.append(f"lg mark {lib} {_quote(version)} --type FIX --note 'confirmed fix package'")
             else:
                 commands.append(f"lg mark {lib} {_quote(version)} --type FULL|FIX --note 'confirmed package type'")
-        if suggested == "FIX" and base_full:
-            commands.append(
-                f"lg library override {lib} {_quote(version)} --package-type PARTIAL_UPDATE "
-                f"--base-full {_quote(base_full)} --previous-effective {_quote(base_full)} "
-                "--compare-default full_baseline --note 'manual confirmed base'"
-            )
-    if not commands and window.get("state") == "EMPTY":
-        return []
-    if not commands:
-        commands.append(f"lg window {lib}")
     return commands
 
 
@@ -235,15 +259,33 @@ def _worklist_row(library: str, window: dict[str, Any]) -> dict[str, Any]:
             if isinstance(item, dict) and str(item.get("version") or item.get("version_id") or "")
         ]
     source = str((window.get("base_effective") or {}).get("source") or "")
+    if source == "uninitialized" and candidate:
+        base_full = str(candidate.get("base_full") or "-")
+        overlays = [str(item) for item in candidate.get("overlays", []) or [] if str(item)]
+        intermediate_count = len(candidate.get("intermediate_items", []) or [])
+        new_version_text = f"初始候选：{base_full}"
+        if overlays:
+            new_version_text += f" + {len(overlays)} 个增量"
+        if intermediate_count:
+            new_version_text += f"（{intermediate_count} 个历史版本不参与组合）"
+    else:
+        new_version_text = ", ".join(new_versions) or "-"
     if state == "EMPTY":
         status = "无新版本"
         action = "无需执行"
+    elif state == "NEEDS_FULL_BASE":
+        status = "缺少完整包基线"
+        action = f"lg next {_quote(library)} --fix"
     elif unknowns:
         status = "需确认包类型"
         action = f"lg next {_quote(library)} --fix"
-    elif source == "first_catalog_version":
-        status = "需确认Base"
-        action = f"lg next {_quote(library)} --fix"
+    elif source == "uninitialized":
+        status = "可接受" if _candidate_ready_for_acceptance(window) else "待建立有效版"
+        action = (
+            f"lg next {_quote(library)} --accept --by <USER> --note 'review passed'"
+            if status == "可接受"
+            else f"lg next {_quote(library)} --apply"
+        )
     else:
         status = "可执行" if window.get("commands") else "可接受"
         action = (
@@ -256,7 +298,7 @@ def _worklist_row(library: str, window: dict[str, Any]) -> dict[str, Any]:
         "状态": status,
         "当前Base": base.get("当前Base") or "-",
         "Base来源": base.get("来源") or "-",
-        "新版本": ", ".join(new_versions) or "-",
+        "新版本": new_version_text,
         "Candidate": candidate.get("effective_id") or "-",
         "需扫描": len(window.get("scan_versions", []) or []),
         "建议动作": action,
@@ -720,14 +762,12 @@ def cmd_intake(args: argparse.Namespace) -> int:
         parse_file_types=args.parse_file_types or "",
         parse_exclude_file_types=args.parse_exclude_file_types or "",
     )
-    if window.get("state") != "EMPTY":
-        write_json(window["pending_window_path"], window)
     plan_path = plan_path_for(args.workdir, args.library)
     unknowns = _unknown_package_versions(window)
     blocked_reason = ""
     if unknowns:
         blocked_reason = "存在未确认包类型，执行 intake 前需要 owner 确认：" + ", ".join(unknowns)
-    existing_plan = load_plan(plan_path)
+    existing_plan = {} if args.rebuild else load_plan(plan_path)
     plan = build_plan_from_window(
         workdir=args.workdir,
         library=args.library,
@@ -735,13 +775,17 @@ def cmd_intake(args: argparse.Namespace) -> int:
         existing=existing_plan,
         blocked_reason=blocked_reason,
     )
-    save_plan(plan_path, plan)
+    if not args.plan_only:
+        if window.get("state") != "EMPTY":
+            write_json(window["pending_window_path"], window)
+        save_plan(plan_path, plan)
+    plan_state, next_action = _presentation_plan_status(plan, window)
     output = {
         "status": "NEEDS_PACKAGE_CONFIRM" if blocked_reason else "PASS",
         "window": window.get("pending_window_path"),
         "plan": str(plan_path),
-        "plan_state": plan.get("state"),
-        "next_action": plan.get("next_action"),
+        "plan_state": plan_state,
+        "next_action": next_action,
         "blocked_reason": blocked_reason,
         "state": window.get("state"),
         "base": window.get("base_effective"),
@@ -762,8 +806,7 @@ def cmd_intake(args: argparse.Namespace) -> int:
         return 0 if args.plan_only or not blocked_reason else 2
     code, plan = execute_plan(plan_path=plan_path, plan=plan, runner=_run_one_command)
     output["command_exit_code"] = code
-    output["plan_state"] = plan.get("state")
-    output["next_action"] = plan.get("next_action")
+    output["plan_state"], output["next_action"] = _presentation_plan_status(plan, window)
     _attach_render_impact(args, output, window, "window_intake_updated")
     _print_json(output)
     return code

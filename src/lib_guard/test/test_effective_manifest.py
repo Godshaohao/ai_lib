@@ -49,6 +49,42 @@ class EffectiveManifestTest(unittest.TestCase):
         self.assertEqual(first["components"][1]["snapshot_digest"], "sha256:fix1")
         self.assertEqual(first["components"][1]["evidence_strength"], "full")
 
+    def test_unclassified_update_file_is_a_warning_not_a_composition_conflict(self) -> None:
+        from lib_guard.effective.manifest import build_effective_manifest
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            full_inventory = root / "full_inventory.json"
+            fix_inventory = root / "fix_inventory.json"
+            full_inventory.write_text(json.dumps([{"path": "LEF/demo.lef", "file_type": "lef"}]), encoding="utf-8")
+            fix_inventory.write_text(
+                json.dumps(
+                    [
+                        {"path": "README.md", "file_type": "doc"},
+                        {"path": "LICENSE_BUILD_RUN_SCRIPTS", "file_type": "unknown"},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            catalog = {
+                "libraries": [
+                    {
+                        "library_id": "ip/demo",
+                        "library_name": "demo",
+                        "versions": [
+                            {"version_id": "full", "file_inventory": str(full_inventory)},
+                            {"version_id": "fix1", "update_scope": ["doc"], "file_inventory": str(fix_inventory)},
+                        ],
+                    }
+                ]
+            }
+
+            manifest = build_effective_manifest(catalog, "demo", "full", [("fix1", ["doc"])])
+
+        self.assertEqual(manifest["summary"]["conflict_count"], 0)
+        self.assertEqual(manifest["summary"]["warning_count"], 1)
+        self.assertEqual(manifest["warnings"][0]["type"], "SCOPE_UNCLASSIFIED")
+
     def test_effective_digest_excludes_created_at_and_paths(self) -> None:
         from lib_guard.effective.manifest import build_effective_manifest
         from lib_guard.identity import build_effective_identity

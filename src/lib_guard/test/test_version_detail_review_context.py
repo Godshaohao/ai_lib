@@ -39,7 +39,21 @@ def _write_active_window(root: Path) -> dict[str, Path]:
     candidate_html = effective_dir / "index.html"
     compare_manifest = compare_dir / "compare_manifest.json"
     compare_html = compare_dir / "index.html"
-    candidate_manifest.write_text("{}", encoding="utf-8")
+    candidate_manifest.write_text(
+        json.dumps(
+            {
+                "summary": {"file_count": 4, "file_type_summary": {"lef": 2, "verilog": 1, "doc": 1}},
+                "effective_files": {
+                    "LEF/a.lef": {"relpath": "LEF/a.lef", "file_type": "lef"},
+                    "LEF/b.lef": {"relpath": "LEF/b.lef", "file_type": "lef"},
+                    "RTL/top.v": {"relpath": "RTL/top.v", "file_type": "verilog"},
+                    "doc/release.md": {"relpath": "doc/release.md", "file_type": "doc"},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     candidate_html.write_text("<html></html>", encoding="utf-8")
     compare_manifest.write_text("{}", encoding="utf-8")
     compare_html.write_text("<html></html>", encoding="utf-8")
@@ -115,6 +129,8 @@ class VersionDetailReviewContextTest(unittest.TestCase):
             self.assertEqual(ctx["candidate_effective_base_full"], "full2")
             self.assertEqual(ctx["candidate_effective_overlays"], ["fix2"])
             self.assertEqual(ctx["candidate_effective_manifest"], str(paths["candidate_manifest"]))
+            self.assertEqual(ctx["candidate_effective_file_count"], 4)
+            self.assertEqual(ctx["candidate_effective_file_type_counts"], {"lef": 2, "verilog": 1, "doc": 1})
             self.assertEqual(ctx["candidate_effective_html"], str(paths["candidate_html"]))
             self.assertEqual(ctx["compare_id"], "window_raw_full1_to_candidate_fix2")
             self.assertEqual(ctx["compare_old"], "raw:full1")
@@ -269,6 +285,36 @@ class VersionDetailReviewContextTest(unittest.TestCase):
                     "status": "STALE_OR_MISSING",
                 },
             )
+
+    def test_malformed_candidate_inventory_counts_do_not_break_review_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = _write_active_window(root)
+            manifest = paths["candidate_manifest"]
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "summary": {
+                            "file_count": "not-a-number",
+                            "file_type_summary": {"lef": "bad", "verilog": -3},
+                        },
+                        "effective_files": {},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_context import build_version_detail_review_context
+
+            ctx = build_version_detail_review_context(
+                catalog_html_out=paths["html"],
+                library_row=_library(),
+                version_row=_version("fix2", paths["scan_dir"]),
+            )
+
+            self.assertEqual(ctx["candidate_effective_file_count"], 0)
+            self.assertEqual(ctx["candidate_effective_file_type_counts"], {"lef": 0, "verilog": 0})
 
 
 if __name__ == "__main__":

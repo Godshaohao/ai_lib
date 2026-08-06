@@ -92,7 +92,12 @@ class ParserSelector:
         tasks: list[ParserTask] = []
         for parser in registry.all():
             if parser.can_parse(record, context):
-                tasks.append(ParserTask(parser_name=parser.parser_name, parser_version="2.0"))
+                tasks.append(
+                    ParserTask(
+                        parser_name=parser.parser_name,
+                        parser_version=str(getattr(parser, "parser_version", "2.0")),
+                    )
+                )
         return tasks
 
 

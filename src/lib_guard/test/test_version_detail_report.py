@@ -48,6 +48,46 @@ def _write_version_detail_lane_fixture(root: Path) -> tuple[dict[str, str], dict
 
 
 class VersionDetailReportTest(unittest.TestCase):
+    def test_changed_file_fallback_counts_only_changed_records(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            diff_dir = root / "diff"
+            diff_dir.mkdir()
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps({"status": "DIFF", "added_files": 1, "removed_files": 1}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (diff_dir / "file_diff.json").write_text(
+                json.dumps(
+                    {
+                        "added": [{"path": "new.lef", "file_type": "lef"}],
+                        "removed": [{"path": "old.lef", "file_type": "lef"}],
+                        "changed": [
+                            {"path": "a.lef", "file_type": "lef"},
+                            {"path": "b.lef", "file_type": "lef"},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/demo", "library_name": "demo"},
+                {
+                    "version_id": "v2",
+                    "raw_path": str(root / "raw" / "v2"),
+                    "diff": {"base_version": "v1", "base_source": "explicit", "base_diff_dir": str(diff_dir)},
+                },
+            )
+
+        self.assertEqual(model["added_files"], 1)
+        self.assertEqual(model["removed_files"], 1)
+        self.assertEqual(model["changed_files"], 2)
+
     def test_version_detail_model_and_first_screen_include_active_window_context(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -110,11 +150,10 @@ class VersionDetailReportTest(unittest.TestCase):
 
             self.assertEqual(model["review_context"]["status"], "IN_ACTIVE_WINDOW")
             self.assertEqual(model["review_context"]["role_in_window"], "candidate_overlay")
-            self.assertIn("当前审查窗口 / 有效版证据", rendered)
-            self.assertIn("候选叠加版本", rendered)
-            self.assertIn("原始版 full1 → 有效版 candidate_fix2", rendered)
-            self.assertIn("candidate_fix2", rendered)
-            self.assertIn("证据齐全", rendered)
+            self.assertIn("对比基准", rendered)
+            self.assertIn("审查窗口基准 / full1", rendered)
+            self.assertIn("交付变化", rendered)
+            self.assertNotIn("版本详情是唯一审查投影", rendered)
 
     def test_accepted_window_base_overrides_stale_explicit_catalog_base(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -190,10 +229,9 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(model["base_version"], "full1")
             self.assertEqual(model["diff_dir"], str(diff_dir))
             self.assertEqual(model["status"], "CHANGED")
-            self.assertIn("fix2 / 候选叠加版本", rendered)
-            self.assertIn("原始版 full1 → 有效版 candidate_fix2", rendered)
             self.assertIn("审查窗口基准", rendered)
-            self.assertIn("证据齐全", rendered)
+            self.assertIn("对比基准", rendered)
+            self.assertIn("交付变化", rendered)
             self.assertNotIn("stale_manual_full", rendered)
             self.assertNotIn("独立版本", rendered)
 
@@ -241,12 +279,12 @@ class VersionDetailReportTest(unittest.TestCase):
                 [item["path"] for item in model["metadata_only_reviewed"]],
                 ["db/top.db", "layout/top.gds", "layout/top.oas"],
             )
-            self.assertIn("文件证据", main_html)
-            self.assertIn("说明", main_html)
+            self.assertIn("文件", main_html)
+            self.assertIn("视图变化矩阵", main_html)
             self.assertIn("本次变化", main_html)
             self.assertIn("lef/top.lef", main_html)
             self.assertIn("constraints/top.sdc", main_html)
-            self.assertIn("重点变化文件", main_html)
+            self.assertIn("重点变化文件明细", main_html)
             self.assertNotIn("Summary-only / Metadata-only 明细", main_html)
             self.assertIn("审计证据", audit_html)
             self.assertIn("摘要级 / 元数据级证据摘要", audit_html)
@@ -311,7 +349,7 @@ class VersionDetailReportTest(unittest.TestCase):
             audit_html = _audit_evidence_panel(model)
             html = main_html + audit_html
 
-            recommended_section = main_html.split("重点变化文件", 1)[1]
+            recommended_section = main_html.split("变化文件明细", 1)[1]
             summary_section = audit_html.split("摘要级证据按类型汇总", 1)[1].split("元数据级证据按类型汇总", 1)[0]
             metadata_section = audit_html.split("元数据级证据按类型汇总", 1)[1].split("发布说明", 1)[0]
 
@@ -414,14 +452,15 @@ class VersionDetailReportTest(unittest.TestCase):
 
             self.assertTrue(model["path_restructure"]["suspected"])
             self.assertIn("修改文件 0 个，新增 181 个，删除 10 个", model["headline"])
-            self.assertIn("包装目录变化", html)
-            self.assertIn("旧包根=asap7_source_package", html)
-            self.assertIn("新包根=upstream_ae9a8ed9", html)
-            self.assertIn("逻辑路径匹配 31", html)
+            migration = next(group for group in model["version_review_model"]["groups"] if group["key"] == "package_root_migration")
+            self.assertEqual(migration["status"], "WARNING")
+            self.assertIn("旧包根", str(migration["facts"]))
+            self.assertIn("asap7_source_package", str(migration["facts"]))
+            self.assertIn("upstream_ae9a8ed9", str(migration["facts"]))
+            self.assertNotIn("包装目录变化", html)
             self.assertNotIn("包根/文件级匹配 31", html)
             self.assertNotIn("old 包内 31 个文件，new 包内 206 个文件", html)
             self.assertNotIn("文件级一一匹配 23", html)
-            self.assertLess(html.index("包装目录变化"), html.index("变化文件明细（按需展开）"))
 
     def test_markdown_export_uses_same_headline_and_evidence_counts_as_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -576,9 +615,8 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("5 个按摘要级/元数据级证据处理", model["headline"])
             self.assertIn("基准来源：当前有效版", model["confidence_note"])
             self.assertIn("对比口径：全量", model["confidence_note"])
-            self.assertIn(model["headline"], html)
-            self.assertIn(model["confidence_note"], html)
-            self.assertIn("重点变化文件", html)
+            self.assertIn("视图变化矩阵", html)
+            self.assertIn("重点变化文件明细", html)
             self.assertNotIn("变化风险", html)
             self.assertNotIn("P0/P1=2", html)
             self.assertNotIn("Run recommended File Diff", html)
@@ -631,8 +669,8 @@ class VersionDetailReportTest(unittest.TestCase):
                 self.assertTrue(group["facts"], group["label"])
 
             html = render_version_update_detail_panel(model)
-            self.assertIn("IP 使用者默认视图", html)
             self.assertIn("视图变化矩阵", html)
+            self.assertNotIn("IP 使用者默认视图", html)
             for label in labels:
                 self.assertNotIn(f"<h3>{label}</h3>", html)
             self.assertNotIn("高级审查字段", html)
@@ -663,7 +701,7 @@ class VersionDetailReportTest(unittest.TestCase):
                 },
             }
         )
-        rows = {row["view_type"]: row for row in review_model["ip_user_view"]["view_delta_rows"]}
+        rows = {row["view_type"]: row for row in review_model["ip_user_view"]["view_rows"]}
 
         self.assertEqual(rows["physical_abstract"]["current_count"], 2)
         self.assertEqual(rows["rtl_model"]["current_count"], 1)
@@ -710,10 +748,10 @@ class VersionDetailReportTest(unittest.TestCase):
 
             self.assertEqual(model["review_mode"], "first_version")
             self.assertEqual(model["usage_decision"], "USAGE_REVIEW_REQUIRED")
-            self.assertEqual(model["ip_user_view_model"]["ip_use_label"], "首版需审查")
-            self.assertIn("首版审查", html)
-            self.assertIn("当前无可比基准版，以下展示版本自身交付内容", html)
-            self.assertIn("View Coverage Matrix", html)
+            self.assertEqual(model["ip_user_view_model"]["decision"]["label"], "首版需审查")
+            self.assertIn("首版交付范围", html)
+            self.assertIn("当前无可比基准版，展示本次交付包自身", html)
+            self.assertIn("视图覆盖矩阵", html)
             self.assertIn("LEF / 物理抽象", html)
             self.assertIn("Liberty / 时序", html)
             self.assertIn("GDS/OAS / 版图", html)
@@ -757,9 +795,9 @@ class VersionDetailReportTest(unittest.TestCase):
         html = render_ip_user_view(review_model["ip_user_view"])
 
         self.assertIn("展开文件", html)
-        self.assertIn("数字对应文件", html)
+        self.assertIn("代表文件", html)
         self.assertIn("本次变化", html)
-        self.assertIn("当前代表", html)
+        self.assertIn("本包文件", html)
         self.assertIn("lef/top.lef", html)
         self.assertIn("sdc/top.sdc", html)
         self.assertIn("rtl/model.v", html)
@@ -781,7 +819,7 @@ class VersionDetailReportTest(unittest.TestCase):
                 "scan_evidence": {"counts": {}, "inventory": {"files": []}},
             }
         )
-        rows = {row["view_type"]: row for row in review_model["ip_user_view"]["view_delta_rows"]}
+        rows = {row["view_type"]: row for row in review_model["ip_user_view"]["view_rows"]}
 
         self.assertEqual(rows["rtl_model"]["current_count"], 2)
 
@@ -807,7 +845,7 @@ class VersionDetailReportTest(unittest.TestCase):
                 "scan_evidence": {"counts": {}, "inventory": {"files": []}},
             }
         )
-        rows = {row["view_type"]: row for row in review_model["ip_user_view"]["view_delta_rows"]}
+        rows = {row["view_type"]: row for row in review_model["ip_user_view"]["view_rows"]}
 
         self.assertEqual(rows["rtl_model"]["added"], 2)
         self.assertEqual(rows["doc_evidence"]["added"], 2)
@@ -816,10 +854,10 @@ class VersionDetailReportTest(unittest.TestCase):
         self.assertNotIn("md", rows)
         self.assertNotIn("lydrc", rows)
         html = render_ip_user_view(review_model["ip_user_view"])
-        self.assertIn("<code>rtl_model</code>", html)
-        self.assertIn("更新", html)
-        self.assertIn("verilog:1", html)
-        self.assertIn("systemverilog:1", html)
+        self.assertIn("RTL 模型", html)
+        self.assertIn("当前文件", html)
+        self.assertIn("证据 / 状态", html)
+        self.assertIn("RTL 模型", html)
         self.assertNotIn("<code>systemverilog</code></td><td>", html)
         self.assertNotIn("<code>md</code></td><td>", html)
         self.assertNotIn("<code>lydrc</code></td><td>", html)
@@ -844,7 +882,7 @@ class VersionDetailReportTest(unittest.TestCase):
             model = build_version_update_detail_model(root / "html", lib, version)
             self.assertEqual(model["usage_decision"], "BLOCKED")
             self.assertIn("review_gate_blocking", model["usage_decision_reasons"])
-            self.assertEqual(model["ip_user_view_model"]["release_decision"], "INFO")
+            self.assertEqual(model["ip_user_view_model"]["release_summary"]["status"], "INFO")
             self.assertNotIn("待 release owner 处理", html)
             self.assertNotIn("release owner", html)
             self.assertNotIn("judgment-bad'><b>正式放行", html)
@@ -852,8 +890,8 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertNotIn("View 完整性", html)
             self.assertIn("发布说明", html)
             self.assertIn("缺失", html)
-            self.assertNotIn("正式放行管理", html)
-            self.assertNotIn("管理阻塞", html)
+            self.assertIn("正式放行管理", html)
+            self.assertIn("管理阻塞", html)
             self.assertNotIn("影响使用", html)
             self.assertNotIn("门禁状态</div><div class='metric-value'>需审阅", html)
             self.assertNotIn("阻塞项</div><div class='metric-value'>1", html)
@@ -1383,14 +1421,9 @@ class VersionDetailReportTest(unittest.TestCase):
 
             self.assertEqual(model["base_ref"], "adjacent_fallback")
             self.assertEqual(model["base_trust_status"], "WARNING")
-            self.assertIn("该结果不是标准当前有效版更新详情，仅供手动对比/调试；正式发布前请确认基准版。", html)
-            for label in [
-                "基准来源",
-                "基准版本",
-                "对比口径",
-                "删除口径",
-            ]:
-                self.assertIn(label, html)
+            self.assertIn("基准来源：相邻上一版", model["confidence_note"])
+            self.assertEqual(model["ip_user_view_model"]["comparison"]["base_label"], "相邻上一版 / raw_previous")
+            self.assertIn("视图变化矩阵", html)
             self.assertNotIn("Markdown export", html)
 
     def test_missing_base_blocks_update_detail_and_drives_primary_next_action(self) -> None:
@@ -1412,18 +1445,20 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(model["status"], "NEEDS_BASE_CONFIRM")
             self.assertEqual(model["base_trust_status"], "BLOCKING")
             self.assertEqual(model["primary_next_action"]["kind"], "base_confirm_required")
-            self.assertIn("无法确定基准版；请先确认当前有效版或上一有效版。", html)
+            self.assertEqual(model["ip_user_view_model"]["decision"]["status"], "BLOCKED")
+            self.assertIn("基础证据不可信", model["ip_user_view_model"]["decision"]["reason"])
+            self.assertIn("视图变化矩阵", html)
             self.assertNotIn("BLOCKING", html)
 
     def test_update_detail_status_copy_is_actionable(self) -> None:
-        from lib_guard.render.version_detail_report import render_version_update_detail_panel
+        from lib_guard.render.version_review_model import build_ip_user_view_model
 
         cases = {
-            "DIFF_NOT_RUN": "尚未生成更新详情；请运行 lg cat <LIB> --update-detail。",
-            "NEEDS_BASE_CONFIRM": "无法确定基准版；请先确认当前有效版或上一有效版。",
-            "NO_DIFF_SUMMARY": "找到对比输出目录，但缺少 diff_summary.json；请检查对比产物。",
-            "CHANGED": "已完成比较，有变化。",
-            "SAME": "已完成比较，无变化。",
+            "DIFF_NOT_RUN": "BLOCKED",
+            "NEEDS_BASE_CONFIRM": "BLOCKED",
+            "NO_DIFF_SUMMARY": "BLOCKED",
+            "CHANGED": "READY",
+            "SAME": "READY",
         }
         for status, expected in cases.items():
             with self.subTest(status=status):
@@ -1452,13 +1487,8 @@ class VersionDetailReportTest(unittest.TestCase):
                     "metadata_only_changes": [],
                 }
 
-                html = render_version_update_detail_panel(model)
-
-                if status == "DIFF_NOT_RUN":
-                    self.assertIn("尚未生成更新详情；请运行 lg cat &lt;LIB&gt; --update-detail。", html)
-                    self.assertNotIn("lg cat <LIB> --update-detail", html)
-                else:
-                    self.assertIn(expected, html)
+                view_model = build_ip_user_view_model(model)
+                self.assertEqual(view_model["decision"]["status"], expected)
 
     def test_existing_diff_dir_without_summary_is_reported_as_missing_summary(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1621,10 +1651,9 @@ class VersionDetailReportTest(unittest.TestCase):
 
             page = Path(render_version_detail_page(out, lib, version))
             html = page.read_text(encoding="utf-8")
-            self.assertIn("事实源状态", html)
-            self.assertIn("scan_review_tables", html)
-            self.assertIn("HTML 只是投影", html)
-            self.assertIn("review/view_coverage.tsv", html)
+            self.assertNotIn("事实源与审计证据", html)
+            self.assertNotIn("scan_review_tables", html)
+            self.assertNotIn("HTML 是投影", html)
 
 
 if __name__ == "__main__":

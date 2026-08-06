@@ -17,6 +17,123 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class ScanPipelineTest(unittest.TestCase):
+    def test_parser_loader_prefers_per_file_results_when_aggregate_is_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            scan_dir = Path(td) / "scan"
+            result_dir = scan_dir / "parser_results" / "lef"
+            result_dir.mkdir(parents=True)
+            (scan_dir / "parser_results.json").write_text(
+                json.dumps({"results": []}), encoding="utf-8"
+            )
+            (result_dir / "one.json").write_text(
+                json.dumps({"parser_name": "LefParser", "status": "PASS"}),
+                encoding="utf-8",
+            )
+
+            from lib_guard.scan.report import load_parser_results
+
+            loaded = load_parser_results(scan_dir)
+
+            self.assertEqual(
+                loaded,
+                {"parser_results/lef/one.json": {"parser_name": "LefParser", "status": "PASS"}},
+            )
+
+    def test_parser_loader_prefers_new_per_file_results_over_stale_aggregate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            scan_dir = Path(td) / "scan"
+            result_dir = scan_dir / "parser_results" / "lef"
+            result_dir.mkdir(parents=True)
+            (scan_dir / "parser_results.json").write_text(
+                json.dumps(
+                    {
+                        "parser_results/lef/one.json": {
+                            "parser_name": "LefParser",
+                            "status": "FAIL",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (result_dir / "one.json").write_text(
+                json.dumps({"parser_name": "LefParser", "status": "PASS"}),
+                encoding="utf-8",
+            )
+
+            from lib_guard.scan.report import load_parser_results
+
+            loaded = load_parser_results(scan_dir)
+
+            self.assertEqual(loaded["parser_results/lef/one.json"]["status"], "PASS")
+
+    def test_scan_omits_aggregate_parser_results_and_loads_per_file_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            out = Path(td) / "scan_out"
+            root.mkdir()
+            (root / "block.lef").write_text(
+                "VERSION 5.8 ;\nMACRO NAND2\n  CLASS CORE ;\nEND NAND2\nEND LIBRARY\n",
+                encoding="utf-8",
+            )
+
+            from lib_guard.scan.report import load_parser_results
+            from lib_guard.scan.scanner import ScanRunner
+
+            result = ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="scan",
+                    scan_id="NO_AGGREGATE",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=True,
+                    no_progress=True,
+                    parse_jobs=1,
+                    parse_file_types=["lef"],
+                    write_raw_parser_results=False,
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+
+            self.assertEqual(result.status, "PASS")
+            self.assertFalse((out / "parser_results.json").exists())
+            result_files = sorted((out / "parser_results").glob("**/*.json"))
+            self.assertEqual(len(result_files), 1)
+            loaded = load_parser_results(out)
+            self.assertEqual(len(loaded), 1)
+            self.assertTrue(next(iter(loaded)).startswith("parser_results/lef/"))
+
+    def test_scan_status_distinguishes_aggregate_from_parser_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            scan_dir = Path(td) / "scan"
+            parser_dir = scan_dir / "parser_results" / "lef"
+            parser_dir.mkdir(parents=True)
+            (scan_dir / "scan_meta.json").write_text(
+                json.dumps({"status": "PASS", "scan_id": "S1"}), encoding="utf-8"
+            )
+            (scan_dir / "parser_manifest.json").write_text(
+                json.dumps({"files": []}), encoding="utf-8"
+            )
+            (scan_dir / "parser_task_list.json").write_text(
+                json.dumps({"task_count": 1}), encoding="utf-8"
+            )
+            (parser_dir / "one.json").write_text(json.dumps({"result_type": "parser_result"}), encoding="utf-8")
+
+            from lib_guard.cli_commands.scan import build_scan_status
+
+            status = build_scan_status(scan_dir)
+
+            self.assertFalse(status["outputs"]["parser_results_json"])
+            self.assertTrue(status["outputs"]["parser_results_dir"])
+            self.assertTrue(status["outputs"]["parser_results_available"])
+            self.assertEqual(status["parser_result_file_count"], 1)
+
     def test_scan_pipeline_writes_core_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "raw"
@@ -63,7 +180,8 @@ class ScanPipelineTest(unittest.TestCase):
                 self.assertEqual(result["result_type"], "parser_result")
                 self.assertIn("parser_name", result)
                 self.assertNotIn("parser", result)
-                self.assertEqual(result["parser_version"], "2.0")
+                expected_version = "2.1" if result["parser_name"] == "LefParser" else "2.0"
+                self.assertEqual(result["parser_version"], expected_version)
 
             parser_manifest = json.loads((out / "parser_manifest.json").read_text(encoding="utf-8"))
             tasks = [
@@ -107,6 +225,83 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertEqual(first_meta["snapshot_identity"]["digest"], second_meta["snapshot_identity"]["digest"])
         self.assertEqual(first_meta["snapshot_identity"]["strength"], "full")
         self.assertEqual(first_meta["snapshot_identity"], first_inventory["snapshot_identity"])
+
+    def test_scan_review_exports_human_summary_and_keeps_one_canonical_html(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "raw"
+            scan_out = Path(td) / "scan_out"
+            html_out = Path(td) / "html"
+            root.mkdir()
+            (root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            (root / "README.md").write_text("release note\n", encoding="utf-8")
+
+            from lib_guard.render.html_report import render_scan_html
+            from lib_guard.scan.scanner import ScanRunner
+
+            result = ScanRunner(
+                SimpleNamespace(
+                    root_path=str(root),
+                    out_dir=str(scan_out),
+                    library_type="ip",
+                    library_name="demo",
+                    version="v1",
+                    scan_mode="scan",
+                    scan_id="HUMAN_SUMMARY",
+                    state_dir=str(Path(td) / "state"),
+                    cache_dir=str(Path(td) / "cache"),
+                    skip_cache=True,
+                    no_cache=True,
+                    no_progress=True,
+                    parse_jobs=1,
+                    parse_file_types=["verilog"],
+                    tool_version="0.5.0",
+                    schema_version="1.0",
+                )
+            ).run()
+            self.assertEqual(result.status, "PASS")
+            (scan_out / "parser_results.json").unlink()
+            from lib_guard.render.version_detail_report import _scan_parser_results
+
+            self.assertTrue(_scan_parser_results(scan_out))
+            from lib_guard.summary.builder import rebuild_summary_from_scan
+
+            rebuilt = rebuild_summary_from_scan(scan_out, types=["verilog"], backup=False)
+            self.assertIn("verilog_summary", rebuilt["rebuilt_summaries"])
+            (scan_out / "review" / "scan_review.md").unlink()
+            render_scan_html(scan_out, html_out)
+
+            human_summary = scan_out / "review" / "scan_review.md"
+            self.assertTrue(human_summary.exists())
+            summary_text = human_summary.read_text(encoding="utf-8")
+            self.assertIn("# 扫描审查摘要", summary_text)
+            self.assertIn("## 视图覆盖", summary_text)
+            self.assertIn("## 文件证据入口", summary_text)
+            self.assertNotIn("parser_results.json", summary_text)
+
+            index_text = (html_out / "index.html").read_text(encoding="utf-8")
+            alias_text = (html_out / "scan_report.html").read_text(encoding="utf-8")
+            self.assertIn("文件证据表", index_text)
+            self.assertNotIn("旧版完整文件列表", index_text)
+            self.assertIn("meta http-equiv", alias_text)
+            self.assertIn("index.html", alias_text)
+            self.assertLess(len(alias_text), 1000)
+
+    def test_scan_html_limits_inline_file_evidence_per_view(self) -> None:
+        from lib_guard.render.html_report import _representative_file_rows
+
+        rows = [
+            {"view_type": "timing_lib", "path": f"timing/{index}.lib"}
+            for index in range(20)
+        ] + [
+            {"view_type": "physical_abstract", "path": f"lef/{index}.lef"}
+            for index in range(20)
+        ]
+
+        selected = _representative_file_rows(rows, per_view=3, limit=6)
+
+        self.assertEqual(len(selected), 6)
+        self.assertEqual(sum(item["view_type"] == "timing_lib" for item in selected), 3)
+        self.assertEqual(sum(item["view_type"] == "physical_abstract" for item in selected), 3)
 
     def test_snapshot_identity_binds_content_digest_without_changing_catalog_fingerprint(self) -> None:
         from lib_guard.scan.scanner import ScanRunner
@@ -355,6 +550,28 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertTrue(task["result_path"].startswith("parser_results/verilog/"))
             self.assertTrue((out / task["result_path"]).exists())
 
+    def test_parser_selector_uses_each_parser_version_for_cache_planning(self) -> None:
+        from lib_guard.scan.parser_engine import ParserRegistry, ParserSelector
+
+        registry = ParserRegistry.default()
+        context = SimpleNamespace(policy=None)
+        lef_tasks = ParserSelector().select(
+            SimpleNamespace(file_type="lef", combined_extension=".lef"),
+            context,
+            registry,
+        )
+        verilog_tasks = ParserSelector().select(
+            SimpleNamespace(file_type="verilog", combined_extension=".v"),
+            context,
+            registry,
+        )
+
+        self.assertEqual([(task.parser_name, task.parser_version) for task in lef_tasks], [("LefParser", "2.1")])
+        self.assertEqual(
+            [(task.parser_name, task.parser_version) for task in verilog_tasks],
+            [("VerilogParser", "2.0")],
+        )
+
     def test_default_scan_keeps_heavy_views_count_only_and_reports_parser_summary(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "raw"
@@ -445,7 +662,7 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("Corner 摘要", html_text)
             self.assertIn("解析器摘要", html_text)
             self.assertIn("扫描结论", html_text)
-            self.assertIn("View 覆盖矩阵", html_text)
+            self.assertIn("视图覆盖矩阵", html_text)
             self.assertIn("文件证据表", html_text)
             self.assertIn("review/view_coverage.tsv", html_text)
             self.assertIn("review/files_by_view.tsv", html_text)
@@ -3271,7 +3488,8 @@ class ScanPipelineTest(unittest.TestCase):
             ]:
                 self.assertEqual(result["result_type"], "parser_result")
                 self.assertEqual(result["parser_name"], parser_name)
-                self.assertEqual(result["parser_version"], "2.0")
+                expected_version = "2.1" if parser_name == "LefParser" else "2.0"
+                self.assertEqual(result["parser_version"], expected_version)
                 self.assertEqual(result["parser_schema_version"], "1.0")
                 self.assertEqual(result["file_type"], file_type)
                 self.assertEqual(result["compression"], None)
@@ -3366,6 +3584,48 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertEqual(pin["layers"], ["M1"])
         self.assertEqual(pin["layer_count"], 1)
         self.assertEqual(pin["rect_count"], 1)
+
+    def test_large_lef_keeps_structural_evidence_without_geometry_payload(self) -> None:
+        from lib_guard.scan.parsers.lef import parse_lef_data_file
+
+        lef = "\n".join(
+            [
+                "LAYER M1",
+                "  TYPE ROUTING ;",
+                "END M1",
+                "MACRO SRAM",
+                "  SIZE 10 BY 20 ;",
+                "  PIN CLK",
+                "    DIRECTION INPUT ;",
+                "    PORT",
+                "      LAYER M1 ;",
+                "      RECT 0 0 1 1 ;",
+                "      RECT 2 2 3 3 ;",
+                "    END",
+                "  END CLK",
+                "  OBS",
+                "    LAYER M1 ;",
+                "    RECT 0 0 10 20 ;",
+                "  END",
+                "END SRAM",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "large.lef"
+            path.write_text(lef, encoding="utf-8")
+            data = parse_lef_data_file(path, full_geometry_max_bytes=1)
+
+        self.assertEqual(data["geometry_detail"], "counts_only")
+        self.assertTrue(data["geometry_omitted"])
+        self.assertEqual(data["stats"]["pin_rect_count"], 2)
+        self.assertEqual(data["stats"]["obs_rect_count"], 1)
+        macro = data["macros"]["SRAM"]
+        self.assertEqual(macro["obs"], [])
+        self.assertEqual(macro["obs_rect_count"], 1)
+        pin = macro["pins"]["CLK"]
+        self.assertEqual(pin["rects"], [])
+        self.assertEqual(pin["rect_count"], 2)
+        self.assertEqual(pin["layers"], ["M1"])
 
     def test_verilog_parser_declares_lightweight_scope_and_unparsed_features(self) -> None:
         with tempfile.TemporaryDirectory() as td:

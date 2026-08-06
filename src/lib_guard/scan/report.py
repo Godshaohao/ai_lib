@@ -5,6 +5,40 @@ from typing import Any
 import json
 
 
+def load_parser_results(scan_dir: str | Path, *, include_aggregate: bool = True) -> dict[str, Any]:
+    """Load parser evidence from a scan output using the canonical fallback order.
+
+    Older scans may contain ``parser_results.json`` while new scans keep only
+    the per-file results under ``parser_results/``.  Both layouts expose the
+    same mapping to summary and render consumers, so callers do not need to
+    know which storage policy produced the scan.
+    """
+
+    scan = Path(scan_dir)
+    aggregate_data: dict[str, Any] = {}
+    aggregate = scan / "parser_results.json"
+    if include_aggregate and aggregate.exists():
+        data = json.loads(aggregate.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            aggregate_data = data
+
+    result_dir = scan / "parser_results"
+    results: dict[str, Any] = {}
+    if result_dir.exists():
+        for path in sorted(result_dir.glob("**/*.json")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(scan).as_posix()
+            results[relative] = json.loads(path.read_text(encoding="utf-8"))
+
+    if results:
+        # A rerun can leave an older aggregate beside newly written per-file
+        # evidence.  The per-file records are the current scan output and
+        # must win; the aggregate is only a legacy fallback.
+        return results
+    return aggregate_data
+
+
 class ScanReportWriter:
     def __init__(self, config: Any = None) -> None:
         self.config = config
@@ -27,7 +61,14 @@ class ScanReportWriter:
         self._write_json(out / "file_inventory.json", bundle.file_inventory)
         self._write_json(out / "parser_task_list.json", bundle.parser_task_list)
         self._write_json(out / "parser_manifest.json", bundle.parser_manifest)
-        self._write_json(out / "parser_results.json", bundle.parser_results)
+        config = getattr(context, "config", None)
+        write_raw_parser_results = getattr(
+            context,
+            "write_raw_parser_results",
+            getattr(config, "write_raw_parser_results", True),
+        )
+        if write_raw_parser_results:
+            self._write_json(out / "parser_results.json", bundle.parser_results)
         self._write_parser_result_files(out, bundle)
         self._write_json(out / "state_delta.json", bundle.state_delta)
         self._write_json(out / "integrity.json", bundle.integrity)

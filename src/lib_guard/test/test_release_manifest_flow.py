@@ -4,6 +4,9 @@ import json
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +14,261 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class ReleaseManifestFlowTest(unittest.TestCase):
+    def _write_effective_release_fixture(
+        self,
+        root: Path,
+        *,
+        accepted: bool,
+        evidence_version_id: str | None = None,
+        include_release_note: bool = True,
+    ) -> tuple[Path, Path]:
+        from types import SimpleNamespace
+
+        from lib_guard.effective.manifest import build_effective_manifest
+        from lib_guard.effective.pointer import sha256_file, write_current_pointer
+        from lib_guard.scan.scanner import ScanRunner
+
+        raw = root / "raw" / "demo" / "full"
+        raw.mkdir(parents=True)
+        (raw / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+        (raw / "README.md").write_text("demo library\n", encoding="utf-8")
+        if include_release_note:
+            (raw / "release_note.txt").write_text("initial release\n", encoding="utf-8")
+        scan_dir = root / "scan" / "demo" / "full"
+        ScanRunner(
+            SimpleNamespace(
+                root_path=str(raw),
+                out_dir=str(scan_dir),
+                library_type="ip",
+                library_name="demo",
+                version="full",
+                scan_mode="signature",
+                scan_id="SIGNATURE_full",
+                state_dir=str(root / "state"),
+                cache_dir=str(root / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                parse_file_types=None,
+                tool_version="test",
+                schema_version="1.0",
+            )
+        ).run()
+        scan_meta = json.loads((scan_dir / "scan_meta.json").read_text(encoding="utf-8"))
+        catalog_data = {
+            "libraries": [
+                {
+                    "library_id": "ip/demo",
+                    "library_name": "demo",
+                    "versions": [
+                        {
+                            "version_id": "full",
+                            "raw_path": str(raw),
+                            "scan": {
+                                "status": scan_meta["status"],
+                                "scan_dir": str(scan_dir),
+                                "scan_mode": scan_meta["scan_mode"],
+                                "snapshot_identity": scan_meta["snapshot_identity"],
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        catalog_path = root / "catalog" / "catalog.json"
+        catalog_path.parent.mkdir(parents=True)
+        catalog_path.write_text(json.dumps(catalog_data), encoding="utf-8")
+
+        effective_dir = root / "catalog" / "html" / "libraries" / "ip_demo" / "effective" / "E1"
+        effective_dir.mkdir(parents=True)
+        manifest_path = effective_dir / "effective_manifest.json"
+        manifest = build_effective_manifest(catalog_data, "demo", "full", [], effective_id="E1")
+        manifest["library_type"] = "ip"
+        if evidence_version_id is not None:
+            manifest["version_evidence"]["components"][0]["version_id"] = evidence_version_id
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        if accepted:
+            compare_manifest = root / "compare" / "compare_manifest.json"
+            compare_manifest.parent.mkdir(parents=True)
+            compare_manifest.write_text(
+                json.dumps({"old_target": {"spec": "none"}, "new_target": {"spec": "effective:E1"}}),
+                encoding="utf-8",
+            )
+            approval_path = effective_dir / "review_approval.json"
+            approval_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_effective_manifest": str(manifest_path.resolve()),
+                        "candidate_effective_sha256": sha256_file(manifest_path),
+                        "candidate_effective_digest": manifest["identity"]["digest"],
+                        "compare_manifest": str(compare_manifest.resolve()),
+                        "compare_manifest_sha256": sha256_file(compare_manifest),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_current_pointer(
+                manifest_path,
+                review_approval=approval_path,
+                approval_sha256=sha256_file(approval_path),
+                accepted_by="owner",
+                note="review passed",
+            )
+        return catalog_path, manifest_path
+
+    @staticmethod
+    def _effective_release_args(root: Path, catalog: Path, manifest: Path) -> Namespace:
+        return Namespace(
+            catalog=str(catalog),
+            library="demo",
+            version=[],
+            stage=None,
+            policy=None,
+            release_root=str(root / "release"),
+            alias="current",
+            release_id="R_EFFECTIVE",
+            out=str(root / "release_run"),
+            apply=False,
+            overwrite=False,
+            link_mode="symlink",
+            force=False,
+            force_reason=None,
+            force_by=None,
+            diff=None,
+            diff_mode=None,
+            only_checked=False,
+            only_ready=False,
+            limit=None,
+            no_verify=True,
+            no_render=True,
+            catalog_html_out=None,
+            no_catalog_render=True,
+            effective_manifest=str(manifest),
+        )
+
+    def test_effective_release_batch_blocks_manifest_without_accepted_pointer(self) -> None:
+        from lib_guard.cli_commands.catalog import run_catalog_release_batch
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog, manifest = self._write_effective_release_fixture(root, accepted=False)
+            args = self._effective_release_args(root, catalog, manifest)
+
+            with patch(
+                "lib_guard.release.linker.link_release_from_manifest",
+                return_value={"status": "DRY_RUN", "failed_links": []},
+            ) as link_release:
+                with redirect_stdout(StringIO()):
+                    code = run_catalog_release_batch(args)
+
+            self.assertEqual(code, 2)
+            link_release.assert_not_called()
+            check = json.loads((root / "release_run" / "release_check.json").read_text(encoding="utf-8"))
+            self.assertEqual(check["release_check_status"], "BLOCK")
+            self.assertIn("effective_pointer", {item["category"] for item in check["issues"]})
+            release_result = json.loads((root / "release_run" / "release_result.json").read_text(encoding="utf-8"))
+            self.assertEqual(release_result["effective_digest"], check["effective_digest"])
+
+    def test_effective_release_batch_rejects_scan_evidence_for_another_component(self) -> None:
+        from lib_guard.cli_commands.catalog import run_catalog_release_batch
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog, manifest = self._write_effective_release_fixture(
+                root,
+                accepted=True,
+                evidence_version_id="../../unrelated",
+            )
+            args = self._effective_release_args(root, catalog, manifest)
+
+            with patch(
+                "lib_guard.release.linker.link_release_from_manifest",
+                return_value={"status": "DRY_RUN", "failed_links": []},
+            ) as link_release:
+                with redirect_stdout(StringIO()):
+                    code = run_catalog_release_batch(args)
+
+            self.assertEqual(code, 2)
+            link_release.assert_not_called()
+            check = json.loads((root / "release_run" / "release_check.json").read_text(encoding="utf-8"))
+            self.assertIn("component_identity", {item["category"] for item in check["issues"]})
+            self.assertFalse((root / "unrelated" / "release_check.json").exists())
+
+    def test_effective_release_batch_preserves_component_warning_status(self) -> None:
+        from lib_guard.cli_commands.catalog import run_catalog_release_batch
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog, manifest = self._write_effective_release_fixture(
+                root,
+                accepted=True,
+                include_release_note=False,
+            )
+            args = self._effective_release_args(root, catalog, manifest)
+
+            with patch(
+                "lib_guard.release.linker.link_release_from_manifest",
+                return_value={"status": "DRY_RUN", "failed_links": []},
+            ):
+                with redirect_stdout(StringIO()):
+                    code = run_catalog_release_batch(args)
+
+            self.assertEqual(code, 0)
+            check = json.loads((root / "release_run" / "release_check.json").read_text(encoding="utf-8"))
+            self.assertEqual(check["release_check_status"], "PASS_WITH_WARNING")
+
+    def test_effective_release_force_passes_bypassed_check_to_linker_audit(self) -> None:
+        from lib_guard.cli_commands.catalog import run_catalog_release_batch
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog, manifest = self._write_effective_release_fixture(root, accepted=False)
+            args = self._effective_release_args(root, catalog, manifest)
+            args.force = True
+            args.force_reason = "release owner accepted missing pointer"
+            args.force_by = "owner"
+
+            with patch(
+                "lib_guard.release.linker.link_release_from_manifest",
+                return_value={"status": "FORCE_DRY_RUN", "failed_links": []},
+            ) as link_release:
+                with redirect_stdout(StringIO()):
+                    code = run_catalog_release_batch(args)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                link_release.call_args.kwargs["release_check_path"],
+                str(root / "release_run" / "release_check.json"),
+            )
+
+    def test_effective_release_batch_allows_accepted_manifest_with_valid_scan_evidence(self) -> None:
+        from lib_guard.cli_commands.catalog import run_catalog_release_batch
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog, manifest = self._write_effective_release_fixture(root, accepted=True)
+            args = self._effective_release_args(root, catalog, manifest)
+
+            with patch(
+                "lib_guard.release.linker.link_release_from_manifest",
+                return_value={"status": "DRY_RUN", "failed_links": []},
+            ) as link_release:
+                with redirect_stdout(StringIO()):
+                    code = run_catalog_release_batch(args)
+
+            self.assertEqual(code, 0)
+            link_release.assert_called_once()
+            check = json.loads((root / "release_run" / "release_check.json").read_text(encoding="utf-8"))
+            self.assertIn(check["release_check_status"], {"PASS", "PASS_WITH_WARNING"})
+            self.assertEqual(check["effective_integrity_status"], "MATCH")
+            self.assertEqual(check["approval_integrity_status"], "MATCH")
+            release_result = json.loads((root / "release_run" / "release_result.json").read_text(encoding="utf-8"))
+            self.assertEqual(release_result["check_status"], check["release_check_status"])
+            self.assertEqual(release_result["release_check"], str(root / "release_run" / "release_check.json"))
+
     def test_effective_manifest_release_manifest_is_file_level_and_hashed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

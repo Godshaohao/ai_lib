@@ -155,13 +155,17 @@ raw delivery
 Version Detail、manual compare 或 release 逻辑。
 
 Version Detail 是唯一审查投影。`window`、`effective`、`compare` 只是它的证据来源
-和上下文，不应新增平行主审查页面。页面第一屏只回答：
+和上下文，不应新增平行主审查页面。默认页面按以下顺序回答：
 
-- IP 使用判断。
-- 当前审查对象。
-- 对比上下文。
-- View 变化。
-- 证据 freshness。
+1. IP 接入判断及其事实依据。
+2. 可信 Base、全量/增量对比范围和删除语义。
+3. 本次交付包与候选有效版两套独立 inventory。
+4. View 变化矩阵、证据等级和确定性的使用场景关联。
+5. 由当前事实产生的未决事项，例如真实删除、Unknown、缺 Base/Diff 或首版范围。
+
+普通 View 新增/修改只在矩阵展示，不重复复制成“待确认事实”。候选有效版未生成时，
+矩阵只显示本包数量；`Summary-only`、`Metadata-only` 只是证据深度，不自动构成阻塞。
+正式放行门禁和事实源审计保留，但默认折叠，并且不得改写 IP 技术判断。
 
 Version Detail 使用 `version_evidence_state` 解释五类输入的边界：
 

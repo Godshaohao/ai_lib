@@ -34,6 +34,8 @@ class VersionDetailReviewContext:
     candidate_effective_base_full: str
     candidate_effective_overlays: list[str]
     candidate_effective_manifest: str
+    candidate_effective_file_count: int
+    candidate_effective_file_type_counts: dict[str, int]
     candidate_effective_html: str
 
     compare_id: str
@@ -70,6 +72,8 @@ def build_version_detail_review_context(
     items = _window_items(window)
     role = _role_for_target(target_version, items, _mapping(window.get("candidate_effective")))
     in_active_window = role != "standalone"
+    candidate_manifest = _candidate_manifest(catalog_html_out, library_row, window)
+    candidate_inventory = _candidate_inventory(candidate_manifest)
     ctx = VersionDetailReviewContext(
         schema_version=SCHEMA_VERSION,
         status="IN_ACTIVE_WINDOW" if in_active_window else "STANDALONE",
@@ -85,7 +89,9 @@ def build_version_detail_review_context(
         candidate_effective_id=_candidate_effective_id(window),
         candidate_effective_base_full=_candidate_base_full(window),
         candidate_effective_overlays=_candidate_overlays(window),
-        candidate_effective_manifest=_candidate_manifest(catalog_html_out, library_row, window),
+        candidate_effective_manifest=candidate_manifest,
+        candidate_effective_file_count=int(candidate_inventory["file_count"]),
+        candidate_effective_file_type_counts=dict(candidate_inventory["file_type_counts"]),
         candidate_effective_html=_candidate_html(catalog_html_out, library_row, window),
         compare_id=_compare_id(window),
         compare_old=_compare_old(window),
@@ -112,6 +118,8 @@ def _standalone_context(
     window_file: Path | None,
 ) -> VersionDetailReviewContext:
     active_summary = window if window else {}
+    candidate_manifest = _candidate_manifest("", library_row, active_summary)
+    candidate_inventory = _candidate_inventory(candidate_manifest)
     ctx = VersionDetailReviewContext(
         schema_version=SCHEMA_VERSION,
         status="STANDALONE",
@@ -127,7 +135,9 @@ def _standalone_context(
         candidate_effective_id=_candidate_effective_id(active_summary),
         candidate_effective_base_full=_candidate_base_full(active_summary),
         candidate_effective_overlays=_candidate_overlays(active_summary),
-        candidate_effective_manifest=_candidate_manifest("", library_row, active_summary),
+        candidate_effective_manifest=candidate_manifest,
+        candidate_effective_file_count=int(candidate_inventory["file_count"]),
+        candidate_effective_file_type_counts=dict(candidate_inventory["file_type_counts"]),
         candidate_effective_html=_candidate_html("", library_row, active_summary),
         compare_id=_compare_id(active_summary),
         compare_old=_compare_old(active_summary),
@@ -178,6 +188,31 @@ def _read_mapping(path: Path) -> Mapping[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, Mapping) else {}
+
+
+def _candidate_inventory(manifest_path: str) -> dict[str, Any]:
+    if not manifest_path:
+        return {"file_count": 0, "file_type_counts": {}}
+    manifest = _read_mapping(Path(manifest_path))
+    summary = _mapping(manifest.get("summary"))
+    raw_counts = _mapping(summary.get("file_type_summary"))
+    counts = {str(key): _non_negative_int(value) for key, value in raw_counts.items()}
+    files = _mapping(manifest.get("effective_files"))
+    if not counts and files:
+        for item in files.values():
+            file_type = str(_mapping(item).get("file_type") or "unknown")
+            counts[file_type] = counts.get(file_type, 0) + 1
+    file_count = _non_negative_int(summary.get("file_count"))
+    if not file_count:
+        file_count = len(files) if files else sum(counts.values())
+    return {"file_count": max(0, file_count), "file_type_counts": counts}
+
+
+def _non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

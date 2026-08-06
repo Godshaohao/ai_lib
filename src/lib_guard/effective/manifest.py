@@ -447,6 +447,7 @@ def build_effective_manifest(
     components: list[dict[str, Any]] = [_component(base_full_version, "base_full", ["all"], 0, base)]
     evidence_components: list[dict[str, Any]] = [_version_evidence(base_full_version, "base_full", base)]
     conflicts: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
     replacement_counts: Counter[str] = Counter()
 
     for record in _file_records(base_full_version, base):
@@ -467,12 +468,15 @@ def build_effective_manifest(
         if scope_list and "all" not in scope_list:
             extra = sorted(t for t in actual_types if t not in set(scope_list))
             for t in extra:
-                conflicts.append({
-                    "type": "SCOPE_MISMATCH",
+                issue = {
                     "version_id": version_id,
                     "file_type": t,
                     "message": f"update_scope 未声明 {t}，但包内包含该类型文件",
-                })
+                }
+                if t in {"unknown", "other"}:
+                    warnings.append({"type": "SCOPE_UNCLASSIFIED", **issue})
+                else:
+                    conflicts.append({"type": "SCOPE_MISMATCH", **issue})
         for record in records:
             rel = record["relpath"]
             previous = effective_files.get(rel)
@@ -536,10 +540,12 @@ def build_effective_manifest(
         "effective_files": dict(sorted(effective_files.items())),
         "tombstones": tombstones,
         "conflicts": conflicts,
+        "warnings": warnings,
         "summary": {
             "file_count": len(effective_files),
             "component_count": len(components),
             "conflict_count": len(conflicts),
+            "warning_count": len(warnings),
             "file_type_summary": dict(sorted(file_type_summary.items())),
             "operation_summary": dict(sorted(operation_summary.items())),
             "source_summary": dict(sorted((str(k), v) for k, v in source_summary.items())),

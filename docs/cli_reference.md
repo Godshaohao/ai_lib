@@ -25,7 +25,7 @@ $PROJ/scripts/lg.csh <COMMAND>
 
 底层 `python -m lib_guard.cli` 是工程自动化和调试入口，不作为普通用户主路径。
 
-在 csh/tcsh 中可以 source 补全脚本，获得 `lg` alias、短命令补全、子命令补全和常用参数补全：
+在 csh/tcsh 中都可以 source 脚本获得 `lg` alias；只有 `tcsh` 支持脚本注册的 Tab 补全，纯 `csh` 不支持 `complete` 内建命令：
 
 ```csh
 source $PROJ/scripts/lg_complete.csh
@@ -249,7 +249,7 @@ scan 输出分两层：
 
 | 层 | 文件 | 用途 |
 | --- | --- | --- |
-| 机器事实 | `file_inventory.json`, `parser_manifest.json`, `parser_results.json`, `summary/*.json` | diff、release、自动化 |
+| 机器事实 | `file_inventory.json`, `parser_manifest.json`, `parser_results/<view>/*.json`, `summary/*.json` | diff、release、自动化；旧扫描的 `parser_results.json` 仍兼容读取 |
 | 人工证据 | `review/view_coverage.tsv`, `review/files_by_view.tsv`, `review/unknown_files.tsv`, `review/large_metadata_files.tsv`, `review/parser_evidence.tsv` | Scan HTML 和 Version Detail |
 
 人工审查优先看 `review/*.tsv`。JSON 可以保留，但不应该被复制到主页面正文里。

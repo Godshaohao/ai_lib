@@ -1,6 +1,7 @@
 #!/usr/bin/env csh
 #
-# Source this file from csh/tcsh to enable lib_guard short-command completion:
+# Source this file from csh/tcsh to enable the lib_guard alias.  Static Tab
+# completion requires tcsh; plain csh has no `complete` builtin.
 #   source $PROJ/scripts/lg_complete.csh
 #
 # It registers static command/option completion only. Library/version names are
@@ -16,26 +17,34 @@ else
   set _lg_complete_proj = "."
 endif
 
-alias lg >& /dev/null
-if ($status != 0) then
+if (-x "$_lg_complete_proj/scripts/lg.csh") then
   alias lg "$_lg_complete_proj/scripts/lg.csh"
 endif
 
-foreach _lg_complete_name (lg lg.csh)
-  complete $_lg_complete_name \
-    'p/1/(init scan cat library cmp fd rel action next intake window worklist accept-window mark effective rv)/' \
-    'n/library/(add discover accept apply list override)/' \
-    'n/rv/(build check list accept waive)/' \
-    'n/--stage/(initial stable final ad-hoc dated unknown)/' \
-    'n/--mode/(current_effective previous_effective adjacent cumulative)/' \
-    'n/--gate/(stage current approved)/' \
-    'n/--hash-policy/(none smart full)/' \
-    'n/--link-mode/(copy symlink)/' \
-    'n/--package-type/(FULL_PACKAGE PARTIAL_UPDATE HOTFIX DOC_UPDATE UNKNOWN_PACKAGE)/' \
-    'n/--compare-default/(previous_effective full_baseline none)/' \
-    'n/--type/(lef cdl spice sp sdc upf cpf waiver ibis pwl snp touchstone cpm verilog systemverilog liberty lib spef db gds oas layout milkyway ndm unknown)/' \
-    'c/-/(--help --config --dry-run --raw-root --library-type --missing --all-versions --limit --stage --with-evidence --hash-policy --parse-file-types --parse-exclude-file-types --parse-jobs --no-render --full --fast --update-detail --all --mode --rescan --refresh-catalog --out --json-out --html-out --max-depth --min-versions --max-dirs --max-candidates --default-status --registry --versions --plain --effective --root --display-name --vendor --middle-path --apply --accept --fix --ready --blocked --parent --base --package-type --update-scope --standalone --base-required --base-full --previous-effective --compare-default --current-effective --manual-review --note --updated-by --scan-if-missing --force-large --alias --overwrite --link-mode --check-only --check-first --explain --only-checked --only-ready --force --force-reason --force-by --no-verify --action --since --plan-only --rebuild --accepted-by --item --by --reason)/'
-end
+if ($?shell) then
+  set _lg_complete_shell = "$shell:t"
+else
+  set _lg_complete_shell = ""
+endif
+
+if ("$_lg_complete_shell" == "tcsh") then
+  foreach _lg_complete_name (lg lg.csh)
+    complete $_lg_complete_name \
+      'p/1/(init scan cat library cmp fd rel action next intake window worklist accept-window mark effective rv)/' \
+      'n/library/(add discover accept apply list override)/' \
+      'n/rv/(build check list accept waive)/' \
+      'n/--stage/(initial stable final ad-hoc dated unknown)/' \
+      'n/--mode/(current_effective previous_effective adjacent cumulative)/' \
+      'n/--gate/(stage current approved)/' \
+      'n/--hash-policy/(none smart full)/' \
+      'n/--link-mode/(copy symlink)/' \
+      'n/--package-type/(FULL_PACKAGE PARTIAL_UPDATE HOTFIX DOC_UPDATE UNKNOWN_PACKAGE)/' \
+      'n/--compare-default/(previous_effective full_baseline none)/' \
+      'n/--type/(lef cdl spice sp sdc upf cpf waiver ibis pwl snp touchstone cpm verilog systemverilog liberty lib spef db gds oas layout milkyway ndm unknown)/' \
+      'c/-/(--help --config --dry-run --raw-root --library-type --missing --all-versions --limit --stage --with-evidence --hash-policy --parse-file-types --parse-exclude-file-types --parse-jobs --no-render --full --fast --update-detail --all --mode --rescan --refresh-catalog --out --json-out --html-out --max-depth --min-versions --max-dirs --max-candidates --default-status --registry --versions --plain --effective --root --display-name --vendor --middle-path --apply --accept --fix --ready --blocked --parent --base --package-type --update-scope --standalone --base-required --base-full --previous-effective --compare-default --current-effective --manual-review --note --updated-by --scan-if-missing --force-large --alias --overwrite --link-mode --check-only --check-first --explain --only-checked --only-ready --force --force-reason --force-by --no-verify --action --since --plan-only --rebuild --accepted-by --item --by --reason)/'
+  end
+endif
 
 unset _lg_complete_name
 unset _lg_complete_proj
+unset _lg_complete_shell

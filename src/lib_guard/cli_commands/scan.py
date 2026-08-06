@@ -91,6 +91,9 @@ def build_scan_config(args: Namespace) -> SimpleNamespace:
         standalone=getattr(args, "standalone", None),
         base_required=getattr(args, "base_required", None),
         base_version=getattr(args, "base_version", None),
+        # Keep the large aggregate Parser JSON for direct/legacy callers only.
+        # The normal CLI retains parser_manifest plus per-file evidence.
+        write_raw_parser_results=getattr(args, "write_raw_parser_results", False),
     )
     return cfg
 
@@ -139,6 +142,7 @@ def build_scan_status(scan_dir: str | Path) -> dict[str, Any]:
     meta = read("scan_meta.json", {})
     manifest = read("parser_manifest.json", {"files": []})
     task_list = read("parser_task_list.json", {"task_count": 0})
+    parser_result_files = list((scan / "parser_results").glob("**/*.json")) if (scan / "parser_results").exists() else []
     outputs = {
         "scan_meta": (scan / "scan_meta.json").exists(),
         "file_inventory": (scan / "file_inventory.json").exists(),
@@ -146,10 +150,10 @@ def build_scan_status(scan_dir: str | Path) -> dict[str, Any]:
         "parser_manifest": (scan / "parser_manifest.json").exists(),
         "parser_results_json": (scan / "parser_results.json").exists(),
         "parser_results_dir": (scan / "parser_results").exists(),
+        "parser_results_available": (scan / "parser_results.json").exists() or bool(parser_result_files),
         "parser_quality": (scan / "summary" / "parser_quality.json").exists(),
         "release_readiness": (scan / "summary" / "release_readiness.json").exists(),
     }
-    parser_result_files = list((scan / "parser_results").glob("**/*.json")) if (scan / "parser_results").exists() else []
     status = str(meta.get("status") or latest.get("status") or "RUNNING")
     if latest.get("event") == "finish":
         status = "FINISHED" if status not in {"FAILED", "BLOCK"} else status

@@ -69,7 +69,20 @@ def version_id(version: Mapping[str, Any]) -> str:
 
 
 def version_index(versions: Sequence[Mapping[str, Any]]) -> dict[str, int]:
-    return {version_id(item): idx for idx, item in enumerate(versions) if version_id(item)}
+    indexes: dict[str, int] = {}
+    duplicates: list[str] = []
+    for idx, item in enumerate(versions):
+        vid = version_id(item)
+        if not vid:
+            continue
+        if vid in indexes:
+            duplicates.append(vid)
+            continue
+        indexes[vid] = idx
+    if duplicates:
+        names = ", ".join(dict.fromkeys(duplicates))
+        raise ValueError(f"duplicate version_id in catalog: {names}")
+    return indexes
 
 
 def version_map(versions: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
@@ -136,16 +149,7 @@ def _target_label(target: str) -> str:
     return text.replace(":", "_") if text else "base"
 
 
-def _summary_ref(library_row: Mapping[str, Any], keys: Sequence[str]) -> str:
-    summary = library_row.get("summary") if isinstance(library_row.get("summary"), Mapping) else {}
-    for key in keys:
-        value = str(summary.get(key) or library_row.get(key) or "")
-        if value and value.lower() not in {"true", "false", "none", "null"}:
-            return value.replace("raw:", "").replace("effective:", "")
-    return ""
-
-
-def _current_anchor(pointer: Mapping[str, Any], library_row: Mapping[str, Any], versions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _current_anchor(pointer: Mapping[str, Any]) -> dict[str, Any]:
     base_full = str(pointer.get("base_full_version") or "")
     accepted_updates = [str(item) for item in pointer.get("accepted_updates", []) or [] if str(item)]
     current_effective_id = str(pointer.get("current_effective_id") or "")
@@ -163,45 +167,16 @@ def _current_anchor(pointer: Mapping[str, Any], library_row: Mapping[str, Any], 
             "manifest": manifest,
         }
 
-    explicit = _summary_ref(library_row, ["current_effective_ref", "latest_effective_ref", "current_version", "approved_version"])
-    if explicit:
-        return {
-            "source": "catalog_summary",
-            "old_target": f"raw:{explicit}",
-            "base_full": explicit,
-            "accepted_updates": [],
-            "checkpoint_version": explicit,
-            "current_effective_id": "",
-            "pointer_revision": 0,
-            "manifest": "",
-        }
-
-    for item in reversed(list(versions)):
-        if package_kind(item) == "FULL":
-            vid = version_id(item)
-            return {
-                "source": "latest_full_fallback",
-                "old_target": f"raw:{vid}",
-                "base_full": vid,
-                "accepted_updates": [],
-                "checkpoint_version": vid,
-                "current_effective_id": "",
-                "pointer_revision": 0,
-                "manifest": "",
-            }
-    if versions:
-        vid = version_id(versions[0])
-        return {
-            "source": "first_catalog_version",
-            "old_target": f"raw:{vid}",
-            "base_full": vid,
-            "accepted_updates": [],
-            "checkpoint_version": vid,
-            "current_effective_id": "",
-            "pointer_revision": 0,
-            "manifest": "",
-        }
-    raise ValueError("library has no versions")
+    return {
+        "source": "uninitialized",
+        "old_target": "",
+        "base_full": "",
+        "accepted_updates": [],
+        "checkpoint_version": "",
+        "current_effective_id": "",
+        "pointer_revision": 0,
+        "manifest": "",
+    }
 
 
 def _after_checkpoint(versions: Sequence[Mapping[str, Any]], checkpoint: str, *, since: str | None = None) -> list[Mapping[str, Any]]:
@@ -235,11 +210,16 @@ def _resolve_candidate(anchor: Mapping[str, Any], item_ids: Sequence[str], versi
         overlays = [vid for vid in item_ids[last_full_idx + 1 :] if package_kind(versions_by_id.get(vid, {})) != "IGNORE"]
         intermediate = list(item_ids[:last_full_idx])
         rule = "latest_full_in_window"
-    else:
+    elif str(anchor.get("base_full") or ""):
         base_full = str(anchor.get("base_full") or "")
         overlays = [*list(anchor.get("accepted_updates", []) or []), *[vid for vid in item_ids if package_kind(versions_by_id.get(vid, {})) != "IGNORE"]]
         intermediate = []
         rule = "append_to_current_effective"
+    else:
+        base_full = ""
+        overlays = []
+        intermediate = list(item_ids)
+        rule = "missing_full_base"
     unknowns = [vid for vid in item_ids if package_kind(versions_by_id.get(vid, {})) == "UNKNOWN"]
     last = overlays[-1] if overlays else (base_full or (item_ids[-1] if item_ids else "candidate"))
     return {
@@ -353,6 +333,7 @@ def resolve_review_window(
     catalog = load_catalog_view(catalog_path)
     library_row = find_library(catalog, library)
     versions = [item for item in library_row.get("versions", []) or [] if isinstance(item, Mapping) and version_id(item)]
+    version_index(versions)
     versions_by_id = version_map(versions)
     if not versions:
         raise ValueError(f"library has no versions: {library}")
@@ -364,9 +345,14 @@ def resolve_review_window(
 
     lib_id = str(library_row.get("library_id") or library_row.get("library_name") or library)
     pointer = load_current_pointer(html_out, lib_id) or load_current_pointer(html_out, library)
-    anchor = _current_anchor(pointer, library_row, versions)
+    anchor = _current_anchor(pointer)
 
     existing_ids: list[str] = []
+    pending_source = str((pending.get("base_effective") or {}).get("source") or "")
+    if has_pending and str(anchor.get("source") or "") == "uninitialized" and pending_source in {"latest_full_fallback", "first_catalog_version", "catalog_summary"}:
+        pending = {}
+        has_pending = False
+
     if has_pending:
         base = dict(pending.get("base_effective") or {})
         anchor.update(
@@ -421,20 +407,57 @@ def resolve_review_window(
         return window
 
     candidate = _resolve_candidate(anchor, item_ids, versions_by_id)
+    if not candidate.get("base_full"):
+        items = [_window_item(versions_by_id[vid], role="needs_full_base") for vid in item_ids]
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "library": library,
+            "library_id": lib_id,
+            "state": "NEEDS_FULL_BASE",
+            "review_kind": "NEEDS_FULL_BASE",
+            "changed": bool(new_ids),
+            "created_at": pending.get("created_at") or now_iso(),
+            "updated_at": now_iso(),
+            "pending_window_path": str(pending_path),
+            "base_effective": {
+                "source": anchor.get("source"),
+                "target": anchor.get("old_target"),
+                "base_full": "",
+                "accepted_updates": [],
+                "checkpoint_version": anchor.get("checkpoint_version"),
+                "current_effective_id": anchor.get("current_effective_id"),
+                "pointer_revision": anchor.get("pointer_revision"),
+                "manifest": anchor.get("manifest"),
+            },
+            "last_seen_version": item_ids[-1],
+            "new_versions": new_ids,
+            "items": items,
+            "kind_counts": dict(Counter(package_kind(versions_by_id.get(vid, {})) for vid in item_ids)),
+            "candidate_effective": {},
+            "compare": {},
+            "scan_versions": [],
+            "commands": [],
+            "warnings": ["尚未建立有效版，且 Catalog 中没有已确认的 FULL 包；请先确认一个完整包类型。"],
+            "message": "缺少完整包基线，不能建立候选有效版",
+        }
+
     last_material = str(candidate.get("last_material_version") or item_ids[-1])
     effective_id = f"candidate_{safe_name(last_material)}"
     old_target = str(anchor.get("old_target") or "")
-    compare_id = f"window_{safe_name(_target_label(old_target or str(anchor.get('checkpoint_version') or anchor.get('base_full') or 'base')))}_to_{safe_name(effective_id)}"
+    is_bootstrap = str(anchor.get("source") or "") == "uninitialized"
+    compare_old_target = f"raw:{candidate['base_full']}" if is_bootstrap else old_target
+    compare_id = f"window_{safe_name(_target_label(compare_old_target or str(anchor.get('checkpoint_version') or anchor.get('base_full') or 'base')))}_to_{safe_name(effective_id)}"
     eff_dir = _effective_dir(html_out, library_row, library, effective_id)
     compare_dir = _compare_dir(html_out, library_row, library, compare_id)
     manifest = eff_dir / "effective_manifest.json"
 
     scan_versions: list[str] = []
-    if old_target.startswith("raw:"):
-        base_vid = old_target.split(":", 1)[1]
+    if compare_old_target.startswith("raw:"):
+        base_vid = compare_old_target.split(":", 1)[1]
         if base_vid in versions_by_id and not _scan_evidence_exists(versions_by_id[base_vid]):
             scan_versions.append(base_vid)
-    for vid in item_ids:
+    candidate_versions = [str(candidate.get("base_full") or ""), *[str(vid) for vid in candidate.get("overlays", []) or []]]
+    for vid in candidate_versions:
         if vid in versions_by_id and not _scan_evidence_exists(versions_by_id[vid]):
             scan_versions.append(vid)
     dedup_scan = list(dict.fromkeys(scan_versions))
@@ -456,7 +479,7 @@ def resolve_review_window(
     if force_rebuild or not manifest.exists() or new_ids:
         commands.append(_effective_build_command(str(catalog_path), library, candidate, effective_id, manifest, eff_dir / "index.html"))
     if force_rebuild or not (compare_dir / "compare_manifest.json").exists() or new_ids:
-        commands.append(_effective_compare_command(str(catalog_path), library, old_target, effective_id, compare_id, compare_dir, html_out))
+        commands.append(_effective_compare_command(str(catalog_path), library, compare_old_target, effective_id, compare_id, compare_dir, html_out))
 
     overlays = set(candidate.get("overlays", []) or [])
     items = []
@@ -465,6 +488,8 @@ def resolve_review_window(
         items.append(_window_item(versions_by_id[vid], role=role))
 
     warnings: list[str] = []
+    if is_bootstrap:
+        warnings.append("尚未建立有效版：本次为初始接入候选，raw FULL 与候选组合的对比仅用于验证组合一致性，不代表版本更新差异。")
     if candidate.get("unknown_package_versions"):
         warnings.append("存在 UNKNOWN package_type；请先用 lg mark 或 lg library override 确认类型，再执行 lg next --plan-only / --apply。")
     if candidate.get("intermediate_items"):
@@ -475,6 +500,7 @@ def resolve_review_window(
         "library": library,
         "library_id": lib_id,
         "state": "PENDING",
+        "review_kind": "INITIAL_BASELINE" if is_bootstrap else "EFFECTIVE_UPDATE",
         "changed": bool(new_ids),
         "created_at": pending.get("created_at") or now_iso(),
         "updated_at": now_iso(),
@@ -505,8 +531,9 @@ def resolve_review_window(
         },
         "compare": {
             "compare_id": compare_id,
-            "old": old_target,
+            "old": compare_old_target,
             "new": f"effective:{effective_id}",
+            "mode": "bootstrap_identity" if is_bootstrap else "effective_update",
             "out_dir": str(compare_dir),
             "html": str(compare_dir / "index.html"),
         },

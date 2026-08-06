@@ -99,7 +99,7 @@ parse_exclude_file_types: verilog,liberty,spef
 Version Review 从这些产物读取 parser 证据：
 
 - `parser_manifest.json`
-- `parser_results.json`
+- `parser_results/<view>/*.json`（默认逐文件 Parser 事实；旧版聚合 `parser_results.json` 仅兼容/调试）
 - `summary/parser_quality.json`
 
 默认页面不会读取重型 view 内容。`.lib/.lib.gz`、`.db`、`.spef` 和 layout/binary
@@ -128,7 +128,8 @@ scan 同时输出机器事实和人工证据。配置和页面必须区分这两
 | --- | --- | --- | --- |
 | `file_inventory.json` | 是 | 否 | 完整文件事实，供 diff/release/render 读取 |
 | `parser_manifest.json` | 是 | 否 | parser 任务事实 |
-| `parser_results.json` | 是 | 否 | 原始 parser 结果，默认 debug |
+| `parser_results/<view>/*.json` | 是 | 否 | 原始 parser 结果，按文件保存，供摘要/详情页按需读取 |
+| `parser_results.json` | 旧版 | 否 | 聚合 Parser 结果；新 CLI 默认不生成，仅兼容旧扫描和调试 |
 | `review/view_coverage.tsv` | 派生证据 | 是 | view 覆盖矩阵 |
 | `review/files_by_view.tsv` | 派生证据 | 是 | 数量背后的文件清单 |
 | `review/unknown_files.tsv` | 派生证据 | 是 | unknown 文件分类入口 |
@@ -181,6 +182,7 @@ $WORK/actions/<library>.action
 这些文件是输出，应重新生成，不应手改：
 
 - `catalog/catalog.json`
+- `catalog/catalog_runtime.json`
 - `catalog/html/index.html`
 - `catalog/html/catalog_state.json`
 - `catalog/html/manager_tasks.json`

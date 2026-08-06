@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import gzip
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 import re
 
-from .base import BaseParser, make_parser_envelope, record_abs_path, get_field, read_text_file
+from .base import BaseParser, make_parser_envelope, record_abs_path, get_field
 
-LEF_PARSER_VERSION = "2.0"
+LEF_PARSER_VERSION = "2.1"
+# A complete geometry payload is useful for small abstracts.  On a large
+# technology LEF it expands every RECT/OBS into JSON and can exceed the source
+# file by several times, without changing the review-level LEF summary.
+LEF_FULL_GEOMETRY_MAX_BYTES = 8 * 1024 * 1024
 
 _RE_VERSION = re.compile(r"^\s*VERSION\s+(?P<version>\S+)\s*;", re.I)
 _RE_BUSBITCHARS = re.compile(r'^\s*BUSBITCHARS\s+"(?P<chars>[^"]+)"\s*;', re.I)
@@ -84,11 +89,12 @@ def _finalize_stats(result: dict[str, Any]) -> None:
     obs_rect_count = 0
     total_area = 0.0
 
+    counts_only = result.get("geometry_detail") == "counts_only"
     for macro in result["macros"].values():
         pins = macro.get("pins") or {}
         obs = macro.get("obs") or []
         macro["pin_count"] = len(pins)
-        macro["obs_rect_count"] = len(obs)
+        macro["obs_rect_count"] = int(macro.pop("_obs_rect_count", len(obs))) if counts_only else len(obs)
         size = macro.get("size")
         if isinstance(size, dict) and size.get("x") is not None and size.get("y") is not None:
             macro["area"] = float(size["x"]) * float(size["y"])
@@ -97,15 +103,16 @@ def _finalize_stats(result: dict[str, Any]) -> None:
             layers = [str(layer) for layer in (pin.get("layers") or []) if str(layer)]
             rects = pin.get("rects") or []
             pin["layer_count"] = len(layers)
-            pin["rect_count"] = len(rects)
+            pin["rect_count"] = int(pin.pop("_rect_count", len(rects))) if counts_only else len(rects)
             used_layers.update(layers)
             pin_layer_count += len(layers)
-            pin_rect_count += len(rects)
+            pin_rect_count += pin["rect_count"]
         for rect in obs:
             layer = rect.get("layer")
             if layer:
                 used_layers.add(str(layer))
-        obs_rect_count += len(obs)
+        used_layers.update(str(layer) for layer in macro.pop("_obs_layers", []) if str(layer))
+        obs_rect_count += macro["obs_rect_count"]
 
     result["used_layers"] = sorted(used_layers)
     result["stats"] = {
@@ -120,9 +127,19 @@ def _finalize_stats(result: dict[str, Any]) -> None:
     }
 
 
-def parse_lef_text(text: str, source: str = "") -> dict[str, Any]:
+def _parse_lef_lines(
+    lines: Iterable[str],
+    *,
+    source: str = "",
+    geometry_detail: str = "full",
+    source_size_bytes: int | None = None,
+) -> dict[str, Any]:
+    retain_geometry = geometry_detail == "full"
     result: dict[str, Any] = {
         "source": source,
+        "source_size_bytes": source_size_bytes,
+        "geometry_detail": geometry_detail,
+        "geometry_omitted": not retain_geometry,
         "lef_version": None,
         "busbitchars": None,
         "dividerchar": None,
@@ -149,7 +166,7 @@ def parse_lef_text(text: str, source: str = "") -> dict[str, Any]:
     in_pin_port = False
     in_obs = False
 
-    for line_no, raw in enumerate(text.splitlines(), start=1):
+    for line_no, raw in enumerate(lines, start=1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
@@ -243,9 +260,12 @@ def parse_lef_text(text: str, source: str = "") -> dict[str, Any]:
                     continue
                 m = _RE_RECT.match(line)
                 if m:
-                    current_pin["rects"].append(
-                        {"layer": current_layer_name, **{k: float(v) for k, v in m.groupdict().items()}}
-                    )
+                    if retain_geometry:
+                        current_pin["rects"].append(
+                            {"layer": current_layer_name, **{k: float(v) for k, v in m.groupdict().items()}}
+                        )
+                    else:
+                        current_pin["_rect_count"] = int(current_pin.get("_rect_count", 0)) + 1
                     continue
                 m = _RE_ANTENNA.match(line)
                 if m:
@@ -265,9 +285,14 @@ def parse_lef_text(text: str, source: str = "") -> dict[str, Any]:
                 continue
             m = _RE_RECT.match(line)
             if m:
-                current_macro["obs"].append(
-                    {"layer": current_layer_name, **{k: float(v) for k, v in m.groupdict().items()}}
-                )
+                if retain_geometry:
+                    current_macro["obs"].append(
+                        {"layer": current_layer_name, **{k: float(v) for k, v in m.groupdict().items()}}
+                    )
+                else:
+                    current_macro["_obs_rect_count"] = int(current_macro.get("_obs_rect_count", 0)) + 1
+                    if current_layer_name:
+                        current_macro.setdefault("_obs_layers", []).append(current_layer_name)
                 continue
 
         m_end = _RE_END.match(line)
@@ -324,8 +349,26 @@ def parse_lef_text(text: str, source: str = "") -> dict[str, Any]:
     return result
 
 
-def parse_lef_data_file(path: str | Path) -> dict[str, Any]:
-    return parse_lef_text(read_text_file(path), source=str(path))
+def parse_lef_text(text: str, source: str = "") -> dict[str, Any]:
+    return _parse_lef_lines(text.splitlines(), source=source)
+
+
+def parse_lef_data_file(
+    path: str | Path,
+    *,
+    full_geometry_max_bytes: int = LEF_FULL_GEOMETRY_MAX_BYTES,
+) -> dict[str, Any]:
+    source = Path(path)
+    source_size_bytes = source.stat().st_size
+    geometry_detail = "full" if source_size_bytes <= full_geometry_max_bytes else "counts_only"
+    opener = gzip.open if source.name.lower().endswith(".gz") else open
+    with opener(source, "rt", encoding="utf-8", errors="ignore") as handle:
+        return _parse_lef_lines(
+            handle,
+            source=str(source),
+            geometry_detail=geometry_detail,
+            source_size_bytes=source_size_bytes,
+        )
 
 
 def parse_lef_file(path: str | Path) -> dict[str, Any]:

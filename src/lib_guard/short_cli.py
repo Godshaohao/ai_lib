@@ -574,13 +574,13 @@ def _build_parser() -> ArgumentParser:
     lg.csh library list <正式库名> --versions --plain
     lg.csh next                          # 小白入口：查看所有库下一步
     lg.csh next --ready                  # 只看可一键执行的库
-    lg.csh next ucie                     # 预演该库 FULL/增量接入计划
+    lg.csh next ucie                     # 只读预演：已有有效版则审查更新；否则建立初始接入候选
     lg.csh next ucie --apply             # 确认后执行 scan/effective compare/render
     lg.csh next ucie --accept --by owner --note "review passed"
     lg.csh worklist                      # 专家别名：批量查看哪些库可执行/需确认/无新版本
     lg.csh cat ucie stable_20250608     # 只重渲染一个版本详情页，不重新 scan
     lg.csh library override ucie stable_20250608 --base initial_20250601 --stage stable
-    lg.csh intake ucie --plan-only        # 专家入口：只生成 review window 和命令计划
+    lg.csh intake ucie --plan-only        # 专家入口：只读预演 review window，不写文件、不修改数据
     lg.csh intake ucie                    # 专家入口：确认计划后执行 scan/effective compare/render
     lg.csh window ucie                    # 查看 old/candidate/scan/compare 组合
     lg.csh mark ucie stable_20250608 --type FULL
@@ -744,13 +744,14 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("library")
     p.add_argument("--action", help="Explicit action file path. Default: $WORK/actions/<library>.action")
 
-    p = sub.add_parser("next", help="小白入口：查看下一步、预演、执行或接受候选有效版")
+    p = sub.add_parser("next", help="小白入口：查看下一步、只读预演、执行或接受候选有效版")
     p.add_argument("library", nargs="?", help="正式库名；不传则查看全部库工作清单")
     p.add_argument("--ready", action="store_true", help="不传 library 时，只显示可执行/可接受的库")
     p.add_argument("--blocked", action="store_true", help="不传 library 时，只显示需要人工处理的库")
+    p.add_argument("--plan-only", action="store_true", help="显式只读预演；与默认 `lg next <库名>` 等价")
     p.add_argument("--apply", action="store_true", help="传 library 时，按预演计划执行 scan/effective compare/render")
     p.add_argument("--accept", action="store_true", help="传 library 时，接受当前 candidate effective")
-    p.add_argument("--fix", action="store_true", help="传 library 时，只显示需要修正的包类型/Base 关系")
+    p.add_argument("--fix", action="store_true", help="传 library 时，只显示包类型/Base 的人工修正建议，不修改数据")
     p.add_argument("--by", help="配合 --accept 记录接受人")
     p.add_argument("--note", help="配合 --accept 记录说明")
     p.add_argument("--since", help="传 library 时，临时从指定 raw version 之后推导窗口")
@@ -761,10 +762,10 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--parse-exclude-file-types", help="覆盖本次 scan parser 排除类型")
     p.add_argument("--parse-jobs", help="覆盖本次 parser worker 数")
 
-    p = sub.add_parser("intake", help="扫描新版本，构建 review window，并对比 current effective vs candidate effective")
+    p = sub.add_parser("intake", help="预演或执行 review window；已有有效版则对比更新，否则建立初始接入候选")
     p.add_argument("library")
     p.add_argument("--since", help="从指定 raw version 之后开始构建窗口")
-    p.add_argument("--plan-only", action="store_true", help="只写 pending_window.json 和命令计划，不执行")
+    p.add_argument("--plan-only", action="store_true", help="只读预演窗口和命令计划，不执行、不写文件、不修改数据")
     p.add_argument("--rebuild", action="store_true", help="强制重建 candidate effective 和 compare")
     p.add_argument("--json", action="store_true", help="配合 --plan-only 输出机器可读 JSON；默认输出人工可读表")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次 scan hash 策略")
@@ -778,7 +779,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
     p.add_argument("--parse-jobs", help=SUPPRESS)
 
-    p = sub.add_parser("worklist", help="批量查看哪些库可执行、需人工确认或无新版本")
+    p = sub.add_parser("worklist", help="批量查看待建立有效版、可执行、需确认或无新版本的库")
     p.add_argument("--ready", action="store_true", help="只显示可执行/可接受的库")
     p.add_argument("--blocked", action="store_true", help="只显示需要人工处理的库")
     p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
@@ -1244,6 +1245,8 @@ def _next_command(cfg: dict[str, str], args: Any) -> list[str]:
     actions = [bool(getattr(args, name, False)) for name in ["apply", "accept", "fix"]]
     if sum(actions) > 1:
         raise ValueError("next 只能选择一个动作：--apply / --accept / --fix")
+    if getattr(args, "plan_only", False) and any(actions):
+        raise ValueError("--plan-only 不能与 --apply/--accept/--fix 同时使用")
     if not getattr(args, "library", None):
         if getattr(args, "apply", False) or getattr(args, "accept", False) or getattr(args, "fix", False):
             raise ValueError("lg next 不传库名时只能查看工作清单；执行动作请使用 `lg next <LIBRARY> --apply|--accept|--fix`")

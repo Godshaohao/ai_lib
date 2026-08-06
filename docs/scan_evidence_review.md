@@ -14,7 +14,7 @@ Status: current
 | 项 | 说明 |
 | --- | --- |
 | 目标读者 | scan 维护者、Version Detail 维护者、需要检查扫描证据的 reviewer |
-| 事实源 | scan 生成的 `file_inventory.json`、`parser_manifest.json`、`parser_results.json`、summary JSON |
+| 事实源 | scan 生成的 `file_inventory.json`、`parser_manifest.json`、`parser_results/<view>/*.json`、summary JSON；旧扫描可继续使用 `parser_results.json` |
 | 人工证据 | scan 生成的 `review/*.tsv` 和 Scan HTML 聚合表 |
 | 禁止做法 | 把 raw JSON、parser 原始结果、cache/progress 日志直接放到主审查页面 |
 | 验证 | scan pipeline 测试、Scan HTML 测试、Version Detail 测试 |
@@ -32,6 +32,26 @@ Status: current
 - 下一步应该进入 diff、补分类、重扫，还是阻塞。
 
 原始 JSON、hash、cache、progress、parser 原始结果只作为调试证据折叠或下沉。
+
+## 产品输出契约
+
+Scan 的输出不是“把所有扫描中间结果都给人看”，而是一个分层证据包：
+
+| 层级 | 默认入口 | 解决的问题 | 是否进入首屏 |
+| --- | --- | --- | --- |
+| 人工摘要 | `review/scan_review.md`、Scan `index.html` | 这个版本能否继续审查、有哪些异常 | 是 |
+| 人工证据 | `review/*.tsv` | 数量对应哪些具体文件、哪些 View 使用什么证据等级 | 文件证据表进入，原始表按需打开 |
+| 机器事实 | `manifest.json`、`file_inventory.json`、`parser_manifest.json`、`state_delta.json`、`signatures/` | 供 diff、release、缓存和详情页消费 | 否 |
+| 调试材料 | `logs/`、原始 Parser JSON | 排查性能、失败和实现问题 | 否 |
+
+这四层不能互相冒充：
+
+- `scan_review.md` 是人工阅读摘要，不是机器事实源。
+- `*.tsv` 是人工证据索引，不替代完整 inventory。
+- JSON 是机器接口，不作为人工主页面。
+- 日志只解释“系统怎么运行”，不能用来判断“库是否可用”。
+
+Scan HTML 只保留一个真实页面：`index.html`。历史入口 `scan_report.html` 继续保留，但只做兼容跳转，不再复制完整 HTML。重新渲染旧扫描目录时，如果缺少 `review/scan_review.md`，渲染器会按现有 TSV/JSON 生成它，避免出现死链接。
 
 ## 证据分层
 
@@ -53,7 +73,7 @@ Status: current
 | `scan_summary.json` | 名字像人工摘要，实际偏机器摘要 | 兼容保留；人工摘要来自 `review/scan_review.json` |
 | `type_distribution.json` | 只是派生计数 | 用 `review/view_coverage.tsv` / `files_by_view.tsv` 给人看 |
 | `version_profile.json` | 从 manifest 拆出的局部信息 | 兼容保留；不作为主页面内容 |
-| `parser_results.json` | 经常为空，人工无意义 | 机器/debug 证据；人工看 `review/parser_evidence.tsv` |
+| `parser_results.json` | 聚合结果可能非常大，人工无意义 | 旧扫描兼容/显式调试；新 CLI 默认不写，统一从 `parser_results/<view>/*.json` 读取 |
 | `file_inventory.json` | 完整文件清单，机器需要但人难读 | 生成 `files_by_view.tsv` 给人看 |
 | `parser_manifest.json` | parser 任务细节 | 生成 `parser_evidence.tsv` 给人看 |
 | `signatures/signatures.json` | diff/cache 需要 | 机器事实，不进默认页面 |
@@ -69,6 +89,7 @@ Status: current
 scan_<id>/
   review/
     scan_review.json
+    scan_review.md
     view_coverage.tsv
     files_by_view.tsv
     unknown_files.tsv
@@ -78,7 +99,8 @@ scan_<id>/
 
   file_inventory.json
   parser_manifest.json
-  parser_results.json
+  parser_results/          # 默认逐文件 Parser 结果
+    <view>/*.json
   summary/
   signatures/
   logs/
@@ -159,7 +181,7 @@ diff/release/render 断链。
 Scan 页面第一屏只保留四块：
 
 1. 扫描结论：`PASS / WARNING / FAILED`。
-2. View 覆盖矩阵：按 view 聚合数量、证据等级、状态。
+2. 视图覆盖矩阵：按 view 聚合数量、证据等级、状态。
 3. 需要处理的问题：unknown、parser failed、required view missing。
 4. 下一步：进入 diff、补分类、重扫或停止。
 
@@ -196,7 +218,10 @@ Version Detail 页面不应内嵌 scan raw 绝对路径、`scan_html` 绝对路�
 已落地：
 
 - `scan/evidence_export.py` 从 scan bundle 生成人工 TSV。
+- `scan/evidence_export.py` 同时生成一页人工可读的 `review/scan_review.md`。
 - `render/html_report.py` 优先读取人工证据表。
+- `render/html_report.py` 只生成一个完整的 `index.html`；`scan_report.html` 仅作为兼容跳转。
+- Scan HTML 不再重复嵌入旧版完整文件清单，Corner/Parser 明细默认折叠。
 - Version Detail 通过 `version_evidence_state` 说明事实源状态，但不展示 raw 绝对路径。
 
 待收敛：
@@ -204,7 +229,7 @@ Version Detail 页面不应内嵌 scan raw 绝对路径、`scan_html` 绝对路�
 1. 统一 `file_type -> view_type -> evidence_level` 映射。
 2. 每个 view 数量都必须能展开到文件列表。
 3. unknown 文件必须给出建议动作。
-4. 空 `parser_results.json` 的写出策略继续收紧。
+4. 已收紧 `parser_results.json` 的写出策略：`lg scan` 和目录驱动扫描默认不生成聚合文件；旧扫描仍可读取，逐文件结果保持为唯一默认 Parser 事实。
 5. `manifest.json` / `scan_summary.json` / `type_distribution.json` 制定废弃或兼容窗口。
 
 P2：

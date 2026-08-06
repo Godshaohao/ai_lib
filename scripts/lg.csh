@@ -30,16 +30,17 @@ if ($?LIB_GUARD_PYTHON) then
   endif
 endif
 if ("$py" == "") then
-  set found = `which python3.11`
-  if ($status == 0) set py = "$found"
-endif
-if ("$py" == "") then
-  set found = `which python3`
-  if ($status == 0) set py = "$found"
-endif
-if ("$py" == "") then
-  set found = `which python`
-  if ($status == 0) set py = "$found"
+  if ($?path) then
+    foreach candidate (python3.11 python3 python)
+      foreach dir ($path)
+        if (-x "$dir/$candidate") then
+          set py = "$dir/$candidate"
+          break
+        endif
+      end
+      if ("$py" != "") break
+    end
+  endif
 endif
 if ("$py" == "") then
   echo "ERROR: python3.11, python3, or python is required but was not found in PATH." >&2

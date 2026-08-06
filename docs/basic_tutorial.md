@@ -21,7 +21,7 @@ Status: current
 底层 `python -m lib_guard.cli` 是自动化和调试入口；日常使用优先用
 `$PROJ/scripts/lg.csh`。
 
-如果在 csh/tcsh 里长期手动操作，先开启短命令补全和 `lg` alias：
+如果在 tcsh 里长期手动操作，先开启短命令补全和 `lg` alias；纯 csh 只能获得 alias，不能注册 Tab 补全：
 
 ```csh
 source $PROJ/scripts/lg_complete.csh
@@ -697,9 +697,19 @@ Version Detail 投影；不需要为了一个版本每次手动全量 `cat --ful
 $PROJ/scripts/lg.csh cat <LIBRARY> <VERSION>
 ```
 
-Version Detail 第一屏固定看五件事：接入判断、审查对象、对比上下文、View 变化、
-证据状态。review window、candidate effective、compare manifest 只作为这个页面的
-证据来源，不是新的主审查入口。
+Version Detail 默认按五组事实审查：接入判断、可信 Base 与对比语义、交付包/候选
+有效版 inventory、View 变化矩阵与关联使用场景、由当前证据产生的待确认事实。
+review window、candidate effective、compare manifest 只作为这个页面的证据来源，
+不是新的主审查入口。
+
+注意两个口径：
+
+- 增量包中“基准存在、本包未携带”不等于删除；FULL 对比中的缺失才按真实删除展示。
+- `Summary-only`、`Metadata-only` 只表示证据深度，不自动代表不完整或阻塞。
+
+普通 View 新增/修改已经在矩阵中展示，不会重复列入待确认区。待确认区只保留真实
+删除、Unknown、缺 Base/Diff 和首版交付范围等未决事实。正式放行管理与事实源审计
+默认折叠，并与 IP 技术判断分开。
 
 ### 只有一个版本时
 
@@ -707,7 +717,7 @@ Version Detail 第一屏固定看五件事：接入判断、审查对象、对�
 
 - 版本和库名。
 - scan 是否存在。
-- View 覆盖矩阵。
+- 视图覆盖矩阵。
 - unknown 文件。
 - summary-only / metadata-only 证据等级。
 - 下一步是否需要建立 FULL baseline 或等待新版本。
@@ -877,7 +887,7 @@ python/3.6.8 conflicts with currently loaded module python/3.11.10
 直接指定 Python 可执行文件：
 
 ```csh
-setenv LIB_GUARD_PYTHON /tools/dk/tools/python/python-3.11.10/bin/python3.11
+setenv LIB_GUARD_PYTHON /path/to/python3.11
 $PROJ/scripts/lg.csh library discover
 ```
 

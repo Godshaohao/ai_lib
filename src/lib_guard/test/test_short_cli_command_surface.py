@@ -83,6 +83,9 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             self.assertIn(name, help_text)
         for old_name in ["catalog,", "diff,", "file-diff", "release,", "override,", "refresh,", "rv-check", "rv-accept"]:
             self.assertNotIn(old_name, help_text)
+        self.assertIn("只读预演", help_text)
+        self.assertIn("初始接入候选", help_text)
+        self.assertIn("不修改数据", help_text)
 
     def test_cat_update_detail_replaces_refresh_as_visible_entry(self) -> None:
         td, workspace = self._workspace()
@@ -168,6 +171,24 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             self.assertEqual(command[command.index("--library") + 1], "ucie")
             self.assertIn("--plan-only", command)
             self.assertEqual(command[command.index("--format") + 1], "text")
+
+    def test_next_plan_only_is_an_explicit_preview_alias(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            default_command = build_cli_commands(["next", "ucie"], cwd=workspace)[0]
+            explicit_command = build_cli_commands(["next", "ucie", "--plan-only"], cwd=workspace)[0]
+
+            self.assertEqual(explicit_command, default_command)
+
+    def test_next_rejects_plan_only_with_executing_action(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            with self.assertRaisesRegex(ValueError, "--plan-only 不能与 --apply/--accept/--fix 同时使用"):
+                build_cli_commands(["next", "ucie", "--plan-only", "--apply"], cwd=workspace)
 
     def test_next_apply_runs_intake_without_plan_only(self) -> None:
         td, workspace = self._workspace()

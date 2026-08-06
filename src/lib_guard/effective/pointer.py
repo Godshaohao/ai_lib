@@ -445,13 +445,21 @@ def pointer_search_paths(out: str | Path, lib_id: str) -> list[Path]:
     return dedup
 
 
+def inspect_current_pointer(path: str | Path) -> dict[str, Any]:
+    pointer_path = Path(path)
+    data = read_json(pointer_path, {}) or {}
+    if not data:
+        return {}
+    data["_pointer_path"] = str(pointer_path)
+    data.update(_pointer_identity_status(data))
+    data.update(_pointer_approval_status(data))
+    return data
+
+
 def load_current_pointer(out: str | Path, lib_id: str) -> dict[str, Any]:
     for path in pointer_search_paths(out, lib_id):
-        data = read_json(path, {}) or {}
+        data = inspect_current_pointer(path)
         if data:
-            data["_pointer_path"] = str(path)
-            data.update(_pointer_identity_status(data))
-            data.update(_pointer_approval_status(data))
             return data
     return {}
 

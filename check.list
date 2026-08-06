@@ -1,0 +1,407 @@
+# lib_guard 工程验收清单
+#
+# 用途：代码修改、工作区迁移、新库入库、版本审查和 release 前的统一检查。
+# 变量约定：
+#   PROJ = lib_guard 仓库根目录
+#   WORK = 本次测试/生产工作区，不要把真实 RAW 复制进 Git 仓库
+#   RAW = RAW 根目录
+#   LIBRARY / VERSION / BASE_VERSION 使用 library list 输出的正式名称
+#
+# 每项填写 PASS / FAIL / SKIP，并记录命令输出和数据路径。
+# 只有 P0 项全部 PASS 且没有未解释的数据覆盖风险，才允许合并。
+
+======================================================================
+0. 验收规则
+======================================================================
+
+- [ ] 明确本次修改范围：代码、配置、文档、测试、生成物。
+- [ ] 没有把 generated HTML、catalog.json、scan_out、diff、effective 当成源码。
+- [ ] 没有删除用户已有工作区数据；清理范围有明确文件清单。
+- [ ] 修改前后记录库数量、版本数量、当前有效版和 HTML 入口。
+- [ ] 所有会写数据的命令都保存完整 JSON 输出。
+- [ ] 命令返回 0 不等于通过，必须检查 status、目标路径和数据内容。
+
+建议记录目录：
+  mkdir -p "$WORK/check_runs/$(date +%Y%m%d_%H%M%S)"
+
+======================================================================
+1. 环境和入口
+======================================================================
+
+- [ ] 当前目录是 PROJ，不是 WORK、catalog/html 或版本 HTML 目录。
+- [ ] PROJ、WORK、LIB_GUARD_CONFIG 指向本次测试工作区。
+- [ ] Python 版本明确，未同时加载冲突的 Python module。
+- [ ] csh/tcsh 环境可指定解释器：
+  setenv LIB_GUARD_PYTHON /path/to/python3.11
+  setenv LIB_GUARD_CONFIG $WORK/lib_guard.yml
+- [ ] 日常入口帮助通过：
+  $PROJ/scripts/lg.csh --help
+  $PROJ/scripts/lg.csh library --help
+  $PROJ/scripts/lg.csh next --help
+  $PROJ/scripts/lg.csh scan --help
+  $PROJ/scripts/lg.csh cat --help
+  $PROJ/scripts/lg.csh cmp --help
+  $PROJ/scripts/lg.csh intake --help
+  $PROJ/scripts/lg.csh rel --help
+- [ ] 底层入口帮助通过：
+  cd "$PROJ"
+  PYTHONPATH=src python3 -m lib_guard.short_cli --help
+  PYTHONPATH=src python3 -m lib_guard.cli --help
+- [ ] source scripts/lg_complete.csh 后，静态命令和帮助一致；纯 csh 只提供 `lg` alias，tcsh 才注册 Tab 补全。
+- [ ] 库名和版本名不靠猜测，统一从 library list 复制。
+
+======================================================================
+2. 编译、单测、静态检查
+======================================================================
+
+- [ ] 编译：
+  cd "$PROJ"
+  PYTHONPYCACHEPREFIX=/tmp/lib_guard_pycache PYTHONPATH=src python3 -m compileall -q src
+
+- [ ] 全量测试：
+  PYTHONPYCACHEPREFIX=/tmp/lib_guard_pycache \
+  PYTHONPATH=src python3 -m unittest discover \
+  -s src/lib_guard/test -p 'test*.py' -q
+
+- [ ] 重点回归：
+  PYTHONPYCACHEPREFIX=/tmp/lib_guard_pycache \
+  PYTHONPATH=src python3 -m unittest \
+  src.lib_guard.test.test_scan_pipeline \
+  src.lib_guard.test.test_version_detail_report \
+  src.lib_guard.test.test_window_intake \
+  src.lib_guard.test.test_release_manifest_flow \
+  src.lib_guard.test.test_short_cli_command_surface -q
+
+- [ ] git diff --check 通过。
+- [ ] 没有 ImportError、SyntaxError、FileNotFoundError 或旧入口失败。
+- [ ] 测试中若有预期非法参数输出，最终结果仍为 OK。
+
+======================================================================
+3. 配置、Registry、Catalog
+======================================================================
+
+事实源必须保持单向关系：
+
+  library_registry.tsv
+    -> library_catalog.yml
+    -> catalog/catalog.json
+    -> scan / diff / effective / HTML
+
+- [ ] $WORK/lib_guard.yml 存在。
+- [ ] $WORK/config/library_registry.tsv 是人工确认登记表。
+- [ ] $WORK/config/library_catalog.yml 是正式 library map。
+- [ ] 日常 cat 不调用 discover，不用 RAW 递归重建库集合。
+- [ ] $WORK/catalog/catalog.json 可解析。
+- [ ] 正式库名唯一：
+python3 - "$WORK/catalog/catalog.json" <<'PY'
+import json, sys
+from collections import Counter
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+names = [str(x.get("library_name") or x.get("library_id") or "") for x in d.get("libraries", [])]
+dup = sorted(k for k, v in Counter(names).items() if k and v > 1)
+print("libraries", len(names))
+print("duplicate_library_names", dup)
+assert not dup
+PY
+
+- [ ] 没有把 vendor、中间目录、source_package、版本目录或 view 子目录误识别为库。
+- [ ] 同一正式库的多个版本只属于该库。
+- [ ] catalog.json、catalog_runtime.json、registry、library map 的库集合符合预期。
+- [ ] 保存基线：
+python3 - "$WORK/catalog/catalog.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+for x in d.get("libraries", []):
+    print(x.get("library_name"), len(x.get("versions", [])))
+PY
+
+======================================================================
+4. 新库入库
+======================================================================
+
+已知库根：
+  library add -> library apply -> cat --refresh-catalog
+
+未知库根：
+  library discover -> 人工确认候选 -> library accept -> library apply
+  -> cat --refresh-catalog
+
+- [ ] 已知库根不先扫描整个 RAW：
+  $PROJ/scripts/lg.csh library add <LIBRARY> \
+    --root <LIBRARY_ROOT> \
+    --vendor <VENDOR> \
+    --display-name <DISPLAY_NAME> \
+    --apply --refresh-catalog
+
+- [ ] 不确定库根时只生成候选：
+  $PROJ/scripts/lg.csh library discover \
+    --max-depth 4 --max-dirs 5000 --max-candidates 200
+
+- [ ] 人工检查候选 TSV/HTML：库根、vendor、middle_path、版本数量和目录边界。
+- [ ] discover 不覆盖人工 registry，不直接创建正式库。
+- [ ] 仅接受确认过的候选：
+  $PROJ/scripts/lg.csh library accept
+  $PROJ/scripts/lg.csh library apply
+  $PROJ/scripts/lg.csh cat --refresh-catalog
+- [ ] 入库后旧库数量不减少。
+- [ ] 入库后没有出现 vendor-only 库或重复库。
+- [ ] 新库可用正式名称列出：
+  $PROJ/scripts/lg.csh library list --plain
+  $PROJ/scripts/lg.csh library list <LIBRARY> --versions --plain
+
+======================================================================
+5. 库名、版本名、版本关系
+======================================================================
+
+- [ ] 页面展示名、命令库名、Catalog library id、版本 UID 可互相追溯。
+- [ ] 最新 FULL 优先于最早 FULL，不能把最早日期当默认 FULL base。
+- [ ] 只有一个版本时，详情页显示自身文件、view 和证据，不显示空 diff 假结论。
+- [ ] FULL/FIX/HOTFIX/UNKNOWN 不只靠日期猜测，允许人工确认。
+- [ ] 当前有效版、上一有效版、最新 FULL、候选版本关系明确。
+- [ ] 不可信关系先修正：
+  $PROJ/scripts/lg.csh next <LIBRARY> --fix
+  $PROJ/scripts/lg.csh mark <LIBRARY> <VERSION> --type FULL --note "manual confirmed full package"
+  $PROJ/scripts/lg.csh library override <LIBRARY> <VERSION> \
+    --package-type PARTIAL_UPDATE \
+    --base-full <BASE_FULL_VERSION> \
+    --previous-effective <PREVIOUS_EFFECTIVE_VERSION> \
+    --compare-default full_baseline \
+    --note "manual confirmed base"
+  $PROJ/scripts/lg.csh next <LIBRARY> --rebuild
+
+======================================================================
+6. next 小白入口
+======================================================================
+
+- [ ] 只读预演不写数据：
+  $PROJ/scripts/lg.csh next <LIBRARY>
+- [ ] 输出明确显示 candidate、Base、scan_versions、compare、current effective 和下一动作。
+- [ ] FULL 场景建立新完整基线。
+- [ ] FIX/HOTFIX 场景使用最新 FULL + 后续增量，不错误当独立 FULL。
+- [ ] 无新版本时显示无需执行，不重复 scan，不生成空 candidate。
+- [ ] 类型/Base 不确定时阻断，不偷偷猜测并写有效状态。
+- [ ] 确认后才执行：
+  $PROJ/scripts/lg.csh next <LIBRARY> --apply
+- [ ] 执行后 Version Detail、window、effective、diff 关系一致。
+
+======================================================================
+7. Scan 验收
+======================================================================
+
+- [ ] 先看展开命令：
+  $PROJ/scripts/lg.csh --dry-run scan <LIBRARY> <VERSION>
+- [ ] 正常扫描：
+  $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION>
+- [ ] 输出检查 status、scan_dir、stats、phase_timings、render_summary。
+- [ ] scan_dir 存在并包含：
+  scan_meta.json
+  manifest.json
+  file_inventory.json
+  parser_manifest.json
+  parser_results/<view>/*.json
+  review/scan_review.json
+  review/scan_review.md
+  review/view_coverage.tsv
+  review/files_by_view.tsv
+  review/unknown_files.tsv
+  review/large_metadata_files.tsv
+  review/parser_evidence.tsv
+  logs/scan_progress_latest.json
+
+- [ ] 新 CLI 默认不生成巨大聚合文件：
+  test ! -e "$SCAN_DIR/parser_results.json"
+  test "$(find "$SCAN_DIR/parser_results" -name '*.json' | wc -l)" -gt 0
+- [ ] 旧扫描存在 parser_results.json 时仍可被摘要和详情读取，不手动删除。
+- [ ] parser_manifest 的 result_path 都能对应逐文件 JSON。
+- [ ] Parser failed、empty、skipped、metadata-only 有原因。
+- [ ] verilog/systemverilog、liberty、spef、db/gds/oas 不默认深度读取全文。
+- [ ] 普通流程不默认使用 --hash-policy full。
+- [ ] 进度阶段为 1/7 到 7/7，不出现 4/8 parse。
+- [ ] 慢扫描诊断：
+  $PROJ/scripts/lg.csh --dry-run scan <LIBRARY> <VERSION>
+  $PROJ/scripts/lg.csh scan <LIBRARY> <VERSION> --no-render
+  python3 -m json.tool "$SCAN_DIR/logs/scan_progress_latest.json"
+- [ ] 诊断结束后补正常 scan 或明确 render。
+
+======================================================================
+8. Scan HTML 和 Version Detail
+======================================================================
+
+- [ ] Scan HTML 的唯一完整入口是 index.html。
+- [ ] scan_report.html 仅兼容跳转，不是第二份完整页面。
+- [ ] 首屏只展示扫描结论、视图覆盖、异常和文件证据入口。
+- [ ] 每个数量可追溯到 files_by_view、unknown_files 或 parser_evidence。
+- [ ] Parser、Corner、大文件明细默认折叠，不把 raw JSON 全部嵌入页面。
+- [ ] 没有“0 个变化文件”这类与新增/删除数量矛盾的文案。
+- [ ] 单版本详情显示自身信息；有 Base 时才显示变化对比。
+- [ ] IP 接入判断与正式放行状态分开。
+- [ ] Summary-only / Metadata-only 只代表证据等级，不自动表示不完整或 blocker。
+- [ ] 没有旧文案“Comparison Review 是唯一 diff 入口”。
+- [ ] 不链接不存在的 parser_results.json。
+- [ ] render_summary.open_first 存在时确实指向刚刷新的详情页。
+- [ ] render_summary.deferred_file 只表示导航页延迟，不表示 Version Detail 未刷新。
+- [ ] cat 不重新 discover、不删除其他库/版本：
+  $PROJ/scripts/lg.csh cat <LIBRARY> <VERSION>
+- [ ] 需要 Catalog 更新时显式执行：
+  $PROJ/scripts/lg.csh cat --refresh-catalog
+
+======================================================================
+9. Compare / Diff
+======================================================================
+
+- [ ] 普通更新不把 adjacent 自动冒充当前有效基准。
+- [ ] 手动 compare 显式指定 Base：
+  $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> \
+    --base <BASE_VERSION> --scan-if-missing
+- [ ] 输出检查 old_version、new_version、base_version_source、diff_dir、diff_html、render_summary。
+- [ ] diff_summary、view_diff、type_diff、diff_issues 同属一个 old/new。
+- [ ] 新增/删除/修改数量可回到文件清单。
+- [ ] renamed_or_moved 只表示匹配证据，附 match reason/confidence，不直接宣称真实 rename。
+- [ ] 不同库同名文件按 library/version 隔离。
+- [ ] 新增文件没有旧文件时，不生成无意义的空气 diff。
+- [ ] view_type 已统一，不重复拆分 verilog/systemverilog 等类型。
+- [ ] 默认 File Diff 不为 verilog、liberty、spef、db、gds、oas 自动生成命令。
+- [ ] fd 只用于专家指定文件：
+  $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> <REL_PATH> \
+    --base <BASE_VERSION>
+- [ ] 多个 LEF、Liberty、Verilog 等文件通过 view/type 汇总和文件清单验证。
+
+======================================================================
+10. Window、Intake、Effective
+======================================================================
+
+- [ ] 只读查看：
+  $PROJ/scripts/lg.csh window <LIBRARY>
+  $PROJ/scripts/lg.csh intake <LIBRARY> --plan-only
+- [ ] --plan-only 不写 scan、diff、effective、registry、catalog。
+- [ ] window 明确区分 old/current effective、candidate、scan_versions、compare。
+- [ ] 增量包按最新 FULL + 后续 FIX/HOTFIX 组合。
+- [ ] FULL 不错误叠加旧 FIX；FIX 不错误当 FULL。
+- [ ] 初次接入没有 current effective 时建立候选，不伪造上一有效版。
+- [ ] 确认计划后执行：
+  $PROJ/scripts/lg.csh intake <LIBRARY>
+- [ ] scan/cmp/intake 后受影响 Version Detail 自动刷新。
+- [ ] 确认后写入有效版：
+  $PROJ/scripts/lg.csh accept-window <LIBRARY> \
+    --accepted-by <USER> --note "review passed"
+- [ ] 错误 accept 可追溯回滚，且不删除历史：
+  $PROJ/scripts/lg.csh effective rollback <LIBRARY> \
+    --to <EFFECTIVE_ID> --by <USER> --reason "wrong candidate accepted"
+
+======================================================================
+11. Release
+======================================================================
+
+- [ ] Release 只消费已确认 current effective，不从最新 raw 猜测。
+- [ ] 先检查和解释：
+  $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --check-first --explain
+- [ ] PASS、WARNING、REVIEW、BLOCK 含义清楚，warning 不伪装成 pass。
+- [ ] 默认 link/symlink 目标、路径和权限正确。
+- [ ] 发布目录 view 映射正确，例如 LEF/，不能由渲染层临时猜路径。
+- [ ] 发布前后 manifest 文件数、hash、link target 与 effective 一致。
+- [ ] 覆盖已有 release 必须显式 --overwrite。
+- [ ] force 缺 reason 必须失败：
+  $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --apply --force
+- [ ] force 只有 reason/by 才允许：
+  $PROJ/scripts/lg.csh rel <LIBRARY> <VERSION> --apply --force \
+    --force-reason "已完成人工复核" --force-by <USER>
+- [ ] release 失败不覆盖已有 current release，不删除历史 manifest。
+
+======================================================================
+12. 数据不覆盖和历史保留
+======================================================================
+
+执行写入命令前后比较以下信息：
+python3 - "$WORK/catalog/catalog.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+print("libraries", len(d.get("libraries", [])))
+print("versions", sum(len(x.get("versions", [])) for x in d.get("libraries", [])))
+print("library_names", sorted(x.get("library_name") for x in d.get("libraries", [])))
+PY
+
+- [ ] cat --update-detail 后库数量不减少。
+- [ ] cat --update-detail 后该库其他版本 HTML 仍存在。
+- [ ] scan 后其他库、其他版本 scan 和 HTML 不消失。
+- [ ] cmp 后 catalog.json 不变成只有一个库。
+- [ ] catalog_runtime.json 更新不覆盖 catalog.json 资产地图。
+- [ ] cat 不调用 library discover。
+- [ ] 删除旧 current_lib_diff.md 后，HTML 仍能从 JSON/model 生成。
+- [ ] 重复执行同一命令稳定，不持续新增重复库、版本、HTML 目录。
+- [ ] 旧 scan、新 scan、无 scan、缺 Base、单版本都能渲染。
+
+======================================================================
+13. 性能和复杂度
+======================================================================
+
+- [ ] --dry-run 没有意外 discover、catalog refresh 或 full hash。
+- [ ] phase_timings 至少包含：
+  resolve_catalog_version
+  scan_runner
+  render_scan_html
+  update_catalog_scan_status
+  render_impacted_catalog_html
+- [ ] scan_progress_latest.json 能说明当前阶段、完成数、失败数和慢文件。
+- [ ] 20 库/500 版本只扫描缺失或过期 evidence，不每次全量 scan。
+- [ ] 普通 cat 只重渲染已有 Catalog；全量 Catalog refresh 必须显式。
+- [ ] scan/cmp/intake 热路径只刷新受影响 Version Detail，导航页可延迟。
+- [ ] render 不对 RAW 做无界 rglob，不在详情页临时扫描 release note。
+- [ ] HTML 不内嵌大 JSON、完整 Parser 结果或数千行文件列表。
+- [ ] 长文件表使用代表行、固定高度、滚动和 TSV 入口。
+- [ ] 大库至少记录 walk、hash、parse、render 耗时和文件数。
+- [ ] 异常慢时保留 progress、phase_timings、展开命令，不靠盲目提高并发掩盖瓶颈。
+
+======================================================================
+14. UI 和信息质量
+======================================================================
+
+- [ ] 页面只有一个主状态，不同级显示“正常/需审查/阻塞”。
+- [ ] 顶部优先回答当前版本、Base、变化、证据等级、IP 使用影响。
+- [ ] 管理门禁、raw JSON、Parser 细节默认折叠或下沉。
+- [ ] 中文为主；LEF、Liberty、SPEF、GDS、PVT、FULL、FIX 等专业词保留。
+- [ ] 不重复展示 Base、scan_id、文件数量和 release 状态。
+- [ ] 每个数量有入口：view matrix -> files_by_view；unknown -> unknown_files；Parser -> parser_evidence。
+- [ ] 目录迁移只作为匹配背景，不将算法推断当事实 rename。
+- [ ] P0/P1/Review 数量和重点文件表行数有解释。
+- [ ] 单版本不展示空 diff 表；重点变化表默认折叠且限制行数。
+- [ ] 桌面浏览器下无横向溢出、重叠、截断、不可读长路径。
+- [ ] 所有 HTML、TSV、manifest、diff evidence 链接存在。
+
+======================================================================
+15. 完成前最终签字
+======================================================================
+
+- [ ] compileall PASS
+- [ ] unittest PASS
+- [ ] FULL 场景 PASS
+- [ ] FIX/HOTFIX 场景 PASS
+- [ ] 单版本场景 PASS
+- [ ] 多版本对比 PASS
+- [ ] 有效版组合 PASS
+- [ ] Release PASS
+- [ ] HTML 检查 PASS
+- [ ] 性能检查 PASS
+- [ ] 旧 scan 只有聚合 JSON 的兼容读取 PASS
+- [ ] 新 scan 只有逐文件 Parser 结果 PASS
+- [ ] scan/cmp 后 Version Detail 刷新 PASS
+- [ ] 错误 accept rollback PASS
+- [ ] force 缺 reason 被拒绝 PASS
+- [ ] 重复执行不减少库/版本 PASS
+- [ ] 文档、help、completion 一致 PASS
+- [ ] 未把 /tmp、__pycache__、真实 RAW、大工艺库加入提交
+
+最终记录：
+  代码版本/commit：
+  测试工作区：
+  测试库：
+  FULL 场景：
+  FIX/HOTFIX 场景：
+  单版本：
+  多版本：
+  有效版组合：
+  Release：
+  HTML：
+  性能：
+  剩余风险：
+
+验收结论：P0 全部 PASS，且无未解释的数据覆盖、事实源冲突、详情页陈旧或 release 覆盖风险，才允许合并/上传。

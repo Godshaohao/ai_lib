@@ -50,7 +50,8 @@ class WindowIntakeTest(unittest.TestCase):
                 catalog_html_out=root / "catalog" / "html",
             )
 
-            self.assertEqual(window["base_effective"]["target"], "raw:full1")
+            self.assertEqual(window["base_effective"]["target"], "")
+            self.assertEqual(window["review_kind"], "INITIAL_BASELINE")
             self.assertNotIn("full1", window["scan_versions"])
 
     def _write_catalog(self, root: Path, versions: list[dict[str, object]]) -> Path:
@@ -156,7 +157,7 @@ class WindowIntakeTest(unittest.TestCase):
         )
         return window, manifest, pointer, effective_dir / "review_approval.json"
 
-    def test_latest_full_fallback_becomes_review_base(self) -> None:
+    def test_uninitialized_library_builds_bootstrap_candidate_from_latest_full(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             catalog = self._write_catalog(
@@ -184,15 +185,64 @@ class WindowIntakeTest(unittest.TestCase):
                 catalog_html_out=root / "catalog" / "html",
             )
 
-            self.assertEqual(window["base_effective"]["target"], "raw:full2")
-            self.assertEqual(window["base_effective"]["source"], "latest_full_fallback")
+            self.assertEqual(window["state"], "PENDING")
+            self.assertEqual(window["review_kind"], "INITIAL_BASELINE")
+            self.assertEqual(window["base_effective"]["target"], "")
+            self.assertEqual(window["base_effective"]["source"], "uninitialized")
             self.assertEqual(window["base_effective"]["pointer_revision"], 0)
             self.assertEqual(window["candidate_effective"]["base_full"], "full2")
             self.assertEqual(window["candidate_effective"]["overlays"], ["fix2"])
-            self.assertEqual(window["candidate_effective"]["intermediate_items"], [])
+            self.assertEqual(window["candidate_effective"]["intermediate_items"], ["full1", "fix1"])
             self.assertEqual(window["scan_versions"], ["full2", "fix2"])
             self.assertEqual(window["compare"]["old"], "raw:full2")
             self.assertEqual(window["compare"]["new"], "effective:candidate_fix2")
+            self.assertEqual(window["compare"]["mode"], "bootstrap_identity")
+
+    def test_uninitialized_library_without_full_requires_confirmed_full_base(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(
+                root,
+                [
+                    {"version_id": "fix1", "version_key": "ip/ucie/fix1", "package_type": "PARTIAL_UPDATE"},
+                    {"version_id": "fix2", "version_key": "ip/ucie/fix2", "package_type": "HOTFIX"},
+                ],
+            )
+
+            from lib_guard.window.resolver import resolve_review_window
+
+            window = resolve_review_window(
+                catalog_path=catalog,
+                library="ucie",
+                workdir=root / "work",
+                catalog_html_out=root / "catalog" / "html",
+            )
+
+            self.assertEqual(window["state"], "NEEDS_FULL_BASE")
+            self.assertEqual(window["base_effective"]["source"], "uninitialized")
+            self.assertEqual(window["candidate_effective"], {})
+            self.assertEqual(window["commands"], [])
+
+    def test_duplicate_version_ids_are_rejected_before_window_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(
+                root,
+                [
+                    {"version_id": "full1", "version_key": "ip/ucie/full1", "package_type": "FULL_PACKAGE"},
+                    {"version_id": "full1", "version_key": "ip/ucie/full1-copy", "package_type": "FULL_PACKAGE"},
+                ],
+            )
+
+            from lib_guard.window.resolver import resolve_review_window
+
+            with self.assertRaisesRegex(ValueError, "duplicate version_id"):
+                resolve_review_window(
+                    catalog_path=catalog,
+                    library="ucie",
+                    workdir=root / "work",
+                    catalog_html_out=root / "catalog" / "html",
+                )
 
     def test_pending_window_compare_id_uses_real_old_target_not_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -406,13 +456,17 @@ class WindowIntakeTest(unittest.TestCase):
 
             self.assertEqual(code, 0)
             output = json.loads(stdout.getvalue())
-            self.assertEqual(output["base_review"]["状态"], "需确认")
-            self.assertEqual(output["base_review"]["当前Base"], "raw:full_new")
+            self.assertEqual(output["base_review"]["状态"], "需建立")
+            self.assertEqual(output["base_review"]["当前Base"], "未建立有效版")
             self.assertEqual(output["版本选择表"][-1]["版本名"], "adhoc_fix")
             self.assertEqual(output["版本选择表"][-1]["类型猜测"], "FIX")
             self.assertEqual(output["版本选择表"][-1]["Catalog类型"], "UNKNOWN_PACKAGE")
             self.assertTrue(any("lg mark ucie adhoc_fix --type FIX" in command for command in output["建议修正命令"]))
-            self.assertIn("lg library override ucie adhoc_fix", output["建议修正命令"][-1])
+            self.assertFalse(any("lg library override" in command for command in output["建议修正命令"]))
+            self.assertEqual(
+                output["relation_fix_commands"],
+                ["lg mark ucie adhoc_fix --type FIX --note 'confirmed fix package'"],
+            )
 
     def test_worklist_summarizes_ready_blocked_and_empty_libraries(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -436,16 +490,15 @@ class WindowIntakeTest(unittest.TestCase):
 
             self.assertEqual(code, 0)
             output = json.loads(stdout.getvalue())
-            self.assertEqual(output["summary"]["可执行"], 1)
+            self.assertEqual(output["summary"]["待建立有效版"], 2)
             self.assertEqual(output["summary"]["需确认包类型"], 1)
-            self.assertEqual(output["summary"]["无新版本"], 1)
             rows = {row["库"]: row for row in output["rows"]}
-            self.assertEqual(rows["ready"]["状态"], "可执行")
+            self.assertEqual(rows["ready"]["状态"], "待建立有效版")
             self.assertEqual(rows["ready"]["建议动作"], "lg next ready --apply")
             self.assertEqual(rows["blocked"]["状态"], "需确认包类型")
             self.assertEqual(rows["blocked"]["建议动作"], "lg next blocked --fix")
-            self.assertEqual(rows["empty"]["状态"], "无新版本")
-            self.assertEqual(rows["empty"]["建议动作"], "无需执行")
+            self.assertEqual(rows["empty"]["状态"], "待建立有效版")
+            self.assertEqual(rows["empty"]["建议动作"], "lg next empty --apply")
 
     def test_rollback_sets_current_effective_to_existing_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -613,7 +666,7 @@ class WindowIntakeTest(unittest.TestCase):
         self.assertIn("_attach_render_impact", inspect.getsource(cmd_intake))
         self.assertIn("_attach_render_impact", inspect.getsource(cmd_accept))
 
-    def test_intake_plan_only_prints_confirm_and_relation_fix_commands(self) -> None:
+    def test_intake_plan_only_omits_fix_commands_when_types_are_confirmed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             catalog = self._write_catalog(
@@ -647,9 +700,123 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertEqual(code, 0)
             output = json.loads(stdout.getvalue())
             self.assertEqual(output["confirm_command"], "lg next ucie --apply")
-            self.assertIn("lg mark ucie <VERSION> --type FULL", output["relation_fix_commands"])
-            self.assertIn("lg library override ucie <FIX_VERSION>", output["relation_fix_commands"][1])
+            self.assertEqual(output["relation_fix_commands"], [])
             self.assertIn("lg next ucie --accept", output["accept_command"])
+
+    def test_ready_candidate_points_to_accept_instead_of_reapplying(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "effective_manifest.json"
+            compare_dir = root / "compare"
+            compare_dir.mkdir()
+            manifest.write_text("{}", encoding="utf-8")
+            (compare_dir / "compare_manifest.json").write_text("{}", encoding="utf-8")
+            window = {
+                "state": "PENDING",
+                "candidate_effective": {
+                    "effective_id": "candidate_fix1",
+                    "manifest": str(manifest),
+                },
+                "compare": {"out_dir": str(compare_dir)},
+                "items": [],
+            }
+
+            from lib_guard.window.cli import _plan_followup_commands, _presentation_plan_status
+
+            followup = _plan_followup_commands("ucie", window)
+            state, action = _presentation_plan_status({"state": "EMPTY", "next_action": "none"}, window)
+
+            self.assertEqual(followup["confirm_command"], "lg next ucie --accept --by <USER> --note 'review passed'")
+            self.assertEqual(state, "READY_TO_ACCEPT")
+            self.assertEqual(action, "accept_candidate")
+            self.assertEqual(_presentation_plan_status({"state": "DONE", "next_action": "none"}, window), ("READY_TO_ACCEPT", "accept_candidate"))
+
+    def test_intake_plan_only_does_not_persist_window_or_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(
+                root,
+                [
+                    {"version_id": "full1", "version_key": "ip/ucie/full1", "package_type": "FULL_PACKAGE"},
+                    {"version_id": "fix1", "version_key": "ip/ucie/fix1", "package_type": "HOTFIX"},
+                ],
+            )
+            html = root / "catalog" / "html"
+            pending = html / "libraries" / "ip_ucie" / "window" / "pending_window.json"
+            plan = root / "work" / "state" / "ucie" / "current_plan.json"
+
+            from lib_guard.window.cli import cmd_intake
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = cmd_intake(
+                    argparse.Namespace(
+                        catalog=str(catalog),
+                        library="ucie",
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(html),
+                        since=None,
+                        window_file=None,
+                        rebuild=False,
+                        parse_jobs="",
+                        hash_policy="",
+                        parse_file_types="",
+                        parse_exclude_file_types="",
+                        plan_only=True,
+                    )
+                )
+
+            self.assertEqual(code, 0)
+            self.assertFalse(pending.exists())
+            self.assertFalse(plan.exists())
+
+    def test_intake_rebuild_does_not_reuse_done_plan_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(
+                root,
+                [
+                    {"version_id": "full1", "version_key": "ip/ucie/full1", "package_type": "FULL_PACKAGE"},
+                    {"version_id": "fix1", "version_key": "ip/ucie/fix1", "package_type": "HOTFIX"},
+                ],
+            )
+            from lib_guard.plan.engine import build_plan_from_window, plan_path_for, save_plan
+            from lib_guard.window.cli import cmd_intake
+            from lib_guard.window.resolver import resolve_review_window
+
+            workdir = root / "work"
+            html = root / "catalog" / "html"
+            window = resolve_review_window(catalog_path=catalog, library="ucie", workdir=workdir, catalog_html_out=html)
+            completed = build_plan_from_window(workdir=workdir, library="ucie", window=window)
+            for task in completed["tasks"]:
+                task["status"] = "DONE"
+            completed["state"] = "DONE"
+            completed["next_action"] = "none"
+            save_plan(plan_path_for(workdir, "ucie"), completed)
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = cmd_intake(
+                    argparse.Namespace(
+                        catalog=str(catalog),
+                        library="ucie",
+                        workdir=str(workdir),
+                        catalog_html_out=str(html),
+                        since=None,
+                        window_file=None,
+                        rebuild=True,
+                        parse_jobs="",
+                        hash_policy="",
+                        parse_file_types="",
+                        parse_exclude_file_types="",
+                        plan_only=True,
+                    )
+                )
+
+            self.assertEqual(code, 0)
+            output = json.loads(stdout.getvalue())
+            self.assertEqual(output["plan_state"], "PENDING")
+            self.assertEqual(output["next_action"], "run_scan")
 
     def test_intake_plan_only_text_keeps_base_and_next_action_visible(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -686,7 +853,7 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertEqual(code, 0)
             text = stdout.getvalue()
             self.assertIn("基线确认", text)
-            self.assertIn("当前Base：raw:full1", text)
+            self.assertIn("当前Base：未建立有效版", text)
             self.assertIn("版本选择表", text)
             self.assertIn("执行计划", text)
             self.assertIn("确认执行：lg next ucie --apply", text)
@@ -757,6 +924,66 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertIn("lg next ready --apply", text)
             self.assertIn("lg next blocked --fix", text)
             self.assertNotIn("lg intake ready", text)
+
+    def test_worklist_distinguishes_bootstrap_from_no_new_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(
+                root,
+                [{"version_id": "full1", "version_key": "ip/ucie/full1", "package_type": "FULL_PACKAGE"}],
+            )
+
+            from lib_guard.window.cli import cmd_worklist
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = cmd_worklist(
+                    argparse.Namespace(
+                        catalog=str(catalog),
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        format="text",
+                        ready=False,
+                        blocked=False,
+                    )
+                )
+
+            self.assertEqual(code, 0)
+            text = stdout.getvalue()
+            self.assertIn("待建立有效版", text)
+            self.assertIn("lg next Vendor_A.ucie --apply", text)
+
+    def test_worklist_bootstrap_summarizes_candidate_instead_of_all_history(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(
+                root,
+                [
+                    {"version_id": "full1", "version_key": "ip/ucie/full1", "package_type": "FULL_PACKAGE"},
+                    {"version_id": "fix1", "version_key": "ip/ucie/fix1", "package_type": "HOTFIX"},
+                    {"version_id": "full2", "version_key": "ip/ucie/full2", "package_type": "FULL_PACKAGE"},
+                    {"version_id": "fix2", "version_key": "ip/ucie/fix2", "package_type": "HOTFIX"},
+                ],
+            )
+
+            from lib_guard.window.cli import cmd_worklist
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = cmd_worklist(
+                    argparse.Namespace(
+                        catalog=str(catalog),
+                        workdir=str(root / "work"),
+                        catalog_html_out=str(root / "catalog" / "html"),
+                        format="json",
+                        ready=False,
+                        blocked=False,
+                    )
+                )
+
+            self.assertEqual(code, 0)
+            row = json.loads(stdout.getvalue())["rows"][0]
+            self.assertEqual(row["新版本"], "初始候选：full2 + 1 个增量（2 个历史版本不参与组合）")
 
     def test_intake_blocks_execution_when_package_type_is_unknown_and_writes_plan(self) -> None:
         with tempfile.TemporaryDirectory() as td:

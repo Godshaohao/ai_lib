@@ -45,7 +45,7 @@ compare/render，审查通过后 `--accept` 写入 current effective。底层 `i
 已完成 task 并从失败点继续；遇到未确认 `package_type` 会先阻断，要求 `lg mark` 或
 `lg library override` 显式确认后再执行。
 
-`source $PROJ/scripts/lg_complete.csh` 会提供 `lg` alias 和 csh/tcsh Tab 补全。
+`source $PROJ/scripts/lg_complete.csh` 会提供 `lg` alias；在 tcsh 中还会启用 Tab 补全，纯 csh 不支持该 shell 内建能力。
 库名/版本名用 `lg library list --plain`、`lg library list <LIBRARY> --versions --plain`
 获取，避免手猜 `_` 和 `.`。
 

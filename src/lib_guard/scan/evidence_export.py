@@ -33,6 +33,86 @@ def _write_tsv(path: Path, fieldnames: list[str], rows: list[Mapping[str, Any]])
             writer.writerow({name: "" if row.get(name) is None else row.get(name) for name in fieldnames})
 
 
+def _md_cell(value: Any) -> str:
+    return str("-" if value in (None, "") else value).replace("|", "\\|").replace("\n", " ")
+
+
+def build_scan_review_markdown(data: Mapping[str, Any]) -> str:
+    summary = data.get("scan_review") or {}
+    coverage = data.get("view_coverage") or []
+    unknown = data.get("unknown_files") or []
+    large = data.get("large_metadata_files") or []
+    parser = data.get("parser_evidence") or []
+    missing = summary.get("required_missing") or []
+    lines = [
+        "# 扫描审查摘要",
+        "",
+        "> 这是给人工 reviewer 的一页摘要。机器流程请读取同目录的 JSON 和 TSV，不要把本文件当作事实源。",
+        "",
+        "## 结论",
+        "",
+        f"- 库：`{_md_cell(summary.get('library'))}`",
+        f"- 版本：`{_md_cell(summary.get('version'))}`",
+        f"- 扫描状态：`{_md_cell(summary.get('status'))}`",
+        f"- 文件总数：`{_md_cell(summary.get('total_files'))}`",
+        f"- 已识别视图数：`{_md_cell(summary.get('view_count'))}`",
+        f"- 未识别文件：`{_md_cell(summary.get('unknown_files'))}`",
+        f"- 摘要级 / 元数据级文件：`{_md_cell(summary.get('large_metadata_files'))}`",
+        f"- Parser 失败任务：`{_md_cell(summary.get('parser_failed'))}`",
+        "",
+        "## 视图覆盖",
+        "",
+        "| 视图 | 文件数 | 证据等级 | 状态 | 审查含义 |",
+        "| --- | ---: | --- | --- | --- |",
+    ]
+    for row in coverage:
+        lines.append(
+            "| " + " | ".join(
+                [
+                    _md_cell(row.get("view_label") or row.get("view_type")),
+                    _md_cell(row.get("count")),
+                    _md_cell(row.get("evidence_level")),
+                    _md_cell(row.get("status")),
+                    _md_cell(row.get("meaning")),
+                ]
+            ) + " |"
+        )
+    lines.extend(["", "## 需要确认", ""])
+    if missing:
+        lines.append("- 必需视图缺失：" + ", ".join(f"`{_md_cell(item)}`" for item in missing))
+    if unknown:
+        lines.append(f"- 未识别文件共 {len(unknown)} 个，完整清单见 `unknown_files.tsv`。")
+        for row in unknown[:20]:
+            lines.append(f"  - `{_md_cell(row.get('path'))}`：{_md_cell(row.get('reason'))}")
+    if large:
+        lines.append(f"- 摘要级 / 元数据级文件共 {len(large)} 个，完整清单见 `large_metadata_files.tsv`。")
+    if parser:
+        failed = [row for row in parser if int(row.get("failed") or 0) > 0]
+        lines.append(f"- Parser 任务共 {len(parser)} 组；失败组 {len(failed)} 组，详情见 `parser_evidence.tsv`。")
+    if not (missing or unknown or large or parser):
+        lines.append("- 当前没有需要人工补充确认的扫描项。")
+    lines.extend(
+        [
+            "",
+            "## 文件证据入口",
+            "",
+            "- `view_coverage.tsv`：视图覆盖和证据等级。",
+            "- `files_by_view.tsv`：数量对应的具体文件路径。",
+            "- `unknown_files.tsv`：未识别文件及建议动作。",
+            "- `large_metadata_files.tsv`：大文件的审查策略。",
+            "- `parser_evidence.tsv`：Parser 聚合结果。",
+            "- `required_view_check.tsv`：必需视图检查。",
+            "",
+            "## 证据边界",
+            "",
+            "- `summary-only` / `metadata-only` 是证据等级，不自动表示文件不完整。",
+            "- 原始 Parser JSON、完整 inventory、hash、缓存和进度日志只服务机器流程或调试，不作为人工主审查入口。",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def evidence_level_for_file_type(file_type: Any) -> str:
     key = canonical_file_type(file_type)
     if key == "unknown":
@@ -219,6 +299,7 @@ def build_scan_review_evidence(bundle: Any, context: Any) -> dict[str, Any]:
         "parser_failed": sum(int(row["failed"] or 0) for row in parser_evidence),
         "required_missing": required_missing,
         "human_tables": {
+            "summary_markdown": "review/scan_review.md",
             "view_coverage": "review/view_coverage.tsv",
             "files_by_view": "review/files_by_view.tsv",
             "unknown_files": "review/unknown_files.tsv",
@@ -255,6 +336,7 @@ def write_scan_review_evidence(out_dir: str | Path, bundle: Any, context: Any) -
     review = out / "review"
     data = build_scan_review_evidence(bundle, context)
     _write_json(review / "scan_review.json", data["scan_review"])
+    (review / "scan_review.md").write_text(build_scan_review_markdown(data), encoding="utf-8")
     _write_tsv(
         review / "view_coverage.tsv",
         ["view_type", "view_label", "file_type", "count", "required", "evidence_level", "status", "meaning"],
@@ -283,6 +365,7 @@ def write_scan_review_evidence(out_dir: str | Path, bundle: Any, context: Any) -
     )
     return {
         "scan_review": str(review / "scan_review.json"),
+        "summary_markdown": str(review / "scan_review.md"),
         "view_coverage": str(review / "view_coverage.tsv"),
         "files_by_view": str(review / "files_by_view.tsv"),
         "unknown_files": str(review / "unknown_files.tsv"),

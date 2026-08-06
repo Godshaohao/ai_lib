@@ -37,7 +37,8 @@ TSV/HTML 表和默认页面展示口径见
 | `catalog/catalog_runtime.json` | scan/diff/release status updates | `load_catalog_view`, review/render, window, release manifest | 运行时状态 sidecar；sidecar 优先，旧嵌入字段回退 |
 | `scan_out/**/file_inventory.json` | scan | Version Detail, readiness, diff | 单版本文件事实 |
 | `scan_out/**/parser_manifest.json` | scan | parser executor, Version Detail | parser 任务事实 |
-| `scan_out/**/parser_results.json` | parser executor | summary, diff, Version Detail | 机器结果；默认不作为人工主界面 |
+| `scan_out/**/parser_results/<view>/*.json` | parser executor | summary, diff, Version Detail | 默认机器结果；按需读取，不作为人工主界面 |
+| `scan_out/**/parser_results.json` | parser executor（旧策略） | summary, diff, Version Detail | 兼容/调试结果；新 CLI 默认不生成 |
 | `scan_out/**/review/*.tsv` | scan evidence exporter | Scan HTML, Version Detail | 人工可读 scan 证据 |
 | `scan_out/**/summary/release_readiness.json` | summary/readiness | release checks, Version Detail, diff | 单版本 release/readiness 摘要 |
 | `diff/**/diff_summary.json` | compare | catalog, Version Detail, Comparison Review | 对比结论摘要 |

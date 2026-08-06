@@ -448,6 +448,8 @@ def run_catalog_workflow(args: Namespace) -> int:
         standalone=item.get("standalone"),
         base_required=item.get("base_required"),
         base_version=item.get("base_version") or (item.get("lineage", {}) or {}).get("base_candidate"),
+        # Catalog-driven scans use the same compact evidence policy as lg scan.
+        write_raw_parser_results=getattr(args, "write_raw_parser_results", False),
     )
     started = start_phase()
     scan_result = ScanRunner(cfg).run()
@@ -1021,7 +1023,32 @@ def run_catalog_release_batch(args: Namespace) -> int:
             alias=args.alias,
             release_id=release_id,
         )
+        from lib_guard.release.checker import check_effective_release
+
+        effective_check = check_effective_release(
+            effective_manifest,
+            manifest_path,
+            run_dir,
+            policy_path=getattr(args, "policy", None),
+        )
+        check_status = str(effective_check.get("release_check_status") or "UNKNOWN")
+        if check_status not in RELEASE_CHECK_PASS_STATUSES and not bool(getattr(args, "force", False)):
+            output = {
+                "status": "FAILED",
+                "phase": "release_check",
+                "release_id": release_id,
+                "selected": 1,
+                "manifest": str(manifest_path),
+                "manifest_source": "current_effective",
+                "effective_manifest": str(effective_manifest),
+                "release_check": str(run_dir / "release_check.json"),
+                "release_check_status": check_status,
+                "failures": list(effective_check.get("issues", []) or []),
+            }
+            print_json(output)
+            return 2
     else:
+        effective_check = None
         requested_versions = set(args.version or [])
         for item in _catalog_versions(args.catalog, args.library):
             if requested_versions and item.get("version_id") not in requested_versions and item.get("version_key") not in requested_versions:
@@ -1069,6 +1096,7 @@ def run_catalog_release_batch(args: Namespace) -> int:
         force=bool(getattr(args, "force", False)),
         force_reason=getattr(args, "force_reason", None),
         force_by=getattr(args, "force_by", None),
+        release_check_path=str(run_dir / "release_check.json") if effective_check is not None else None,
         verify_skipped=bool(getattr(args, "no_verify", False)),
         verify_skip_reason="no_verify requested" if getattr(args, "no_verify", False) else "",
         render=bool(args.apply) and not getattr(args, "no_render", False),
@@ -1084,7 +1112,17 @@ def run_catalog_release_batch(args: Namespace) -> int:
     release_html = ""
     if verify_result and verify_result.get("html"):
         release_html = str((verify_result.get("html") or {}).get("index_html") or "")
-    write_release_result(release_result_path, release_result_from_link(link_result, verify_result=verify_result, html=release_html))
+    release_result = release_result_from_link(link_result, verify_result=verify_result, html=release_html)
+    if effective_check is not None:
+        release_result.update(
+            {
+                "check_status": effective_check.get("release_check_status"),
+                "release_check": str(run_dir / "release_check.json"),
+                "effective_manifest": str(effective_manifest),
+                "effective_digest": effective_check.get("effective_digest") or "",
+            }
+        )
+    write_release_result(release_result_path, release_result)
     link_status = str(link_result.get("status") or "UNKNOWN")
     verify_status = str((verify_result or {}).get("status") or "")
     final_status = verify_status or link_status
@@ -1129,6 +1167,9 @@ def run_catalog_release_batch(args: Namespace) -> int:
         "verify_issues": verify_issues,
         "library_count": len(manifest.get("libraries", []) or []),
     }
+    if effective_check is not None:
+        output["release_check"] = str(run_dir / "release_check.json")
+        output["release_check_status"] = effective_check.get("release_check_status")
     if catalog_html:
         output["catalog_html"] = catalog_html
     print_json(output)
