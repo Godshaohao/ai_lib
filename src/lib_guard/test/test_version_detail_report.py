@@ -284,7 +284,7 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("本次变化", main_html)
             self.assertIn("lef/top.lef", main_html)
             self.assertIn("constraints/top.sdc", main_html)
-            self.assertIn("重点变化文件明细", main_html)
+            self.assertIn("重点变化文件", main_html)
             self.assertNotIn("Summary-only / Metadata-only 明细", main_html)
             self.assertIn("审计证据", audit_html)
             self.assertIn("摘要级 / 元数据级证据摘要", audit_html)
@@ -349,7 +349,7 @@ class VersionDetailReportTest(unittest.TestCase):
             audit_html = _audit_evidence_panel(model)
             html = main_html + audit_html
 
-            recommended_section = main_html.split("变化文件明细", 1)[1]
+            recommended_section = main_html.split("重点变化文件", 1)[1]
             summary_section = audit_html.split("摘要级证据按类型汇总", 1)[1].split("元数据级证据按类型汇总", 1)[0]
             metadata_section = audit_html.split("元数据级证据按类型汇总", 1)[1].split("发布说明", 1)[0]
 
@@ -616,7 +616,7 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("基准来源：当前有效版", model["confidence_note"])
             self.assertIn("对比口径：全量", model["confidence_note"])
             self.assertIn("视图变化矩阵", html)
-            self.assertIn("重点变化文件明细", html)
+            self.assertIn("重点变化文件", html)
             self.assertNotIn("变化风险", html)
             self.assertNotIn("P0/P1=2", html)
             self.assertNotIn("Run recommended File Diff", html)
@@ -761,6 +761,87 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertNotIn("缺少基准对比", html)
             self.assertNotIn("暂无视图变化", html)
 
+    def test_self_referential_full_base_enters_first_version_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scan_dir = root / "scan" / "initial_full"
+            scan_dir.mkdir(parents=True)
+            (scan_dir / "file_inventory.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {"path": "lef/top.lef", "file_type": "lef"},
+                            {"path": "rtl/top.v", "file_type": "verilog"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+            from lib_guard.review.model_rules import resolve_review_base
+
+            version = {
+                "version_id": "20260624_asap7",
+                "package_type": "FULL_PACKAGE",
+                "standalone": True,
+                "update_scope": ["rtl", "lef", "lib"],
+                "base_version": "20260624_asap7",
+                "base_full_version": "20260624_asap7",
+                "compare_default": "none",
+                "scan": {"status": "PASS", "scan_dir": str(scan_dir)},
+            }
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/asap7", "library_name": "asap7"},
+                version,
+            )
+
+            self.assertEqual(resolve_review_base(version)["base_ref"], "NEEDS_BASE_CONFIRM")
+            self.assertEqual(model["review_mode"], "first_version")
+            self.assertEqual(model["base_version"], "")
+            self.assertEqual(model["ip_user_view_model"]["decision"]["label"], "首版需审查")
+
+    def test_scan_evidence_uses_scan_summary_counts_when_inventory_has_no_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scan_dir = root / "scan" / "with_summary"
+            scan_dir.mkdir(parents=True)
+            (scan_dir / "file_inventory.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {"path": "rtl/top.v", "file_type": "verilog"},
+                            {"path": "misc/readme.raw", "file_type": "unknown"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (scan_dir / "scan_summary.json").write_text(
+                json.dumps({"file_type_counts": {"verilog": 1, "unknown": 1}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/summary_counts", "library_name": "summary_counts"},
+                {
+                    "version_id": "initial_full_20260807",
+                    "package_type": "FULL_PACKAGE",
+                    "scan": {"status": "PASS", "scan_dir": str(scan_dir)},
+                },
+            )
+
+            evidence = model["scan_evidence"]
+            self.assertEqual(evidence["file_total"], 2)
+            self.assertEqual(evidence["counts"], {"verilog": 1, "unknown": 1})
+            self.assertEqual(evidence["unknown_count"], 1)
+
     def test_view_matrix_exposes_expandable_file_trace_from_counts_to_evidence(self) -> None:
         from lib_guard.render.version_review_model import build_version_review_model
         from lib_guard.render.version_review_render import render_ip_user_view
@@ -881,6 +962,11 @@ class VersionDetailReportTest(unittest.TestCase):
 
             model = build_version_update_detail_model(root / "html", lib, version)
             self.assertEqual(model["usage_decision"], "BLOCKED")
+            ip_decision = model["ip_user_view_model"]["decision"]
+            self.assertEqual(ip_decision["status"], "USAGE_REVIEW_REQUIRED")
+            self.assertEqual(ip_decision["label"], "需审查后使用")
+            self.assertIn(f">{ip_decision['label']}<", html)
+            self.assertNotIn(">阻塞</span></div></header>", html)
             self.assertIn("review_gate_blocking", model["usage_decision_reasons"])
             self.assertEqual(model["ip_user_view_model"]["release_summary"]["status"], "INFO")
             self.assertNotIn("待 release owner 处理", html)

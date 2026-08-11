@@ -27,7 +27,7 @@ from lib_guard.render import catalog_render_common as common
 from lib_guard.render import catalog_report as catalog
 from lib_guard.render import product_theme as ui
 from lib_guard.render.version_detail_context import build_version_detail_review_context
-from lib_guard.render.version_file_evidence import render_version_file_evidence_page
+from lib_guard.render.version_file_evidence import render_version_file_evidence_section
 from lib_guard.render.version_review_model import build_version_review_model
 from lib_guard.render.version_review_render import render_ip_user_view
 from lib_guard.view_types import canonical_file_type, package_view_type
@@ -347,6 +347,20 @@ def _build_scan_evidence_model(version: Mapping[str, Any]) -> dict[str, Any]:
     parser_results = _scan_parser_results(scan_dir)
     release_readiness = read_json(scan_dir / "summary" / "release_readiness.json", default={}) if scan_dir else {}
     counts = _as_mapping(inventory.get("file_type_counts"))
+    if not counts and scan_dir:
+        scan_summary = read_json(scan_dir / "scan_summary.json", default={})
+        counts = _as_mapping(scan_summary.get("file_type_counts"))
+    if not counts and scan_dir:
+        manifest = read_json(scan_dir / "manifest.json", default={})
+        counts = _as_mapping(manifest.get("file_type_counts"))
+    if not counts:
+        inferred: Counter[str] = Counter()
+        files = inventory.get("files", []) or []
+        if isinstance(files, list):
+            for item in files:
+                if isinstance(item, Mapping):
+                    inferred[canonical_file_type(item.get("file_type"))] += 1
+        counts = dict(inferred)
     parser_task_count = sum(
         1
         for file_entry in (parser_manifest.get("files", []) or [])
@@ -429,6 +443,8 @@ def _scan_evidence_unknown_total(scan_evidence: Mapping[str, Any]) -> int:
 
 def _is_partial_update(version: Mapping[str, Any]) -> bool:
     pkg = common.package_type(version)
+    if pkg in {"FULL_PACKAGE", "FULL"}:
+        return False
     if pkg in {"PARTIAL_UPDATE", "PARTIAL", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"}:
         return True
     if common.truthy(version.get("base_required")):
@@ -1133,7 +1149,26 @@ def _focus_file_change_rows(model: Mapping[str, Any]) -> list[str]:
     ]
     if not focus:
         focus = [item for item in model.get("file_changes", []) or [] if isinstance(item, Mapping)]
-    return _file_change_rows_for(focus[:120])
+    rows: list[str] = []
+    for item in focus[:120]:
+        if not isinstance(item, Mapping):
+            continue
+        rows.append(
+            "<tr>"
+            f"<td>{ui.badge(str(item.get('change') or '').upper(), _cn_change_kind(item.get('change')))}</td>"
+            f"<td><b>{ui.esc(_view_label(str(item.get('file_type') or 'unknown')))}</b></td>"
+            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
+            f"<td>{ui.badge(item.get('review_lane') or 'Review', _cn_review_lane(item.get('review_lane') or 'Review'))}</td>"
+            f"<td><span class='match-status'>{ui.esc(_cn_match_status(item.get('match_status')))}</span>"
+            f"<small class='match-candidates'>"
+            f"{ui.esc('基准候选: ' + str(item.get('base_candidate'))) if item.get('base_candidate') else ''}"
+            f"{'；' if item.get('base_candidate') and item.get('target_candidate') else ''}"
+            f"{ui.esc('目标文件: ' + str(item.get('target_candidate'))) if item.get('target_candidate') else ''}"
+            f"</small></td>"
+            f"<td>{ui.esc(item.get('hint') or '按该视图变化确认使用影响。')}</td>"
+            "</tr>"
+        )
+    return rows
 
 
 def _lane_count(model: Mapping[str, Any], key: str) -> int:
@@ -1323,6 +1358,7 @@ def _version_detail_styles() -> str:
 .review-primary-column>.panel{margin-bottom:0}.review-primary-column>.panel .panel-body{padding:16px 18px}.review-primary-column .panel-head{padding:16px 18px}.review-primary-column .panel-head h2{font-size:17px}
 .view-delta-scroll{max-height:560px;overflow:auto;scrollbar-gutter:stable}.view-delta-table{min-width:980px;table-layout:fixed}.view-delta-table th{position:sticky;top:0;z-index:2;background:#eef3f7;border-bottom:2px solid #cbd5e1;color:#27364a}.view-delta-table th:nth-child(1){width:22%}.view-delta-table th:nth-child(2),.view-delta-table th:nth-child(3),.view-delta-table th:nth-child(4),.view-delta-table th:nth-child(5){width:8%;text-align:center}.view-delta-table th:nth-child(6){width:19%}.view-delta-table th:nth-child(7){width:27%}.view-delta-table tbody tr:hover{background:#f8fbfc}.view-delta-table td{padding:12px 10px}.view-delta-table td.numeric-cell{text-align:center;vertical-align:middle}.view-use{display:block;margin-top:3px;color:#667085;font-size:11px;font-weight:600}.evidence-level{display:inline-block;margin-bottom:4px;color:#475467;font-size:12px;line-height:1.35}.delta-number{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:28px;padding:0 7px;border-radius:7px;background:#f2f4f7;color:#98a2b3;font-weight:800;font-variant-numeric:tabular-nums}.delta-number.nonzero.current{background:#eef4ff;color:#1849a9}.delta-number.nonzero.added{background:#ecfdf3;color:#087443}.delta-number.nonzero.removed{background:#fff1f0;color:#b42318}.delta-number.nonzero.changed{background:#fff7e8;color:#a15c00}
 .focus-change-scroll{max-height:480px;overflow:auto;scrollbar-gutter:stable}.review-fold{margin-top:16px;border-top:1px solid #e4e8ef;padding-top:13px}.review-fold>summary{font-size:13px}.review-fold .quality-note{margin:10px 0}.pending-facts{margin-top:14px}.pending-facts>b{display:block;margin-bottom:7px;font-size:12px;color:#344054}.pending-fact-list{gap:6px}.pending-fact-list .context-row{padding:8px 10px}
+.decision-summary{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:0;border-bottom:1px solid #e4e8ef;background:#fbfdfc}.decision-summary>div{padding:15px 18px}.decision-summary>div+div{border-left:1px solid #e4e8ef}.decision-summary b{display:block;color:#667085;font-size:12px}.decision-summary p{margin:6px 0 0;color:#172033;line-height:1.5;font-size:13px}.lineage-strip{display:flex;align-items:center;gap:10px;padding:11px 18px;border-top:1px solid #e4e8ef;color:#667085;font-size:12px}.lineage-strip b{color:#172033;overflow-wrap:anywhere}.lineage-strip i{color:#14866e;font-style:normal;font-weight:900}.impact-scope{display:flex;align-items:flex-start;gap:14px;margin:0 0 14px;padding:11px 12px;border:1px solid #d9e7df;border-radius:8px;background:#f7fbf8}.impact-scope>b{flex:0 0 auto;color:#245d50;font-size:12px}.impact-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;width:100%}.impact-card{display:grid;gap:3px;padding:8px 10px;border-left:3px solid #43a782;background:#fff}.impact-card b{font-size:12px;color:#344054}.impact-card strong{font-size:16px;color:#142635}.impact-card span{font-size:11px;color:#667085;overflow-wrap:anywhere}.impact-scope-empty{align-items:center}.impact-scope-empty span{color:#667085;line-height:1.4}.review-sidebar-stack .quality-note{margin-top:10px}
 @media(max-width:1180px){.review-layout{grid-template-columns:1fr}.review-secondary-column{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.review-secondary-column>.panel{margin-bottom:0}.review-summary-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-cell:nth-child(2n){border-right:0}.overview-cell{border-bottom:1px solid #e4e8ef}}
 @media(max-width:760px){.review-secondary-column{display:block}.review-secondary-column>.panel{margin-bottom:14px}.review-summary-strip{grid-template-columns:1fr}.overview-cell{border-right:0}.overview-cell:last-child{border-bottom:0}}
 :root{--review-ink:#142635;--review-ink-soft:#284254;--review-canvas:#eef3f1;--review-paper:#fff;--review-line:#d6e1dd;--review-muted:#60727b;--review-teal:#14866e;--review-teal-soft:#e8f6f0;--review-amber:#b76612;--review-amber-soft:#fff4e3;--review-red:#b54537;--review-red-soft:#fff0ed}
@@ -1462,23 +1498,22 @@ def _version_overview_panel(model: Mapping[str, Any]) -> str:
     inventory_scope = _as_mapping(ip_model.get("inventory_scope"))
     visible_counts = _as_mapping(comparison.get("visible_counts"))
     decision_reason = str(decision_model.get("reason") or "缺少 IP 审查投影。")
-    change_summary = _as_mapping(ip_model.get("change_summary"))
-    change_status = str(change_summary.get("status") or "UNKNOWN")
-    change_label = str(change_summary.get("label") or "待确认")
-    usage_impact = _as_mapping(ip_model.get("usage_impact"))
     scope_text = "增量" if str(comparison.get("scope") or "") == "incremental" else "全量"
     baseline_only_count = _as_int(comparison.get("baseline_only_count"))
     lane_counts = _as_mapping(model.get("lane_counts"))
     focus_count = _as_int(lane_counts.get("recommended_file_diff"))
-    lightweight_count = _as_int(lane_counts.get("summary_only")) + _as_int(lane_counts.get("metadata_only"))
     base_source_label = str(comparison.get("base_source_label") or "")
+    pending = [
+        item
+        for item in ip_model.get("pending_fact_items", []) or []
+        if isinstance(item, Mapping) and str(item.get("kind") or "").upper() != "VIEW_DELTA"
+    ]
     delivery_hint = (
         f"新增 {visible_counts.get('added') or 0} / 删除 {visible_counts.get('removed') or 0} / 修改 {visible_counts.get('changed') or 0}"
     )
     if baseline_only_count:
         delivery_hint += f"；另有 {baseline_only_count} 个基准文件未随本包交付"
     overview_items = [
-        ("主因", decision_reason, "主状态见页面右上角"),
         (
             "对比基准 / 范围",
             comparison.get("base_label") or "-",
@@ -1486,18 +1521,23 @@ def _version_overview_panel(model: Mapping[str, Any]) -> str:
         ),
         (
             "交付变化",
-            str(inventory_scope.get("delivery_file_count") or 0),
+            f"+{visible_counts.get('added') or 0} / -{visible_counts.get('removed') or 0} / ~{visible_counts.get('changed') or 0}",
             delivery_hint,
         ),
         (
-            "重点变化",
+            "重点文件",
             str(focus_count),
             "推荐优先查看，非自动阻塞" if focus_count else "没有重点文件待下钻",
         ),
         (
-            "证据层级",
-            str(lightweight_count),
-            "摘要级 / 元数据级；不自动代表不完整" if lightweight_count else "以内容级证据为主",
+            "交付文件",
+            str(inventory_scope.get("delivery_file_count") or 0),
+            "当前扫描交付文件总数",
+        ),
+        (
+            "待确认事实",
+            str(len(pending)),
+            "仅列未解决条件，不重复视图变化" if pending else "当前没有额外待确认事实",
         ),
     ]
     overview_cells = "".join(
@@ -1508,23 +1548,20 @@ def _version_overview_panel(model: Mapping[str, Any]) -> str:
         )
         for label, value, hint in overview_items
     )
-    context_parts = [str(usage_impact.get("summary") or "暂无场景影响摘要。")]
-    path_restructure = _as_mapping(model.get("path_restructure"))
-    if path_restructure.get("suspected"):
-        context_parts.append(
-            "包装目录发生变化；系统已按逻辑路径解释新增/删除统计，不默认代表 IP 使用风险。"
-        )
-    unknown_total = _scan_evidence_unknown_total(_as_mapping(model.get("scan_evidence")))
-    if unknown_total:
-        context_parts.append(
-            f"待分类文件 {unknown_total} 个，详见文件证据清单。"
-        )
+    context_parts = ["轻量证据只描述检查深度，不自动代表不完整。"]
+    if baseline_only_count:
+        context_parts.append(f"基准中另有 {baseline_only_count} 个文件未随本包交付，未计为删除。")
     return (
         "<section class='version-overview'>"
         "<div class='overview-head'>"
-        f"<div class='overview-title'><h2>使用判断</h2>{ui.badge(change_status, change_label)}</div></div>"
+        "<div class='overview-title'><h2>判断摘要</h2></div></div>"
+        "<div class='decision-summary'>"
+        f"<div><b>为什么</b><p>{ui.esc(decision_reason)}</p></div>"
+        f"<div><b>需要关注</b><p>{ui.esc('；'.join(str(item.get('summary') or item.get('label') or '-') for item in pending[:3]) if pending else '当前没有额外待确认事实；请按影响范围和变化矩阵阅读。')}</p></div>"
+        "</div>"
         f"<div class='overview-grid review-summary-strip'>{overview_cells}</div>"
-        f"<div class='overview-context-note'><b>事实摘要</b>{ui.esc(' '.join(context_parts))}"
+        f"<div class='lineage-strip'><span>版本关系</span><b>{ui.esc('首版交付' if str(model.get('review_mode') or '') == 'first_version' else comparison.get('base_label') or '待确认基准')}</b><i>→</i><b>{ui.esc(model.get('version_id') or '-')}</b></div>"
+        f"<div class='overview-context-note'><b>判断口径</b>{ui.esc(' '.join(context_parts) or '按已有扫描和对比事实判断。')}"
         f"</div></section>"
     )
 
@@ -1928,12 +1965,67 @@ def _audit_evidence_panel(model: Mapping[str, Any]) -> str:
     )
 
 
-def _review_evidence_sidebar(model: Mapping[str, Any], version: Mapping[str, Any], *, evidence_href: str = "") -> str:
+def _delivery_completeness_panel(ip_model: Mapping[str, Any]) -> str:
+    completeness = _as_mapping(ip_model.get("delivery_completeness"))
+    status = str(completeness.get("status") or "UNKNOWN").upper()
+    if status == "UNKNOWN":
+        return ""
+    required_total = _as_int(completeness.get("required_total"))
+    required_present = _as_int(completeness.get("required_present"))
+    missing = [str(item) for item in completeness.get("missing", []) or []]
+    missing_text = "、".join(missing[:4]) if missing else "无"
+    if len(missing) > 4:
+        missing_text += f" 等 {len(missing)} 项"
+    summary = (
+        f"必需视图 {required_present} / {required_total}；缺失：{missing_text}"
+        if required_total
+        else "当前没有配置必需视图口径，不能从此项推断交付完整度。"
+    )
+    body = (
+        ui.metric_grid(
+            [
+                ("必需视图", f"{required_present} / {required_total}" if required_total else "未配置", "按现有 readiness 规则", status),
+                ("可选视图", str(_as_int(completeness.get("optional_present"))), "当前交付中已发现", "INFO"),
+            ]
+        )
+        + f"<div class='quality-note'>{ui.esc(summary)}</div>"
+    )
+    return ui.panel("交付完整度", "只按已有必需视图配置汇总，不替代 IP 使用判断。", body)
+
+
+def _version_lineage_provenance_panel(ip_model: Mapping[str, Any]) -> str:
+    lineage = _as_mapping(ip_model.get("lineage"))
+    provenance = _as_mapping(ip_model.get("provenance"))
+    if not lineage and not provenance:
+        return ""
+    base = _as_mapping(provenance.get("base"))
+    scan = _as_mapping(provenance.get("scan"))
+    target = _as_mapping(provenance.get("target"))
+    target_source = str(target.get("source") or "")
+    source_label = Path(target_source).name if target_source else "未记录"
+    rows = [
+        f"<tr><td>基准版</td><td><code>{ui.esc(lineage.get('base_label') or base.get('version') or '首版交付')}</code></td></tr>",
+        f"<tr><td>当前版本</td><td><code>{ui.esc(lineage.get('target_version') or target.get('version') or '-')}</code></td></tr>",
+        f"<tr><td>基准来源</td><td>{ui.esc(base.get('source_label') or '未记录')}</td></tr>",
+        f"<tr><td>扫描输入</td><td><code>{ui.esc(source_label)}</code>；{ui.esc('已记录' if scan.get('scan_id') else '未扫描')}</td></tr>",
+    ]
+    return ui.collapsible_panel(
+        "版本关系与来源",
+        "只展示当前页面使用的基准、目标版本和扫描来源；完整路径保留在证据入口。",
+        ui.table(["字段", "值"], rows, "暂无版本来源信息"),
+        open=False,
+    )
+
+
+def _review_evidence_sidebar(model: Mapping[str, Any], version: Mapping[str, Any], *, evidence_href: str = "#file-structure") -> str:
     """Render compact secondary evidence without importing scan debug payloads."""
     scan_evidence = _as_mapping(model.get("scan_evidence"))
     scan_context = _as_mapping(model.get("scan_context"))
     comparison_context = _as_mapping(model.get("comparison_context"))
-    raw_scan_status = str(scan_context.get("scan_status") or "NOT_SCANNED").upper()
+    raw_scan_status = str(scan_context.get("scan_status") or "").upper()
+    scan_has_files = _scan_evidence_has_files(scan_evidence)
+    if not raw_scan_status:
+        raw_scan_status = "SCANNED" if scan_has_files else "SCAN_EMPTY" if scan_context.get("scan_id") else "NOT_SCANNED"
     scan_status_label = {
         "SCAN_EMPTY": "扫描为空",
         "SCAN_PASS": "扫描通过",
@@ -1953,7 +2045,20 @@ def _review_evidence_sidebar(model: Mapping[str, Any], version: Mapping[str, Any
     }.get(raw_diff_status, ui.status_label(raw_diff_status))
     diff_badge_status = "PASS" if raw_diff_status == "SAME" else "WARNING" if raw_diff_status not in {"PASS", "READY", "OK"} else "PASS"
     diff_badge = ui.badge(diff_badge_status, diff_status_label)
-    scan_hint = "有扫描记录" if scan_context.get("scan_id") else "未找到扫描证据"
+    scan_has_no_files = bool(scan_context.get("scan_id")) and not scan_has_files
+    scan_hint = {
+        "SCAN_EMPTY": "没有形成可用扫描事实",
+        "EMPTY": "没有形成可用扫描事实",
+        "NOT_SCANNED": "未找到扫描证据",
+        "FAILED": "扫描失败；请查看扫描错误",
+    }.get(
+        raw_scan_status,
+        "没有形成可用扫描事实"
+        if scan_has_no_files
+        else "扫描事实已记录"
+        if scan_context.get("scan_id")
+        else "未找到扫描证据",
+    )
     context_body = ui.metric_grid(
         [
             ("扫描", scan_status_label, scan_hint, "WARNING" if raw_scan_status in {"SCAN_EMPTY", "NOT_SCANNED", "FAILED"} else "PASS"),
@@ -1966,14 +2071,16 @@ def _review_evidence_sidebar(model: Mapping[str, Any], version: Mapping[str, Any
         f"<tr><td>扫描事实</td><td>{scan_badge}</td><td>扫描页面和扫描摘要</td></tr>",
         f"<tr><td>版本对比</td><td>{diff_badge}</td><td>主变化表</td></tr>",
         f"<tr><td>重点文件</td><td>{ui.esc(_as_int(model.get('lane_counts', {}).get('recommended_file_diff')))}</td><td>重点变化文件表</td></tr>",
-        f"<tr><td>文件证据</td><td>{ui.esc(_scan_evidence_file_total(scan_evidence))}</td><td>{ui.button('打开完整清单', evidence_href, 'secondary', disabled=not evidence_href)}</td></tr>",
+        f"<tr><td>文件结构</td><td>{ui.esc(_scan_evidence_file_total(scan_evidence))}</td><td>{ui.button('查看文件树', evidence_href, 'secondary', disabled=not evidence_href)}</td></tr>",
     ]
     evidence_body = ui.table(["证据类别", "状态", "入口"], evidence_rows, "暂无证据摘要")
     return (
         "<div class='review-sidebar-stack'>"
         + ui.panel("审查上下文", "固定当前版本、扫描和对比证据入口。", context_body)
+        + _delivery_completeness_panel(_as_mapping(model.get("ip_user_view_model")))
+        + _version_lineage_provenance_panel(_as_mapping(model.get("ip_user_view_model")))
         + _review_gate_summary_panel(version, model)
-        + ui.collapsible_panel("证据入口 / 调试", "只显示证据类别和去向；详细 JSON、解析器和大文件明细留在独立证据页。", evidence_body, open=False)
+        + ui.collapsible_panel("证据入口 / 调试", "扫描、对比和文件结构都在本页；原始 JSON 和解析器明细仍保留为证据来源。", evidence_body, open=False)
         + "</div>"
     )
 
@@ -1989,10 +2096,10 @@ def render_version_update_detail_panel(model: Mapping[str, Any], *, href_base: P
     if focus_rows:
         focus_changes = (
             "<details class='detail-fold review-fold'>"
-            "<summary>重点变化文件明细（按需展开）</summary>"
-            "<div class='quality-note'>仅列出 P0/P1/Review 文件，最多 120 行；完整清单见证据入口。</div>"
+            "<summary>重点变化文件</summary>"
+            "<div class='quality-note'>仅列出 P0/P1/审查文件，最多 120 行；用于快速定位变化，不替代文件结构。</div>"
             + catalog._scroll_table(
-                ["变化", "类型", "路径", "审查级别", "匹配状态", "基准候选", "目标文件", "建议"],
+                ["变化", "类型 / 视图", "路径 / 文件", "审查级别", "匹配状态", "建议 / 说明"],
                 focus_rows,
                 "暂无重点变化文件。",
                 "focus-change-scroll",
@@ -2002,13 +2109,16 @@ def render_version_update_detail_panel(model: Mapping[str, Any], *, href_base: P
     if first_version:
         panel_title = "视图覆盖矩阵"
         panel_subtitle = "当前无可比基准版，展示本次交付包自身的视图覆盖和文件证据。"
+    elif str(model.get("status") or "").upper() in {"DIFF_NOT_RUN", "NO_DIFF_SUMMARY", "NEEDS_BASE_CONFIRM"}:
+        panel_title = "视图变化矩阵"
+        panel_subtitle = "对比证据尚未完成；空表不代表没有变化，请先补齐可信对比。"
     else:
         panel_title = "视图变化矩阵"
         panel_subtitle = f"相对 {_cn_base_ref(base_ref)} / {base_version}；仅显示有变化或待分类的视图。"
     return ui.panel(
         panel_title,
         panel_subtitle,
-        render_ip_user_view(ip_model, href_base=href_base) + focus_changes,
+        render_ip_user_view(ip_model, href_base=href_base, show_pending=False) + focus_changes,
     )
 
 def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Path) -> str:
@@ -2126,11 +2236,10 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
     safe_lib = _library_report_slug(lib)
     safe_ver = common.safe(version_id)
     page = out_path / "libraries" / safe_lib / "versions" / safe_ver / "index.html"
-    tags = catalog._version_tags(version)
     model = build_version_update_detail_model(out_path, lib, version)
-    evidence_page = page.parent / "file-evidence.html"
-    render_version_file_evidence_page(evidence_page, lib, version, model)
-    model["file_evidence_page"] = str(evidence_page)
+    stale_evidence_page = page.parent / "file-evidence.html"
+    if stale_evidence_page.is_file():
+        stale_evidence_page.unlink()
     md_path = page.parent / "current_lib_diff.md"
     model["markdown_export_path"] = str(md_path)
     if export_markdown:
@@ -2141,20 +2250,24 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
         + "<main class='version-main review-layout'>"
         + "<section class='review-primary-column'>"
         + render_version_update_detail_panel(model, href_base=page.parent)
+        + render_version_file_evidence_section(model)
         + "</section>"
         + "<aside class='review-secondary-column'>"
-        + _review_evidence_sidebar(model, version, evidence_href=common.rel_href(page.parent, evidence_page))
+        + _review_evidence_sidebar(model, version)
         + "</aside>"
         + "</main>"
     )
     ip_model = _as_mapping(model.get("ip_user_view_model"))
-    usage_decision = str(_as_mapping(ip_model.get("decision")).get("status") or "BLOCKED")
+    decision_model = _as_mapping(ip_model.get("decision"))
+    usage_decision = str(decision_model.get("status") or "BLOCKED")
+    usage_decision_label = str(decision_model.get("label") or "暂不可判断")
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / {version_id}",
         "版本审查",
         "版本、基准与视图变化。",
         catalog_browser_styles() + body,
         decision=usage_decision,
+        decision_label=usage_decision_label,
         nav="<a href='../../../index.html'>目录</a><a class='active' href='#'>版本详情</a><a href='../index.html'>库工作台</a>",
         meta=ui.compact_meta([("库", lib_id), ("版本", version_id), ("基准版", model.get("base_version") or "-")]),
     )

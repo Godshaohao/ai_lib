@@ -11,6 +11,7 @@ Status: current
 | 禁止做法 | 只看静态 diff 就声称完成；只测 UI 不测数据模型；只测单命令不测 scan/cmp/render 联动 |
 
 完整的代码修改、真实库演练、数据不覆盖、Version Detail、有效版本和 Release 验收清单见仓库根目录 [check.list](../check.list)。
+Version Detail 的单页数据、信息层级和 HTML 静态检查见 [version_detail_checklist.md](version_detail_checklist.md)；本轮结果记录见 [version_detail_evaluation.md](version_detail_evaluation.md)。
 
 ## 基础回归
 
@@ -87,6 +88,8 @@ PYTHONPATH=src python3 -m unittest \
 - intake / accept-window 按 review window 内版本集合刷新，复杂度为 O(W)。
 - 全 catalog render 只作为显式 catalog 页面刷新或低频重建动作。
 
+本节只验证投影链路。详情页上线前还必须执行 [Version Detail 专项验收清单](version_detail_checklist.md)，避免把“代码回归通过”误认为“页面信息和浏览器交互全部通过”。
+
 ## 手工 Smoke 流程
 
 在内网真实库上每轮发布前至少选一个小库和一个复杂库执行：
@@ -108,6 +111,20 @@ lg cat <LIBRARY> <VERSION>
 | Scan HTML | View 覆盖、文件证据表、unknown、大文件证据等级 |
 | Version Detail | 接入判断、审查对象、对比上下文、View 变化、证据状态 |
 | `render_summary` | `open_first` 是否指向刚刷新详情页 |
+
+浏览器交互验收不使用手工打开页面代替自动化结果。生成详情页后，按
+[Version Detail 专项验收清单](version_detail_checklist.md) 执行：
+
+```bash
+node scripts/validate_version_detail_browser.cjs \
+  <FIRST_VERSION>/index.html \
+  <UPDATED_VERSION>/index.html \
+  --out work/browser_validation
+```
+
+结果必须同时满足：`browser_validation.json` 的 `status` 为 `true`，每个页面的
+`assertions.allPassed` 为 `true`，并留存对应 PNG 截图。脚本会先展开重点变化面板再
+操作表格搜索，避免把折叠状态误判成页面交互失败。
 
 遇到慢 scan 时先跑：
 

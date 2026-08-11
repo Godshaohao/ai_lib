@@ -227,6 +227,12 @@ PY
 8. Scan HTML 和 Version Detail
 ======================================================================
 
+Version Detail 单页的独立 P0/P1/P2 清单见：
+  docs/version_detail_checklist.md
+
+本轮页面评估记录见：
+  docs/version_detail_evaluation.md
+
 - [ ] Scan HTML 的唯一完整入口是 index.html。
 - [ ] scan_report.html 仅兼容跳转，不是第二份完整页面。
 - [ ] 首屏只展示扫描结论、视图覆盖、异常和文件证据入口。

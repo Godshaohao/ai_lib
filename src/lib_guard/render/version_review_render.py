@@ -7,6 +7,11 @@ from lib_guard.render import catalog_render_common as common
 from lib_guard.render import product_theme as ui
 
 
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    """Treat optional model sections as mappings without leaking None into HTML."""
+    return value if isinstance(value, Mapping) else {}
+
+
 def _fact_table(facts: list[Mapping[str, Any]]) -> str:
     rows = []
     for fact in facts:
@@ -186,7 +191,49 @@ def _baseline_only_note(ip_model: Mapping[str, Any]) -> str:
     return f"<div class='scope-note'>基准中另有 {count} 个文件未随本包交付，未计为删除。</div>"
 
 
-def render_ip_user_view(ip_model: Mapping[str, Any], *, href_base: Path | None = None) -> str:
+def _impact_scope_html(ip_model: Mapping[str, Any]) -> str:
+    """Show observed usage-area deltas without inferring severity."""
+    changed = [
+        item
+        for item in ip_model.get("view_rows", []) or []
+        if isinstance(item, Mapping) and int(item.get("delta_total") or 0) > 0
+    ]
+    usage_impact = ip_model.get("usage_impact") if isinstance(ip_model.get("usage_impact"), Mapping) else {}
+    if not changed:
+        summary = str(usage_impact.get("summary") or "未识别到视图变化；当前页面不推断额外使用风险。")
+        return (
+            "<div class='impact-scope impact-scope-empty'>"
+            "<b>影响范围</b>"
+            f"<span>{ui.esc(summary)}</span>"
+            "</div>"
+        )
+
+    groups: dict[str, dict[str, Any]] = {}
+    for item in changed:
+        area = str(item.get("usage_area") or "其他 / 证据")
+        group = groups.setdefault(area, {"count": 0, "views": []})
+        group["count"] += int(item.get("delta_total") or 0)
+        view = str(item.get("view") or item.get("view_type") or "-")
+        if view not in group["views"]:
+            group["views"].append(view)
+    cards = []
+    for area, group in groups.items():
+        cards.append(
+            "<div class='impact-card'>"
+            f"<b>{ui.esc(area)}</b>"
+            f"<strong>{ui.esc(group['count'])} 个变化</strong>"
+            f"<span>{ui.esc('、'.join(group['views'][:4]))}</span>"
+            "</div>"
+        )
+    return "<div class='impact-scope'><b>影响范围</b><div class='impact-grid'>" + "".join(cards) + "</div></div>"
+
+
+def render_ip_user_view(
+    ip_model: Mapping[str, Any],
+    *,
+    href_base: Path | None = None,
+    show_pending: bool = True,
+) -> str:
     if not ip_model:
         return "<div class='muted-box'>暂无 IP 使用者视图模型。</div>"
     # View deltas already have a dedicated row above. Keep this list for facts
@@ -197,7 +244,7 @@ def render_ip_user_view(ip_model: Mapping[str, Any], *, href_base: Path | None =
         if isinstance(item, Mapping) and str(item.get("kind") or "").upper() != "VIEW_DELTA"
     ]
     pending_html = ""
-    if pending:
+    if pending and show_pending:
         pending_html = "<div class='pending-facts'><b>需确认</b>" + _pending_fact_list({"pending_fact_items": pending}) + "</div>"
     delta_toolbar = (
         "<div class='view-delta-toolbar'>"
@@ -209,13 +256,21 @@ def render_ip_user_view(ip_model: Mapping[str, Any], *, href_base: Path | None =
         "<span><i class='legend-dot changed'></i>修改</span>"
         "</div></div>"
     )
+    decision = _as_mapping(ip_model.get("decision"))
+    change_summary = _as_mapping(ip_model.get("change_summary"))
+    blocked_without_diff = (
+        str(decision.get("status") or "").upper() == "BLOCKED"
+        and str(change_summary.get("status") or "").upper() in {"UNKNOWN", "DIFF_NOT_RUN", "NO_DIFF_SUMMARY"}
+    )
+    empty_copy = "对比证据尚未完成，不能据此判断无变化。" if blocked_without_diff else "没有需要关注的视图变化。"
     return (
         "<div class='ip-user-view'>"
         + delta_toolbar
+        + _impact_scope_html(ip_model)
         + _simple_table(
             ["视图 / 用途", "当前文件", "新增", "删除", "修改", "证据 / 状态", "代表文件"],
             _view_delta_rows(ip_model, href_base),
-            "没有需要关注的视图变化。",
+            empty_copy,
             table_class="view-delta-table",
             wrap_class="table-wrap view-delta-scroll",
         )

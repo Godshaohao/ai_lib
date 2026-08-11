@@ -68,6 +68,14 @@ def resolve_review_base(version: Mapping[str, Any], library: Mapping[str, Any] |
     diff_base = diff.get("base_version")
     diff_base_source = str(diff.get("base_source") or diff.get("base_version_source") or "").lower()
     diff_kind = str(diff.get("kind") or diff.get("diff_kind") or "").lower()
+    full_base = _base_full_version(version)
+    if (
+        full_base
+        and version_id
+        and str(full_base) == version_id
+        and (not diff_base or str(diff_base) == version_id)
+    ):
+        return {"base_ref": "NEEDS_BASE_CONFIRM", "base_version": "", "base_source": "self_referential_base"}
     if diff_base and diff_base_source in {"full_baseline", "previous_full"}:
         return {"base_ref": "base_full", "base_version": str(diff_base), "base_source": f"diff.base_version:{diff_base_source}"}
     if diff_base and (diff_base_source in {"explicit", "current_effective", "previous_effective"} or diff_kind == "current_library_diff"):
@@ -78,8 +86,6 @@ def resolve_review_base(version: Mapping[str, Any], library: Mapping[str, Any] |
         else:
             base_ref = "explicit"
         return {"base_ref": base_ref, "base_version": str(diff_base), "base_source": f"diff.base_version:{diff_base_source or diff_kind}"}
-    full_base = _base_full_version(version)
-    diff_base = diff.get("base_version")
     if full_base and (not version_id or str(full_base) != version_id or not diff_base):
         return {"base_ref": "base_full", "base_version": str(full_base), "base_source": "base_full_version"}
     if diff_base:

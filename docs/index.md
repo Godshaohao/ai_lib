@@ -23,6 +23,8 @@ CLI 参考负责命令契约，配置参考负责可修改项，数据契约负�
 - [配置参考](config_reference.md)
 - [数据契约](data_contract.md)
 - [Scan 证据分层与人工审查口径](scan_evidence_review.md)
+- [Version Detail 专项验收清单](version_detail_checklist.md)
+- [Version Detail 本轮评估](version_detail_evaluation.md)
 - [架构说明](architecture.md)
 - [架构与主流程总览图](lib_guard_architecture_flow.svg)
 - [测试计划](test_plan.md)

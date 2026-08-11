@@ -393,6 +393,7 @@ def review_page_shell(
     body: str,
     *,
     decision: Any = "INFO",
+    decision_label: str | None = None,
     nav: str = "",
     rail: str = "",
     meta: str = "",
@@ -417,7 +418,7 @@ def review_page_shell(
         <p>{esc(subtitle)}</p>
         {meta_html}
       </div>
-      <div class='hero-status'>{badge(decision)}</div>
+      <div class='hero-status'>{badge(decision, decision_label)}</div>
     </header>
     <section class='workspace'>
       {rail_html}

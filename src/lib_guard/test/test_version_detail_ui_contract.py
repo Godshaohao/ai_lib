@@ -274,6 +274,122 @@ class VersionDetailUiContractTest(unittest.TestCase):
         self.assertEqual(model["decision"]["status"], "READY")
         self.assertIn("证据等级", model["non_blocker_note"])
 
+    def test_ip_view_projects_delivery_completeness_without_inventing_missing_views(self) -> None:
+        from lib_guard.render.version_review_model import build_ip_user_view_model
+
+        model = build_ip_user_view_model(
+            {
+                "status": "CHANGED",
+                "base_ref": "previous_effective",
+                "base_version": "v1_full",
+                "base_trust_status": "PASS",
+                "file_changes": [],
+                "scan_evidence": {
+                    "release_readiness": {
+                        "bundle_status": "PASS",
+                        "release_level_candidate": "L1",
+                        "components": [
+                            {
+                                "required_views": ["verilog", "lef"],
+                                "required_view_results": {
+                                    "verilog": {"found": True, "status": "PASS"},
+                                    "lef": {"found": False, "status": "MISSING"},
+                                },
+                                "optional_views": ["sdc"],
+                                "optional_view_results": {"sdc": {"found": True, "status": "PASS"}},
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+
+        completeness = model["delivery_completeness"]
+        self.assertEqual(completeness["status"], "MISSING")
+        self.assertEqual(completeness["required_total"], 2)
+        self.assertEqual(completeness["required_present"], 1)
+        self.assertEqual(completeness["optional_present"], 1)
+        self.assertTrue(any("LEF" in item for item in completeness["missing"]))
+
+    def test_missing_required_view_blocks_ip_user_decision(self) -> None:
+        from lib_guard.render.version_review_model import build_ip_user_view_model
+
+        model = build_ip_user_view_model(
+            {
+                "status": "CHANGED",
+                "base_ref": "previous_effective",
+                "base_version": "v1_full",
+                "base_trust_status": "PASS",
+                "file_changes": [],
+                "scan_evidence": {
+                    "release_readiness": {
+                        "bundle_status": "BLOCK",
+                        "components": [
+                            {
+                                "required_views": ["verilog"],
+                                "required_view_results": {
+                                    "verilog": {"found": False, "status": "MISSING"}
+                                },
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(model["delivery_completeness"]["status"], "MISSING")
+        self.assertEqual(model["decision"]["status"], "BLOCKED")
+        self.assertEqual(model["decision"]["label"], "不可接入")
+        self.assertIn("RTL 模型", model["decision"]["reason"])
+        self.assertEqual(model["pending_fact_items"][0]["kind"], "REQUIRED_VIEW_MISSING")
+
+    def test_ip_view_renders_usage_impact_without_repeating_usage_sections(self) -> None:
+        from lib_guard.render.version_review_render import render_ip_user_view
+
+        html = render_ip_user_view(
+            {
+                "view_rows": [
+                    {
+                        "view": "Liberty / 时序",
+                        "view_type": "timing_lib",
+                        "usage_area": "时序分析 / STA",
+                        "delta_total": 3,
+                        "delivery_count": 3,
+                        "added": 2,
+                        "removed": 0,
+                        "changed": 1,
+                        "evidence_level": "摘要级证据（Summary-only）",
+                    },
+                    {
+                        "view": "LEF / 物理抽象",
+                        "view_type": "physical_abstract",
+                        "usage_area": "物理实现 / PD",
+                        "delta_total": 1,
+                        "delivery_count": 1,
+                        "added": 0,
+                        "removed": 0,
+                        "changed": 1,
+                        "evidence_level": "重点审查",
+                    },
+                ],
+                "usage_impact": {"summary": "影响场景：时序分析 / STA、物理实现 / PD。"},
+            }
+        )
+
+        self.assertIn("影响范围", html)
+        self.assertIn("时序分析 / STA", html)
+        self.assertIn("物理实现 / PD", html)
+        self.assertNotIn("关联使用场景", html)
+
+    def test_page_prioritizes_decision_summary_and_lineage(self) -> None:
+        html = self._render_doc_update_page()
+
+        self.assertIn("判断摘要", html)
+        self.assertIn(">为什么<", html)
+        self.assertIn("影响范围", html)
+        self.assertIn("版本关系", html)
+        self.assertNotIn("证据分层</b>", html)
+
     def test_change_status_is_separate_from_usage_decision(self) -> None:
         from lib_guard.render.version_review_model import build_ip_user_view_model
 
@@ -306,9 +422,12 @@ class VersionDetailUiContractTest(unittest.TestCase):
         self.assertIn("时序", model["usage_impact"]["summary"])
         self.assertEqual(model["provenance"]["base"]["version"], "v1_full")
 
-    def test_version_detail_generates_filterable_file_evidence_page(self) -> None:
+    def test_version_detail_includes_compact_file_structure_section(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
+            stale_evidence_page = root / "html" / "libraries" / "ip_demo" / "versions" / "v1" / "file-evidence.html"
+            stale_evidence_page.parent.mkdir(parents=True)
+            stale_evidence_page.write_text("old standalone page", encoding="utf-8")
             from lib_guard.render.version_detail_report import render_version_detail_page
 
             page = Path(
@@ -322,14 +441,62 @@ class VersionDetailUiContractTest(unittest.TestCase):
                     },
                 )
             )
-            evidence_page = page.parent / "file-evidence.html"
             detail_html = page.read_text(encoding="utf-8")
-            evidence_html = evidence_page.read_text(encoding="utf-8")
-            self.assertTrue(evidence_page.exists())
-            self.assertIn("文件证据清单", evidence_html)
-            self.assertIn("data-filterable-table", evidence_html)
-            self.assertIn("文件路径", evidence_html)
-            self.assertIn("file-evidence.html", detail_html)
+            self.assertFalse(stale_evidence_page.exists())
+            self.assertIn("文件结构", detail_html)
+            self.assertNotIn("文件证据清单", detail_html)
+            self.assertIn("file-tree-scroll", detail_html)
+            self.assertIn("当前没有可展示的文件结构", detail_html)
+            self.assertIn("目录默认展开前两层", detail_html)
+            self.assertIn("#file-structure", detail_html)
+
+    def test_file_evidence_section_exposes_a_status_annotated_tree(self) -> None:
+        from lib_guard.render.version_file_evidence import render_version_file_evidence_section
+
+        html = render_version_file_evidence_section(
+            {
+                "base_version": "v1",
+                "file_changes": [
+                    {"change": "added", "file_type": "lef", "path": "LEF/macros/new.lef", "match_status": "true_added"},
+                    {"change": "changed", "file_type": "liberty", "path": "LIB/slow.lib"},
+                    {"change": "removed", "file_type": "gds", "path": "GDS/old.gds", "match_status": "true_removed"},
+                ],
+                "scan_evidence": {
+                    "inventory": {
+                        "files": [
+                            {"path": "LEF/macros/new.lef", "file_type": "lef"},
+                            {"path": "RTL/top.sv", "file_type": "systemverilog"},
+                        ]
+                    }
+                },
+            }
+        )
+
+        self.assertIn("文件结构", html)
+        self.assertIn("class='file-tree'", html)
+        self.assertIn("全部展开", html)
+        self.assertIn("全部收起", html)
+        self.assertIn("data-tree-status='added'", html)
+        self.assertIn("data-tree-status='removed'", html)
+        self.assertIn("data-tree-status='changed'", html)
+        self.assertIn("data-tree-status='current'", html)
+        self.assertIn("LEF/macros/new.lef", html)
+        self.assertIn("GDS/old.gds", html)
+        self.assertIn("RTL/top.sv", html)
+
+    def test_file_tree_keeps_deleted_paths_and_has_bounded_scroll(self) -> None:
+        from lib_guard.render.version_file_evidence import render_version_file_evidence_section
+
+        html = render_version_file_evidence_section(
+            {
+                "file_changes": [{"change": "removed", "file_type": "lef", "path": "old/only.lef"}],
+                "scan_evidence": {"inventory": {"files": []}},
+            }
+        )
+
+        self.assertIn("old/only.lef", html)
+        self.assertIn("file-tree-scroll", html)
+        self.assertIn("overflow:auto", html)
 
     def test_missing_diff_is_blocked_instead_of_presented_as_normal_review(self) -> None:
         from lib_guard.render.version_review_model import build_ip_user_view_model
@@ -646,6 +813,23 @@ class VersionDetailUiContractTest(unittest.TestCase):
         unknown = next(row for row in result["view_rows"] if row["view_type"] == "unknown")
         self.assertEqual(unknown["delivery_count"], 2)
         self.assertTrue(unknown["current_examples"] or unknown["full_evidence_href"])
+
+    def test_scan_id_without_delivery_files_is_not_presented_as_scanned(self) -> None:
+        from lib_guard.render.version_detail_report import _review_evidence_sidebar
+
+        html = _review_evidence_sidebar(
+            {
+                "scan_context": {"scan_id": "legacy_scan"},
+                "scan_evidence": {"inventory": {"files": []}, "counts": {}},
+                "comparison_context": {"diff_status": "DIFF_NOT_RUN"},
+                "lane_counts": {},
+            },
+            {},
+        )
+
+        self.assertIn("没有形成可用扫描事实", html)
+        self.assertNotIn("扫描事实已记录", html)
+        self.assertNotIn("scan_id", html)
 
     def test_large_diff_caps_inline_rows_and_keeps_full_evidence_link(self) -> None:
         from lib_guard.render.version_detail_report import render_version_update_detail_panel

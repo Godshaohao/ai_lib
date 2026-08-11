@@ -549,6 +549,70 @@ def _build_related_usage_sections(view_rows: list[Mapping[str, Any]]) -> list[di
     return sections
 
 
+def _delivery_completeness(model: Mapping[str, Any]) -> dict[str, Any]:
+    """Project existing readiness evidence into user-facing delivery facts."""
+    scan_evidence = _as_mapping(model.get("scan_evidence"))
+    readiness = _as_mapping(scan_evidence.get("release_readiness"))
+    if not readiness:
+        return {
+            "status": "UNKNOWN",
+            "label": "未生成",
+            "required_total": 0,
+            "required_present": 0,
+            "missing": [],
+            "optional_present": 0,
+            "release_level": "",
+        }
+
+    required: dict[str, Mapping[str, Any]] = {}
+    optional: dict[str, Mapping[str, Any]] = {}
+    for component in readiness.get("components", []) or []:
+        if not isinstance(component, Mapping):
+            continue
+        required_results = _as_mapping(component.get("required_view_results"))
+        optional_results = _as_mapping(component.get("optional_view_results"))
+        for view in component.get("required_views", []) or []:
+            key = canonical_view_type(view)
+            required[key] = _as_mapping(required_results.get(view))
+        for view in component.get("optional_views", []) or []:
+            key = canonical_view_type(view)
+            optional.setdefault(key, _as_mapping(optional_results.get(view)))
+        for view, result in required_results.items():
+            required[canonical_view_type(view)] = _as_mapping(result)
+        for view, result in optional_results.items():
+            optional.setdefault(canonical_view_type(view), _as_mapping(result))
+
+    def is_present(result: Mapping[str, Any]) -> bool:
+        if result.get("found") is True:
+            return True
+        return str(result.get("status") or "").upper() in {"PASS", "FOUND", "PRESENT"}
+
+    missing_keys = [key for key, result in required.items() if not is_present(result)]
+    required_present = len(required) - len(missing_keys)
+    optional_present = sum(1 for result in optional.values() if is_present(result))
+    readiness_status = str(readiness.get("required_view_status") or readiness.get("bundle_status") or "UNKNOWN").upper()
+    if missing_keys:
+        status = "MISSING"
+        label = "存在缺失"
+    elif required:
+        status = "PASS" if readiness_status in {"PASS", "READY", "OK"} else readiness_status
+        label = "已满足" if status in {"PASS", "READY", "OK"} else "待确认"
+    else:
+        status = "UNCONFIGURED"
+        label = "未配置口径"
+    return {
+        "status": status,
+        "label": label,
+        "required_total": len(required),
+        "required_present": required_present,
+        "required_views": [view_label(key) for key in required],
+        "missing": [view_label(key) for key in missing_keys],
+        "optional_present": optional_present,
+        "optional_total": len(optional),
+        "release_level": str(readiness.get("release_level_candidate") or ""),
+    }
+
+
 def _review_gate_counts(model: Mapping[str, Any]) -> tuple[int, int, str]:
     gate = _as_mapping(model.get("review_gate"))
     return (
@@ -589,12 +653,10 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
     base_blocked = status_key in {"NEEDS_BASE_CONFIRM", "SCAN_BLOCKED", "DIFF_BLOCKED"} or base_key in {"BLOCK", "BLOCKING", "BLOCKED"}
     diff_missing = status_key in {"DIFF_NOT_RUN", "NO_DIFF_SUMMARY"}
     gate_blocking, gate_attention, gate_status = _review_gate_counts(model)
+    delivery_completeness = _delivery_completeness(model)
+    required_view_missing = delivery_completeness["status"] == "MISSING"
 
-    if first_version:
-        ip_decision = "USAGE_REVIEW_REQUIRED"
-        ip_label = "首版需审查"
-        main_reason = "当前无可比基准版；不做变化判断，先审查版本自身 view 覆盖、文件分类和证据等级。"
-    elif base_blocked:
+    if base_blocked:
         ip_decision = "BLOCKED"
         ip_label = "暂不可判断"
         main_reason = "基准版、扫描、对比基础证据不可信，不能作为版本更新判断。"
@@ -602,6 +664,15 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         ip_decision = "BLOCKED"
         ip_label = "暂不可判断"
         main_reason = f"尚未生成相对{base_noun}的可信对比，当前不能判断版本变化。"
+    elif required_view_missing:
+        ip_decision = "BLOCKED"
+        ip_label = "不可接入"
+        missing = "、".join(delivery_completeness.get("missing", []) or [])
+        main_reason = f"当前交付缺少必需 View：{missing or '未标明'}；在补齐前不可接入。"
+    elif first_version:
+        ip_decision = "USAGE_REVIEW_REQUIRED"
+        ip_label = "首版需审查"
+        main_reason = "当前无可比基准版；不做变化判断，先审查版本自身 view 覆盖、文件分类和证据等级。"
     elif p0p1 or removed or unknown_count:
         ip_decision = "USAGE_REVIEW_REQUIRED"
         ip_label = "需审查后使用"
@@ -617,10 +688,6 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         ip_decision = "READY"
         ip_label = "可接入"
         main_reason = f"相对{base_noun}检测到交付变化；当前采用的证据策略未发现自动阻塞条件。"
-    elif unknown_count:
-        ip_decision = "USAGE_REVIEW_REQUIRED"
-        ip_label = "存在未知文件"
-        main_reason = f"当前交付中有 {unknown_count} 个 Unknown 文件，需先确认文件分类和使用范围。"
     else:
         ip_decision = "READY"
         ip_label = "可接入"
@@ -690,6 +757,17 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
                     "file_count": unknown_count,
                 }
             )
+    if required_view_missing:
+        missing = "、".join(delivery_completeness.get("missing", []) or [])
+        pending_facts.insert(
+            0,
+            {
+                "kind": "REQUIRED_VIEW_MISSING",
+                "label": "必需视图缺失",
+                "summary": f"当前交付缺少必需 View：{missing or '未标明'}；补齐前不可接入。",
+                "file_count": 0,
+            },
+        )
     if diff_missing and not base_blocked:
         pending_facts.append(
             {
@@ -708,7 +786,9 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         if area not in changed_areas:
             changed_areas.append(area)
     if first_version:
-        impact_summary = "首版无基准变化；当前页面展示交付包自身的视图覆盖。"
+        impact_summary = "首版交付范围：没有基准版，不作新增/删除/修改判断；当前页面展示交付包自身的视图覆盖。"
+    elif base_blocked or diff_missing:
+        impact_summary = "对比证据尚未完成；当前不作使用影响判断。"
     elif changed_rows:
         impact_summary = "影响场景：" + "、".join(changed_areas[:5]) + "；变化只描述交付差异，不等同于不可使用。"
     else:
@@ -725,6 +805,8 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
     candidate_view_counts = _aggregate_counts_by_view(_as_mapping(candidate_inventory.get("file_type_counts")))
     trace_links = _as_mapping(model.get("trace_links"))
     scan_dir = str(scan_context.get("scan_dir") or "")
+    provenance_source = str(scan_context.get("raw_path") or "")
+    base_label = "无基准：首版/单版本审查" if first_version else f"{_copy(BASE_REF_COPY, model.get('base_ref'))} / {model.get('base_version') or '-'}"
 
     return {
         "schema_version": "ip_user_view.v2",
@@ -772,6 +854,13 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
             "summary": impact_summary,
             "changed_view_count": len(changed_rows),
         },
+        "delivery_completeness": delivery_completeness,
+        "lineage": {
+            "base_version": "" if first_version else str(model.get("base_version") or ""),
+            "base_label": "首版交付" if first_version else base_label,
+            "target_version": str(model.get("version_id") or model.get("target_version") or ""),
+            "relation": "首版交付" if first_version else "基准版 -> 当前版本",
+        },
         "provenance": {
             "base": {
                 "ref": str(model.get("base_ref") or ""),
@@ -781,6 +870,7 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
             },
             "scan": {"status": scan_status, "scan_id": str(scan_context.get("scan_id") or "")},
             "diff": {"status": diff_status, "directory": str(model.get("diff_dir") or "")},
+            "target": {"version": str(model.get("version_id") or model.get("target_version") or ""), "source": provenance_source},
         },
         "evidence_links": {
             "scan_dir": scan_dir,
@@ -789,9 +879,9 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
             "candidate_effective_manifest": candidate_manifest,
         },
         "non_blocker_note": (
-            "首版没有变化判断；证据等级只描述检查深度，不自动代表不完整。只有缺少可信基准/对比、扫描证据不可信或明确门禁阻塞项才升级为阻塞。"
+            "首版没有变化判断；证据等级只描述检查深度，不自动代表不完整。只有缺少可信基准/对比、扫描证据不可信、必需 View 缺失或明确门禁阻塞项才升级为阻塞。"
             if first_version
-            else "摘要级证据、元数据级证据和 P0/P1 只描述证据等级，不自动构成阻塞；只有缺少可信基准/对比、扫描证据不可信或明确门禁阻塞项才升级为阻塞。"
+            else "摘要级证据、元数据级证据和 P0/P1 只描述证据等级，不自动构成阻塞；只有缺少可信基准/对比、扫描证据不可信、必需 View 缺失或明确门禁阻塞项才升级为阻塞。"
         ),
     }
 
