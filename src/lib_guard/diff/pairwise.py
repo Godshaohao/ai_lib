@@ -82,6 +82,8 @@ def build_pairwise_diff_tasks(
                 "new_file": new_file,
                 "old_path": old_key,
                 "new_path": new_key,
+                "old_physical_path": str(old_item.get("physical_path") or old_key),
+                "new_physical_path": str(new_item.get("physical_path") or new_key),
                 "pairing_confidence": confidence,
                 "expected_output": str(expected),
                 "status": "PENDING",
@@ -99,7 +101,16 @@ def build_pairwise_diff_tasks(
         new_type = _file_type(new_item)
         if old_type != new_type or old_type not in DEFAULT_PAIRWISE_FILE_DIFF_TYPES:
             continue
-        add_task(old_type, rel, old_item, rel, new_item, reason="changed_file", confidence="path_exact")
+        logical_pair = bool(old_item.get("physical_path") or new_item.get("physical_path"))
+        add_task(
+            old_type,
+            rel,
+            old_item,
+            rel,
+            new_item,
+            reason="logical_path_changed_file" if logical_pair else "changed_file",
+            confidence="logical_path" if logical_pair else "path_exact",
+        )
 
     for file_type in sorted(DEFAULT_PAIRWISE_FILE_DIFF_TYPES):
         old_candidates = [

@@ -140,12 +140,12 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
         result = _validate_view(view, required=True, file_types=file_types, parser_by_type=parser_by_type, validation_levels=validation_levels)
         required_view_results[view] = result
         if result["status"] == "BLOCK":
-            item = _item("blocker", "required_view", f"Required view blocked: {view}", result["message"], view)
+            item = _item("blocker", "required_view", f"必需视图阻塞：{view}", result["message"], view)
             blocking_items.append(item)
             if result.get("parser_status") == "PASS_EMPTY":
-                manual_review_items.append(_manual_review("required_view_pass_empty", component_id, view, result.get("files", []), "Required parsed view returned PASS_EMPTY."))
+                manual_review_items.append(_manual_review("required_view_pass_empty", component_id, view, result.get("files", []), "必需视图解析结果为空，需要人工确认。"))
         elif result["status"] == "WARNING":
-            warning_items.append(_item("warning", "required_view", f"Required view warning: {view}", result["message"], view))
+            warning_items.append(_item("warning", "required_view", f"必需视图提示：{view}", result["message"], view))
 
     optional_view_results: dict[str, dict[str, Any]] = {}
     for view in optional_views:
@@ -154,12 +154,12 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
     for file_type in sorted(file_types):
         level = validation_levels.get(file_type, "pass_through_allowed")
         if level == "metadata_required":
-            manual_review_items.append(_manual_review("metadata_only_ack", component_id, file_type, _files_for_type(files, file_type), "Metadata-only release channel requires acknowledgement."))
+            manual_review_items.append(_manual_review("metadata_only_ack", component_id, file_type, _files_for_type(files, file_type), "元数据级交付需要人工确认。"))
         elif level == "manual_review":
-            manual_review_items.append(_manual_review("manual_view_review", component_id, file_type, _files_for_type(files, file_type), "Flow/technology setup files require manual approval."))
+            manual_review_items.append(_manual_review("manual_view_review", component_id, file_type, _files_for_type(files, file_type), "工艺或流程配置文件需要人工确认。"))
         elif level == "pass_through_allowed":
-            manual_review_items.append(_manual_review("pass_through_approval", component_id, file_type, _files_for_type(files, file_type), "Pass-through files require manual approval."))
-            warning_items.append(_item("warning", "pass_through", f"Pass-through file type: {file_type}", "File type is not automatically validated.", file_type))
+            manual_review_items.append(_manual_review("pass_through_approval", component_id, file_type, _files_for_type(files, file_type), "未纳入自动校验的文件需要人工确认。"))
+            warning_items.append(_item("warning", "pass_through", f"未自动校验的文件类型：{file_type}", "该文件类型未纳入自动校验。", file_type))
 
     component_status = _rollup_status(blocking_items, warning_items, scan_issues)
     release_channel = _release_channel(component_status, file_types, validation_levels, manual_review_items)
@@ -262,18 +262,18 @@ def _validate_view(
     files = [str(t.get("file")) for t in tasks if t.get("file")]
 
     if not found:
-        return {"view": view, "found": False, "validation_level": level, "parser_status": None, "status": "BLOCK" if required else "INFO", "message": "Required view missing." if required else "Optional view missing.", "files": []}
+        return {"view": view, "found": False, "validation_level": level, "parser_status": None, "status": "BLOCK" if required else "INFO", "message": "必需视图缺失。" if required else "可选视图未发现。", "files": []}
     if level == "metadata_required":
-        return {"view": view, "found": True, "validation_level": level, "parser_status": "METADATA_ONLY", "status": "PASS", "message": "Metadata recorded; deep parser is not required.", "files": files}
+        return {"view": view, "found": True, "validation_level": level, "parser_status": "METADATA_ONLY", "status": "PASS", "message": "已记录元数据；该视图不要求深度解析。", "files": files}
     if level == "doc_review_required":
-        return {"view": view, "found": True, "validation_level": level, "parser_status": "DOC_REVIEW", "status": "WARNING" if required else "INFO", "message": "Document requires manual review.", "files": files}
+        return {"view": view, "found": True, "validation_level": level, "parser_status": "DOC_REVIEW", "status": "WARNING" if required else "INFO", "message": "文档需要人工审查。", "files": files}
     if level == "manual_review":
-        return {"view": view, "found": True, "validation_level": level, "parser_status": "MANUAL_REVIEW", "status": "WARNING", "message": "Flow/technology setup requires manual review.", "files": files}
+        return {"view": view, "found": True, "validation_level": level, "parser_status": "MANUAL_REVIEW", "status": "WARNING", "message": "工艺或流程配置需要人工审查。", "files": files}
     if level == "pass_through_allowed":
-        return {"view": view, "found": True, "validation_level": level, "parser_status": "PASS_THROUGH", "status": "WARNING", "message": "Pass-through file requires manual approval.", "files": files}
+        return {"view": view, "found": True, "validation_level": level, "parser_status": "PASS_THROUGH", "status": "WARNING", "message": "未纳入自动校验的文件需要人工确认。", "files": files}
     if worst_status in {"FAILED", "PASS_EMPTY"}:
-        return {"view": view, "found": True, "validation_level": level, "parser_status": worst_status, "status": "BLOCK" if required and level == "parsed_required" else "WARNING", "message": f"Parser status is {worst_status}.", "files": files}
-    return {"view": view, "found": True, "validation_level": level, "parser_status": worst_status or "PASS", "status": "PASS", "message": "View validated.", "files": files}
+        return {"view": view, "found": True, "validation_level": level, "parser_status": worst_status, "status": "BLOCK" if required and level == "parsed_required" else "WARNING", "message": f"解析器状态为 {worst_status}。", "files": files}
+    return {"view": view, "found": True, "validation_level": level, "parser_status": worst_status or "PASS", "status": "PASS", "message": "视图已完成校验。", "files": files}
 
 
 def _worst_parser_status(statuses: list[str]) -> str | None:
@@ -383,13 +383,13 @@ def _aliases_for_level(level: str, policy: Mapping[str, Any]) -> tuple[list[str]
 def _limitations_for_level(level: str, doc_summary: Mapping[str, Any], required_view_status: str) -> list[str]:
     limitations: list[str] = []
     if level == "L0":
-        limitations.append("Content parser validation not completed")
+        limitations.append("内容解析验证尚未完成")
     if level in {"L0", "L1"}:
-        limitations.append("P2 deep diff not completed")
+        limitations.append("深度文件对比尚未完成")
     if required_view_status != "PASS":
-        limitations.append(f"Required view status is {required_view_status}")
+        limitations.append(f"必需视图状态为 {required_view_status}")
     if not doc_summary.get("release_note_found"):
-        limitations.append("Release note not found")
+        limitations.append("未找到发布说明")
     return limitations
 
 
@@ -415,5 +415,5 @@ def _recommended_actions(component_id: str, blocking_items: list[dict[str, Any]]
     for item in blocking_items:
         actions.append({"title": item["title"], "component_id": component_id, "command": "lg.csh scan <library> <version> --rescan"})
     for item in warning_items:
-        actions.append({"title": item["title"], "component_id": component_id, "command": "Open the Version Review page and record an owner decision if needed."})
+        actions.append({"title": item["title"], "component_id": component_id, "command": "打开版本详情页；如有需要，记录负责人决定。"})
     return actions

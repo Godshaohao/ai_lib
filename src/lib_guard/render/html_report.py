@@ -500,7 +500,7 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     rail = ui.status_rail([
         ("扫描", review["decision"], review["headline"]),
         ("人工证据", evidence_status, "已生成视图、文件和问题清单" if evidence_status == "AVAILABLE" else "先处理扫描阻塞项"),
-        ("当前判断", "READY" if evidence_status == "AVAILABLE" else "BLOCKED", "Scan 结果可供下一步判断" if evidence_status == "AVAILABLE" else "当前证据不能继续使用"),
+        ("当前判断", "READY" if evidence_status == "AVAILABLE" else "BLOCKED", "扫描结果可供下一步判断" if evidence_status == "AVAILABLE" else "当前证据不能继续使用"),
     ])
     inline_file_rows = _representative_file_rows(review_files_by_view, per_view=12, limit=120)
     if not inline_file_rows and files:
@@ -517,7 +517,7 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             ui.metric_grid([
                 ("交付类型", review.get("package_type"), "扫描识别的包类型", "PASS" if review.get("package_type") != "UNKNOWN" else "WARNING"),
                 ("核心视图缺失", len(review["required_views"]["missing"]), "LEF / Liberty / Verilog", "WARNING" if review["required_views"]["missing"] else "PASS"),
-                ("元数据/摘要文件", int((review_scan or {}).get("large_metadata_files", len(review_large_metadata)) or 0), "summary-only / metadata-only", "INFO" if review_large_metadata else "PASS"),
+                ("元数据/摘要文件", int((review_scan or {}).get("large_metadata_files", len(review_large_metadata)) or 0), "摘要级 / 元数据级证据", "INFO" if review_large_metadata else "PASS"),
                 ("注意项", len(attention), review["headline"], review["decision"]),
             ])
             + ui.compact_meta([
@@ -547,14 +547,14 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             ) + ui.callout("文件清单范围", file_evidence_note, "INFO"),
         )
         + ui.collapsible_panel(
-            "Unknown 文件",
+            "未知文件",
             "未识别文件不应被数量淹没；这里集中列出需要分类或确认可忽略的文件。",
             ui.filterable_table(
                 "unknown-file-table",
                 ["文件路径", "扩展名", "大小", "建议动作", "原因"],
                 _unknown_file_rows(review_unknown_files),
-                "没有 unknown 文件",
-                "筛选 unknown 文件",
+                "没有未知文件",
+                "筛选未知文件",
             ),
             open=bool(review_unknown_files),
         )
@@ -576,11 +576,11 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             ui.trace_link_list([
                 ("review/scan_review.json", _file_href(review_dir / "scan_review.json"), "scan 人工证据摘要"),
                 ("review/scan_review.md", _file_href(review_dir / "scan_review.md"), "人工可读的一页摘要"),
-                ("review/view_coverage.tsv", _file_href(review_dir / "view_coverage.tsv"), "View 覆盖表"),
+                ("review/view_coverage.tsv", _file_href(review_dir / "view_coverage.tsv"), "视图覆盖表"),
                 ("review/files_by_view.tsv", _file_href(review_dir / "files_by_view.tsv"), "按视图聚合的文件证据表"),
                 ("review/unknown_files.tsv", _file_href(review_dir / "unknown_files.tsv"), "未识别文件表"),
                 ("review/large_metadata_files.tsv", _file_href(review_dir / "large_metadata_files.tsv"), "摘要级 / 元数据级文件表"),
-                ("review/parser_evidence.tsv", _file_href(review_dir / "parser_evidence.tsv"), "Parser 证据表"),
+                ("review/parser_evidence.tsv", _file_href(review_dir / "parser_evidence.tsv"), "解析器证据表"),
                 ("scan_review.json", _file_href(out / "scan_review.json"), "当前 HTML 使用的审阅导航模型"),
                 ("scan_meta.json", _file_href(scan / "scan_meta.json"), "版本和原始根目录上下文"),
                 ("file_inventory.json", _file_href(scan / "file_inventory.json"), "完整文件清单"),
@@ -597,7 +597,7 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     parser = review.get("parser_summary") or {}
     body += (
         ui.collapsible_panel(
-            "大文件计数与 Corner 摘要",
+            "大文件计数与工艺角摘要",
             "大体量时序、寄生和二进制视图只按路径、文件名和工艺角归类；普通扫描不读取它们的内容。",
             ui.metric_grid([
                 ("计数文件", count_only.get("total_files", 0), ", ".join(f"{k}:{v}" for k, v in (count_only.get("file_type_counts") or {}).items()) or "无", "INFO" if count_only.get("total_files") else "PASS"),
@@ -605,7 +605,7 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
                 ("电压角", len(corner.get("voltage_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("voltage_counts") or {}).items()) or "无", "PASS" if corner.get("voltage_counts") else "INFO"),
                 ("温度角", len(corner.get("temperature_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("temperature_counts") or {}).items()) or "无", "PASS" if corner.get("temperature_counts") else "INFO"),
             ])
-            + ui.table(["文件类型", "工艺角", "电压角", "温度角", "文件路径"], _corner_rows(corner), "没有文件名 corner 线索"),
+            + ui.table(["文件类型", "工艺角", "电压角", "温度角", "文件路径"], _corner_rows(corner), "没有文件名工艺角线索"),
             open=False,
         )
         + ui.collapsible_panel(
@@ -1148,7 +1148,7 @@ def render_diff_html(diff_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["review_level"])
         + ui.panel("变化影响域", "面向使用者：先看变更影响哪个领域，再决定是否打开文件深度对比。", ui.impact_grid(review["impact"]))
         + ui.panel("重点文件确认项", "这里是重点变化证据入口，不是全量差异完成度；页面不再自动给出脚本命令。", ui.filterable_table("recommend-file-diff-table", ["优先级", "类型", "旧文件", "新文件", "原因", "状态", "结果"], rec_rows, "暂无重点文件确认项", "筛选类型 / 文件 / 状态"))
-        + ui.collapsible_panel("候选变化 / 已折叠", "候选变化不默认展开，避免错误 base 或大规模重组导致上千条无效确认项。", ui.metric_grid([("候选变化", recommendation.get("candidate_total", 0), "changed/candidate files", recommendation.get("comparison_quality")), ("已折叠", recommendation.get("suppressed_total", 0), "未进入重点队列", "WARNING" if recommendation.get("suppressed_total") else "PASS"), ("策略", recommendation.get("policy"), "key view first", "INFO")]) + ui.table(["Reason", "Count"], [f"<tr><td>{ui.esc(x.get('reason'))}</td><td>{ui.esc(x.get('count'))}</td></tr>" for x in recommendation.get("suppressed_summary", [])], "暂无折叠项"), open=False)
+        + ui.collapsible_panel("候选变化 / 已折叠", "候选变化不默认展开，避免错误基准版或大规模重组导致上千条无效确认项。", ui.metric_grid([("候选变化", recommendation.get("candidate_total", 0), "变化/候选文件", recommendation.get("comparison_quality")), ("已折叠", recommendation.get("suppressed_total", 0), "未进入重点队列", "WARNING" if recommendation.get("suppressed_total") else "PASS"), ("策略", recommendation.get("policy"), "优先关键视图", "INFO")]) + ui.table(["原因", "数量"], [f"<tr><td>{ui.esc(x.get('reason'))}</td><td>{ui.esc(x.get('count'))}</td></tr>" for x in recommendation.get("suppressed_summary", [])], "暂无折叠项"), open=False)
         + ui.panel("优先关注", "只列出会影响继续审阅的事项。", ui.attention_items(attention))
         + ui.collapsible_panel(
             "补充证据",

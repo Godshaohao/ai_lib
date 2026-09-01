@@ -34,9 +34,9 @@ def _blockers_from_review_gate(review_gate: Mapping[str, Any]) -> list[dict[str,
             {
                 "id": _text(item.get("id"), "unknown"),
                 "category": _text(item.get("category"), "review_gate"),
-                "title": _text(item.get("title"), "Release review blocker"),
-                "reason": _text(item.get("why") or item.get("message"), "Release is blocked by review gate."),
-                "next_action": _action_text(item.get("next_action"), "rv accept/rv waive the item or force release with audit reason"),
+                "title": _text(item.get("title"), "发布审查阻塞项"),
+                "reason": _text(item.get("why") or item.get("message"), "发布被审查门禁阻塞。"),
+                "next_action": _action_text(item.get("next_action"), "使用 rv accept / rv waive 处理事项，或带审计原因强制发布"),
             }
         )
     return blockers
@@ -49,9 +49,9 @@ def _blockers_from_release_check(result: Mapping[str, Any]) -> list[dict[str, An
             {
                 "id": f"release_check.block_reason:{idx}",
                 "category": "release_check",
-                "title": "Release check blocked",
+                "title": "发布检查被阻塞",
                 "reason": str(reason),
-                "next_action": "fix release evidence or force release with audit reason",
+                "next_action": "补齐发布证据，或带审计原因强制发布",
             }
         )
     for idx, issue in enumerate(result.get("issues", []) or [], start=1):
@@ -61,9 +61,9 @@ def _blockers_from_release_check(result: Mapping[str, Any]) -> list[dict[str, An
             {
                 "id": _text(issue.get("id"), f"release_check.issue:{idx}"),
                 "category": _text(issue.get("category"), "release_check"),
-                "title": _text(issue.get("title"), "Release check issue"),
-                "reason": _text(issue.get("message") or issue.get("reason"), "Release check issue requires attention."),
-                "next_action": _action_text(issue.get("next_action"), "fix release evidence or force release with audit reason"),
+                "title": _text(issue.get("title"), "发布检查问题"),
+                "reason": _text(issue.get("message") or issue.get("reason"), "发布检查需要关注。"),
+                "next_action": _action_text(issue.get("next_action"), "补齐发布证据，或带审计原因强制发布"),
             }
         )
     return blockers

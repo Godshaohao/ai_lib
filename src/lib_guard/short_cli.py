@@ -15,6 +15,7 @@ from lib_guard.project_config import (
     SCAN_STRATEGY_CONFIG_KEYS,
     SUMMARY_ONLY_TYPES,
 )
+from lib_guard.package.types import package_type_from_version
 from lib_guard.short_cli_config import (
     find_config as _find_config,
     load_config as _load_config,
@@ -261,19 +262,19 @@ def _manual_lineage_parent(version: dict[str, Any]) -> str | None:
 
 
 def _version_package_type(version: dict[str, Any]) -> str:
-    return str(version.get("package_type") or version.get("version_type") or "").upper()
+    return package_type_from_version(version)
 
 
 def _is_full_package(version: dict[str, Any]) -> bool:
     package_type = _version_package_type(version)
-    if package_type in {"FULL_PACKAGE", "FULL"}:
+    if package_type == "FULL_PACKAGE":
         return True
     return bool(version.get("standalone")) and not bool(version.get("base_required"))
 
 
 def _full_baseline_for_update(version: dict[str, Any]) -> str | None:
     package_type = _version_package_type(version)
-    if package_type not in {"PARTIAL_UPDATE", "PARTIAL", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"} and not bool(version.get("base_required")):
+    if package_type not in {"PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"} and not bool(version.get("base_required")):
         return None
     target = str(version.get("version_id") or "")
     diff = version.get("diff", {}) or {}
@@ -468,7 +469,7 @@ def _infer_file_type(relpath: str) -> str:
     record = FileClassifier().classify({"path": relpath, "name": Path(relpath).name})
     file_type = str(record.get("file_type") or "unknown")
     if file_type not in MANUAL_FILE_DIFF_TYPES:
-        raise ValueError(f"file type {file_type!r} is not supported by pairwise file-diff")
+        raise ValueError(f"文件类型 {file_type!r} 不支持文件逐对对比")
     return file_type
 
 
@@ -576,7 +577,7 @@ def _build_parser() -> ArgumentParser:
     lg.csh next --ready                  # 只看可一键执行的库
     lg.csh next ucie                     # 只读预演：已有有效版则审查更新；否则建立初始接入候选
     lg.csh next ucie --apply             # 确认后执行 scan/effective compare/render
-    lg.csh next ucie --accept --by owner --note "review passed"
+    lg.csh next ucie --accept --by owner --note "审查通过"
     lg.csh worklist                      # 专家别名：批量查看哪些库可执行/需确认/无新版本
     lg.csh cat ucie stable_20250608     # 只重渲染一个版本详情页，不重新 scan
     lg.csh library override ucie stable_20250608 --base initial_20250601 --stage stable
@@ -584,13 +585,16 @@ def _build_parser() -> ArgumentParser:
     lg.csh intake ucie                    # 专家入口：确认计划后执行 scan/effective compare/render
     lg.csh window ucie                    # 查看 old/candidate/scan/compare 组合
     lg.csh mark ucie stable_20250608 --type FULL
-    lg.csh accept-window ucie --accepted-by lib_owner --note "review passed"
+    lg.csh accept-window ucie --accepted-by lib_owner --note "审查通过"
     lg.csh effective rollback ucie --to E_old --by lib_owner --reason "wrong accept"
     # 手动 compare/debug 时再显式指定 base 或 adjacent/cumulative
     lg.csh cmp ucie stable_20250608 --base initial_20250601 --scan-if-missing
     lg.csh fd ucie stable_20250608 lef/ucie.lef --base initial_20250601
     lg.csh rv check ucie stable_20250608 --gate current
     lg.csh rv accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason accepted
+    lg.csh review prepare ucie stable_20250608
+    lg.csh review submit ucie stable_20250608 --review-id review_timing_01 --decision PASS
+    lg.csh review collect ucie stable_20250608
     lg.csh rel ucie                       # 发布已接受 current effective 的规划
     lg.csh rel ucie stable_20250608 --explain  # 专家 raw version release-check 解释
 
@@ -624,32 +628,32 @@ def _build_parser() -> ArgumentParser:
     p = sub.add_parser("scan", help="扫描 catalog 中已有版本，或按策略批量补 scan evidence；不会自动刷新 catalog")
     p.add_argument("library", nargs="?")
     p.add_argument("version", nargs="?")
-    p.add_argument("--missing", action="store_true", help="只扫描缺少或已过期 scan evidence 的版本")
-    p.add_argument("--all-versions", action="store_true", help="扫描选中 library 的全部版本")
+    p.add_argument("--missing", action="store_true", help="只扫描缺少或已过期扫描证据的版本")
+    p.add_argument("--all-versions", action="store_true", help="扫描选中库的全部版本")
     p.add_argument("--limit", type=int, help="限制批量扫描数量，便于试跑")
-    p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="只扫描某个 catalog stage")
-    p.add_argument("--with-evidence", action="store_true", help="不再由 scan 触发 catalog 刷新；请改用 cat --refresh-catalog，确需轻量文件 evidence 时再加 --with-evidence")
-    p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次扫描的内容 hash 策略")
-    p.add_argument("--parse-file-types", help="覆盖本次扫描进入 parser 的文件类型，例如 lef,cdl")
-    p.add_argument("--parse-exclude-file-types", help="覆盖本次扫描不进入 parser 的文件类型，例如 verilog,liberty,spef")
-    p.add_argument("--parse-jobs", help="覆盖本次扫描 parser 并发数")
-    p.add_argument("--no-render", action="store_true", help="只运行 scan 和 scan HTML，不刷新 catalog/版本详情页；用于定位慢点")
+    p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="只扫描目录中的某个阶段")
+    p.add_argument("--with-evidence", action="store_true", help="不再由 scan 触发目录刷新；请改用 cat --refresh-catalog，确需轻量文件证据时再加此项")
+    p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次扫描的内容哈希策略")
+    p.add_argument("--parse-file-types", help="覆盖本次扫描进入解析器的文件类型，例如 lef,cdl")
+    p.add_argument("--parse-exclude-file-types", help="覆盖本次扫描不进入解析器的文件类型，例如 verilog,liberty,spef")
+    p.add_argument("--parse-jobs", help="覆盖本次扫描的解析器并发数")
+    p.add_argument("--no-render", action="store_true", help="只运行扫描和扫描页面，不刷新目录/版本详情页；用于定位慢点")
 
-    p = sub.add_parser("cat", help="渲染已有 catalog/HTML；显式 --refresh-catalog/--with-evidence/--full 才重建 catalog")
+    p = sub.add_parser("cat", help="渲染已有目录/HTML；显式 --refresh-catalog/--with-evidence/--full 才重建目录")
     p.add_argument("library", nargs="?")
     p.add_argument("version", nargs="?")
     p.add_argument("--full", action="store_true", help="显式全量 catalog refresh，不复用 catalog_state.json")
     p.add_argument("--fast", action="store_true", help="显式目录级 catalog refresh")
-    p.add_argument("--with-evidence", action="store_true", help="显式 catalog refresh 并为发现的版本收集轻量文件类型 evidence；大 RAW 树会更慢")
-    p.add_argument("--update-detail", action="store_true", help="刷新 Version Review 更新详情；旧 refresh 命令会改写到这里")
-    p.add_argument("--all", action="store_true", help="配合 --update-detail 刷新所有 catalog library 的更新详情")
-    p.add_argument("--mode", default="current_effective", choices=["current_effective", "previous_effective", "adjacent", "cumulative"], help="更新详情默认使用 current/previous effective；adjacent 仅用于显式手动 compare")
-    p.add_argument("--rescan", action="store_true", help="配合 --update-detail 强制重扫 old/new 版本")
-    p.add_argument("--refresh-catalog", action="store_true", help="显式刷新 catalog；默认 cat 只重渲染已有 catalog")
+    p.add_argument("--with-evidence", action="store_true", help="显式刷新目录并为发现的版本收集轻量文件证据；大型 RAW 树会更慢")
+    p.add_argument("--update-detail", action="store_true", help="刷新版本详情页的更新详情；旧 refresh 命令已归并到这里")
+    p.add_argument("--all", action="store_true", help="配合 --update-detail 刷新所有目录库的更新详情")
+    p.add_argument("--mode", default="current_effective", choices=["current_effective", "previous_effective", "adjacent", "cumulative"], help="更新详情默认使用当前/上一有效版；相邻版本只用于显式手动对比")
+    p.add_argument("--rescan", action="store_true", help="配合 --update-detail 强制重扫旧版和新版")
+    p.add_argument("--refresh-catalog", action="store_true", help="显式刷新目录；默认 cat 只重渲染已有 catalog")
 
-    root_library = sub.add_parser("library", help="维护人工确认 library registry，并生成正式 library map")
+    root_library = sub.add_parser("library", help="维护人工确认的库登记表，并生成正式库映射")
     lsp = root_library.add_subparsers(dest="library_cmd", required=True)
-    p = lsp.add_parser("discover", help="从 RAW 中发现候选 library root，写出候选快照；不会覆盖人工 registry")
+    p = lsp.add_parser("discover", help="从 RAW 中发现候选库根，写出候选快照；不会覆盖人工登记表")
     p.add_argument("--out", help="候选 TSV 输出，默认 $WORK/config/library_candidates/latest.tsv")
     p.add_argument("--json-out", help="机器发现 evidence JSON，默认 $WORK/config/library_candidates/latest.json")
     p.add_argument("--html-out", help="发现结果审查 HTML，默认 $WORK/config/library_candidates/latest.html")
@@ -659,15 +663,15 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--max-candidates", type=int, default=200)
     p.add_argument("--default-status", choices=["REVIEW", "OK"], default="REVIEW")
 
-    p = lsp.add_parser("accept", help="把候选 TSV 中标为 OK/ENABLE 的行合并进人工 registry")
+    p = lsp.add_parser("accept", help="把候选 TSV 中标为 OK/ENABLE 的行合并进人工登记表")
     p.add_argument("--input", help="候选 TSV 输入，默认 $WORK/config/library_candidates/latest.tsv")
     p.add_argument("--registry", help="人工确认 registry，默认 $WORK/config/library_registry.tsv")
 
-    p = lsp.add_parser("list", help="列出 catalog 中可直接用于命令的正式库名和版本名")
-    p.add_argument("library", nargs="?", help="正式库名；传入后可配合 --versions 列版本")
+    p = lsp.add_parser("list", help="列出目录中可直接用于命令的正式库名和版本名")
+    p.add_argument("library", nargs="?", help="正式库名；传入后可配合 --versions 列出版本")
     p.add_argument("--versions", action="store_true", help="列出该库的版本名")
-    p.add_argument("--plain", action="store_true", help="只输出正式库名或版本名，每行一个，便于复制和 shell completion")
-    p.add_argument("--effective", action="store_true", help="并排列出交付库库存和当前 Effective 有效组合")
+    p.add_argument("--plain", action="store_true", help="只输出正式库名或版本名，每行一个，便于复制和命令补全")
+    p.add_argument("--effective", action="store_true", help="并排列出交付库库存和当前有效组合")
 
     p = lsp.add_parser("add", help="已知库根时直接加入人工 registry，不做 discover")
     p.add_argument("library_id", help="正式库名，例如 vendor_A.openroad_platform.openroad_asap7")
@@ -679,58 +683,58 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--apply", action="store_true", help="加入 registry 后立即生成正式 library_catalog.yml")
     p.add_argument("--refresh-catalog", action="store_true", help="配合 --apply 立即把该库局部投影进 catalog.json/HTML")
 
-    p = lsp.add_parser("apply", help="把人工确认后的 registry 转成正式 library_catalog.yml")
+    p = lsp.add_parser("apply", help="把人工确认后的登记表转成正式 library_catalog.yml")
     p.add_argument("--input", help="输入 registry，默认 $WORK/config/library_registry.tsv")
     p.add_argument("--out", help="正式 library_catalog.yml 输出，默认 $WORK/config/library_catalog.yml")
 
-    p = lsp.add_parser("override", help="人工确认/修正一个 catalog 版本的 stage、base、package 关系")
+    p = lsp.add_parser("override", help="人工确认或修正目录版本的阶段、基准版和包类型关系")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"])
-    p.add_argument("--parent", help="Compatibility alias for --previous-effective")
-    p.add_argument("--base", help="Compatibility alias for --base-full")
+    p.add_argument("--parent", help="--previous-effective 的兼容别名")
+    p.add_argument("--base", help="--base-full 的兼容别名")
     p.add_argument("--package-type", choices=["FULL_PACKAGE", "PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "UNKNOWN_PACKAGE"])
-    p.add_argument("--update-scope", help="Comma/space separated scope, e.g. lib,lef")
+    p.add_argument("--update-scope", help="以逗号或空格分隔的更新范围，例如 lib,lef")
     p.add_argument("--standalone", action="store_true", default=None)
     p.add_argument("--base-required", action="store_true", default=None)
-    p.add_argument("--base-full", dest="base_full_version", help="Nearest confirmed full package baseline")
-    p.add_argument("--previous-effective", dest="previous_effective_version", help="Previous accepted/effective version used as default diff target")
+    p.add_argument("--base-full", dest="base_full_version", help="最近确认的完整包基线")
+    p.add_argument("--previous-effective", dest="previous_effective_version", help="作为默认对比目标的上一接受版/有效版")
     p.add_argument("--compare-default", choices=["previous_effective", "full_baseline", "none"])
     p.add_argument("--current-effective", action="store_true", default=None)
     p.add_argument("--manual-review", action="store_true", default=None)
     p.add_argument("--note")
     p.add_argument("--updated-by", default="short_cli")
 
-    p = sub.add_parser("cmp", help="按 base 关系运行结构 diff；默认不偷偷重扫")
+    p = sub.add_parser("cmp", help="按基准版关系运行结构对比；默认不偷偷重扫")
     p.add_argument("library")
     p.add_argument("version")
-    p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"], help="Catalog relation used when --base is not provided")
-    p.add_argument("--base", help="显式指定 base version；catalog 无法可靠推断时必须传入")
-    p.add_argument("--scan-if-missing", action="store_true", help="compare 前只扫描缺少或已过期 evidence 的 old/new 版本")
-    p.add_argument("--rescan", action="store_true", help="compare 前强制重扫 old/new 版本")
+    p.add_argument("--mode", default="adjacent", choices=["adjacent", "cumulative"], help="未提供 --base 时使用的目录版本关系")
+    p.add_argument("--base", help="显式指定基准版本；目录无法可靠推断时必须传入")
+    p.add_argument("--scan-if-missing", action="store_true", help="对比前只扫描缺少或已过期证据的旧版和新版")
+    p.add_argument("--rescan", action="store_true", help="对比前强制重扫旧版和新版")
     p.add_argument("--auto-scan", action="store_true", help=SUPPRESS)
-    p.add_argument("--refresh-catalog", action="store_true", help="compare 前刷新该 library catalog；默认使用已有 catalog.json")
-    p.add_argument("--with-evidence", action="store_true", help="配合 --refresh-catalog 收集文件类型 evidence")
+    p.add_argument("--refresh-catalog", action="store_true", help="对比前刷新该库目录；默认使用已有 catalog.json")
+    p.add_argument("--with-evidence", action="store_true", help="配合 --refresh-catalog 收集文件类型证据")
 
-    p = sub.add_parser("fd", help="运行单文件两两 diff；支持 catalog 同路径跨版本，或 --old/--new 显式文件")
+    p = sub.add_parser("fd", help="运行单文件逐对对比；支持目录同路径跨版本，或用 --old/--new 显式指定文件")
     p.add_argument("library", nargs="?")
     p.add_argument("version", nargs="?")
     p.add_argument("relpath", nargs="?")
-    p.add_argument("--old", dest="old_file", help="显式指定 old 文件路径；配合 --new 使用，不读取 catalog")
-    p.add_argument("--new", dest="new_file", help="显式指定 new 文件路径；配合 --old 使用，不读取 catalog")
+    p.add_argument("--old", dest="old_file", help="显式指定旧文件路径；配合 --new 使用，不读取目录")
+    p.add_argument("--new", dest="new_file", help="显式指定新文件路径；配合 --old 使用，不读取目录")
     p.add_argument("--base")
     p.add_argument("--type", metavar="FILE_TYPE", help="覆盖自动推断的文件类型；专家入口，具体类型按策略校验")
-    p.add_argument("--force-large", action="store_true", help="专家入口：允许摘要级/元数据级证据文件类型运行手动文件深度对比")
+    p.add_argument("--force-large", action="store_true", help="专家入口：允许摘要级/元数据级证据文件类型运行手动深度对比")
 
-    p = sub.add_parser("rel", help="对已扫描版本执行 release check/link/verify 规划；不会运行 scan")
+    p = sub.add_parser("rel", help="对已扫描版本执行发布检查、链接和验证规划；不会运行扫描")
     p.add_argument("library")
     p.add_argument("version", nargs="?")
     p.add_argument("--alias", default="current")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--link-mode", default="symlink", choices=["copy", "symlink"])
-    p.add_argument("--check-only", action="store_true", help="只对该 catalog 版本运行发布检查")
-    p.add_argument("--check-first", action="store_true", help="兼容显式写法；rel 默认已先运行 release-check")
+    p.add_argument("--check-only", action="store_true", help="只对该目录版本运行发布检查")
+    p.add_argument("--check-first", action="store_true", help="兼容显式写法；rel 默认已先运行发布检查")
     p.add_argument("--explain", action="store_true", help="只打印发布检查解释 JSON，不执行发布写入")
     p.add_argument("--only-checked", action="store_true", help="仅在已有/最新发布检查为 PASS/PASS_WITH_WARNING 时发布")
     p.add_argument("--only-ready", action="store_true", help="跳过需要人工复核或已阻塞的版本")
@@ -742,40 +746,40 @@ def _build_parser() -> ArgumentParser:
 
     p = sub.add_parser("action", help="运行 $WORK/actions/<library>.action 中的人工编排动作")
     p.add_argument("library")
-    p.add_argument("--action", help="Explicit action file path. Default: $WORK/actions/<library>.action")
+    p.add_argument("--action", help="显式动作文件路径；默认使用 $WORK/actions/<library>.action")
 
     p = sub.add_parser("next", help="小白入口：查看下一步、只读预演、执行或接受候选有效版")
     p.add_argument("library", nargs="?", help="正式库名；不传则查看全部库工作清单")
     p.add_argument("--ready", action="store_true", help="不传 library 时，只显示可执行/可接受的库")
     p.add_argument("--blocked", action="store_true", help="不传 library 时，只显示需要人工处理的库")
     p.add_argument("--plan-only", action="store_true", help="显式只读预演；与默认 `lg next <库名>` 等价")
-    p.add_argument("--apply", action="store_true", help="传 library 时，按预演计划执行 scan/effective compare/render")
-    p.add_argument("--accept", action="store_true", help="传 library 时，接受当前 candidate effective")
-    p.add_argument("--fix", action="store_true", help="传 library 时，只显示包类型/Base 的人工修正建议，不修改数据")
+    p.add_argument("--apply", action="store_true", help="传入库名时，按预演计划执行扫描、有效组合、对比和渲染")
+    p.add_argument("--accept", action="store_true", help="传入库名时，接受当前候选组合")
+    p.add_argument("--fix", action="store_true", help="传入库名时，只显示包类型/基准版的人工修正建议，不修改数据")
     p.add_argument("--by", help="配合 --accept 记录接受人")
     p.add_argument("--note", help="配合 --accept 记录说明")
     p.add_argument("--since", help="传 library 时，临时从指定 raw version 之后推导窗口")
-    p.add_argument("--rebuild", action="store_true", help="传 library 时，强制重建 candidate effective 和 compare")
+    p.add_argument("--rebuild", action="store_true", help="传入库名时，强制重建候选组合和对比")
     p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
-    p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次 scan hash 策略")
-    p.add_argument("--parse-file-types", help="覆盖本次 scan parser 类型")
-    p.add_argument("--parse-exclude-file-types", help="覆盖本次 scan parser 排除类型")
-    p.add_argument("--parse-jobs", help="覆盖本次 parser worker 数")
+    p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次扫描的哈希策略")
+    p.add_argument("--parse-file-types", help="覆盖本次扫描的解析器类型")
+    p.add_argument("--parse-exclude-file-types", help="覆盖本次扫描排除的解析器类型")
+    p.add_argument("--parse-jobs", help="覆盖本次解析器并发数")
 
-    p = sub.add_parser("intake", help="预演或执行 review window；已有有效版则对比更新，否则建立初始接入候选")
+    p = sub.add_parser("intake", help="预演或执行审查窗口；已有有效版则对比更新，否则建立初始接入候选")
     p.add_argument("library")
-    p.add_argument("--since", help="从指定 raw version 之后开始构建窗口")
+    p.add_argument("--since", help="从指定原始版本之后开始构建窗口")
     p.add_argument("--plan-only", action="store_true", help="只读预演窗口和命令计划，不执行、不写文件、不修改数据")
-    p.add_argument("--rebuild", action="store_true", help="强制重建 candidate effective 和 compare")
+    p.add_argument("--rebuild", action="store_true", help="强制重建候选组合和对比")
     p.add_argument("--json", action="store_true", help="配合 --plan-only 输出机器可读 JSON；默认输出人工可读表")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次 scan hash 策略")
     p.add_argument("--parse-file-types", help="覆盖本次 scan parser 类型")
     p.add_argument("--parse-exclude-file-types", help="覆盖本次 scan parser 排除类型")
     p.add_argument("--parse-jobs", help="覆盖本次 parser worker 数")
 
-    p = sub.add_parser("window", help="查看当前 review window 算法结果")
+    p = sub.add_parser("window", help="查看当前审查窗口的计算结果")
     p.add_argument("library")
-    p.add_argument("--since", help="临时从指定 raw version 之后推导窗口")
+    p.add_argument("--since", help="临时从指定原始版本之后推导窗口")
     p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
     p.add_argument("--parse-jobs", help=SUPPRESS)
 
@@ -784,12 +788,12 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--blocked", action="store_true", help="只显示需要人工处理的库")
     p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
 
-    p = sub.add_parser("accept-window", help="接受当前 candidate effective，写 current_effective.json")
+    p = sub.add_parser("accept-window", help="接受当前候选组合，并写入 current_effective.json")
     p.add_argument("library")
     p.add_argument("--accepted-by", default="manual")
     p.add_argument("--note")
 
-    p = sub.add_parser("mark", help="修正版本 package_type；FULL/FIX/HOTFIX/UNKNOWN")
+    p = sub.add_parser("mark", help="修正版本包类型；FULL/FIX/HOTFIX/UNKNOWN")
     p.add_argument("library")
     p.add_argument("version")
     p.add_argument("--type", required=True, choices=["FULL", "FIX", "HOTFIX", "UNKNOWN"])
@@ -820,6 +824,26 @@ def _build_parser() -> ArgumentParser:
         p.add_argument("--item", required=True)
         p.add_argument("--by", required=True)
         p.add_argument("--reason", required=True)
+
+    root_review = sub.add_parser("review", help="静态 Review Packet：冻结、提交判断、汇总 Gate")
+    reviewsp = root_review.add_subparsers(dest="review_cmd", required=True)
+    p = reviewsp.add_parser("prepare", help="冻结当前目标版本/基准版本/对比口径，生成审查数据包")
+    p.add_argument("library")
+    p.add_argument("version")
+    p.add_argument("--base")
+    p.add_argument("--review-owner")
+    p.add_argument("--no-render", action="store_true")
+    p = reviewsp.add_parser("submit", help="提交 PASS/BLOCK/QUESTION 和备注")
+    p.add_argument("library")
+    p.add_argument("version")
+    p.add_argument("--review-id", required=True)
+    p.add_argument("--decision", required=True, choices=["PASS", "BLOCK", "QUESTION"])
+    p.add_argument("--note", default="")
+    p.add_argument("--reviewer")
+    p = reviewsp.add_parser("collect", help="从现有响应重建 Review Gate 和审查报告")
+    p.add_argument("library")
+    p.add_argument("version")
+    p.add_argument("--no-render", action="store_true")
     return parser
 
 
@@ -1066,6 +1090,33 @@ def _review_gate_command(cfg: dict[str, str], args: Any, subcommand: str) -> lis
     ]
     if subcommand in {"accept", "waive"}:
         command.extend(["--item", args.item, "--by", args.by, "--reason", args.reason])
+    return command
+
+
+def _review_packet_command(cfg: dict[str, str], args: Any, subcommand: str) -> list[str]:
+    command = [
+        "review",
+        subcommand,
+        "--catalog",
+        cfg["catalog"],
+        "--library",
+        args.library,
+        "--version",
+        args.version,
+        "--catalog-html-out",
+        cfg["catalog_html"],
+    ]
+    if getattr(args, "no_render", False):
+        command.append("--no-catalog-render")
+    if subcommand == "prepare":
+        if getattr(args, "base", None):
+            command.extend(["--base", args.base])
+        if getattr(args, "review_owner", None):
+            command.extend(["--review-owner", args.review_owner])
+    if subcommand == "submit":
+        command.extend(["--review-id", args.review_id, "--decision", args.decision, "--note", args.note])
+        if getattr(args, "reviewer", None):
+            command.extend(["--reviewer", args.reviewer])
     return command
 
 
@@ -1582,6 +1633,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
     if args.short_command == "rv":
         review_subcommand = args.rv_cmd
         return [_review_gate_command(cfg, args, review_subcommand)]
+    if args.short_command == "review":
+        return [_review_packet_command(cfg, args, args.review_cmd)]
     if args.short_command == "action":
         return _review_commands(cfg, args)
     if args.short_command == "scan":

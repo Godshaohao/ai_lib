@@ -7,6 +7,13 @@ from argparse import Namespace
 from .common import print_json
 
 
+COMPLETED_DIFF_STATUSES = {"SAME", "DIFF", "PASS_WITH_WARNING", "UNVERIFIED"}
+
+
+def _diff_exit_code(result: dict[str, object]) -> int:
+    return 0 if result.get("status") in COMPLETED_DIFF_STATUSES else 2
+
+
 def run_diff_scan(args: Namespace) -> int:
     from lib_guard.diff.scan_diff import diff_scan_outputs
 
@@ -20,7 +27,7 @@ def run_diff_scan(args: Namespace) -> int:
     }
     result = diff_scan_outputs(args.old, args.new, out_path=args.out, version_relation=version_relation)
     print_json(result)
-    return 0 if result.get("status") in {"SAME", "DIFF", "PASS_WITH_WARNING"} else 2
+    return _diff_exit_code(result)
 
 
 def run_diff_adjacent(args: Namespace) -> int:
@@ -32,7 +39,7 @@ def run_diff_adjacent(args: Namespace) -> int:
     pair = resolve_adjacent_pair(args.library_id, args.new_version, workdir=args.workdir)
     result = diff_scan_outputs(pair["old_scan"], pair["new_scan"], out_path=args.out, version_relation=pair["version_relation"])
     print_json(result)
-    return 0 if result.get("status") in {"SAME", "DIFF", "PASS_WITH_WARNING"} else 2
+    return _diff_exit_code(result)
 
 
 def run_diff_cumulative(args: Namespace) -> int:
@@ -44,7 +51,7 @@ def run_diff_cumulative(args: Namespace) -> int:
     pair = resolve_cumulative_pair(args.library_id, args.new_version, workdir=args.workdir)
     result = diff_scan_outputs(pair["old_scan"], pair["new_scan"], out_path=args.out, version_relation=pair["version_relation"])
     print_json(result)
-    return 0 if result.get("status") in {"SAME", "DIFF", "PASS_WITH_WARNING"} else 2
+    return _diff_exit_code(result)
 
 
 def run_diff_render(args: Namespace) -> int:

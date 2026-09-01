@@ -89,9 +89,9 @@ class ReleaseLevelTest(unittest.TestCase):
             self.assertEqual(stage["required_release_level"], "L0")
             self.assertFalse(current["allowed_to_apply"])
             self.assertEqual(current["release_check_status"], "BLOCK")
-            self.assertIn("current requires L1 release level", current["block_reasons"])
+            self.assertIn("current 需要达到发布级别 L1", current["block_reasons"])
             self.assertFalse(approved["allowed_to_apply"])
-            self.assertIn("approved requires L2 release level", approved["block_reasons"])
+            self.assertIn("approved 需要达到发布级别 L2", approved["block_reasons"])
 
     def test_current_alias_accepts_l1_with_p0_diff_and_approved_requires_p2(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -116,7 +116,7 @@ class ReleaseLevelTest(unittest.TestCase):
             self.assertEqual(current["diff_level"], "P0")
             self.assertTrue(current["allowed_to_apply"])
             self.assertFalse(approved["allowed_to_apply"])
-            self.assertIn("approved requires P2 deep diff", approved["block_reasons"])
+            self.assertIn("approved 需要完成深度文件对比", approved["block_reasons"])
 
     def test_approved_alias_accepts_l2_when_p2_diff_is_present(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -172,7 +172,7 @@ class ReleaseLevelTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "BLOCKED")
             self.assertFalse(result["release_check"]["allowed_to_apply"])
-            self.assertIn("approved requires P2 deep diff", result["block_reasons"])
+            self.assertIn("approved 需要完成深度文件对比", result["block_reasons"])
             self.assertFalse((release_root / "ip" / "demo" / "approved").exists())
 
     def test_scan_release_link_uses_manifest_staging_and_promotion(self) -> None:

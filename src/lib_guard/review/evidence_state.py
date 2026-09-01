@@ -162,7 +162,7 @@ def build_version_evidence_state(
             owner="scan evidence exporter",
             primary_artifact=scan["view_coverage"],
             artifacts={key: value for key, value in scan.items() if key not in {"scan_dir", "scan_html"}},
-            message="View 覆盖、文件清单、unknown 和大文件策略应优先从这些表进入页面。",
+            message="视图覆盖、文件清单、未知文件和大文件策略应优先从这些表进入页面。",
         ),
         _source(
             name="diff",

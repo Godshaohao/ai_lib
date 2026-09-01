@@ -1,0 +1,25 @@
+version: review-policy.v1
+review_owner: library_owner
+max_review_items: 10
+
+# 只把发生变化的 View 路由给对应部门；没有变化的 View 不生成审查项。
+routing:
+  liberty: Timing
+  lib: Timing
+  spef: Timing
+  lef: Physical
+  gds: Physical
+  oas: Physical
+  db: Physical
+  ndm: Physical
+  verilog: Integration
+  systemverilog: Integration
+  sdc: Constraint
+  upf: Constraint
+  cpf: Constraint
+  cdl: Circuit
+  spice: Circuit
+  sp: Circuit
+  doc: Documentation
+  waiver: Documentation
+  unknown: Integration

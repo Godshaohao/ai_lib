@@ -6,6 +6,7 @@ from argparse import Namespace
 from pathlib import Path
 import json
 
+from lib_guard.artifacts import write_run_manifest
 from .common import auto_scan_id, print_json
 
 RELEASE_FAILURE_STATUSES = {"BLOCK", "BLOCKED", "MIGRATION_REQUIRED", "FAILED", "FORCE_FAILED"}
@@ -44,6 +45,29 @@ def run_release_check(args: Namespace) -> int:
             update_latest=True,
             summary=result.get("summary", {}),
         )
+    scan_meta = {}
+    meta_path = Path(scan_dir) / "scan_meta.json"
+    if meta_path.exists():
+        scan_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    release_dir = Path(scan_dir) / "release"
+    manifest_path = write_run_manifest(
+        release_dir,
+        operation="release_check",
+        status=result.get("release_check_status", "UNKNOWN"),
+        run_id=f"release_check_{scan_meta.get('scan_id') or auto_scan_id()}",
+        library_type=scan_meta.get("library_type"),
+        library_name=scan_meta.get("library_name"),
+        version=scan_meta.get("release_version"),
+        inputs={"scan_dir": str(scan_dir), "diff_dir": str(args.diff or ""), "policy": str(args.policy or "")},
+        comparison={"diff_dir": str(args.diff or "")},
+        artifacts={
+            "facts": {
+                "release_check": str(release_dir / "release_check.json"),
+                "release_result": str(release_dir / "release_result.json"),
+            }
+        },
+    )
+    result["run_manifest"] = str(manifest_path)
     print_json(result)
     return 2 if _release_failed(result.get("release_check_status")) else 0
 
@@ -69,7 +93,7 @@ def run_release_link(args: Namespace) -> int:
     from lib_guard.release.linker import link_release_from_scan
 
     if not getattr(args, "release_root", None):
-        raise ValueError("release link --scan requires --release-root")
+        raise ValueError("release link --scan 需要提供 --release-root")
 
     scan_dir = resolve_scan_dir(scan=args.scan, latest=args.latest, library_id=args.library_id, mode=args.mode, workdir=args.workdir)
     dry_run = not bool(args.apply)

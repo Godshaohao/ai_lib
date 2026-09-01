@@ -9,14 +9,9 @@ from typing import Any, Mapping, Sequence
 from lib_guard.atomic import atomic_write_json
 from lib_guard.catalog.runtime import load_catalog_view
 from lib_guard.effective.pointer import load_current_pointer, safe_name
+from lib_guard.package.types import package_kind as canonical_package_kind
 
 SCHEMA_VERSION = "review_window.v1"
-
-FULL_TYPES = {"FULL", "FULL_PACKAGE", "BASE_FULL", "BASE", "COMPLETE"}
-FIX_TYPES = {"FIX", "HOTFIX", "PARTIAL", "PARTIAL_UPDATE", "DOC_UPDATE", "UPDATE"}
-IGNORE_TYPES = {"IGNORE", "IGNORED"}
-UNKNOWN_TYPES = {"UNKNOWN", "UNKNOWN_PACKAGE", "UNCLASSIFIED", "NEEDS_CONFIRM"}
-
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -90,27 +85,13 @@ def version_map(versions: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str,
 
 
 def package_kind(version: Mapping[str, Any]) -> str:
-    explicit = str(version.get("package_type") or version.get("delivery_type") or "").strip().upper()
-    if explicit in UNKNOWN_TYPES or explicit.startswith("UNKNOWN"):
-        return "UNKNOWN"
-    if explicit in FULL_TYPES or "FULL" in explicit:
-        return "FULL"
-    if explicit in FIX_TYPES or "HOTFIX" in explicit or "PARTIAL" in explicit or explicit.endswith("UPDATE"):
-        return "FIX"
-    if explicit in IGNORE_TYPES:
-        return "IGNORE"
-    if explicit:
-        return "UNKNOWN"
-    return "UNKNOWN"
+    return canonical_package_kind(version)
 
 
 def guessed_package_kind(version: Mapping[str, Any]) -> str:
-    name = version_id(version).lower()
-    if any(token in name for token in ["full", "initial", "base", "final", "release"]):
-        return "FULL"
-    if any(token in name for token in ["fix", "hotfix", "patch", "update"]):
-        return "FIX"
-    return "UNKNOWN"
+    # Keep the field for schema compatibility, but do not infer package type
+    # from version names. Names are not delivery metadata.
+    return package_kind(version)
 
 
 def _scan_evidence_exists(version: Mapping[str, Any]) -> bool:
@@ -207,12 +188,23 @@ def _resolve_candidate(anchor: Mapping[str, Any], item_ids: Sequence[str], versi
             last_full_idx = idx
     if last_full_idx is not None:
         base_full = item_ids[last_full_idx]
-        overlays = [vid for vid in item_ids[last_full_idx + 1 :] if package_kind(versions_by_id.get(vid, {})) != "IGNORE"]
+        overlays = [
+            vid
+            for vid in item_ids[last_full_idx + 1 :]
+            if package_kind(versions_by_id.get(vid, {})) in {"FIX", "DOC"}
+        ]
         intermediate = list(item_ids[:last_full_idx])
         rule = "latest_full_in_window"
     elif str(anchor.get("base_full") or ""):
         base_full = str(anchor.get("base_full") or "")
-        overlays = [*list(anchor.get("accepted_updates", []) or []), *[vid for vid in item_ids if package_kind(versions_by_id.get(vid, {})) != "IGNORE"]]
+        overlays = [
+            *list(anchor.get("accepted_updates", []) or []),
+            *[
+                vid
+                for vid in item_ids
+                if package_kind(versions_by_id.get(vid, {})) in {"FIX", "DOC"}
+            ],
+        ]
         intermediate = []
         rule = "append_to_current_effective"
     else:
@@ -491,9 +483,9 @@ def resolve_review_window(
     if is_bootstrap:
         warnings.append("尚未建立有效版：本次为初始接入候选，raw FULL 与候选组合的对比仅用于验证组合一致性，不代表版本更新差异。")
     if candidate.get("unknown_package_versions"):
-        warnings.append("存在 UNKNOWN package_type；请先用 lg mark 或 lg library override 确认类型，再执行 lg next --plan-only / --apply。")
+        warnings.append("存在未确认的包类型；请先用 lg mark 或 lg library override 确认类型，再执行 lg next --plan-only / --apply。")
     if candidate.get("intermediate_items"):
-        warnings.append("Versions before the latest FULL are kept as window evidence and are not overlaid on the candidate FULL.")
+        warnings.append("最新完整包之前的版本会作为窗口证据保留，不会叠加到候选完整包上。")
 
     return {
         "schema_version": SCHEMA_VERSION,

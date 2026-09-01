@@ -8,6 +8,7 @@ import os
 import re
 
 from lib_guard.review.io import as_file_href, read_json
+from lib_guard.package.types import package_kind, package_type_from_version
 from lib_guard.render import product_theme as ui
 
 
@@ -67,7 +68,7 @@ def short_name(value: Any, head: int = 26, tail: int = 18) -> str:
 
 
 def package_type(version: Mapping[str, Any]) -> str:
-    return str(version.get("package_type") or version.get("version_type") or version.get("stage") or "UNKNOWN").upper()
+    return package_type_from_version(version)
 
 
 def base_full_version(version: Mapping[str, Any]) -> str | None:
@@ -96,7 +97,7 @@ def previous_effective_version(version: Mapping[str, Any]) -> str | None:
 
 def is_full_baseline(version: Mapping[str, Any]) -> bool:
     pkg = package_type(version)
-    return bool(truthy(version.get("standalone")) or pkg in {"FULL_PACKAGE", "FULL"})
+    return bool(truthy(version.get("standalone")) or pkg == "FULL_PACKAGE")
 
 
 def relation_status(version: Mapping[str, Any]) -> str:
@@ -171,17 +172,13 @@ def file_review_status(version: Mapping[str, Any]) -> str:
 
 
 def node_package_type(version: Mapping[str, Any]) -> str:
-    pkg = package_type(version)
-    version_id = str(version.get("version_id") or version.get("version") or "").lower()
-    stage = str(version.get("stage") or "").lower()
-    if pkg in {"FULL_PACKAGE", "FULL"} or version_id.startswith(("stable_", "final_", "initial_")) or stage in {"stable", "final", "initial"}:
+    kind = package_kind(package_type(version))
+    if kind == "FULL":
         return "full"
-    if pkg == "HOTFIX" or stage == "ad-hoc":
+    if kind == "FIX":
         return "hotfix"
-    if pkg in {"DOC_UPDATE", "DOC_ONLY"}:
+    if kind == "DOC":
         return "doc"
-    if pkg in {"PARTIAL_UPDATE", "PARTIAL"} or version_id.startswith(("patch_", "update_")) or version.get("update_scope"):
-        return "partial"
     return "unknown"
 
 

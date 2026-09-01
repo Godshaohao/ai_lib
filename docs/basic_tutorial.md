@@ -15,11 +15,24 @@ Status: current
 | 目标读者 | 库管理员、IP 使用者、首次接入新版本的人 |
 | 目标判断 | 新库/新版本是否能进入审查、是否能成为当前有效版、是否能 release |
 | 允许输入 | RAW 库根、人工确认的库名/版本名、package type/Base 修正、review 决策 |
-| 主要输出 | `catalog.json`、`catalog_runtime.json`、scan evidence、diff evidence、Version Detail、current effective、release manifest |
+| 主要输出 | `catalog.json`、`catalog_runtime.json`、scan evidence、diff evidence、Version Detail、current effective、release manifest、每次运行的 `run_manifest.json` |
 | 禁止做法 | 手改生成 HTML、手改 `catalog.json` 的 scan/diff 字段、用全量 discover 代替已知库入库 |
 
 底层 `python -m lib_guard.cli` 是自动化和调试入口；日常使用优先用
 `$PROJ/scripts/lg.csh`。
+
+如果需要浏览器操作，可启动 Web 控制台。它只是 CLI 的受控界面，不改变事实源：
+
+```bash
+python3 -m venv .venv-web
+. .venv-web/bin/activate
+python -m pip install -r requirements-web.txt
+PYTHONPATH=src python -m lib_guard.web.app --config $WORK/lib_guard.yml
+```
+
+浏览器打开 `http://127.0.0.1:5000/`。页面默认只读现有库和版本；扫描、对比、发布检查
+通过固定动作提交 Job，完成后仍以 `run_manifest.json` 和 Version Detail 为准。
+完整验收项见 [Web 控制台验收清单](web_console_checklist.md)。
 
 如果在 tcsh 里长期手动操作，先开启短命令补全和 `lg` alias；纯 csh 只能获得 alias，不能注册 Tab 补全：
 
@@ -120,6 +133,12 @@ $WORK/config/library_catalog.yml
 `library_catalog.yml` 是 Catalog 的正式输入；`catalog.json` 是资产快照，
 `catalog_runtime.json` 保存 scan/diff/release 运行状态。业务读取时会自动合并两者；
 如果二者不一致，先检查 registry/apply 和 runtime artifact，不要手改生成文件。
+
+每次 `scan`、`cmp` 或 `rel --check` 完成后，优先看命令输出中的 `run_manifest`。它是本次
+运行的产物导航，不是新的事实源，会列出输入、Base、scan/diff/release 事实、报告和版本
+详情页。不要再根据目录名猜报告位置；没有 `run_manifest` 就视为本次运行输出不完整。
+
+完整检查项见 [运行产物与报告检查清单](artifact_output_checklist.md)。
 
 大 RAW 树上不要把 discover 当成日常刷新。默认 discover 是浅层、有上限的候选发现：
 
@@ -229,16 +248,16 @@ $PROJ/scripts/lg.csh library list <LIBRARY> --versions --plain
 
 | 场景 | 判断方式 | 推荐命令 |
 | --- | --- | --- |
-| FULL 流程 | 最新交付本身是完整包，作为新的完整基线 | `lg next <LIBRARY>` 预演，确认后 `lg next <LIBRARY> --apply` |
-| 增量流程 | 最新 FULL 作为基线，后续 FIX/HOTFIX 叠加成 candidate effective | `lg next <LIBRARY>` 预演，确认后 `lg next <LIBRARY> --apply` |
+| 完整包流程 | 最新交付本身是完整包，作为新的完整基线 | `lg next <LIBRARY>` 预演，确认后 `lg next <LIBRARY> --apply` |
+| 增量流程 | 最新完整包作为基线，后续 FIX/HOTFIX 叠加成候选组合 | `lg next <LIBRARY>` 预演，确认后 `lg next <LIBRARY> --apply` |
 | 包类型不确定 | 有版本被识别为 `UNKNOWN_PACKAGE` 或 Base 不可信 | `lg next <LIBRARY> --fix` 看修正建议，再 `lg mark ...` 或 `lg library override ...` |
-| 审查通过 | Version Detail 确认可用后写入当前有效版 | `lg next <LIBRARY> --accept --by <USER> --note "review passed"` |
+| 审查通过 | 版本详情页确认可用后写入当前有效版 | `lg next <LIBRARY> --accept --by <USER> --note "审查通过"` |
 
 `lg next <LIBRARY>` 默认只读，不执行 scan/diff，不改 current effective。它会显示：
 
 ```text
 基线确认
-流程判断：FULL流程 / FULL流程 + 增量流程
+流程判断：完整包流程 / 完整包流程 + 增量流程
 版本选择表
 建议修正命令
 当前组合
@@ -296,7 +315,7 @@ $PROJ/scripts/lg.csh cmp <LIBRARY> <VERSION> --base <BASE_VERSION> --scan-if-mis
 firefox <render_summary.open_first>
 ```
 
-第一屏只看五个判断：接入判断、审查对象、对比上下文、View 变化、证据状态。
+第一屏只看五个判断：接入判断、审查对象、对比上下文、视图变化、证据状态。
 如果这里显示 `STALE_OR_MISSING` 或 `NEEDS_BASE_CONFIRM`，先不要看 parser 明细，
 先回到库名、版本名、base/effective 是否正确。
 
@@ -312,15 +331,15 @@ firefox <render_summary.open_first>
 | `scan <LIBRARY> <VERSION>` | 是 | 否 | 是，仅该版本 | 生成 scan evidence |
 | `scan <LIBRARY> --missing` | 是，批量缺失项 | 否 | 是，成功版本集合 | 补齐 scan evidence |
 | `next` | 否 | 否 | 否 | 小白入口：批量查看库下一步 |
-| `next <LIBRARY>` | 否 | 否 | 否 | 预演该库 FULL/增量流程、Base 和 candidate |
+| `next <LIBRARY>` | 否 | 否 | 否 | 预演该库完整包/增量流程、基准版和候选组合 |
 | `next <LIBRARY> --apply` | 是，window 内版本 | 是，effective compare | 是，window 内版本 | 确认后执行 scan、effective compare、刷新详情页 |
-| `next <LIBRARY> --accept --by ...` | 否 | 否 | 是，window 内版本 | 接受 candidate effective |
+| `next <LIBRARY> --accept --by ...` | 否 | 否 | 是，窗口内版本 | 接受候选组合 |
 | `worklist` | 否 | 否 | 否 | 专家别名：批量查看哪些库可执行、需人工确认或无新版本 |
 | `cmp <LIBRARY> <VERSION> --base ...` | 仅 `--scan-if-missing/--rescan` 时 | 是 | 是，target 版本 | 手动 compare/debug |
 | `intake <LIBRARY> --plan-only` | 否 | 否 | 否 | 专家入口：生成接入计划；默认人工可读，`--json` 才输出机器 JSON |
 | `intake <LIBRARY>` | 是，window 内版本 | 是，effective compare | 是，window 内版本 | 专家入口：执行接入计划 |
 | `window <LIBRARY>` | 否 | 否 | 否 | 专家入口：查看 Base、候选版本、Catalog 类型和建议修正命令 |
-| `accept-window <LIBRARY>` | 否 | 否 | 是，window 内版本 | 接受 candidate effective |
+| `accept-window <LIBRARY>` | 否 | 否 | 是，窗口内版本 | 接受候选组合 |
 | `effective rollback <LIBRARY> --to <ID>` | 否 | 否 | 是，库级页面 | 错误 accept 后把 current effective 指回旧 manifest |
 | `mark <LIBRARY> <VERSION>` | 否 | 否 | 是，该版本 | 修正 package type |
 | `rv ...` | 否 | 否 | 否 | Review Gate 决策 |
@@ -355,7 +374,7 @@ lg library override <LIBRARY> <FIX_VERSION> \
 # 4. 预演：确认 Base、候选版本、Catalog 类型、scan_versions
 lg next <LIBRARY>
 
-# 5. 执行：自动 scan、构建 candidate effective、对比并刷新 Version Detail
+# 5. 执行：自动扫描、构建候选组合、对比并刷新版本详情页
 lg next <LIBRARY> --apply
 ```
 
@@ -446,8 +465,8 @@ lg next <LIBRARY>
 lg next <LIBRARY> --apply
 ```
 
-`next` 会给出 candidate effective：FIX 场景会把 FIX 叠加到基线；FULL 场景会把
-最新 FULL 作为候选完整基线，并把它之前的 FIX 作为证据说明。
+`next` 会给出候选组合：FIX 场景会把 FIX 叠加到基线；FULL 场景会把
+最新完整包作为候选完整基线，并把它之前的 FIX 作为证据说明。
 
 ## 3. 生成 Catalog 页面
 
@@ -473,7 +492,7 @@ Catalog 首页只负责“找库”和进入库工作台。普通 `cat` 不重�
 - 证据入口：进入 Version Detail、Effective、Release Preview。
 
 历史版本、历史 scan/diff 和 compare 记录默认折叠。不要把库工作台当成全版本
-scan/diff 仪表盘；详细 View Delta、文件变化、parser evidence 仍以 Version Detail 为准。
+扫描/对比仪表盘；详细视图变化、文件变化、解析器证据仍以版本详情页为准。
 
 库工作台的数据口径固定为三类，不能混：
 
@@ -699,13 +718,13 @@ $PROJ/scripts/lg.csh cat <LIBRARY> <VERSION>
 
 Version Detail 默认按五组事实审查：接入判断、可信 Base 与对比语义、交付包/候选
 有效版 inventory、View 变化矩阵与关联使用场景、由当前证据产生的待确认事实。
-review window、candidate effective、compare manifest 只作为这个页面的证据来源，
+审查窗口、候选组合、对比清单只作为这个页面的证据来源，
 不是新的主审查入口。
 
 注意两个口径：
 
 - 增量包中“基准存在、本包未携带”不等于删除；FULL 对比中的缺失才按真实删除展示。
-- `Summary-only`、`Metadata-only` 只表示证据深度，不自动代表不完整或阻塞。
+- 摘要级证据、元数据级证据只表示证据深度，不自动代表不完整或阻塞。
 
 普通 View 新增/修改已经在矩阵中展示，不会重复列入待确认区。待确认区只保留真实
 删除、Unknown、缺 Base/Diff 和首版交付范围等未决事实。正式放行管理与事实源审计
@@ -770,9 +789,38 @@ $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> db/top.db --base <BASE_VERSION> --ty
 `--force-large` 只影响这一次手动 `fd`，不会改变 Version Review 或 pairwise 默认策略。
 `summary-only` 和 `metadata-only` 是证据等级，不自动代表不完整，也不自动构成 blocker。
 
-## 9. Review Gate 人工决策
+## 9. 静态部门审查与 Review Gate
 
-Review Gate 只记录真正会阻塞 release 的问题和 owner 决策，不是多部门审批流。
+推荐使用静态 Review Packet。它把真正需要专业判断的问题按 View 路由给部门；人只填写
+PASS/BLOCK/QUESTION 和备注，系统负责版本绑定、过期、汇总和 Gate。不会生成第二个主审查页面。
+
+```csh
+# 1. 冻结当前版本的 Target/Base/Compare，输出 review_items.tsv
+$PROJ/scripts/lg.csh review prepare <LIBRARY> <VERSION>
+
+# 2. 查看问题编号（只读文本，适合转给对应部门）
+cat $WORK/reviews/<LIBRARY>/<VERSION>/<PACKET_ID>/review_items.tsv
+
+# 3. 部门提交判断；BLOCK/QUESTION 必须有备注
+$PROJ/scripts/lg.csh review submit <LIBRARY> <VERSION> \
+  --review-id <REVIEW_ID> --decision PASS
+$PROJ/scripts/lg.csh review submit <LIBRARY> <VERSION> \
+  --review-id <REVIEW_ID> --decision BLOCK \
+  --note "说明阻塞原因和需要补充的事实"
+
+# 4. 汇总当前 Packet，生成 review_gate.json 和 review_report.md
+$PROJ/scripts/lg.csh review collect <LIBRARY> <VERSION>
+```
+
+`review collect` 的状态只有三种：`WAITING`（缺必需意见或有 QUESTION）、`BLOCKED`
+（机器或人工阻塞）和 `APPROVED`（全部必需部门通过）。只有 `APPROVED` 才能继续
+`accept-window`；它仍不等于已经正式 release。
+
+如果 Target/Base/Compare 或策略内容（即使管理员未递增版本号）发生变化，必须重新 `review prepare`。旧 Packet 的
+反馈不会复用。完整人工意见在 `review_report.md`，Version Detail 只展示部门摘要和入口。
+
+旧的 `rv build/check/list/accept/waive` 仍作为历史轻量 Gate 兼容入口；新项目不要再用它
+代替部门 Review Packet。
 
 ```csh
 $PROJ/scripts/lg.csh rv check  <LIBRARY> <VERSION> --gate current

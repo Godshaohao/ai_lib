@@ -710,7 +710,7 @@ def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any
     label, href, kind, disabled = _version_primary_action(version)
     release_html = f"<span class='release-mini'>{ui.badge(version.get('release_status'), '发布')}</span>" if _release_is_visible(version, lib) else ""
     review_hint = ui.badge(file_status, _file_review_text(version)) if file_status != "PAIRWISE_EMPTY" else ""
-    stage_html = "" if stage.lower() in {"", "-", "unknown"} else ui.badge(stage, stage)
+    stage_html = "" if stage.lower() in {"", "-", "unknown"} else ui.badge(stage)
     scan_html = "" if scan_status == "NOT_SCANNED" else ui.badge(scan_status, scan_text)
     relation_html = "<div class='version-relation version-relation-empty' aria-hidden='true'></div>"
     if base_full or prev_eff:
@@ -742,7 +742,7 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
     latest_effective = _latest_effective_version(lib, versions, effective_items)
     current_confirmed = _has_confirmed_current_effective(lib, versions, effective_items)
     status = lib.get("overall_status") or "UNKNOWN"
-    vendor = str(lib.get("vendor") or "Unknown")
+    vendor = str(lib.get("vendor") or "未知供应方")
     middle = str(lib.get("middle_path") or lib.get("library_root") or "-")
     stages = sorted({str(v.get("stage") or "unknown") for v in versions})
     tags = _library_tags(lib)
@@ -785,7 +785,7 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
 def _group_libraries(libraries: list[Mapping[str, Any]]) -> dict[tuple[str, str], list[Mapping[str, Any]]]:
     grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     for lib in libraries:
-        key = (str(lib.get("vendor") or "Unknown"), str(lib.get("middle_path") or lib.get("library_root") or "-"))
+        key = (str(lib.get("vendor") or "未知供应方"), str(lib.get("middle_path") or lib.get("library_root") or "-"))
         grouped.setdefault(key, []).append(lib)
     return dict(sorted(grouped.items(), key=lambda kv: (kv[0][0], kv[0][1])))
 

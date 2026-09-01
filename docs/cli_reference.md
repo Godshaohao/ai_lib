@@ -51,14 +51,15 @@ lg library list <LIBRARY> --versions --plain
 | `cat` | 渲染已有 catalog/HTML；显式 `--refresh-catalog` 时重建 catalog 投影 |
 | `scan` | 扫描一个版本或一批版本 |
 | `cmp` | 手动对比更新版本和指定 base 版本 |
-| `next` | 小白入口：查看下一步、预演 FULL/增量流程、执行接入、接受 candidate effective |
+| `next` | 小白入口：查看下一步、预演完整包/增量流程、执行接入、接受候选组合 |
 | `worklist` | 专家别名：批量查看哪些库可执行、需人工确认或无新版本 |
 | `intake` | 专家入口：预演/执行新版本接入窗口，自动串起 scan、effective compare 和 Version Detail 刷新 |
-| `window` / `accept-window` | 专家入口：查看接入窗口、接受 candidate effective |
+| `window` / `accept-window` | 专家入口：查看接入窗口、接受候选组合 |
 | `effective rollback` | 错误 accept 后把 current effective 指回旧 manifest |
 | `fd` | 运行单文件两两 diff |
 | `rv check` / `rv list` | 查看 Review Gate 状态 |
 | `rv accept` / `rv waive` | 记录 owner 决策 |
+| `review prepare/submit/collect` | 冻结静态 Review Packet、提交部门判断、确定性汇总 Gate/报告 |
 | `rel` | 执行 release check/link/verify 规划 |
 | `action` | 执行一个 workspace action 文件 |
 
@@ -82,18 +83,21 @@ lg.csh next
 lg.csh next --ready
 lg.csh next ucie
 lg.csh next ucie --apply
-lg.csh next ucie --accept --by lib_owner --note "review passed"
+lg.csh next ucie --accept --by lib_owner --note "审查通过"
 lg.csh worklist
 lg.csh library override ucie stable_20250608 --stage stable --base stable_20250601
 lg.csh intake ucie --plan-only
 lg.csh intake ucie
-lg.csh accept-window ucie --accepted-by lib_owner --note "review passed"
+lg.csh accept-window ucie --accepted-by lib_owner --note "审查通过"
 lg.csh effective rollback ucie --to E_old --by lib_owner --reason "wrong accept"
 lg.csh scan ucie stable_20250608 --parse-file-types lef,cdl
 lg.csh cmp ucie stable_20250608 --base stable_20250601 --scan-if-missing
 lg.csh fd ucie stable_20250608 lef/ucie.lef --base stable_20250601 --type lef
 lg.csh rv check ucie stable_20250608 --gate current
 lg.csh rv accept ucie stable_20250608 --item metadata.db.changed:db/ucie.db --by lib_owner --reason "DB hash change accepted for current."
+lg.csh review prepare ucie stable_20250608
+lg.csh review submit ucie stable_20250608 --review-id review_timing_01 --decision PASS
+lg.csh review collect ucie stable_20250608
 lg.csh action ucie
 lg.csh rel ucie stable_20250608
 lg.csh rel ucie stable_20250608 --apply --overwrite
@@ -111,8 +115,8 @@ lg.csh rel ucie stable_20250608 --apply --overwrite
 | `scan <LIBRARY> <VERSION>` | catalog、raw path | scan_out、catalog runtime 指针 | scan HTML、Version Detail | O(版本文件数) |
 | `cmp <LIBRARY> <VERSION>` | catalog、scan_out、base | diff、catalog runtime 指针 | target Version Detail | O(两版本文件数) |
 | `next <LIBRARY>` | catalog、effective/window | 无 | 无 | O(该库版本数) |
-| `next <LIBRARY> --apply` | catalog、raw、scan/diff/effective | scan_out、effective、diff、plan state | window 内 Version Detail | O(window) |
-| `next <LIBRARY> --accept` | pending window、candidate effective | current_effective | 相关 Version Detail | O(window) |
+| `next <LIBRARY> --apply` | catalog、raw、scan/diff/effective | scan_out、effective、diff、plan state | 窗口内版本详情页 | O(window) |
+| `next <LIBRARY> --accept` | pending window、candidate effective | current_effective | 相关版本详情页 | O(window) |
 | `rel ... --apply` | release manifest、scan/diff/gate | release area、release result | release HTML | O(manifest 文件数) |
 
 所有热路径都应通过 Render Impact 局部刷新 Version Detail。只有显式 `cat --refresh-catalog`
@@ -143,7 +147,7 @@ lg.csh next --ready
 lg.csh next --blocked
 ```
 
-`next` 不传库名时不运行 scan/diff，只根据 catalog、current effective 和 review window 归类：
+`next` 不传库名时不运行 scan/diff，只根据目录、当前有效版和接入窗口归类：
 `可执行`、`可接受`、`需确认包类型`、`需确认Base`、`无新版本`。
 
 单库新版本接入优先用 `next` 两段式：
@@ -153,8 +157,8 @@ lg.csh next ucie
 lg.csh next ucie --apply
 ```
 
-`lg next <LIBRARY>` 只输出 candidate/base/scan_versions、FULL/增量流程判断和确认后执行命令；
-确认后运行 `lg next <LIBRARY> --apply`，系统会自动 scan 缺失版本、构建 candidate effective、做 effective
+`lg next <LIBRARY>` 只输出候选组合、基准版、待扫描版本、完整包/增量流程判断和确认后执行命令；
+确认后运行 `lg next <LIBRARY> --apply`，系统会自动扫描缺失版本、构建候选组合、做有效组合
 compare，并刷新受影响 Version Detail。Version Review 仍是唯一主审查投影。
 
 `intake` 同时会维护：
@@ -175,7 +179,7 @@ $WORK/state/<LIBRARY>/current_plan.json
 Version Detail 审查通过后接受当前候选有效版：
 
 ```csh
-lg.csh next ucie --accept --by lib_owner --note "review passed"
+lg.csh next ucie --accept --by lib_owner --note "审查通过"
 ```
 
 如果错误执行了接受操作，使用：

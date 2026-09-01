@@ -1,6 +1,6 @@
 Status: current
 
-# Scan 证据分层与人工审查口径
+# 扫描证据分层与人工审查口径
 
 `scan` 的核心职责是把一个版本目录转成可复用的证据包。证据包同时服务两类对象：
 
@@ -13,11 +13,11 @@ Status: current
 
 | 项 | 说明 |
 | --- | --- |
-| 目标读者 | scan 维护者、Version Detail 维护者、需要检查扫描证据的 reviewer |
+| 目标读者 | 扫描维护者、版本详情页维护者、需要检查扫描证据的审查人员 |
 | 事实源 | scan 生成的 `file_inventory.json`、`parser_manifest.json`、`parser_results/<view>/*.json`、summary JSON；旧扫描可继续使用 `parser_results.json` |
-| 人工证据 | scan 生成的 `review/*.tsv` 和 Scan HTML 聚合表 |
+| 人工证据 | 扫描生成的 `review/*.tsv` 和扫描 HTML 聚合表 |
 | 禁止做法 | 把 raw JSON、parser 原始结果、cache/progress 日志直接放到主审查页面 |
-| 验证 | scan pipeline 测试、Scan HTML 测试、Version Detail 测试 |
+| 验证 | 扫描流程测试、扫描 HTML 测试、版本详情页测试 |
 
 ## 设计结论
 
@@ -35,14 +35,14 @@ Status: current
 
 ## 产品输出契约
 
-Scan 的输出不是“把所有扫描中间结果都给人看”，而是一个分层证据包：
+扫描输出不是“把所有扫描中间结果都给人看”，而是一个分层证据包：
 
 | 层级 | 默认入口 | 解决的问题 | 是否进入首屏 |
 | --- | --- | --- | --- |
-| 人工摘要 | `review/scan_review.md`、Scan `index.html` | 这个版本能否继续审查、有哪些异常 | 是 |
+| 人工摘要 | `review/scan_review.md`、扫描 `index.html` | 这个版本能否继续审查、有哪些异常 | 是 |
 | 人工证据 | `review/*.tsv` | 数量对应哪些具体文件、哪些 View 使用什么证据等级 | 文件证据表进入，原始表按需打开 |
 | 机器事实 | `manifest.json`、`file_inventory.json`、`parser_manifest.json`、`state_delta.json`、`signatures/` | 供 diff、release、缓存和详情页消费 | 否 |
-| 调试材料 | `logs/`、原始 Parser JSON | 排查性能、失败和实现问题 | 否 |
+| 调试材料 | `logs/`、原始解析器 JSON | 排查性能、失败和实现问题 | 否 |
 
 这四层不能互相冒充：
 
@@ -51,14 +51,14 @@ Scan 的输出不是“把所有扫描中间结果都给人看”，而是一个
 - JSON 是机器接口，不作为人工主页面。
 - 日志只解释“系统怎么运行”，不能用来判断“库是否可用”。
 
-Scan HTML 只保留一个真实页面：`index.html`。历史入口 `scan_report.html` 继续保留，但只做兼容跳转，不再复制完整 HTML。重新渲染旧扫描目录时，如果缺少 `review/scan_review.md`，渲染器会按现有 TSV/JSON 生成它，避免出现死链接。
+扫描页面只保留一个真实页面：`index.html`。历史入口 `scan_report.html` 继续保留，但只做兼容跳转，不再复制完整 HTML。重新渲染旧扫描目录时，如果缺少 `review/scan_review.md`，渲染器会按现有 TSV/JSON 生成它，避免出现死链接。
 
 ## 证据分层
 
 | 层级 | 面向对象 | 内容 | 展示方式 |
 | --- | --- | --- | --- |
-| L1 审查摘要 | IP 使用者 / 库管理员 | scan 结论、view 覆盖、unknown、parser 失败、下一步 | Version Detail / Scan HTML 第一屏 |
-| L2 人工证据表 | reviewer | view 文件表、unknown 文件表、大文件表、parser evidence 表 | TSV/HTML，可筛选、可复制 |
+| L1 审查摘要 | IP 使用者 / 库管理员 | 扫描结论、视图覆盖、未知文件、解析器失败、下一步 | 版本详情页 / 扫描 HTML 第一屏 |
+| L2 人工证据表 | 审查人员 | 视图文件表、未知文件表、大文件表、解析器证据表 | TSV/HTML，可筛选、可复制 |
 | L3 机器事实 | 自动化流程 | inventory、parser manifest、signatures、issues、readiness | JSON，供 diff/render/release 读取 |
 | L4 调试日志 | 工程调试 | progress、cache events、parser errors、raw parser results | debug 区域，默认不展示 |
 
@@ -198,7 +198,7 @@ Scan 页面第一屏只保留四块：
 
 ## 与 Version Detail 的关系
 
-Version Detail 是唯一主审查投影。Scan 页面只是单版本 scan 证据页。
+版本详情页是唯一主审查投影。扫描页面只是单版本扫描证据页。
 
 Version Detail 应读取 scan 的人工证据表和机器事实，组合成：
 
@@ -221,8 +221,8 @@ Version Detail 页面不应内嵌 scan raw 绝对路径、`scan_html` 绝对路�
 - `scan/evidence_export.py` 同时生成一页人工可读的 `review/scan_review.md`。
 - `render/html_report.py` 优先读取人工证据表。
 - `render/html_report.py` 只生成一个完整的 `index.html`；`scan_report.html` 仅作为兼容跳转。
-- Scan HTML 不再重复嵌入旧版完整文件清单，Corner/Parser 明细默认折叠。
-- Version Detail 通过 `version_evidence_state` 说明事实源状态，但不展示 raw 绝对路径。
+- 扫描页面不再重复嵌入旧版完整文件清单，工艺角/解析器明细默认折叠。
+- 版本详情页通过 `version_evidence_state` 说明事实源状态，但不展示 raw 绝对路径。
 
 待收敛：
 

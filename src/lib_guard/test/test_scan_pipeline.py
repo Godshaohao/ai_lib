@@ -659,7 +659,7 @@ class ScanPipelineTest(unittest.TestCase):
 
             html_text = (html / "index.html").read_text(encoding="utf-8")
             self.assertIn("大文件计数", html_text)
-            self.assertIn("Corner 摘要", html_text)
+            self.assertIn("工艺角摘要", html_text)
             self.assertIn("解析器摘要", html_text)
             self.assertIn("扫描结论", html_text)
             self.assertIn("视图覆盖矩阵", html_text)
@@ -1699,7 +1699,7 @@ class ScanPipelineTest(unittest.TestCase):
             for file_type in ["verilog", "systemverilog", "liberty", "spef", "db", "gds", "oas"]:
                 self.assertNotIn(file_type, task_types)
 
-    def test_diff_treats_same_hash_path_prefix_change_as_move_not_added_removed(self) -> None:
+    def test_diff_ignores_package_wrapper_prefix_when_logical_path_and_content_match(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             old_root = Path(td) / "old_raw"
             new_root = Path(td) / "new_raw"
@@ -1738,15 +1738,693 @@ class ScanPipelineTest(unittest.TestCase):
             diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
 
             file_diff = json.loads((diff_out / "file_diff.json").read_text(encoding="utf-8"))
-            self.assertEqual(file_diff["counts"]["renamed_or_moved"], 1)
+            self.assertEqual(file_diff["counts"]["renamed_or_moved"], 0)
             self.assertEqual(file_diff["counts"]["added"], 0)
             self.assertEqual(file_diff["counts"]["removed"], 0)
+            self.assertEqual(file_diff["counts"]["unchanged"], 1)
+            self.assertEqual(file_diff["unchanged"], ["constraints.sdc"])
             self.assertEqual(file_diff["added"], [])
             self.assertEqual(file_diff["removed"], [])
             summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
-            self.assertEqual(summary["renamed_or_moved"], 1)
+            self.assertEqual(summary["renamed_or_moved"], 0)
             tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
             self.assertEqual(tasks["summary"]["total"], 0)
+
+    def test_diff_keeps_real_logical_rename_as_content_confirmed_move(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            for scan, path in (
+                (old_scan, "RTL/top.v"),
+                (new_scan, "RTL/top_renamed.v"),
+            ):
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "path": path,
+                                    "file_type": "verilog",
+                                    "size_bytes": 128,
+                                    "hash": "sha256:same-content",
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            from lib_guard.diff.scan_diff import _file_diff
+
+            file_diff = _file_diff(old_scan, new_scan)
+
+            self.assertEqual(file_diff["counts"]["renamed_or_moved"], 1)
+            self.assertEqual(file_diff["counts"]["added"], 0)
+            self.assertEqual(file_diff["counts"]["removed"], 0)
+            move = file_diff["renamed_or_moved"][0]
+            self.assertEqual(move["old_logical_path"], "RTL/top.v")
+            self.assertEqual(move["new_logical_path"], "RTL/top_renamed.v")
+            self.assertEqual(move["reason"], "unique_hash_match")
+
+    def test_diff_does_not_treat_missing_content_evidence_as_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            for scan in (old_scan, new_scan):
+                scan.mkdir()
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "path": "GDS/block.gds",
+                                    "file_type": "gds",
+                                    "size_bytes": 1024,
+                                    "hash": None,
+                                    "hash_status": "SKIPPED_BY_SMART_POLICY",
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            from lib_guard.diff.scan_diff import _file_diff
+
+            file_diff = _file_diff(old_scan, new_scan)
+
+            self.assertEqual(file_diff["changed"], [])
+            self.assertEqual(file_diff["unchanged"], [])
+            self.assertEqual(
+                file_diff["unverified"],
+                [
+                    {
+                        "logical_path": "GDS/block.gds",
+                        "old": "GDS/block.gds",
+                        "new": "GDS/block.gds",
+                        "reason": "missing_content_evidence",
+                    }
+                ],
+            )
+            self.assertEqual(file_diff["counts"]["unverified"], 1)
+
+    def test_diff_keeps_unhashed_version_root_match_unverified(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            for scan, version in (
+                (old_scan, "20250716_UCIe_BE_Final_maintenance"),
+                (new_scan, "20250806_UCIe_BE_Final_maintenance"),
+            ):
+                scan.mkdir()
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "path": f"{version}/GDS/block.gds",
+                                    "file_type": "gds",
+                                    "size_bytes": 1024,
+                                    "hash": None,
+                                    "hash_status": "SKIPPED_BY_SMART_POLICY",
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            from lib_guard.diff.scan_diff import _file_diff
+
+            file_diff = _file_diff(
+                old_scan,
+                new_scan,
+                old_meta={"release_version": "20250716_UCIe_BE_Final_maintenance"},
+                new_meta={"release_version": "20250806_UCIe_BE_Final_maintenance"},
+            )
+
+            self.assertEqual(file_diff["added"], [])
+            self.assertEqual(file_diff["removed"], [])
+            self.assertEqual(file_diff["renamed_or_moved"], [])
+            self.assertEqual(file_diff["counts"]["unverified"], 1)
+            self.assertEqual(file_diff["unverified"][0]["logical_path"], "GDS/block.gds")
+            self.assertEqual(file_diff["unverified"][0]["reason"], "missing_content_evidence")
+
+    def test_diff_propagates_unverified_files_without_per_file_issue_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            diff_out = Path(td) / "diff"
+            for scan, scan_id in ((old_scan, "OLD"), (new_scan, "NEW")):
+                scan.mkdir()
+                (scan / "scan_meta.json").write_text(
+                    json.dumps({"scan_id": scan_id, "library_name": "demo", "release_version": scan_id}),
+                    encoding="utf-8",
+                )
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "path": "GDS/block.gds",
+                                    "file_type": "gds",
+                                    "size_bytes": 1024,
+                                    "hash": None,
+                                    "hash_status": "SKIPPED_BY_SMART_POLICY",
+                                },
+                                {
+                                    "path": "DB/block.db",
+                                    "file_type": "db",
+                                    "size_bytes": 2048,
+                                    "hash": None,
+                                    "hash_status": "SKIPPED_BY_SMART_POLICY",
+                                },
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            result = diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
+
+            summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
+            type_diff = json.loads((diff_out / "type_diff.json").read_text(encoding="utf-8"))
+            issues = json.loads((diff_out / "diff_issues.json").read_text(encoding="utf-8"))
+            content_issues = [item for item in issues["issues"] if item.get("category") == "content_evidence"]
+            self.assertEqual(result["inventory"]["unverified_count"], 2)
+            self.assertEqual(result["status"], "UNVERIFIED")
+            self.assertEqual(summary["status"], "UNVERIFIED")
+            self.assertEqual(summary["recommended_actions"], ["确认缺少内容证据的文件，再判断是否发生变化。"])
+            self.assertEqual(summary["unverified_files"], 2)
+            self.assertEqual(type_diff["by_type"]["gds"]["unverified_count"], 1)
+            self.assertEqual(type_diff["by_type"]["gds"]["status"], "UNVERIFIED")
+            self.assertEqual(type_diff["summary"]["unverified_types"], 2)
+            self.assertEqual(len(content_issues), 1)
+            self.assertIn("2", content_issues[0]["message"])
+
+    def test_diff_cli_treats_unverified_as_completed_review_result(self) -> None:
+        from lib_guard.cli_commands.diff import run_diff_scan
+
+        args = SimpleNamespace(
+            old="old_scan",
+            new="new_scan",
+            out="diff_out",
+            diff_mode="explicit",
+            old_version_type=None,
+            new_version_type=None,
+            release_line=None,
+            parent_version=None,
+            base_version=None,
+        )
+        with patch("lib_guard.diff.scan_diff.diff_scan_outputs", return_value={"status": "UNVERIFIED"}):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(run_diff_scan(args), 0)
+
+    def test_diff_does_not_use_equal_parser_summary_as_full_content_proof(self) -> None:
+        from lib_guard.diff.scan_diff import _compare_file_evidence
+
+        old = {
+            "file_type": "lef",
+            "size_bytes": 1024,
+            "hash": None,
+            "semantic_signature": "parser:same-summary",
+        }
+        new = dict(old)
+
+        self.assertEqual(_compare_file_evidence(old, new), ("unverified", "missing_content_evidence"))
+
+    def test_diff_uses_different_parser_summaries_only_with_same_parser_contract(self) -> None:
+        from lib_guard.diff.scan_diff import _compare_file_evidence
+
+        old = {
+            "file_type": "lef",
+            "size_bytes": 1024,
+            "hash": None,
+            "semantic_signature": "parser:old-summary",
+            "semantic_signature_contract": "parser-contract:v1",
+        }
+        new = {**old, "semantic_signature": "parser:new-summary"}
+
+        self.assertEqual(_compare_file_evidence(old, new), ("changed", "semantic_signature_changed"))
+
+    def test_diff_does_not_compare_parser_summaries_across_parser_versions(self) -> None:
+        from lib_guard.diff.scan_diff import _compare_file_evidence
+
+        old = {
+            "file_type": "lef",
+            "size_bytes": 1024,
+            "hash": None,
+            "semantic_signature": "parser:old-summary",
+            "semantic_signature_contract": "parser-contract:v1",
+        }
+        new = {
+            **old,
+            "semantic_signature": "parser:new-summary",
+            "semantic_signature_contract": "parser-contract:v2",
+        }
+
+        self.assertEqual(_compare_file_evidence(old, new), ("unverified", "parser_contract_mismatch"))
+
+    def test_diff_parser_signature_ignores_diagnostic_stats_and_honors_schema_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def write_scan(scan: Path, *, warning_count: int, schema_version: str, macro: str) -> None:
+                result_path = Path("parser_results/lef/block.json")
+                (scan / result_path.parent).mkdir(parents=True)
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "path": "LEF/block.lef",
+                                    "file_type": "lef",
+                                    "size_bytes": 1024,
+                                    "hash": None,
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (scan / "parser_manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "file": "LEF/block.lef",
+                                    "parser_tasks": [
+                                        {
+                                            "parser_name": "LefParser",
+                                            "parser_version": "2.1",
+                                            "result_path": str(result_path),
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (scan / result_path).write_text(
+                    json.dumps(
+                        {
+                            "parser_name": "LefParser",
+                            "parser_version": "2.1",
+                            "parser_schema_version": schema_version,
+                            "status": "PASS",
+                            "stats": {"macro_count": 1, "warning_count": warning_count},
+                            "data": {"macros": [{"name": macro}]},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            old_scan = root / "old"
+            warning_scan = root / "warning_only"
+            schema_scan = root / "schema_changed"
+            old_scan.mkdir()
+            warning_scan.mkdir()
+            schema_scan.mkdir()
+            write_scan(old_scan, warning_count=0, schema_version="1.0", macro="A")
+            write_scan(warning_scan, warning_count=3, schema_version="1.0", macro="A")
+            write_scan(schema_scan, warning_count=0, schema_version="2.0", macro="B")
+
+            from lib_guard.diff.scan_diff import _file_diff
+
+            warning_diff = _file_diff(old_scan, warning_scan)
+            schema_diff = _file_diff(old_scan, schema_scan)
+
+            self.assertEqual(warning_diff["counts"]["changed"], 0)
+            self.assertEqual(warning_diff["counts"]["unverified"], 1)
+            self.assertEqual(schema_diff["counts"]["changed"], 0)
+            self.assertEqual(schema_diff["unverified"][0]["reason"], "parser_contract_mismatch")
+
+    def test_diff_ignores_parser_quality_runtime_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_scan = root / "old"
+            new_scan = root / "new"
+            for scan, scan_id, cache_hits, example in (
+                (old_scan, "SCAN_OLD", 0, "old_wrapper/LEF/a.lef"),
+                (new_scan, "SCAN_NEW", 1, "new_wrapper/LEF/a.lef"),
+            ):
+                (scan / "summary").mkdir(parents=True)
+                (scan / "scan_meta.json").write_text(
+                    json.dumps({"scan_id": scan_id, "library_name": "demo", "release_version": "v1"}),
+                    encoding="utf-8",
+                )
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "path": "LEF/a.lef",
+                                    "file_type": "lef",
+                                    "size_bytes": 100,
+                                    "hash": "sha256:same",
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (scan / "summary" / "parser_quality.json").write_text(
+                    json.dumps(
+                        {
+                            "scan_id": scan_id,
+                            "schema_version": "1.0",
+                            "status": "PASS",
+                            "parsers": [
+                                {
+                                    "file_type": "lef",
+                                    "parser_name": "LefParser",
+                                    "parser_version": "2.1",
+                                    "file_count": 1,
+                                    "parsed_count": 1,
+                                    "cache_hit_count": cache_hits,
+                                    "failed_count": 0,
+                                    "pass_empty_count": 0,
+                                    "object_count": 1,
+                                    "quality_score": 100,
+                                    "status": "PASS",
+                                    "examples": [example],
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            result = diff_scan_outputs(old_scan, new_scan)
+
+            self.assertEqual(result["status"], "SAME")
+            self.assertFalse(result["parser_quality"]["changed"])
+
+    def test_diff_does_not_force_move_when_hash_match_is_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            (old_scan / "file_inventory.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {"path": "old_a/block.gds", "file_type": "gds", "size_bytes": 1024, "hash": "sha256:same"},
+                            {"path": "old_b/block.gds", "file_type": "gds", "size_bytes": 1024, "hash": "sha256:same"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (new_scan / "file_inventory.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {"path": "new_root/block.gds", "file_type": "gds", "size_bytes": 1024, "hash": "sha256:same"}
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.diff.scan_diff import _file_diff
+
+            file_diff = _file_diff(old_scan, new_scan)
+
+            self.assertEqual(file_diff["renamed_or_moved"], [])
+            self.assertEqual(file_diff["added"], ["new_root/block.gds"])
+            self.assertEqual(file_diff["removed"], ["old_a/block.gds", "old_b/block.gds"])
+
+    def test_release_evidence_uses_normalized_file_diff_events(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            for scan, path in (
+                (old_scan, "old_package/README.md"),
+                (new_scan, "new_package/README.md"),
+            ):
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "path": path,
+                                    "file_type": "doc",
+                                    "doc_type": "readme",
+                                    "size_bytes": 100,
+                                    "hash": "sha256:same",
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            from lib_guard.diff.scan_diff import _file_diff, _release_evidence_diff
+
+            file_diff = _file_diff(old_scan, new_scan)
+            evidence_diff = _release_evidence_diff(file_diff)
+
+            self.assertEqual(file_diff["counts"]["renamed_or_moved"], 0)
+            self.assertEqual(file_diff["counts"]["unchanged"], 1)
+            self.assertEqual(evidence_diff["status"], "SAME")
+            self.assertEqual(evidence_diff["by_role"]["readme"]["added"], [])
+            self.assertEqual(evidence_diff["by_role"]["readme"]["removed"], [])
+
+    def test_release_evidence_reports_role_transition_on_same_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            for scan, role in ((old_scan, "readme"), (new_scan, "release_note")):
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "path": "README.md",
+                                    "file_type": "doc",
+                                    "doc_type": role,
+                                    "size_bytes": 100,
+                                    "hash": "sha256:same",
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            from lib_guard.diff.scan_diff import _file_diff, _release_evidence_diff
+
+            evidence_diff = _release_evidence_diff(_file_diff(old_scan, new_scan))
+
+            self.assertEqual(evidence_diff["by_role"]["readme"]["removed"], ["README.md"])
+            self.assertEqual(evidence_diff["by_role"]["readme"]["status"], "CHANGED")
+            self.assertEqual(evidence_diff["by_role"]["release_note"]["added"], ["README.md"])
+            self.assertEqual(evidence_diff["by_role"]["release_note"]["status"], "CHANGED")
+
+    def test_release_evidence_deduplicates_logical_role_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            for scan, path, role, digest in (
+                (old_scan, "old_package/README.md", "readme", "sha256:old"),
+                (new_scan, "new_package/README.md", "release_note", "sha256:new"),
+            ):
+                (scan / "file_inventory.json").write_text(
+                    json.dumps(
+                        {
+                            "files": [
+                                {
+                                    "path": path,
+                                    "file_type": "doc",
+                                    "doc_type": role,
+                                    "size_bytes": 100,
+                                    "hash": digest,
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            from lib_guard.diff.scan_diff import _file_diff, _release_evidence_diff
+
+            evidence_diff = _release_evidence_diff(_file_diff(old_scan, new_scan))
+
+            self.assertEqual(evidence_diff["by_role"]["readme"]["removed"], ["old_package/README.md"])
+            self.assertEqual(evidence_diff["by_role"]["release_note"]["added"], ["new_package/README.md"])
+
+    def test_release_evidence_excludes_unverified_non_evidence_files(self) -> None:
+        from lib_guard.diff.scan_diff import _release_evidence_diff
+
+        file_diff = {
+            "added": [],
+            "removed": [],
+            "changed": [],
+            "unverified": [
+                {
+                    "logical_path": "GDS/block.gds",
+                    "old": "GDS/block.gds",
+                    "new": "GDS/block.gds",
+                    "reason": "missing_content_evidence",
+                }
+            ],
+            "_old_items": {"GDS/block.gds": {"file_type": "gds"}},
+            "_new_items": {"GDS/block.gds": {"file_type": "gds"}},
+        }
+
+        evidence_diff = _release_evidence_diff(file_diff)
+
+        self.assertEqual(evidence_diff["status"], "SAME")
+        self.assertEqual(evidence_diff["summary"]["unverified_files"], 0)
+
+    def test_release_evidence_counts_unverified_even_when_role_also_changed(self) -> None:
+        from lib_guard.diff.scan_diff import _release_evidence_diff
+
+        file_diff = {
+            "added": [],
+            "removed": [],
+            "changed": ["CHANGELOG.md"],
+            "unverified": [
+                {
+                    "logical_path": "README.md",
+                    "old": "README.md",
+                    "new": "README.md",
+                    "reason": "missing_content_evidence",
+                }
+            ],
+            "_old_items": {
+                "CHANGELOG.md": {"file_type": "doc", "doc_type": "doc"},
+                "README.md": {"file_type": "doc", "doc_type": "doc"},
+            },
+            "_new_items": {
+                "CHANGELOG.md": {"file_type": "doc", "doc_type": "doc"},
+                "README.md": {"file_type": "doc", "doc_type": "doc"},
+            },
+        }
+
+        evidence_diff = _release_evidence_diff(file_diff)
+
+        self.assertEqual(evidence_diff["by_role"]["doc"]["status"], "CHANGED")
+        self.assertEqual(evidence_diff["summary"]["unverified_roles"], 1)
+        self.assertEqual(evidence_diff["summary"]["unverified_files"], 1)
+
+    def test_package_root_migration_counts_added_removed_roots_once(self) -> None:
+        from lib_guard.diff.scan_diff import _package_root_migrations
+
+        class CountingSet(set):
+            def __init__(self, values):
+                super().__init__(values)
+                self.iterations = 0
+
+            def __iter__(self):
+                self.iterations += 1
+                return super().__iter__()
+
+        roots = 20
+        old_items = {f"old_{index}/a.lef": {} for index in range(roots)}
+        new_items = {f"new_{index}/a.lef": {} for index in range(roots)}
+        pairs = [
+            {
+                "logical_path": f"view_{index}/a.lef",
+                "old": f"old_{index}/a.lef",
+                "new": f"new_{index}/a.lef",
+                "comparison": "same",
+            }
+            for index in range(roots)
+        ]
+        raw_added = CountingSet(new_items)
+        raw_removed = CountingSet(old_items)
+
+        migrations = _package_root_migrations(
+            old_items,
+            new_items,
+            pairs,
+            raw_added=raw_added,
+            raw_removed=raw_removed,
+        )
+
+        self.assertEqual(len(migrations), roots)
+        self.assertLessEqual(raw_added.iterations, 1)
+        self.assertLessEqual(raw_removed.iterations, 1)
+
+    def test_diff_removes_single_version_directory_before_unverified_matching(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_container = Path(td) / "old_raw"
+            new_container = Path(td) / "new_raw"
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            diff_out = Path(td) / "diff"
+            old_version = old_container / "20250716_UCIe_BE_Final_maintenance"
+            new_version = new_container / "20250806_UCIe_BE_Final_maintenance"
+            (old_version / "LEF").mkdir(parents=True)
+            (new_version / "LEF").mkdir(parents=True)
+            content = "VERSION 5.8 ;\nMACRO UCIe_BLOCK\n  SIZE 1 BY 1 ;\nEND UCIe_BLOCK\nEND LIBRARY\n"
+            (old_version / "LEF" / "macro.lef").write_text(content, encoding="utf-8")
+            (new_version / "LEF" / "macro.lef").write_text(content, encoding="utf-8")
+            (old_container / "README.txt").write_text("UCIe package root\n", encoding="utf-8")
+            (new_container / "README.txt").write_text("UCIe package root\n", encoding="utf-8")
+
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+            from lib_guard.scan.scanner import ScanRunner
+
+            base = dict(
+                library_type="ip",
+                library_name="ucie",
+                scan_mode="release",
+                state_dir=str(Path(td) / "state"),
+                cache_dir=str(Path(td) / "cache"),
+                skip_cache=True,
+                no_cache=True,
+                no_progress=True,
+                progress_interval=1,
+                parse_jobs=1,
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+            ScanRunner(
+                SimpleNamespace(
+                    **base,
+                    root_path=str(old_container),
+                    out_dir=str(old_scan),
+                    version=old_version.name,
+                    scan_id="OLD_VERSION_ROOT",
+                )
+            ).run()
+            ScanRunner(
+                SimpleNamespace(
+                    **base,
+                    root_path=str(new_container),
+                    out_dir=str(new_scan),
+                    version=new_version.name,
+                    scan_id="NEW_VERSION_ROOT",
+                )
+            ).run()
+
+            diff_scan_outputs(old_scan, new_scan, out_path=diff_out)
+
+            file_diff = json.loads((diff_out / "file_diff.json").read_text(encoding="utf-8"))
+            self.assertEqual(file_diff["counts"]["renamed_or_moved"], 0)
+            self.assertEqual(file_diff["counts"]["added"], 0)
+            self.assertEqual(file_diff["counts"]["removed"], 0)
+            self.assertEqual(file_diff["counts"]["unverified"], 1)
+            self.assertEqual(file_diff["unverified"][0]["old"], "20250716_UCIe_BE_Final_maintenance/LEF/macro.lef")
+            self.assertEqual(file_diff["unverified"][0]["new"], "20250806_UCIe_BE_Final_maintenance/LEF/macro.lef")
+            self.assertEqual(file_diff["unverified"][0]["logical_path"], "LEF/macro.lef")
 
     def test_diff_treats_wrapper_path_change_with_content_delta_as_logical_change(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1802,6 +2480,14 @@ class ScanPipelineTest(unittest.TestCase):
             )
             summary = json.loads((diff_out / "diff_summary.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["changed_files"], 1)
+            type_diff = json.loads((diff_out / "type_diff.json").read_text(encoding="utf-8"))
+            self.assertEqual(type_diff["by_type"]["lef"]["old_count"], 1)
+            self.assertEqual(type_diff["by_type"]["lef"]["new_count"], 1)
+            pairwise_tasks = json.loads((diff_out / "pairwise_diff_tasks.json").read_text(encoding="utf-8"))
+            self.assertEqual(pairwise_tasks["tasks"][0]["pairing_confidence"], "logical_path")
+            self.assertEqual(pairwise_tasks["tasks"][0]["reason"], "logical_path_changed_file")
+            self.assertEqual(pairwise_tasks["tasks"][0]["old_physical_path"], "asap7_source_package/lef/macro.lef")
+            self.assertEqual(pairwise_tasks["tasks"][0]["new_physical_path"], "upstream_ae9a8ed9/lef/macro.lef")
 
     def test_diff_reports_package_root_migration_from_logical_path_pairs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1863,7 +2549,8 @@ class ScanPipelineTest(unittest.TestCase):
             file_diff = json.loads((diff_out / "file_diff.json").read_text(encoding="utf-8"))
             self.assertEqual(file_diff["counts"]["added"], 1)
             self.assertEqual(file_diff["counts"]["removed"], 0)
-            self.assertEqual(file_diff["counts"]["renamed_or_moved"], 2)
+            self.assertEqual(file_diff["counts"]["renamed_or_moved"], 0)
+            self.assertEqual(file_diff["counts"]["unchanged"], 2)
             self.assertEqual(file_diff["counts"]["package_root_migrations"], 1)
             self.assertEqual(file_diff["counts"]["package_root_migration_matched_files"], 2)
             migration = file_diff["package_root_migrations"][0]
@@ -2198,6 +2885,8 @@ class ScanPipelineTest(unittest.TestCase):
         for file_type in ["lef", "liberty", "verilog", "cdl", "sdc", "upf", "cpf", "spef", "db", "waiver", "ibis", "pwl", "snp", "cpm"]:
             args = parser.parse_args(["file-diff", file_type, "--old", "old", "--new", "new", "--out", "out"])
             self.assertEqual(args.file_type, file_type)
+        opt_in = parser.parse_args(["file-diff", "liberty", "--old", "old", "--new", "new", "--out", "out", "--manual-large-file-opt-in"])
+        self.assertTrue(opt_in.manual_large_file_opt_in)
 
     def test_short_cli_expands_catalog_commands(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2575,7 +3264,7 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertIn("lg.csh scan", help_text)
         self.assertIn("lg.csh next ucie --apply", help_text)
         self.assertIn("lg.ps1 scan", help_text)
-        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv}", help_text)
+        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv,review}", help_text)
         self.assertIn("lg.csh intake ucie --plan-only", help_text)
         self.assertIn("lg.csh worklist", help_text)
         self.assertIn("lg.csh window ucie", help_text)
@@ -3395,7 +4084,7 @@ class ScanPipelineTest(unittest.TestCase):
             (old_root / "old_view").mkdir(parents=True)
             (new_root / "new_view").mkdir(parents=True)
             (old_root / "old_view" / "block.lef").write_text("VERSION 5.8 ;\nMACRO A\n  SIZE 1 BY 1 ;\nEND A\n", encoding="utf-8")
-            (new_root / "new_view" / "block.lef").write_text("VERSION 5.8 ;\nMACRO A\n  SIZE 2 BY 1 ;\nEND A\n", encoding="utf-8")
+            (new_root / "new_view" / "renamed.lef").write_text("VERSION 5.8 ;\nMACRO A\n  SIZE 2 BY 1 ;\nEND A\n", encoding="utf-8")
 
             from lib_guard.scan.scanner import ScanRunner
             from lib_guard.diff.scan_diff import diff_scan_outputs

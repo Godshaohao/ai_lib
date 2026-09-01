@@ -19,6 +19,8 @@ CLI 参考负责命令契约，配置参考负责可修改项，数据契约负�
 ## 当前文档
 
 - [基础教程：从新库入库到 Release](basic_tutorial.md)
+- [运行产物与报告检查清单](artifact_output_checklist.md)
+- [Web 控制台验收清单](web_console_checklist.md)
 - [CLI 参考](cli_reference.md)
 - [配置参考](config_reference.md)
 - [数据契约](data_contract.md)

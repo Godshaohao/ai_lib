@@ -58,7 +58,7 @@ def build_scan_review_markdown(data: Mapping[str, Any]) -> str:
         f"- 已识别视图数：`{_md_cell(summary.get('view_count'))}`",
         f"- 未识别文件：`{_md_cell(summary.get('unknown_files'))}`",
         f"- 摘要级 / 元数据级文件：`{_md_cell(summary.get('large_metadata_files'))}`",
-        f"- Parser 失败任务：`{_md_cell(summary.get('parser_failed'))}`",
+        f"- 解析器失败任务：`{_md_cell(summary.get('parser_failed'))}`",
         "",
         "## 视图覆盖",
         "",
@@ -88,7 +88,7 @@ def build_scan_review_markdown(data: Mapping[str, Any]) -> str:
         lines.append(f"- 摘要级 / 元数据级文件共 {len(large)} 个，完整清单见 `large_metadata_files.tsv`。")
     if parser:
         failed = [row for row in parser if int(row.get("failed") or 0) > 0]
-        lines.append(f"- Parser 任务共 {len(parser)} 组；失败组 {len(failed)} 组，详情见 `parser_evidence.tsv`。")
+        lines.append(f"- 解析器任务共 {len(parser)} 组；失败组 {len(failed)} 组，详情见 `parser_evidence.tsv`。")
     if not (missing or unknown or large or parser):
         lines.append("- 当前没有需要人工补充确认的扫描项。")
     lines.extend(
@@ -100,13 +100,13 @@ def build_scan_review_markdown(data: Mapping[str, Any]) -> str:
             "- `files_by_view.tsv`：数量对应的具体文件路径。",
             "- `unknown_files.tsv`：未识别文件及建议动作。",
             "- `large_metadata_files.tsv`：大文件的审查策略。",
-            "- `parser_evidence.tsv`：Parser 聚合结果。",
+            "- `parser_evidence.tsv`：解析器聚合结果。",
             "- `required_view_check.tsv`：必需视图检查。",
             "",
             "## 证据边界",
             "",
-            "- `summary-only` / `metadata-only` 是证据等级，不自动表示文件不完整。",
-            "- 原始 Parser JSON、完整 inventory、hash、缓存和进度日志只服务机器流程或调试，不作为人工主审查入口。",
+            "- 摘要级证据 / 元数据级证据是证据等级，不自动表示文件不完整。",
+            "- 原始解析器 JSON、完整文件清单、哈希、缓存和进度日志只服务机器流程或调试，不作为人工主审查入口。",
             "",
         ]
     )

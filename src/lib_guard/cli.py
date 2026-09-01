@@ -14,7 +14,7 @@ This CLI keeps scan, render, release, catalog, and diff boundaries explicit.
 
 from __future__ import annotations
 
-from argparse import ArgumentParser, Namespace, REMAINDER
+from argparse import ArgumentParser, Namespace, REMAINDER, SUPPRESS
 from typing import Any
 import importlib
 import logging
@@ -91,7 +91,10 @@ run_render_command = _lazy_command("lib_guard.cli_commands.render", "run_render_
 run_review_accept = _lazy_command("lib_guard.cli_commands.review", "run_review_accept")
 run_review_build = _lazy_command("lib_guard.cli_commands.review", "run_review_build")
 run_review_check = _lazy_command("lib_guard.cli_commands.review", "run_review_check")
+run_review_collect = _lazy_command("lib_guard.cli_commands.review", "run_review_collect")
 run_review_list = _lazy_command("lib_guard.cli_commands.review", "run_review_list")
+run_review_prepare = _lazy_command("lib_guard.cli_commands.review", "run_review_prepare")
+run_review_submit = _lazy_command("lib_guard.cli_commands.review", "run_review_submit")
 run_review_waive = _lazy_command("lib_guard.cli_commands.review", "run_review_waive")
 run_scan_command = _lazy_command("lib_guard.cli_commands.scan", "run_scan_command")
 run_scan_status = _lazy_command("lib_guard.cli_commands.scan", "run_scan_status")
@@ -292,6 +295,33 @@ def add_review_parser(subparsers: Any) -> None:
     root = subparsers.add_parser("review", help="Lightweight review gate operations")
     sp = root.add_subparsers(dest="review_cmd", required=True)
 
+    def add_packet_common(p: Any) -> None:
+        p.add_argument("--catalog", required=True)
+        p.add_argument("--library", required=True)
+        p.add_argument("--version", required=True)
+        p.add_argument("--out", help="Review root. Default: <work>/reviews")
+        p.add_argument("--policy", help="review_policy.yaml; default is discovered beside the review root")
+        p.add_argument("--catalog-html-out")
+        p.add_argument("--no-catalog-render", action="store_true")
+
+    p = sp.add_parser("prepare", help="冻结当前 Target/Base/Compare，生成静态 Review Packet")
+    add_packet_common(p)
+    p.add_argument("--base", help="手动指定 Base 版本；不填则使用 Catalog 已记录的 Base")
+    p.add_argument("--review-owner", help="审查负责人；默认取 review_policy.yaml")
+    p.set_defaults(func=run_review_prepare)
+
+    p = sp.add_parser("submit", help="提交一个部门审查判断；只写入新的 response 文件")
+    add_packet_common(p)
+    p.add_argument("--review-id", required=True)
+    p.add_argument("--decision", required=True, choices=["PASS", "BLOCK", "QUESTION"])
+    p.add_argument("--note", default="")
+    p.add_argument("--reviewer", help="默认使用 LIB_GUARD_REVIEWER 或 USER")
+    p.set_defaults(func=run_review_submit)
+
+    p = sp.add_parser("collect", help="从 Packet source records 重建 Review Gate 和 Markdown 报告")
+    add_packet_common(p)
+    p.set_defaults(func=run_review_collect)
+
     def add_common(p: Any) -> None:
         p.add_argument("--catalog", required=True)
         p.add_argument("--library", required=True)
@@ -373,6 +403,10 @@ def add_file_diff_parser(subparsers: Any) -> None:
         p.add_argument("--library-id")
         p.add_argument("--version-id")
         p.add_argument("--base-version")
+        # Accepted from the short CLI's explicit large-file safety gate. The
+        # gate is enforced before this parser; the execution handler only
+        # needs to accept the marker while running the already-approved job.
+        p.add_argument("--manual-large-file-opt-in", action="store_true", help=SUPPRESS)
         p.set_defaults(func=run_file_diff)
 
 

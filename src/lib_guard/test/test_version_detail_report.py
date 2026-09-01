@@ -251,6 +251,10 @@ class VersionDetailReportTest(unittest.TestCase):
         self.assertEqual(lane["lane"], "Metadata-only")
         self.assertEqual(semantics["comparison_scope"], "incremental")
 
+        unknown = comparison_semantics_for_package("UNKNOWN_PACKAGE")
+        self.assertEqual(unknown["comparison_scope"], "unknown")
+        self.assertEqual(unknown["delete_semantics"], "needs_confirm")
+
     def test_version_detail_groups_file_diff_evidence_by_review_lane(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -462,6 +466,72 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertNotIn("old 包内 31 个文件，new 包内 206 个文件", html)
             self.assertNotIn("文件级一一匹配 23", html)
 
+    def test_update_detail_model_projects_confirmed_path_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            diff_dir = root / "diff"
+            diff_dir.mkdir()
+            (diff_dir / "diff_summary.json").write_text(
+                json.dumps(
+                    {
+                        "status": "SAME",
+                        "added_files": 0,
+                        "removed_files": 0,
+                        "changed_files": 0,
+                        "renamed_or_moved": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (diff_dir / "file_diff.json").write_text(
+                json.dumps(
+                    {
+                        "added": [],
+                        "removed": [],
+                        "changed": [],
+                        "renamed_or_moved": [
+                            {
+                                "old": "old_package/RTL/top.v",
+                                "new": "new_package/RTL/top_renamed.v",
+                                "old_logical_path": "RTL/top.v",
+                                "new_logical_path": "RTL/top_renamed.v",
+                                "reason": "unique_hash_match",
+                                "hash": "sha256:same",
+                            }
+                        ],
+                        "counts": {"added": 0, "removed": 0, "changed": 0, "renamed_or_moved": 1},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model
+
+            model = build_version_update_detail_model(
+                root / "html",
+                {"library_id": "ip/demo", "library_name": "demo"},
+                {
+                    "version_id": "v2",
+                    "current_effective_ref": "v1",
+                    "diff": {"current_effective_diff_dir": str(diff_dir)},
+                },
+            )
+
+        self.assertEqual(len(model["path_changes_same_content"]), 1)
+        path_change = model["path_changes_same_content"][0]
+        self.assertEqual(path_change["file_type"], "verilog")
+        self.assertEqual(path_change["old"], "RTL/top.v")
+        self.assertEqual(path_change["new"], "RTL/top_renamed.v")
+        self.assertNotIn("old_package", path_change["old"])
+        self.assertNotIn("new_package", path_change["new"])
+        self.assertIn("路径变化且内容相同 1 个", model["headline"])
+        view_row = next(
+            item
+            for item in model["ip_user_view_model"]["view_rows"]
+            if item["view_type"] == "rtl_model"
+        )
+        self.assertEqual(view_row["path_changed_same_content"], 1)
+
     def test_markdown_export_uses_same_headline_and_evidence_counts_as_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -484,9 +554,9 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn(f"recommended_file_diff: {len(model['recommended_file_diff'])}", text)
             self.assertIn(f"summary_only_reviewed: {len(model['summary_only_reviewed'])}", text)
             self.assertIn(f"metadata_only_reviewed: {len(model['metadata_only_reviewed'])}", text)
-            self.assertIn("## Summary-only Reviewed", text)
-            self.assertIn("## Metadata-only Reviewed", text)
-            self.assertIn("## Diff Issues", text)
+            self.assertIn("## 摘要级证据", text)
+            self.assertIn("## 元数据级证据", text)
+            self.assertIn("## 对比问题", text)
 
     def test_view_type_release_issues_are_visible_in_update_detail_panel(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -646,6 +716,26 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(missing["usage_decision"], "BLOCKED")
             self.assertIn("base_not_confirmed", missing["usage_decision_reasons"])
 
+    def test_management_gate_items_do_not_block_ip_usage(self) -> None:
+        from lib_guard.render.version_detail_report import _usage_decision_result
+
+        decision, reasons = _usage_decision_result(
+            status="SAME",
+            base_trust_status="INFO",
+            lane_counts={"recommended_file_diff": 0},
+            release_notes=[{"path": "RELEASE.md"}],
+            review_gate={
+                "status": "BLOCKED",
+                "blocking_items": [
+                    {"category": "release", "id": "release.fatal:stable"},
+                    {"category": "metadata_only", "id": "metadata.gds.changed:gds/top.gds"},
+                ],
+            },
+        )
+
+        self.assertEqual(decision, "READY")
+        self.assertEqual(reasons, [])
+
     def test_version_review_model_groups_update_detail_into_five_chinese_sections(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -749,15 +839,15 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(model["review_mode"], "first_version")
             self.assertEqual(model["usage_decision"], "USAGE_REVIEW_REQUIRED")
             self.assertEqual(model["ip_user_view_model"]["decision"]["label"], "首版需审查")
-            self.assertIn("首版交付范围", html)
             self.assertIn("当前无可比基准版，展示本次交付包自身", html)
             self.assertIn("视图覆盖矩阵", html)
-            self.assertIn("LEF / 物理抽象", html)
-            self.assertIn("Liberty / 时序", html)
-            self.assertIn("GDS/OAS / 版图", html)
-            self.assertIn("Unknown", html)
-            self.assertIn("lef/top.lef", html)
-            self.assertIn("misc/todo.raw", html)
+            self.assertIn("物理抽象（LEF）", html)
+            self.assertIn("时序库（Liberty）", html)
+            self.assertIn("版图（GDS/OAS）", html)
+            self.assertIn("未知文件", html)
+            self.assertIn("查看文件结构", html)
+            self.assertNotIn("lef/top.lef", html)
+            self.assertNotIn("misc/todo.raw", html)
             self.assertNotIn("缺少基准对比", html)
             self.assertNotIn("暂无视图变化", html)
 
@@ -842,7 +932,7 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(evidence["counts"], {"verilog": 1, "unknown": 1})
             self.assertEqual(evidence["unknown_count"], 1)
 
-    def test_view_matrix_exposes_expandable_file_trace_from_counts_to_evidence(self) -> None:
+    def test_view_matrix_links_to_file_structure_without_repeating_paths(self) -> None:
         from lib_guard.render.version_review_model import build_version_review_model
         from lib_guard.render.version_review_render import render_ip_user_view
 
@@ -875,13 +965,13 @@ class VersionDetailReportTest(unittest.TestCase):
         )
         html = render_ip_user_view(review_model["ip_user_view"])
 
-        self.assertIn("展开文件", html)
-        self.assertIn("代表文件", html)
+        self.assertIn("文件入口", html)
+        self.assertIn("查看文件结构", html)
+        self.assertNotIn("完整变化证据", html)
         self.assertIn("本次变化", html)
-        self.assertIn("本包文件", html)
-        self.assertIn("lef/top.lef", html)
-        self.assertIn("sdc/top.sdc", html)
-        self.assertIn("rtl/model.v", html)
+        self.assertNotIn("lef/top.lef", html)
+        self.assertNotIn("sdc/top.sdc", html)
+        self.assertNotIn("rtl/model.v", html)
 
     def test_ip_user_view_current_count_is_never_less_than_target_delta(self) -> None:
         from lib_guard.render.version_review_model import build_version_review_model
@@ -936,7 +1026,7 @@ class VersionDetailReportTest(unittest.TestCase):
         self.assertNotIn("lydrc", rows)
         html = render_ip_user_view(review_model["ip_user_view"])
         self.assertIn("RTL 模型", html)
-        self.assertIn("当前文件", html)
+        self.assertIn("交付 / 变化", html)
         self.assertIn("证据 / 状态", html)
         self.assertIn("RTL 模型", html)
         self.assertNotIn("<code>systemverilog</code></td><td>", html)

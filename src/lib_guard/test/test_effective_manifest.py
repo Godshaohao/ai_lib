@@ -576,6 +576,10 @@ class EffectiveManifestTest(unittest.TestCase):
             (base / "rtl" / "top.v").write_text("module top(input a); endmodule\n", encoding="utf-8")
             (patch / "rtl" / "top.v").write_text("module top(input a, output b); endmodule\n", encoding="utf-8")
             (full / "rtl" / "top.v").write_text("module top(input a, output b, output c); endmodule\n", encoding="utf-8")
+            (full / "lef").mkdir()
+            (full / "lef" / "top.lef").write_text("MACRO top\nEND top\n", encoding="utf-8")
+            (full / "lib").mkdir()
+            (full / "lib" / "top.lib").write_text("library(top) { delay_model : table_lookup; }\n", encoding="utf-8")
 
             from lib_guard.catalog.index import render_catalog_html, scan_catalog
             from lib_guard.effective.cli import main as effective_main
@@ -619,7 +623,7 @@ class EffectiveManifestTest(unittest.TestCase):
             self.assertEqual(nodes[full.name]["node_kind"], "raw")
             self.assertEqual(nodes[full.name]["package_type"], "full")
             self.assertEqual(nodes[full.name]["usage_status"], "usable")
-            self.assertEqual(nodes[patch.name]["package_type"], "partial")
+            self.assertEqual(nodes[patch.name]["package_type"], "hotfix")
             self.assertEqual(nodes[patch.name]["usage_status"], "accepted")
             self.assertEqual(nodes["effective_20260624"]["node_kind"], "effective")
             self.assertEqual(nodes["effective_20260624"]["package_type"], "composed")

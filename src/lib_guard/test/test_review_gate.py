@@ -65,7 +65,7 @@ class ReviewGateTest(unittest.TestCase):
             pairwise = [task for task in tasks if task["task_type"] == "PAIRWISE_DIFF"]
             self.assertEqual(pairwise[0]["priority"], "P2")
 
-    def test_metadata_only_blocks_until_accept(self) -> None:
+    def test_metadata_only_is_attention_not_current_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             diff = root / "diff" / "ucie" / "stable" / "adjacent"
@@ -105,30 +105,14 @@ class ReviewGateTest(unittest.TestCase):
                 ]
             }
 
-            from lib_guard.review.overrides import write_review_override
             from lib_guard.review.state import build_review_state
 
             state = build_review_state(catalog, out_dir=root / "catalog" / "html")
             gate = state["libraries"][0]["versions"][0]["review_gate"]
-            self.assertEqual(gate["status"], "REVIEW_REQUIRED")
-            self.assertEqual(gate["blocking_open"], 1)
-            self.assertGateItemsExplainTheRule(gate["blocking_items"])
-
-            write_review_override(
-                gate["override_file"],
-                library="ucie",
-                version="stable",
-                item_id="metadata.db.changed:db/ucie.db",
-                decision="accepted",
-                by="lib_owner",
-                reason="DB hash change acknowledged for current.",
-            )
-            refreshed = build_review_state(catalog, out_dir=root / "catalog" / "html")
-            refreshed_gate = refreshed["libraries"][0]["versions"][0]["review_gate"]
-
-            self.assertEqual(refreshed_gate["status"], "READY")
-            self.assertEqual(refreshed_gate["blocking_open"], 0)
-            self.assertEqual(refreshed_gate["accepted_items"][0]["id"], "metadata.db.changed:db/ucie.db")
+            self.assertEqual(gate["status"], "ATTENTION")
+            self.assertEqual(gate["blocking_open"], 0)
+            self.assertEqual(gate["attention_items"][0]["category"], "metadata_only")
+            self.assertGateItemsExplainTheRule(gate["attention_items"])
 
     def test_release_checker_consumes_review_gate(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -167,9 +151,40 @@ class ReviewGateTest(unittest.TestCase):
             )
 
             self.assertFalse(blocked["allowed_to_apply"])
-            self.assertIn("current requires review gate closed", blocked["block_reasons"])
+            self.assertIn("current 需要先关闭审查门禁", blocked["block_reasons"])
+            waiting = check_release_scan(
+                scan,
+                diff_dir=diff,
+                alias="current",
+                review_gate={"schema_version": "review_gate.v1", "status": "WAITING", "blocking_open": 0, "blocking_items": [], "attention_items": []},
+            )
+            self.assertFalse(waiting["allowed_to_apply"])
+            self.assertIn("current 需要先关闭审查门禁", waiting["block_reasons"])
             self.assertTrue(ready["allowed_to_apply"])
-            self.assertNotIn("current requires pairwise file diff complete", ready["block_reasons"])
+        self.assertNotIn("current 需要完成文件逐对对比", ready["block_reasons"])
+
+    def test_release_checker_blocks_when_static_gate_is_blocked_even_without_alias_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scan = root / "scan"
+            (scan / "summary").mkdir(parents=True)
+            (scan / "scan_meta.json").write_text(
+                json.dumps({"status": "PASS", "scan_mode": "signature", "library_type": "ip", "library_name": "ucie", "release_version": "stable"}),
+                encoding="utf-8",
+            )
+            (scan / "manifest.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+            (scan / "file_inventory.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+            (scan / "parser_manifest.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+            (scan / "scan_issues.json").write_text(json.dumps({"issues": []}), encoding="utf-8")
+            (scan / "summary" / "release_readiness.json").write_text(json.dumps({"bundle_status": "PASS"}), encoding="utf-8")
+            from lib_guard.release.checker import check_release_scan
+
+            result = check_release_scan(
+                scan,
+                review_gate={"schema_version": "review_gate.v1", "status": "BLOCKED", "blocking_open": 1, "blocking_items": [{"id": "human_review"}]},
+            )
+            self.assertEqual(result["release_check_status"], "BLOCK")
+            self.assertTrue(any(issue["category"] == "review_gate" for issue in result["issues"]))
 
     def test_short_cli_release_symlink_default_and_review_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as td:

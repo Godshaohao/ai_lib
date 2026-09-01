@@ -64,20 +64,20 @@ class ReleaseChecker:
         issues: list[dict[str, Any]] = []
 
         if release_readiness.get("bundle_status") == "BLOCK":
-            issues.append(_issue("blocker", "release_readiness", "Release readiness is blocked", "One or more required component views are blocked."))
+            issues.append(_issue("blocker", "release_readiness", "发布准备被阻塞", "一个或多个必需组件视图处于阻塞状态。"))
         elif release_readiness.get("bundle_status") in {"FAILED", "PASS_WITH_WARNING"}:
-            issues.append(_issue("warning", "release_readiness", "Release readiness needs review", f"bundle_status={release_readiness.get('bundle_status')}"))
+            issues.append(_issue("warning", "release_readiness", "发布准备需要审查", f"bundle_status={release_readiness.get('bundle_status')}"))
 
         if scan_status not in self.policy.allowed_scan_status:
-            issues.append(_issue("blocker", "scan_status", "Scan status not allowed for release", f"scan status={scan_status}"))
+            issues.append(_issue("blocker", "scan_status", "扫描状态不允许发布", f"scan status={scan_status}"))
 
         if scan_mode not in self.policy.allowed_scan_modes:
-            issues.append(_issue("warning", "scan_mode", "Scan mode is not preferred for release", f"scan mode={scan_mode}"))
+            issues.append(_issue("warning", "scan_mode", "当前扫描策略不是发布首选", f"scan mode={scan_mode}"))
 
         required_types = self.policy.required_file_types.get(lib_type, [])
         for ft in required_types:
             if file_type_counts.get(ft, 0) <= 0:
-                issues.append(_issue("blocker", "completeness", f"Missing required file type: {ft}", f"library_type={lib_type} requires {ft}"))
+                issues.append(_issue("blocker", "completeness", f"缺少必需文件类型：{ft}", f"library_type={lib_type} requires {ft}"))
 
         parser_failed = []
         for f in parser_manifest.get("files", []) or []:
@@ -85,26 +85,36 @@ class ReleaseChecker:
                 if str(task.get("result_status", task.get("status", ""))).upper() == "FAILED":
                     parser_failed.append(f.get("file"))
         if parser_failed and self.policy.block_on_parser_failed:
-            issues.append(_issue("blocker", "parser", "Parser failures exist", f"parser failed files={len(parser_failed)}", parser_failed[:20]))
+            issues.append(_issue("blocker", "parser", "存在解析器失败", f"解析器失败文件数={len(parser_failed)}", parser_failed[:20]))
 
         error_issues = [i for i in scan_issues.get("issues", []) or [] if str(i.get("severity", "")).lower() in {"error", "blocker"}]
         if error_issues and self.policy.block_on_error_issue:
-            issues.append(_issue("blocker", "scan_issue", "Scan has error/blocker issues", f"error/blocker issue count={len(error_issues)}"))
+            issues.append(_issue("blocker", "scan_issue", "扫描存在错误或阻塞问题", f"error/blocker issue count={len(error_issues)}"))
 
         signatures_dir = scan / "signatures"
         if self.policy.require_signatures and not any(signatures_dir.glob("*.json")):
-            issues.append(_issue("warning", "signature", "No signature json found", "signatures/*.json not found"))
+            issues.append(_issue("warning", "signature", "未找到签名 JSON", "signatures/*.json not found"))
 
         doc_files = [f for f in files if str(f.get("file_type", "")) == "doc" or bool(f.get("is_key_doc", False))]
         doc_roles = {str(f.get("doc_type") or f.get("role") or "") for f in doc_files}
         for doc_type in self.policy.require_doc_types:
             if doc_type not in doc_roles:
                 sev = "warning" if self.policy.allow_missing_docs_as_warning else "blocker"
-                issues.append(_issue(sev, "doc", f"Missing recommended document: {doc_type}", f"doc_type={doc_type} not found"))
+                issues.append(_issue(sev, "doc", f"缺少建议文档：{doc_type}", f"doc_type={doc_type} not found"))
 
         diff_gate = self._check_diff_gate(diff_dir)
         issues.extend(diff_gate.get("issues", []))
         review_gate_data = self._load_review_gate(review_gate=review_gate, review_gate_path=review_gate_path)
+        review_status = str(review_gate_data.get("status") or "").upper()
+        if review_status in {"WAITING", "BLOCKED", "REVIEW_REQUIRED"} or int(review_gate_data.get("blocking_open", 0) or 0) > 0:
+            issues.append(
+                _issue(
+                    "blocker",
+                    "review_gate",
+                    "审查门禁未关闭",
+                    f"review status={review_status or 'UNKNOWN'}, blocking_open={review_gate_data.get('blocking_open', 0)}",
+                )
+            )
         alias_gate = self._check_alias_gate(alias, release_readiness, diff_gate, review_gate_data)
         for reason in alias_gate.get("block_reasons", []):
             issues.append(_issue("blocker", "alias_gate", reason, f"alias={alias}"))
@@ -198,23 +208,26 @@ class ReleaseChecker:
         required_level = str(gate.get("required_release_level") or {"stage": "L0", "current": "L1", "approved": "L2"}.get(alias, "L1"))
         block_reasons: list[str] = []
         if LEVEL_ORDER.get(actual_level, 0) < LEVEL_ORDER.get(required_level, 0):
-            block_reasons.append(f"{alias} requires {required_level} release level")
+            block_reasons.append(f"{alias} 需要达到发布级别 {required_level}")
         if gate.get("require_diff") and diff_gate.get("status") == "NOT_PROVIDED":
-            block_reasons.append(f"{alias} requires release diff")
+            block_reasons.append(f"{alias} 需要先完成版本对比")
         if gate.get("require_p2_deep_diff") and not (diff_level == "P2" and deep_diff_completed):
-            block_reasons.append(f"{alias} requires P2 deep diff")
+            block_reasons.append(f"{alias} 需要完成深度文件对比")
         if gate.get("require_manual_review_closed") and release_readiness.get("manual_review_items"):
-            block_reasons.append(f"{alias} requires manual review closed")
-        if gate.get("require_review_gate_closed") and int(review_gate.get("blocking_open", 0) or 0) > 0:
-            block_reasons.append(f"{alias} requires review gate closed")
+            block_reasons.append(f"{alias} 需要先关闭人工审查事项")
+        if gate.get("require_review_gate_closed"):
+            review_status = str(review_gate.get("status") or "").upper()
+            static_gate_open = review_status in {"WAITING", "BLOCKED"}
+            if static_gate_open or int(review_gate.get("blocking_open", 0) or 0) > 0:
+                block_reasons.append(f"{alias} 需要先关闭审查门禁")
         if gate.get("require_pairwise_done"):
             for item in review_gate.get("attention_items", []) or []:
                 item_id = str((item or {}).get("id") or "")
                 if item_id.startswith("pairwise."):
-                    block_reasons.append(f"{alias} requires pairwise file diff complete")
+                    block_reasons.append(f"{alias} 需要完成文件逐对对比")
                     break
         if not gate.get("allow_warning", True) and release_readiness.get("bundle_status") == "PASS_WITH_WARNING":
-            block_reasons.append(f"{alias} does not allow release warnings")
+            block_reasons.append(f"{alias} 不允许带注意项发布")
 
         return {
             "alias": alias,
@@ -239,15 +252,15 @@ class ReleaseChecker:
         issues: list[dict[str, Any]] = []
         status = str(summary.get("status") or "UNKNOWN")
         if status == "BLOCK":
-            issues.append(_issue("blocker", "diff", "Diff gate is blocked", "diff_summary.status=BLOCK"))
+            issues.append(_issue("blocker", "diff", "对比门禁已阻塞", "diff_summary.status=BLOCK"))
         elif status == "FAILED":
-            issues.append(_issue("blocker", "diff", "Diff gate failed", "diff_summary.status=FAILED"))
+            issues.append(_issue("blocker", "diff", "对比门禁失败", "diff_summary.status=FAILED"))
         for item in diff_issues.get("issues", []) or []:
             severity = str(item.get("severity", "info")).lower()
             if severity in {"blocker", "error"}:
-                issues.append(_issue("blocker", "diff", item.get("title", "Blocking diff issue"), item.get("message", "Diff issue requires release review")))
+                issues.append(_issue("blocker", "diff", item.get("title", "阻塞性对比问题"), item.get("message", "对比问题需要进行发布审查")))
             elif severity == "warning" and str(item.get("category")) == "file" and "metadata" in str(item.get("title", "")).lower():
-                issues.append(_issue("warning", "diff", item.get("title", "Metadata-only diff issue"), item.get("message", "Metadata-only change requires manual review")))
+                issues.append(_issue("warning", "diff", item.get("title", "元数据级对比问题"), item.get("message", "元数据级变化需要人工审查")))
         return {"status": status, "diff_dir": str(diff), "summary": summary, "issue_count": len(diff_issues.get("issues", []) or []), "issues": issues}
 
 

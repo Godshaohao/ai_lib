@@ -10,6 +10,93 @@ import json
 from .common import print_json, refresh_catalog_html
 
 
+def _default_review_root(catalog_path: str | Path) -> Path:
+    catalog = Path(catalog_path)
+    if catalog.parent.name == "catalog":
+        return catalog.parent.parent / "reviews"
+    return catalog.parent / "reviews"
+
+
+def _default_review_policy(catalog_path: str | Path, review_root: str | Path) -> Path | None:
+    catalog = Path(catalog_path)
+    root = Path(review_root)
+    candidates = [
+        root.parent / "review_policy.yaml",
+        root.parent / "config" / "review_policy.yaml",
+        root.parent / "configs" / "review_policy.yaml",
+        catalog.parent.parent / "config" / "review_policy.yaml",
+        catalog.parent.parent / "configs" / "review_policy.yaml",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _packet_root(args: Namespace) -> Path:
+    root = Path(args.out) if getattr(args, "out", None) else _default_review_root(args.catalog)
+    return root
+
+
+def _packet_policy(args: Namespace, root: Path) -> Path | None:
+    return Path(args.policy) if getattr(args, "policy", None) else _default_review_policy(args.catalog, root)
+
+
+def run_review_prepare(args: Namespace) -> int:
+    from lib_guard.review.static_packet import prepare_review_packet
+
+    root = _packet_root(args)
+    result = prepare_review_packet(
+        _read_catalog(args.catalog),
+        args.library,
+        args.version,
+        review_root=root,
+        policy_path=_packet_policy(args, root),
+        base_version=getattr(args, "base", None),
+        review_owner=getattr(args, "review_owner", None),
+    )
+    if not getattr(args, "no_catalog_render", False):
+        refresh_catalog_html(args)
+    print_json(result)
+    return 0
+
+
+def run_review_submit(args: Namespace) -> int:
+    from lib_guard.review.static_packet import submit_review_response
+
+    root = _packet_root(args)
+    result = submit_review_response(
+        _read_catalog(args.catalog),
+        args.library,
+        args.version,
+        review_root=root,
+        review_id=args.review_id,
+        decision=args.decision,
+        note=args.note,
+        reviewer=getattr(args, "reviewer", None),
+        policy_path=_packet_policy(args, root),
+    )
+    print_json(result)
+    return 0
+
+
+def run_review_collect(args: Namespace) -> int:
+    from lib_guard.review.static_packet import collect_review_packet
+
+    root = _packet_root(args)
+    result = collect_review_packet(
+        _read_catalog(args.catalog),
+        args.library,
+        args.version,
+        review_root=root,
+        policy_path=_packet_policy(args, root),
+    )
+    if not getattr(args, "no_catalog_render", False):
+        refresh_catalog_html(args)
+    print_json({"status": result.get("status"), "packet_id": result.get("packet_id"), "packet_dir": result.get("packet_dir"), "review_gate": str(Path(result["packet_dir"]) / "review_gate.json"), "review_report": str(Path(result["packet_dir"]) / "review_report.md"), "blocking_open": result.get("blocking_open", 0), "attention_count": result.get("attention_count", 0), "stale_response_count": result.get("stale_response_count", 0)})
+    return 0 if result.get("status") == "APPROVED" else 2
+
+
 def _read_catalog(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 

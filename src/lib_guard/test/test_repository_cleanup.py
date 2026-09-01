@@ -283,6 +283,7 @@ class RepositoryCleanupTest(unittest.TestCase):
     def test_docs_are_consolidated_around_basic_tutorial(self) -> None:
         expected = {
             "architecture.md",
+            "artifact_output_checklist.md",
             "basic_tutorial.md",
             "cli_reference.md",
             "compatibility.md",
@@ -293,6 +294,7 @@ class RepositoryCleanupTest(unittest.TestCase):
             "test_plan.md",
             "version_detail_checklist.md",
             "version_detail_evaluation.md",
+            "web_console_checklist.md",
         }
         actual = {path.name for path in (ROOT / "docs").glob("*.md")}
         self.assertEqual(expected, actual)
@@ -302,6 +304,8 @@ class RepositoryCleanupTest(unittest.TestCase):
         self.assertIn("scan_evidence_review.md", index)
         self.assertIn("version_detail_checklist.md", index)
         self.assertIn("version_detail_evaluation.md", index)
+        self.assertIn("artifact_output_checklist.md", index)
+        self.assertIn("web_console_checklist.md", index)
 
     def test_current_tests_are_not_v5_named(self) -> None:
         stale = sorted((ROOT / "src" / "lib_guard" / "test").glob("test_v5_*.py"))

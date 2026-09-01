@@ -14,6 +14,27 @@ from unittest import mock
 
 
 class WindowIntakeTest(unittest.TestCase):
+    def test_unknown_package_is_not_included_in_candidate_overlay(self) -> None:
+        from lib_guard.window.resolver import _resolve_candidate
+
+        versions = {
+            "full1": {"version_id": "full1", "package_type": "FULL_PACKAGE"},
+            "mystery": {"version_id": "mystery", "package_type": "UNKNOWN_PACKAGE"},
+            "fix1": {"version_id": "fix1", "package_type": "PARTIAL_UPDATE"},
+        }
+
+        candidate = _resolve_candidate({}, ["full1", "mystery", "fix1"], versions)
+
+        self.assertEqual(candidate["base_full"], "full1")
+        self.assertEqual(candidate["overlays"], ["fix1"])
+        self.assertEqual(candidate["unknown_package_versions"], ["mystery"])
+
+    def test_package_kind_requires_exact_known_type(self) -> None:
+        from lib_guard.window.resolver import package_kind
+
+        self.assertEqual(package_kind({"package_type": "NOT_FULL"}), "UNKNOWN")
+        self.assertEqual(package_kind({"package_type": "NOT_UPDATE"}), "UNKNOWN")
+
     def test_review_window_reads_scan_evidence_from_catalog_runtime_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -362,8 +383,8 @@ class WindowIntakeTest(unittest.TestCase):
                 )
             self.assertEqual(code, 0)
             text = stdout.getvalue()
-            self.assertIn("来源：当前Effective指针", text)
-            self.assertIn("当前Base：effective:candidate_fix1", text)
+            self.assertIn("来源：当前有效版指针", text)
+            self.assertIn("当前基准版：effective:candidate_fix1", text)
             self.assertIn("当前没有新的待审查版本", text)
             self.assertIn("无需修正", text)
             self.assertNotIn("lg window ucie", text)
@@ -418,7 +439,7 @@ class WindowIntakeTest(unittest.TestCase):
                 )
             self.assertEqual(code, 0)
             plan_json = json.loads(stdout.getvalue())
-            self.assertEqual(plan_json["accept_command"], "无需执行：没有 candidate effective，不能接受新有效版")
+            self.assertEqual(plan_json["accept_command"], "无需执行：没有候选组合，不能接受新有效版")
             self.assertNotIn("lg accept-window", plan_json["accept_command"])
 
     def test_window_output_contains_human_review_table_and_fix_commands(self) -> None:
@@ -459,13 +480,13 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertEqual(output["base_review"]["状态"], "需建立")
             self.assertEqual(output["base_review"]["当前Base"], "未建立有效版")
             self.assertEqual(output["版本选择表"][-1]["版本名"], "adhoc_fix")
-            self.assertEqual(output["版本选择表"][-1]["类型猜测"], "FIX")
+            self.assertEqual(output["版本选择表"][-1]["类型猜测"], "UNKNOWN")
             self.assertEqual(output["版本选择表"][-1]["Catalog类型"], "UNKNOWN_PACKAGE")
-            self.assertTrue(any("lg mark ucie adhoc_fix --type FIX" in command for command in output["建议修正命令"]))
+            self.assertTrue(any("lg mark ucie adhoc_fix --type FULL|FIX" in command for command in output["建议修正命令"]))
             self.assertFalse(any("lg library override" in command for command in output["建议修正命令"]))
             self.assertEqual(
                 output["relation_fix_commands"],
-                ["lg mark ucie adhoc_fix --type FIX --note 'confirmed fix package'"],
+                ["lg mark ucie adhoc_fix --type FULL|FIX --note '已确认包类型'"],
             )
 
     def test_worklist_summarizes_ready_blocked_and_empty_libraries(self) -> None:
@@ -853,7 +874,7 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertEqual(code, 0)
             text = stdout.getvalue()
             self.assertIn("基线确认", text)
-            self.assertIn("当前Base：未建立有效版", text)
+            self.assertIn("当前基准版：未建立有效版", text)
             self.assertIn("版本选择表", text)
             self.assertIn("执行计划", text)
             self.assertIn("确认执行：lg next ucie --apply", text)
@@ -894,9 +915,9 @@ class WindowIntakeTest(unittest.TestCase):
             self.assertEqual(code, 0)
             text = stdout.getvalue()
             self.assertIn("流程判断", text)
-            self.assertIn("FULL流程", text)
+            self.assertIn("完整包流程", text)
             self.assertIn("增量流程", text)
-            self.assertIn("最新FULL：full2", text)
+            self.assertIn("最新完整包：full2", text)
             self.assertIn("增量包：fix2", text)
 
     def test_worklist_text_points_to_next_command_not_internal_intake(self) -> None:
@@ -1057,7 +1078,7 @@ class WindowIntakeTest(unittest.TestCase):
             )
             from lib_guard.window.cli import cmd_accept
 
-            with self.assertRaisesRegex(ValueError, "confirmed package_type"):
+            with self.assertRaisesRegex(ValueError, "必须确认以下版本的包类型"):
                 cmd_accept(
                     argparse.Namespace(
                         catalog=None,

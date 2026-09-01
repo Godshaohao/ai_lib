@@ -11,6 +11,10 @@ Status: current
 HTML、`catalog_state.json`、`manager_tasks.json` 和 `report_index.json` 是投影或索引，
 不能反向驱动 scan、diff、release 或有效版判断。
 
+Version Detail 的工程验收也分四层：Gate 1 校验上游 catalog/scan/diff/effective/window
+事实，Gate 2 校验 review model，Gate 3 校验 Version Detail 投影，Gate 4 用真实桌面浏览器
+走完用户路径。只有四层都通过，才能把页面标记为完整验收通过。
+
 命令行查询当前有效版时，优先读取 `current_effective.json` 和对应
 `effective_manifest.json`。`report_index.json` 只能作为报告导航索引和兼容回退，不能作为
 有效版事实来源。
@@ -40,6 +44,7 @@ raw delivery
 | Release evidence 和 link/verify | `src/lib_guard/release/` |
 | Review Gate 聚合 | `src/lib_guard/review/` |
 | HTML 渲染 | `src/lib_guard/render/` |
+| Web 控制层 | `src/lib_guard/web/` | 只读 Catalog/runtime、受控提交动作、复用现有 Version Detail |
 | CLI 入口 | `src/lib_guard/cli.py`, `src/lib_guard/short_cli.py`, `src/lib_guard/cli_commands/` |
 
 ## 主流程文件地图
@@ -74,7 +79,7 @@ raw delivery
 | Parser | `src/lib_guard/scan/parsers/` | 允许解析的轻量文件 | parser results | 大文件/二进制不要在这里强行全文解析 |
 | 人工证据汇总 | `src/lib_guard/scan/evidence_export.py`, `src/lib_guard/scan/report.py` | inventory/parser/readiness | review TSV / scan HTML | JSON 是机器事实，TSV/HTML 才适合人工读 |
 
-### Diff / Compare
+### 对比（Diff / Compare）
 
 | 阶段 | 核心文件 | 输入 | 输出 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -83,21 +88,22 @@ raw delivery
 | 文件级 diff | `src/lib_guard/diff/file_diff.py`, `src/lib_guard/diff/pairwise.py` | 显式文件或推荐 lane | `file_diff/**` | 专家下钻入口，不是默认审查主线 |
 | compare 命令 | `src/lib_guard/cli_commands/diff.py` | catalog、base、target | compare html/json | `cmp` 是手动对比/调试入口 |
 
-### Review Window / Effective
+### 审查窗口与当前有效版（Review Window / Effective）
 
 | 阶段 | 核心文件 | 输入 | 输出 | 说明 |
 | --- | --- | --- | --- | --- |
 | 新版本窗口判断 | `src/lib_guard/window/resolver.py` | catalog versions、package type、current effective | pending window plan | 决定 FULL/FIX/无新版本的接入关系 |
 | Window CLI | `src/lib_guard/window/cli.py` | `lg next/intake/accept-window` | window/effective/approval artifacts | 小白流程的主要编排层 |
 | 当前有效版指针 | `src/lib_guard/effective/pointer.py` | review approval、candidate manifest | `current_effective.json` | 带 revision 和 digest 的事实指针 |
-| Review Gate | `src/lib_guard/review/` | scan/diff/release readiness/overrides | review gate/model | 记录人工 accept/waive，不替代 scan/diff |
+| Review Packet / Gate | `src/lib_guard/review/static_packet.py`, `src/lib_guard/review/state.py` | scan/diff/evidence + `review_policy.yaml` | `reviews/**/packet.json`, `review_items.tsv`, `responses/*.tsv`, 派生 Gate/Markdown | 部门只提交 PASS/BLOCK/QUESTION；Gate 可重建，不替代 scan/diff/current effective |
 
-### Version Detail / Render
+### 版本详情页与渲染（Version Detail / Render）
 
 | 阶段 | 核心文件 | 输入 | 输出 | 说明 |
 | --- | --- | --- | --- | --- |
 | 审查上下文 | `src/lib_guard/render/version_detail_context.py` | catalog、window、effective、diff、scan | context model | 第一屏说明当前在审查什么 |
 | IP 使用者模型 | `src/lib_guard/render/version_review_model.py` | update detail/diff/evidence | lightweight user view model | 默认面向 IP 使用者，而不是 debug 用户 |
+| 结构化审查报告 | `src/lib_guard/render/version_review_model.py::build_review_report` | 既有 review model、scan/diff/evidence state | bounded `review_report` | 固定报告结构，不收集新事实、不嵌入 raw JSON |
 | Version Detail 页面 | `src/lib_guard/render/version_detail_report.py`, `src/lib_guard/render/version_review_render.py` | review model | version detail HTML | 唯一主审查投影 |
 | 局部刷新 | `src/lib_guard/render/impact.py`, `src/lib_guard/render/version_detail_fast.py` | affected library/version | 局部 HTML 更新 | scan/cmp 后避免全量 render |
 | Catalog/库工作台 | `src/lib_guard/render/catalog_report.py`, `src/lib_guard/render/catalog_workspace_report.py` | catalog state/report index | index/library HTML | 导航投影，不作为事实源 |
@@ -154,6 +160,11 @@ raw delivery
 `catalog_report.py` 是 catalog render facade 和 state/task adapter，不应继续吸收
 Version Detail、manual compare 或 release 逻辑。
 
+Web 控制台只是现有 CLI 和静态投影的薄控制层。它不能成为新的事实源；页面读取
+`catalog_runtime.json`、`run_manifest.json` 和已有 HTML，动作只允许调用固定的 scan、cmp、
+release-check 路径。长任务通过 workspace 下的 `web_jobs/<job_id>` 记录请求、状态和日志，
+不引入数据库、调度器或任意 shell 执行接口。
+
 Version Detail 是唯一审查投影。`window`、`effective`、`compare` 只是它的证据来源
 和上下文，不应新增平行主审查页面。默认页面按以下顺序回答：
 
@@ -163,9 +174,15 @@ Version Detail 是唯一审查投影。`window`、`effective`、`compare` 只是
 4. View 变化矩阵、证据等级和确定性的使用场景关联。
 5. 由当前事实产生的未决事项，例如真实删除、Unknown、缺 Base/Diff 或首版范围。
 
-普通 View 新增/修改只在矩阵展示，不重复复制成“待确认事实”。候选有效版未生成时，
-矩阵只显示本包数量；`Summary-only`、`Metadata-only` 只是证据深度，不自动构成阻塞。
+普通视图新增/修改只在矩阵展示，不重复复制成“待确认事实”。候选有效版未生成时，
+矩阵只显示本包数量；摘要级证据、元数据级证据只是证据深度，不自动构成阻塞。
 正式放行门禁和事实源审计保留，但默认折叠，并且不得改写 IP 技术判断。
+
+Version Detail 的 `review_report` 是上述模型的结构化二次投影，不是新的事实源。它固定包含
+`base_analysis`、`delivery_analysis`、`view_delta_analysis`、`focus_file_analysis`、
+`unknown_analysis`、`evidence_assessment`、`open_questions` 和 `recommended_actions`。
+首屏只展示判断摘要、影响摘要、视图变化和证据状态；完整报告通过本页折叠区查看，
+`current_lib_diff.md` 若显式导出，也必须从同一个模型生成。
 
 Version Detail 使用 `version_evidence_state` 解释五类输入的边界：
 
@@ -179,6 +196,11 @@ Version Detail 使用 `version_evidence_state` 解释五类输入的边界：
 intake、accept-window、mark 会声明受影响的库/版本，再由 finalizer 局部刷新对应
 Version Detail、库工作台和目录索引。它不负责重新发现库，也不改变 scan、diff、
 release 的业务规则。
+
+本轮新增的 `run_manifest.json` 是单次运行的产物导航清单，不是新的业务事实源。它串起
+输入、Base、scan/diff/release 事实和 HTML 投影；清单写在对应事实目录内，重跑只产生新的
+运行目录，不删除旧证据。完整验收项见
+[`docs/artifact_output_checklist.md`](artifact_output_checklist.md)。
 
 复杂度约束：
 
@@ -227,7 +249,7 @@ File Diff 推荐默认只是 attention item，不等同 blocker。
 | 修改目标 | 应改位置 | 不应改位置 |
 | --- | --- | --- |
 | 文件识别/扫描速度 | `scan/`, `view_types.py`, `project_config.py` | HTML renderer |
-| View Delta / IP 使用判断 | review model、`version_detail_report.py` model builder | scan parser |
+| 视图变化 / IP 使用判断 | review model、`version_detail_report.py` model builder | scan parser |
 | 页面布局和中文文案 | `render/` | scan/diff/release 规则 |
 | Base/effective/window 关系 | `effective/`, `window_intake`, review context | HTML 字符串拼接 |
 | release link/verify | `release/` | catalog renderer |

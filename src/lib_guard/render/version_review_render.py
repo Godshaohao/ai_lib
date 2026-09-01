@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from lib_guard.render import catalog_render_common as common
 from lib_guard.render import product_theme as ui
+from lib_guard.view_types import VIEW_LABELS, canonical_view_type, usage_area_for_view, view_label
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -44,6 +45,44 @@ def _status_class(status: Any) -> str:
     return "judgment-neutral"
 
 
+def _compact_evidence_label(value: Any) -> str:
+    text = str(value or "-").strip()
+    lowered = text.lower()
+    if "summary-only" in lowered or "摘要级" in text:
+        return "摘要证据"
+    if "metadata-only" in lowered or "元数据级" in text:
+        return "元数据证据"
+    if "重点" in text:
+        return "重点审查"
+    if text in {"PASS", "完整证据", "内容级证据"}:
+        return "内容证据"
+    return text
+
+
+def _compact_evidence_counts(value: Any, *, primary_label: str = "") -> str:
+    counts = value if isinstance(value, Mapping) else {}
+    parts = []
+    for label, count in counts.items():
+        number = int(count or 0)
+        if number:
+            compact_label = _compact_evidence_label(label)
+            # The badge already names the dominant evidence level. Repeat only
+            # the number in that common case so the cell stays scannable.
+            parts.append(str(number) if compact_label == primary_label else f"{compact_label} {number}")
+    return f"· {' / '.join(parts)}" if parts else ""
+
+
+def _change_counts_text(value: Any) -> str:
+    counts = value if isinstance(value, Mapping) else {}
+    text = (
+        f"+{int(counts.get('added') or 0)} / "
+        f"-{int(counts.get('removed') or 0)} / "
+        f"~{int(counts.get('changed') or 0)}"
+    )
+    path_count = int(counts.get("path_changed_same_content") or 0)
+    return f"{text} / 路径变化且内容相同 {path_count}" if path_count else text
+
+
 def _simple_table(
     headers: list[str],
     rows: list[str],
@@ -67,13 +106,6 @@ def _simple_table(
     )
 
 
-def _example_list(title: str, values: Any) -> str:
-    if not isinstance(values, list) or not values:
-        return ""
-    body = "<br>".join(f"<code>{ui.esc(item)}</code>" for item in values[:8])
-    return f"<b>{ui.esc(title)}</b><br>{body}"
-
-
 def _view_delta_items(ip_model: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     """Return only facts that change the IP user's review decision."""
     items: list[Mapping[str, Any]] = []
@@ -82,6 +114,7 @@ def _view_delta_items(ip_model: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         if not isinstance(item, Mapping):
             continue
         has_change = int(item.get("delta_total") or 0) > 0
+        has_path_change = int(item.get("path_changed_same_content") or 0) > 0
         has_delivery = int(item.get("delivery_count") or 0) > 0 or int(item.get("current_count") or 0) > 0
         needs_classification = (
             str(item.get("view_type") or item.get("file_type") or "").lower() == "unknown"
@@ -89,7 +122,7 @@ def _view_delta_items(ip_model: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         )
         # A first version has no baseline delta. Its useful output is the
         # package's own view coverage, limited to views actually delivered.
-        if not first_version and not has_change and not needs_classification:
+        if not first_version and not has_change and not has_path_change and not needs_classification:
             continue
         if first_version and not has_delivery and not needs_classification:
             continue
@@ -111,28 +144,34 @@ def _evidence_href(value: Any, href_base: Path | None) -> str:
 
 
 def _view_delta_file_evidence(item: Mapping[str, Any], href_base: Path | None = None) -> str:
-    changed_examples = _example_list("本次变化", item.get("changed_examples"))
-    current_examples = _example_list("本包文件", item.get("current_examples"))
-    baseline_examples = _example_list("基准存在、本包未携带", item.get("baseline_only_examples"))
-    body = "<br>".join(part for part in [changed_examples, current_examples, baseline_examples] if part)
     full_evidence = _evidence_href(item.get("full_evidence_href"), href_base)
-    sample_count = int(item.get("sample_count") or 0)
     total_count = int(item.get("total_evidence_count") or 0)
-    visible_count = min(sample_count, total_count) if total_count else sample_count
-    sample_copy = f"代表文件 {visible_count} / {total_count}" if total_count else "代表文件"
-    if not body:
-        if full_evidence:
-            return f"<a href='{ui.esc(full_evidence)}' target='_blank'>完整变化证据</a>"
-        return "<span class='muted'>暂无文件证据</span>"
-    full_link = f"<br><a href='{ui.esc(full_evidence)}' target='_blank'>完整变化证据</a>" if full_evidence else ""
-    return (
-        "<details class='inline-file-evidence'>"
-        "<summary>展开文件</summary>"
-        f"<div class='muted'>{ui.esc(sample_copy)}</div>"
-        f"{body}"
-        f"{full_link}"
-        "</details>"
-    )
+    count_copy = f"查看文件结构（{total_count} 项）" if total_count else "查看文件结构"
+    links = [f"<a href='#file-structure' class='file-entry-link'>{ui.esc(count_copy)}</a>"]
+    if full_evidence:
+        links.append(f"<a href='{ui.esc(full_evidence)}' target='_blank'>完整变化证据</a>")
+    path_examples = [
+        example
+        for example in item.get("path_change_examples", []) or []
+        if isinstance(example, Mapping)
+    ]
+    path_count = int(item.get("path_changed_same_content") or 0)
+    path_detail = ""
+    if path_examples:
+        rows = "".join(
+            "<li>"
+            f"<code>{ui.esc(example.get('old') or '-')}</code>"
+            " <span aria-hidden='true'>→</span> "
+            f"<code>{ui.esc(example.get('new') or '-')}</code>"
+            "</li>"
+            for example in path_examples
+        )
+        path_detail = (
+            "<details class='inline-file-evidence'>"
+            f"<summary>查看路径变化（{path_count}）</summary>"
+            f"<ul>{rows}</ul></details>"
+        )
+    return path_detail + "<span class='file-entry-links'>" + " / ".join(links) + "</span>"
 
 
 def _view_delta_rows(ip_model: Mapping[str, Any], href_base: Path | None = None) -> list[str]:
@@ -140,34 +179,141 @@ def _view_delta_rows(ip_model: Mapping[str, Any], href_base: Path | None = None)
     first_version = str(ip_model.get("review_mode") or "").lower() == "first_version"
     for item in _view_delta_items(ip_model):
         delivery_count = int(item.get("delivery_count") or item.get("current_count") or 0)
-        evidence = str(item.get("evidence_level") or "-")
+        evidence = _compact_evidence_label(item.get("evidence_level"))
         status_code = str(item.get("status") or "")
         status_label = str(item.get("status_label") or ui.status_label(status_code) or "待确认")
         status_html = ui.badge(status_code or "INFO", status_label)
         evidence_counts = item.get("evidence_counts") if isinstance(item.get("evidence_counts"), Mapping) else {}
-        evidence_count_text = "；".join(
-            f"{ui.esc(label)} {int(count)}" for label, count in evidence_counts.items() if int(count or 0)
+        evidence_count_text = _compact_evidence_counts(evidence_counts, primary_label=evidence)
+        evidence_count_html = f"<small class='evidence-counts'>{ui.esc(evidence_count_text)}</small>" if evidence_count_text else ""
+        raw_view_type = str(item.get("view_type") or item.get("file_type") or "").strip().lower()
+        normalized_view_type = (
+            raw_view_type
+            if raw_view_type in VIEW_LABELS
+            else canonical_view_type(raw_view_type)
         )
-        evidence_count_html = f"<small class='evidence-counts'>{evidence_count_text}</small>" if evidence_count_text else ""
-        usage = str(item.get("usage_area") or "")
-        view_label = ui.esc(item.get("view") or item.get("view_type") or "-")
+        has_canonical_view = raw_view_type in VIEW_LABELS or normalized_view_type != "other"
+        display_view = view_label(normalized_view_type) if has_canonical_view else str(item.get("view") or raw_view_type or "-")
+        usage = (
+            usage_area_for_view(normalized_view_type)
+            if has_canonical_view
+            else str(item.get("usage_area") or "")
+        )
+        display_view_html = ui.esc(display_view)
         usage_html = f"<span class='view-use'>{ui.esc(usage)}</span>" if usage else ""
-        def count_cell(value: Any, kind: str) -> str:
+        change_kinds = []
+        if int(item.get("added") or 0):
+            change_kinds.append("added")
+        if int(item.get("removed") or 0):
+            change_kinds.append("removed")
+        if int(item.get("changed") or 0):
+            change_kinds.append("changed")
+        if int(item.get("path_changed_same_content") or 0):
+            change_kinds.append("path")
+        change_kind_text = " ".join(change_kinds) or "current"
+        view_search_text = f"{display_view} {usage} {raw_view_type}".strip().lower()
+        def compact_count(value: Any, kind: str, prefix: str, label: str) -> str:
             number = int(value or 0)
-            return f"<span class='delta-number {kind}{' nonzero' if number else ''}'>{number}</span>"
+            if not number:
+                return ""
+            return (
+                f"<span class='delta-compact-count {kind}' title='{ui.esc(label)} {number}'>"
+                f"<b>{ui.esc(prefix)}{number}</b><small>{ui.esc(label)}</small></span>"
+            )
+
+        delta_summary = (
+            "<div class='delta-delivery-count'>"
+            f"<b>{delivery_count}</b><span>{'交付' if first_version else '当前'}</span>"
+            "</div>"
+            "<div class='delta-compact-counts'>"
+            + compact_count(item.get("added"), "added", "+", "新增")
+            + compact_count(item.get("removed"), "removed", "-", "删除")
+            + compact_count(item.get("changed"), "changed", "~", "修改")
+            + compact_count(
+                item.get("path_changed_same_content"),
+                "path-changed",
+                "↔",
+                "路径变化且内容相同",
+            )
+            + "</div>"
+        )
 
         rows.append(
-            f"<tr data-view-type='{ui.esc(item.get('view_type') or item.get('file_type') or '')}'>"
-            f"<td><b>{view_label}</b>{usage_html}</td>"
-            f"<td class='numeric-cell'>{count_cell(delivery_count, 'current')}</td>"
-            f"<td class='numeric-cell'>{count_cell(item.get('added'), 'added')}</td>"
-            f"<td class='numeric-cell'>{count_cell(item.get('removed'), 'removed')}</td>"
-            f"<td class='numeric-cell'>{count_cell(item.get('changed'), 'changed')}</td>"
-            f"<td><span class='evidence-level'>{ui.esc(evidence)}</span>{evidence_count_html}<br>{status_html}</td>"
+            f"<tr data-view-type='{ui.esc(normalized_view_type)}'"
+            f" data-view-label='{ui.esc(display_view)}'"
+            f" data-view-search='{ui.esc(view_search_text)}'"
+            f" data-change-kinds='{ui.esc(change_kind_text)}'"
+            f" data-has-change='{'1' if change_kinds else '0'}'>"
+            f"<td><b>{display_view_html}</b>{usage_html}</td>"
+            f"<td class='delta-summary-cell'>{delta_summary}</td>"
+            f"<td><div class='evidence-line'><span class='evidence-level'>{ui.esc(evidence)}</span>{evidence_count_html}</div><div class='evidence-status'>{status_html}</div></td>"
             f"<td>{_view_delta_file_evidence(item, href_base)}</td>"
             "</tr>"
         )
     return rows
+
+
+def _view_delta_filter_bar(view_items: list[Mapping[str, Any]]) -> str:
+    """Render filters from the same view rows that feed the matrix."""
+    view_options: list[tuple[str, str]] = []
+    seen_views: set[str] = set()
+    totals = {"added": 0, "removed": 0, "changed": 0, "path": 0}
+    for item in view_items:
+        raw_type = str(item.get("view_type") or item.get("file_type") or "other").strip().lower()
+        view_type = raw_type if raw_type in VIEW_LABELS else canonical_view_type(raw_type)
+        label = view_label(view_type) if view_type in VIEW_LABELS else str(item.get("view") or raw_type or "其他证据")
+        if view_type not in seen_views:
+            seen_views.add(view_type)
+            view_options.append((view_type, label))
+        for key in totals:
+            totals[key] += int(item.get("path_changed_same_content") or 0) if key == "path" else int(item.get(key) or 0)
+
+    change_options = [
+        ("added", f"新增（{totals['added']}）"),
+        ("removed", f"删除（{totals['removed']}）"),
+        ("changed", f"修改（{totals['changed']}）"),
+    ]
+    if totals["path"]:
+        change_options.append(("path", f"路径变化且内容相同（{totals['path']}）"))
+    view_select_options = "<option value='all'>全部视图</option>" + "".join(
+        f"<option value='{ui.esc(value)}'>{ui.esc(label)}</option>"
+        for value, label in sorted(view_options, key=lambda item: item[1])
+    )
+    change_select_options = "<option value='all'>全部变化</option>" + "".join(
+        f"<option value='{ui.esc(value)}'>{ui.esc(label)}</option>"
+        for value, label in change_options
+    )
+    summary_chips = "".join(
+        f"<span class='view-delta-total {kind}'><b>{count}</b>{label}</span>"
+        for kind, count, label in (
+            ("added", totals["added"], "新增"),
+            ("removed", totals["removed"], "删除"),
+            ("changed", totals["changed"], "修改"),
+        )
+        if count
+    )
+    if totals["path"]:
+        summary_chips += f"<span class='view-delta-total path-changed'><b>{totals['path']}</b>路径变化且内容相同</span>"
+    if not summary_chips:
+        summary_chips = "<span class='view-delta-total neutral'><b>0</b>文件变化</span>"
+    return (
+        "<div class='view-delta-filter-bar' data-view-delta-filter>"
+        "<div class='view-delta-filter-head'><b>筛选变化</b>"
+        "<span>按视图类型和文件变化快速缩小范围；数字来自当前对比事实。</span></div>"
+        "<div class='view-delta-filter-controls'>"
+        "<label class='view-delta-search'><span>搜索</span>"
+        "<input type='search' data-view-search placeholder='搜索视图、用途或类型' oninput='filterViewDelta()'></label>"
+        "<label class='view-delta-select'><span>变化类型</span>"
+        f"<select data-change-filter onchange='filterViewDelta()'>{change_select_options}</select></label>"
+        "<label class='view-delta-select'><span>视图类型</span>"
+        f"<select data-view-type-filter onchange='filterViewDelta()'>{view_select_options}</select></label>"
+        "<label class='view-delta-check'><input type='checkbox' data-only-changes onchange='filterViewDelta()'>仅显示有变化</label>"
+        "<button type='button' class='btn secondary' data-reset-view-delta onclick='resetViewDeltaFilters()'>清除筛选</button>"
+        "<span class='view-delta-filter-count' data-view-delta-count aria-live='polite'></span>"
+        "</div>"
+        f"<div class='view-delta-totals' aria-label='变化汇总'>{summary_chips}</div>"
+        "</div>"
+    )
 
 
 def _pending_fact_list(ip_model: Mapping[str, Any]) -> str:
@@ -191,43 +337,6 @@ def _baseline_only_note(ip_model: Mapping[str, Any]) -> str:
     return f"<div class='scope-note'>基准中另有 {count} 个文件未随本包交付，未计为删除。</div>"
 
 
-def _impact_scope_html(ip_model: Mapping[str, Any]) -> str:
-    """Show observed usage-area deltas without inferring severity."""
-    changed = [
-        item
-        for item in ip_model.get("view_rows", []) or []
-        if isinstance(item, Mapping) and int(item.get("delta_total") or 0) > 0
-    ]
-    usage_impact = ip_model.get("usage_impact") if isinstance(ip_model.get("usage_impact"), Mapping) else {}
-    if not changed:
-        summary = str(usage_impact.get("summary") or "未识别到视图变化；当前页面不推断额外使用风险。")
-        return (
-            "<div class='impact-scope impact-scope-empty'>"
-            "<b>影响范围</b>"
-            f"<span>{ui.esc(summary)}</span>"
-            "</div>"
-        )
-
-    groups: dict[str, dict[str, Any]] = {}
-    for item in changed:
-        area = str(item.get("usage_area") or "其他 / 证据")
-        group = groups.setdefault(area, {"count": 0, "views": []})
-        group["count"] += int(item.get("delta_total") or 0)
-        view = str(item.get("view") or item.get("view_type") or "-")
-        if view not in group["views"]:
-            group["views"].append(view)
-    cards = []
-    for area, group in groups.items():
-        cards.append(
-            "<div class='impact-card'>"
-            f"<b>{ui.esc(area)}</b>"
-            f"<strong>{ui.esc(group['count'])} 个变化</strong>"
-            f"<span>{ui.esc('、'.join(group['views'][:4]))}</span>"
-            "</div>"
-        )
-    return "<div class='impact-scope'><b>影响范围</b><div class='impact-grid'>" + "".join(cards) + "</div></div>"
-
-
 def render_ip_user_view(
     ip_model: Mapping[str, Any],
     *,
@@ -246,15 +355,27 @@ def render_ip_user_view(
     pending_html = ""
     if pending and show_pending:
         pending_html = "<div class='pending-facts'><b>需确认</b>" + _pending_fact_list({"pending_fact_items": pending}) + "</div>"
+    view_items = _view_delta_items(ip_model)
+    path_change_legend = (
+        "<span><i class='legend-dot path-changed'></i>路径变化且内容相同</span>"
+        if any(int(item.get("path_changed_same_content") or 0) for item in view_items)
+        else ""
+    )
     delta_toolbar = (
         "<div class='view-delta-toolbar'>"
-        "<div><b>交付视角</b><span>按 IP 使用场景聚合本次版本的文件变化。</span></div>"
+        "<div><b>本次变化</b><span>按 IP 使用场景聚合当前版本的文件变化。</span></div>"
         "<div class='delta-legend' aria-label='变化类型图例'>"
         "<span><i class='legend-dot current'></i>当前文件</span>"
         "<span><i class='legend-dot added'></i>新增</span>"
         "<span><i class='legend-dot removed'></i>删除</span>"
         "<span><i class='legend-dot changed'></i>修改</span>"
+        f"{path_change_legend}"
         "</div></div>"
+    )
+    scroll_note = (
+        f"<div class='view-delta-scroll-note'>共 {len(view_items)} 个视图；表格区域可滚动查看全部视图。</div>"
+        if len(view_items) > 3
+        else ""
     )
     decision = _as_mapping(ip_model.get("decision"))
     change_summary = _as_mapping(ip_model.get("change_summary"))
@@ -266,17 +387,145 @@ def render_ip_user_view(
     return (
         "<div class='ip-user-view'>"
         + delta_toolbar
-        + _impact_scope_html(ip_model)
+        + _view_delta_filter_bar(view_items)
+        + scroll_note
         + _simple_table(
-            ["视图 / 用途", "当前文件", "新增", "删除", "修改", "证据 / 状态", "代表文件"],
+            ["视图 / 用途", "交付 / 变化", "证据 / 状态", "文件入口"],
             _view_delta_rows(ip_model, href_base),
             empty_copy,
             table_class="view-delta-table",
             wrap_class="table-wrap view-delta-scroll",
         )
+        + "<div class='view-delta-filter-empty' data-view-delta-filter-empty hidden>当前筛选没有匹配的视图；请清除筛选或更换条件。</div>"
         + _baseline_only_note(ip_model)
         + pending_html
         + "</div>"
+    )
+
+
+def _report_value(value: Any, fallback: str = "-") -> str:
+    if value is None or value == "":
+        return fallback
+    if isinstance(value, (list, tuple, set)):
+        return "、".join(str(item) for item in value) or fallback
+    text = str(value)
+    return {
+        "NEEDS_BASE_CONFIRM": "待确认基准版",
+        "DIFF_NOT_RUN": "尚未生成对比",
+        "NO_DIFF_SUMMARY": "缺少对比摘要",
+        "BLOCKED": "阻塞",
+        "INCOMPLETE": "证据不完整",
+        "STALE": "证据已过期",
+        "PASS": "通过",
+        "RECONCILED": "已核对",
+        "NOT_AVAILABLE": "不适用",
+        "UNKNOWN_PACKAGE": "未知包类型",
+        "recorded_base": "对比记录基准",
+        "current_effective": "当前有效版",
+        "previous_effective": "上一有效版",
+        "adjacent_fallback": "相邻上一版回退",
+        "review_window": "审查窗口",
+    }.get(text, text)
+
+
+def _report_kv_rows(items: list[tuple[str, Any]]) -> list[str]:
+    return [
+        f"<tr><th>{ui.esc(label)}</th><td>{ui.esc(_report_value(value))}</td></tr>"
+        for label, value in items
+    ]
+
+
+def render_review_report(report: Mapping[str, Any]) -> str:
+    """Render the bounded formal report below the IP-user first screen."""
+    if not report:
+        return ""
+    base = _as_mapping(report.get("base_analysis"))
+    delivery = _as_mapping(report.get("delivery_analysis"))
+    delta = _as_mapping(report.get("view_delta_analysis"))
+    focus = _as_mapping(report.get("focus_file_analysis"))
+    unknown = _as_mapping(report.get("unknown_analysis"))
+    evidence = _as_mapping(report.get("evidence_assessment"))
+    reconciliation = _as_mapping(delta.get("evidence_reconciliation"))
+    delta_rows = []
+    for row in delta.get("rows", []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        delta_rows.append(
+            "<tr>"
+            f"<td><b>{ui.esc(row.get('label') or row.get('view_type') or row.get('file_type') or '-')}</b></td>"
+            f"<td>{ui.esc(row.get('delivery_count') or row.get('current_count') or 0)}</td>"
+            f"<td>{ui.esc(_change_counts_text(row))}</td>"
+            f"<td>{ui.esc(row.get('evidence_level') or row.get('status_label') or '-')}</td>"
+            "</tr>"
+        )
+    focus_rows = []
+    for item in focus.get("items", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        focus_rows.append(
+            "<tr>"
+            f"<td>{ui.esc(item.get('review_lane') or '-')}</td>"
+            f"<td>{ui.esc(item.get('change') or '-')}</td>"
+            f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
+            f"<td>{ui.esc(item.get('evidence_mode') or '-')}</td>"
+            "</tr>"
+        )
+    question_rows = [f"<li>{ui.esc(item)}</li>" for item in report.get("open_questions", []) or []]
+    action_rows = [f"<li>{ui.esc(item)}</li>" for item in report.get("recommended_actions", []) or []]
+    report_parts = ["<div class='review-report-grid'>"]
+    report_parts.append(ui.panel("对比范围", "当前页面使用的基准和对比口径。", ui.table(["字段", "值"], _report_kv_rows([
+        ("状态", base.get("status")), ("基准来源", base.get("base_ref")), ("基准版本", base.get("base_version")),
+        ("目标版本", base.get("target_version")), ("对比语义", base.get("comparison_semantics")), ("说明", base.get("reason")),
+    ]))))
+    report_parts.append(ui.panel("交付分析", "只汇总交付覆盖，不替代原始扫描证据。", ui.table(["字段", "值"], _report_kv_rows([
+        ("状态", delivery.get("status")), ("包类型", delivery.get("package_type")), ("交付文件", delivery.get("file_count")),
+        ("必需视图", f"{delivery.get('required_present') or 0} / {delivery.get('required_total') or 0}"),
+        ("缺失视图", delivery.get("missing_views")),
+        ("组合", delivery.get("package_composition")),
+    ]))))
+    report_parts.append("</div><div class='review-report-grid'>")
+    totals = _as_mapping(delta.get("totals"))
+    reconciliation_checks = _as_mapping(reconciliation.get("checks"))
+    reconciliation_text = (
+        f"证据对账：{_report_value(reconciliation.get('status'))}；"
+        f"文件变化证据 {_change_counts_text(reconciliation.get('file_diff_items'))} → "
+        f"视图变化矩阵 {_change_counts_text(reconciliation.get('view_matrix'))}；"
+        f"重点文件是变化子集：{ui.esc('是' if reconciliation_checks.get('focus_files_are_file_diff_subset') else '否')}；"
+        f"文件树状态已核对：{ui.esc('是' if reconciliation_checks.get('file_tree_status_matches_file_diff') else '否')}。"
+    )
+    report_parts.append(ui.panel("视图变化分析", "按统一视图类型汇总；总计与视图行必须可核对。", ui.table(
+        ["视图", "交付数量", "变化分类", "证据"], delta_rows, "当前没有可用视图变化。"
+    ) + f"<p class='report-reconcile'>总计：{ui.esc(_change_counts_text(totals))}；{ui.esc(delta.get('reconciliation') or '-')}</p>"
+    + f"<p class='report-reconcile'>{reconciliation_text}</p>"))
+    focus_table = (
+        "<div class='report-focus-scroll' data-focus-scroll='true'>"
+        + ui.table(["级别", "变化", "路径", "证据"], focus_rows, "没有重点文件。")
+        + "</div>"
+    )
+    report_parts.append(ui.panel(
+        "重点文件分析",
+        "只展示优先下钻文件；数量较多时在列表内滚动，完整文件结构仍在本页文件树。",
+        focus_table
+        + f"<p class='report-reconcile'>重点文件 {ui.esc(focus.get('count') or 0)} 个，当前展示 {ui.esc(focus.get('shown_count') or 0)} 个。</p>",
+    ))
+    report_parts.append("</div><div class='review-report-grid'>")
+    report_parts.append(ui.panel("未知项与证据评估", "未知文件和证据新鲜度是需要明确的限制条件。", ui.table(["字段", "值"], _report_kv_rows([
+        ("未知文件", unknown.get("count")), ("未知状态", unknown.get("status")), ("代表路径", unknown.get("examples")),
+        ("证据状态", evidence.get("status")), ("扫描状态", evidence.get("scan_status")),
+        ("对比状态", evidence.get("diff_status")),
+    ]))))
+    report_parts.append(ui.panel("待确认与建议动作", "这是报告层的未决事项，不自动等同于阻塞。", (
+        "<div class='report-list'><b>待确认</b><ul>" + ("".join(question_rows) or "<li>暂无</li>") + "</ul>"
+        "<b>建议动作</b><ul>" + ("".join(action_rows) or "<li>暂无</li>") + "</ul></div>"
+    )))
+    report_parts.append("</div>")
+    report_body = "".join(report_parts)
+    return (
+        "<style>.review-report-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}.review-report-grid .panel{margin-bottom:0;box-shadow:none;border-radius:9px}.review-report-grid .panel-head{padding:12px 14px}.review-report-grid .panel-body{padding:12px 14px}.report-focus-scroll{max-height:360px;overflow:auto;scrollbar-gutter:stable;border:1px solid var(--line);border-radius:8px;background:var(--surface)}.report-focus-scroll .table-wrap{border:0;border-radius:0;overflow:visible}.report-focus-scroll table{min-width:560px}.report-focus-scroll th{position:sticky;top:0;z-index:1;background:var(--surface-2)}.report-focus-scroll td code{white-space:nowrap}.report-reconcile{margin:10px 0 0;color:var(--muted);font-size:12px}.report-list ul{margin:6px 0 14px;padding-left:22px;color:var(--muted)}.report-list li{margin:3px 0}@media(max-width:900px){.review-report-grid{grid-template-columns:1fr}}</style>"
+        '<details data-section="review-report" class="panel collapsible review-report-fold">'
+        '<summary class="panel-head"><div><h2>完整审查报告</h2><p>首屏结论的结构化依据；默认折叠，避免调试字段抢占主线。</p></div>'
+        '<div class="panel-actions"><span class="chevron">⌄</span></div></summary>'
+        f"<div class='panel-body'>{report_body}</div></details>"
     )
 
 

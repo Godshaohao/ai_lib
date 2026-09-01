@@ -142,16 +142,16 @@ def format_user_error(exc: BaseException, *, argv: list[str] | None = None) -> s
             "系统不能确定某些版本是 FULL 还是 FIX/HOTFIX，所以不会继续自动 intake 或 accept-window。",
             [
                 "先看窗口表：lg window <LIBRARY>",
-                "完整包确认：lg mark <LIBRARY> <VERSION> --type FULL --note \"confirmed full package\"",
-                "增量包确认：lg mark <LIBRARY> <VERSION> --type FIX --note \"confirmed partial update\"",
+                "完整包确认：lg mark <LIBRARY> <VERSION> --type FULL --note \"已确认完整包\"",
+                "增量包确认：lg mark <LIBRARY> <VERSION> --type FIX --note \"已确认增量包\"",
                 "确认后重新执行：lg intake <LIBRARY> --plan-only",
             ],
         )
 
     if "candidate effective manifest does not exist" in lower or "pending window has no candidate effective manifest" in lower:
         return _block(
-            "candidate effective 还没有生成。",
-            "accept-window 只能接受已经执行过 intake 的 candidate effective。",
+            "候选组合还没有生成。",
+            "accept-window 只能接受已经执行过 intake 的候选组合。",
             [
                 "先预演：lg intake <LIBRARY> --plan-only",
                 "确认 Base/类型后执行：lg intake <LIBRARY>",

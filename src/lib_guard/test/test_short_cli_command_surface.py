@@ -61,7 +61,7 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             main(["--help"])
         self.assertEqual(cm.exception.code, 0)
         help_text = stdout.getvalue()
-        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv}", help_text)
+        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv,review}", help_text)
         for name in [
             "init",
             "library",

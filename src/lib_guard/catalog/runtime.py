@@ -35,6 +35,35 @@ def catalog_runtime_path(catalog_path: str | Path) -> Path:
     return Path(catalog_path).with_name(RUNTIME_FILENAME)
 
 
+def inspect_catalog_runtime(
+    catalog_path: str | Path,
+    catalog: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Describe whether the catalog's runtime sidecar is usable.
+
+    The catalog asset and runtime sidecar are intentionally separate, but a
+    consumer must be able to tell the difference between a clean empty state,
+    a legacy embedded state, and a missing or corrupt sidecar.  This helper is
+    read-only and is used by the Web boundary to expose that distinction.
+    """
+
+    path = catalog_runtime_path(catalog_path)
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return {"status": "INVALID", "source": path.name, "path": str(path), "entry_count": 0}
+        sidecar_exists, runtime = _sidecar_runtime(payload)
+        if not sidecar_exists:
+            return {"status": "INVALID", "source": path.name, "path": str(path), "entry_count": 0}
+        return {"status": "AVAILABLE", "source": path.name, "path": str(path), "entry_count": len(runtime)}
+
+    embedded = collect_embedded_runtime(catalog or {})
+    if embedded:
+        return {"status": "EMBEDDED_FALLBACK", "source": "catalog.json", "path": str(path), "entry_count": len(embedded)}
+    return {"status": "MISSING", "source": path.name, "path": str(path), "entry_count": 0}
+
+
 def _clean_runtime_item(item: Mapping[str, Any]) -> dict[str, Any]:
     cleaned = {str(key): deepcopy(value) for key, value in item.items()}
     scan = cleaned.get("scan")

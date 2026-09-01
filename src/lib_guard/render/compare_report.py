@@ -105,7 +105,7 @@ def source_transitions(summary: Mapping[str, Any]) -> str:
 def risk_panel(manifest: Mapping[str, Any]) -> str:
     risks = manifest.get("risk_flags", []) or []
     if not risks:
-        return "<div class='notice pass'><b>未发现文件映射级风险。</b><span>当前报告做文件映射比较；内容级 deep diff 需要进入下方命令区。</span></div>"
+        return "<div class='notice pass'><b>未发现文件映射级风险。</b><span>当前报告做文件映射比较；内容级深度文件对比需要进入下方命令区。</span></div>"
     readable_messages = {
         "REMOVED_FILES": "对比目标缺少基准目标中存在的文件。",
         "REPLACED_FILES": "存在来源、哈希或大小变化的文件。",

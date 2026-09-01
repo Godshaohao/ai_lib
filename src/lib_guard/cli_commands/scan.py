@@ -9,6 +9,7 @@ from typing import Any
 import json
 import logging
 
+from lib_guard.artifacts import canonical_scan_dir, scan_artifacts, write_run_manifest
 from .common import auto_scan_id, default_cache_dir, default_state_dir, print_json
 
 
@@ -47,15 +48,26 @@ def build_scan_config(args: Namespace) -> SimpleNamespace:
     scan_id = args.scan_id or auto_scan_id()
     out_dir = args.out
     if not out_dir:
-        template = args.out_template or "work/scan_out/{library_type}/{library_name}/{version}/runs/{mode}_{scan_id}"
-        out_dir = format_out_template(
-            template,
-            library_type=args.profile,
-            library_name=args.name,
-            version=args.version,
-            mode=args.mode,
-            scan_id=scan_id,
-        )
+        if args.out_template:
+            out_dir = format_out_template(
+                args.out_template,
+                library_type=args.profile,
+                library_name=args.name,
+                version=args.version,
+                mode=args.mode,
+                scan_id=scan_id,
+            )
+        else:
+            out_dir = str(
+                canonical_scan_dir(
+                    args.workdir,
+                    library_type=args.profile,
+                    library_name=args.name,
+                    version=args.version,
+                    mode=args.mode,
+                    scan_id=scan_id,
+                )
+            )
 
     cfg = SimpleNamespace(
         root_path=args.root,
@@ -111,6 +123,7 @@ def run_scan_command(args: Namespace) -> int:
         except Exception as exc:
             LOGGER.warning("failed to register scan history: %s", exc)
 
+    scan_html: str | None = None
     if args.render:
         html_out = args.html_out
         if not html_out:
@@ -118,11 +131,31 @@ def run_scan_command(args: Namespace) -> int:
         try:
             from lib_guard.render.html_report import render_scan_html
             render_result = render_scan_html(result.out_dir, html_out)
-            LOGGER.info("html report generated: %s", render_result.get("index_html"))
+            scan_html = render_result.get("index_html")
+            LOGGER.info("html report generated: %s", scan_html)
         except Exception as exc:
             LOGGER.warning("render failed: %s", exc)
 
-    print_json({"status": result.status, "scan_id": result.scan_id, "out_dir": result.out_dir, "stats": result.stats})
+    manifest_path = write_run_manifest(
+        result.out_dir,
+        operation="scan",
+        status=result.status,
+        run_id=result.scan_id,
+        library_type=cfg.library_type,
+        library_name=cfg.library_name,
+        version=cfg.version,
+        inputs={"raw_root": str(cfg.root_path), "workdir": str(cfg.workdir)},
+        artifacts=scan_artifacts(result.out_dir, scan_html=scan_html),
+        warnings=["scan HTML 未生成或生成失败"] if args.render and not scan_html else [],
+    )
+    print_json({
+        "status": result.status,
+        "scan_id": result.scan_id,
+        "out_dir": result.out_dir,
+        "run_manifest": str(manifest_path),
+        "scan_html": scan_html,
+        "stats": result.stats,
+    })
     return 0 if result.status not in {"FAILED", "BLOCK"} else 2
 
 

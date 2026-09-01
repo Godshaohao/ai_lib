@@ -16,6 +16,37 @@ METADATA_ONLY_TYPES = set(BINARY_METADATA_ONLY_TYPES)
 SUMMARY_ONLY_DIFF_TYPES = set(SUMMARY_ONLY_TYPES)
 RELEASE_EVIDENCE_TYPES = {"doc", "waiver"}
 
+# These names are view directories, not delivery-package roots.  A single
+# non-view top-level directory can safely be removed from the logical path
+# when comparing two version-root scans.
+VIEW_ROOT_NAMES = {
+    "lef",
+    "lib",
+    "liberty",
+    "rtl",
+    "verilog",
+    "systemverilog",
+    "cdl",
+    "spice",
+    "spi",
+    "sdc",
+    "upf",
+    "cpf",
+    "sdf",
+    "spef",
+    "db",
+    "ndm",
+    "gds",
+    "gdsii",
+    "oas",
+    "oasis",
+    "ibis",
+    "waiver",
+    "doc",
+    "docs",
+    "package",
+}
+
 
 REQUIRED_SCAN_FILES = [
     "scan_meta.json",
@@ -110,47 +141,81 @@ def _strip_path_fields(value: Any) -> Any:
     return value
 
 
-def _parser_result_signatures(scan: Path) -> dict[str, str]:
+def _parser_result_signatures(scan: Path) -> dict[str, dict[str, str]]:
     manifest = _read_json(scan / "parser_manifest.json", {"files": []}) or {}
-    out: dict[str, str] = {}
+    out: dict[str, dict[str, str]] = {}
     for item in manifest.get("files", []) or []:
         path = str(item.get("file") or "")
         if not path:
             continue
         task_signatures: list[dict[str, Any]] = []
+        task_contracts: list[dict[str, Any]] = []
         for task in item.get("parser_tasks", []) or []:
             rel = task.get("result_path")
             if not rel:
                 continue
             result = _read_json(scan / str(rel), {}) or {}
+            parser_name = result.get("parser_name") or task.get("parser_name")
+            parser_version = result.get("parser_version") or task.get("parser_version")
+            parser_schema_version = result.get("parser_schema_version") or task.get("parser_schema_version")
+            status = result.get("status") or task.get("result_status") or task.get("status")
+            if status != "PASS" or not parser_name or not parser_version or not parser_schema_version:
+                continue
             task_signatures.append(
                 {
-                    "parser_name": result.get("parser_name") or task.get("parser_name"),
-                    "parser_version": result.get("parser_version") or task.get("parser_version"),
-                    "status": result.get("status") or task.get("result_status") or task.get("status"),
-                    "stats": result.get("stats"),
+                    "parser_name": parser_name,
                     "data": _strip_path_fields(result.get("data")),
-                    "issues": _strip_path_fields(result.get("issues")),
+                }
+            )
+            task_contracts.append(
+                {
+                    "parser_name": parser_name,
+                    "parser_version": parser_version,
+                    "parser_schema_version": parser_schema_version,
+                    "status": status,
                 }
             )
         if task_signatures:
-            out[path] = "parser:" + _stable_hash(task_signatures)
+            out[path] = {
+                "semantic_signature": "parser:" + _stable_hash(task_signatures),
+                "semantic_signature_contract": "parser-contract:" + _stable_hash(task_contracts),
+            }
     return out
 
 
-def _content_signature(item: Mapping[str, Any]) -> Any:
-    return item.get("hash") or item.get("semantic_signature")
+def _compare_file_evidence(old: Mapping[str, Any], new: Mapping[str, Any]) -> tuple[str, str]:
+    if old.get("file_type") != new.get("file_type"):
+        return "changed", "file_type_changed"
+    old_size = old.get("size_bytes")
+    new_size = new.get("size_bytes")
+    if old_size is not None and new_size is not None and old_size != new_size:
+        return "changed", "size_changed"
+    old_hash = old.get("hash")
+    new_hash = new.get("hash")
+    if old_hash and new_hash:
+        if old_hash == new_hash:
+            return "same", "content_hash_match"
+        return "changed", "content_hash_changed"
+    old_semantic = old.get("semantic_signature")
+    new_semantic = new.get("semantic_signature")
+    if old_semantic and new_semantic:
+        old_contract = old.get("semantic_signature_contract")
+        new_contract = new.get("semantic_signature_contract")
+        if old_contract and new_contract:
+            if old_contract != new_contract:
+                return "unverified", "parser_contract_mismatch"
+            if old_semantic != new_semantic:
+                return "changed", "semantic_signature_changed"
+    return "unverified", "missing_content_evidence"
 
 
-def _file_signature(item: Mapping[str, Any]) -> tuple[Any, Any, Any]:
-    return (item.get("file_type"), item.get("size_bytes"), _content_signature(item))
-
-
-def _logical_file_key(path: str) -> str:
+def _logical_file_key(path: str, *, strip_root: str | None = None) -> str:
     parts = [part for part in str(path or "").replace("\\", "/").split("/") if part]
     if len(parts) <= 1:
         return "/".join(parts)
     wrapper = parts[0].lower()
+    if strip_root and wrapper == str(strip_root).lower():
+        return "/".join(parts[1:])
     if (
         wrapper == "source_package"
         or wrapper.endswith("_source_package")
@@ -169,10 +234,31 @@ def _root_counts(items: Mapping[str, Mapping[str, Any]]) -> Counter[str]:
     return Counter(_path_root(path) for path in items)
 
 
-def _unique_logical_index(items: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+def _candidate_package_root(
+    items: Mapping[str, Mapping[str, Any]],
+    *,
+    release_version: str | None = None,
+) -> str | None:
+    roots = _root_counts(items)
+    version_root = str(release_version or "").strip().replace("\\", "/").strip("/")
+    if version_root and version_root in roots and version_root.lower() not in VIEW_ROOT_NAMES:
+        return version_root
+    if len(roots) != 1:
+        return None
+    root = next(iter(roots))
+    if root.lower() in VIEW_ROOT_NAMES:
+        return None
+    return root
+
+
+def _unique_logical_index(
+    items: Mapping[str, Mapping[str, Any]],
+    *,
+    strip_root: str | None = None,
+) -> dict[str, str]:
     logical_to_paths: dict[str, list[str]] = {}
     for path in items:
-        logical_to_paths.setdefault(_logical_file_key(path), []).append(path)
+        logical_to_paths.setdefault(_logical_file_key(path, strip_root=strip_root), []).append(path)
     return {logical: paths[0] for logical, paths in logical_to_paths.items() if len(paths) == 1}
 
 
@@ -186,7 +272,7 @@ def _inventory_index(scan: Path) -> dict[str, dict[str, Any]]:
             continue
         row = dict(item)
         if parser_signatures.get(key):
-            row["semantic_signature"] = parser_signatures[key]
+            row.update(parser_signatures[key])
         out[key] = row
     return out
 
@@ -204,12 +290,22 @@ def _scan_support(scan: Path) -> dict[str, Any]:
     }
 
 
-def _changed_files(old_items: dict[str, dict[str, Any]], new_items: dict[str, dict[str, Any]]) -> list[str]:
+def _classify_common_files(
+    old_items: Mapping[str, Mapping[str, Any]],
+    new_items: Mapping[str, Mapping[str, Any]],
+) -> tuple[list[str], list[str], list[dict[str, Any]]]:
     changed: list[str] = []
+    unchanged: list[str] = []
+    unverified: list[dict[str, Any]] = []
     for key in sorted(set(old_items) & set(new_items)):
-        if _file_signature(old_items[key]) != _file_signature(new_items[key]):
+        comparison, reason = _compare_file_evidence(old_items[key], new_items[key])
+        if comparison == "changed":
             changed.append(key)
-    return changed
+        elif comparison == "same":
+            unchanged.append(key)
+        else:
+            unverified.append({"logical_path": key, "old": key, "new": key, "reason": reason})
+    return changed, unchanged, unverified
 
 
 def _moved_files(
@@ -223,28 +319,87 @@ def _moved_files(
     excluded_new = set(exclude_new or set())
     old_by_hash: dict[str, list[str]] = {}
     for path, item in old_items.items():
-        if path in excluded_old:
+        if path in excluded_old or path in new_items:
             continue
         digest = str(item.get("hash") or "")
         if digest:
             old_by_hash.setdefault(digest, []).append(path)
-    used_old: set[str] = set()
-    moved = []
-    for new_path, new in sorted(new_items.items()):
-        if new_path in excluded_new:
+    new_by_hash: dict[str, list[str]] = {}
+    for path, item in new_items.items():
+        if path in excluded_new or path in old_items:
             continue
-        digest = str(new.get("hash") or "")
-        candidates = [
-            old_path
-            for old_path in old_by_hash.get(digest, [])
-            if old_path not in used_old and old_path != new_path and old_path not in new_items
-        ]
-        if candidates:
-            basename = Path(new_path).name
-            old_path = next((path for path in candidates if Path(path).name == basename), candidates[0])
-            used_old.add(old_path)
-            moved.append({"old": old_path, "new": new_path, "hash": digest, "reason": "hash_match"})
+        digest = str(item.get("hash") or "")
+        if digest:
+            new_by_hash.setdefault(digest, []).append(path)
+    moved = []
+    for digest in sorted(set(old_by_hash) & set(new_by_hash)):
+        old_candidates = old_by_hash[digest]
+        new_candidates = new_by_hash[digest]
+        if len(old_candidates) != 1 or len(new_candidates) != 1:
+            continue
+        moved.append(
+            {
+                "old": old_candidates[0],
+                "new": new_candidates[0],
+                "hash": digest,
+                "reason": "unique_hash_match",
+            }
+        )
     return moved
+
+
+def _metadata_match_candidates(
+    old_items: Mapping[str, Mapping[str, Any]],
+    new_items: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pair cheap, hashless candidates without claiming content equality.
+
+    Large views often omit full hashes by policy.  A unique basename + file
+    type + size match is useful evidence for package re-layout, but it is not
+    strong enough to call a file unchanged.  Keep it in ``unverified`` so the
+    review gate can remain conservative without manufacturing add/remove noise.
+    """
+
+    def key(path: str, item: Mapping[str, Any]) -> tuple[str, str, int | None]:
+        basename = Path(str(path).replace("\\", "/")).name.lower()
+        file_type = str(item.get("file_type") or "unknown").lower()
+        size = item.get("size_bytes")
+        try:
+            normalized_size = int(size) if size is not None else None
+        except (TypeError, ValueError):
+            normalized_size = None
+        return basename, file_type, normalized_size
+
+    old_by_key: dict[tuple[str, str, int | None], list[str]] = {}
+    new_by_key: dict[tuple[str, str, int | None], list[str]] = {}
+    for path, item in old_items.items():
+        if not isinstance(item, Mapping) or item.get("hash") or item.get("sha256"):
+            continue
+        old_by_key.setdefault(key(path, item), []).append(path)
+    for path, item in new_items.items():
+        if not isinstance(item, Mapping) or item.get("hash") or item.get("sha256"):
+            continue
+        new_by_key.setdefault(key(path, item), []).append(path)
+
+    candidates: list[dict[str, Any]] = []
+    for match_key in sorted(set(old_by_key) & set(new_by_key)):
+        old_paths = old_by_key[match_key]
+        new_paths = new_by_key[match_key]
+        if len(old_paths) != 1 or len(new_paths) != 1:
+            continue
+        old_path, new_path = old_paths[0], new_paths[0]
+        if old_path == new_path:
+            continue
+        candidates.append(
+            {
+                "old": old_path,
+                "new": new_path,
+                "reason": "metadata_name_size_candidate",
+                "match_reason": "same_basename_file_type_size",
+                "confidence": "candidate",
+            }
+        )
+    return candidates
 
 
 def _package_root_migrations(
@@ -257,6 +412,8 @@ def _package_root_migrations(
 ) -> list[dict[str, Any]]:
     old_counts = _root_counts(old_items)
     new_counts = _root_counts(new_items)
+    raw_added_by_root = Counter(_path_root(path) for path in raw_added)
+    raw_removed_by_root = Counter(_path_root(path) for path in raw_removed)
     by_pair: dict[tuple[str, str], dict[str, Any]] = {}
     for pair in logical_pairs:
         old_path = str(pair.get("old") or "")
@@ -276,41 +433,59 @@ def _package_root_migrations(
                 "same_signature_paths": 0,
                 "old_root_file_count": old_counts[old_root],
                 "new_root_file_count": new_counts[new_root],
-                "raw_added_under_new_root": sum(1 for path in raw_added if _path_root(path) == new_root),
-                "raw_removed_under_old_root": sum(1 for path in raw_removed if _path_root(path) == old_root),
+                "raw_added_under_new_root": raw_added_by_root[new_root],
+                "raw_removed_under_old_root": raw_removed_by_root[old_root],
                 "sample_mappings": [],
             },
         )
         row["matched_logical_paths"] += 1
-        if pair.get("signature_changed"):
+        comparison = str(pair.get("comparison") or "")
+        if comparison == "changed":
             row["changed_logical_paths"] += 1
-        else:
+        elif comparison == "same":
             row["same_signature_paths"] += 1
+        else:
+            row.setdefault("unverified_logical_paths", 0)
+            row["unverified_logical_paths"] += 1
         if len(row["sample_mappings"]) < 10:
             row["sample_mappings"].append(
                 {
                     "logical_path": pair.get("logical_path"),
                     "old": old_path,
                     "new": new_path,
-                    "signature_changed": bool(pair.get("signature_changed")),
+                    "signature_changed": comparison == "changed",
+                    "comparison": comparison or "unverified",
                 }
             )
     return sorted(by_pair.values(), key=lambda item: (-int(item["matched_logical_paths"]), str(item["old_root"]), str(item["new_root"])))
 
 
-def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
+def _file_diff(
+    old_scan: Path,
+    new_scan: Path,
+    *,
+    old_meta: Mapping[str, Any] | None = None,
+    new_meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     old_files = _inventory_index(old_scan)
     new_files = _inventory_index(new_scan)
     physical_old_files = dict(old_files)
     physical_new_files = dict(new_files)
     raw_added = set(new_files) - set(old_files)
     raw_removed = set(old_files) - set(new_files)
-    changed = _changed_files(old_files, new_files)
+    changed, unchanged, unverified = _classify_common_files(old_files, new_files)
     logical_path_changes: list[dict[str, Any]] = []
-    logical_path_moves: list[dict[str, Any]] = []
     logical_pairs: list[dict[str, Any]] = []
-    old_logical = _unique_logical_index(old_files)
-    new_logical = _unique_logical_index(new_files)
+    old_package_root = _candidate_package_root(
+        old_files,
+        release_version=str((old_meta or {}).get("release_version") or ""),
+    )
+    new_package_root = _candidate_package_root(
+        new_files,
+        release_version=str((new_meta or {}).get("release_version") or ""),
+    )
+    old_logical = _unique_logical_index(old_files, strip_root=old_package_root)
+    new_logical = _unique_logical_index(new_files, strip_root=new_package_root)
     logical_changed: list[str] = []
     paired_old: set[str] = set()
     paired_new: set[str] = set()
@@ -321,30 +496,38 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
             continue
         old_item = old_files[old_path]
         new_item = new_files[new_path]
-        signature_changed = _file_signature(old_item) != _file_signature(new_item)
+        comparison, reason = _compare_file_evidence(old_item, new_item)
         logical_pairs.append(
             {
                 "logical_path": logical,
                 "old": old_path,
                 "new": new_path,
-                "signature_changed": signature_changed,
+                "signature_changed": comparison == "changed",
+                "comparison": comparison,
             }
         )
         paired_old.add(old_path)
         paired_new.add(new_path)
-        if not signature_changed:
-            logical_path_moves.append(
+        if comparison == "same":
+            # A version/package wrapper is outside the library's logical file
+            # path. Matching files beneath different wrappers are unchanged,
+            # while the wrapper transition remains package migration evidence.
+            unchanged.append(logical)
+            continue
+        if comparison == "unverified":
+            unverified.append(
                 {
+                    "logical_path": logical,
                     "old": old_path,
                     "new": new_path,
-                    "hash": _content_signature(new_item) or _content_signature(old_item),
-                    "logical_path": logical,
-                    "reason": "logical_path_same_signature",
+                    "reason": reason,
                 }
             )
             continue
         logical_changed.append(logical)
         logical_path_changes.append({"logical_path": logical, "old": old_path, "new": new_path})
+        old_files.pop(old_path, None)
+        new_files.pop(new_path, None)
         old_files[logical] = {**old_item, "path": logical, "physical_path": old_path, "logical_path": logical, "abs_path": old_item.get("abs_path")}
         new_files[logical] = {**new_item, "path": logical, "physical_path": new_path, "logical_path": logical, "abs_path": new_item.get("abs_path")}
     changed = sorted(set(changed) | set(logical_changed))
@@ -352,14 +535,55 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
     for key in changed:
         old = old_files[key]
         new = new_files[key]
-        if _content_signature(old) == _content_signature(new) and old.get("size_bytes") == new.get("size_bytes"):
+        old_hash = old.get("hash")
+        new_hash = new.get("hash")
+        if old_hash and old_hash == new_hash and old.get("size_bytes") == new.get("size_bytes"):
             metadata_only.append(key)
-    moved = logical_path_moves + _moved_files(old_files, new_files, exclude_old=paired_old, exclude_new=paired_new)
+    moved = _moved_files(old_files, new_files, exclude_old=paired_old, exclude_new=paired_new)
+    for item in moved:
+        item["old_logical_path"] = _logical_file_key(
+            str(item.get("old") or ""),
+            strip_root=old_package_root,
+        )
+        item["new_logical_path"] = _logical_file_key(
+            str(item.get("new") or ""),
+            strip_root=new_package_root,
+        )
     moved_old = {str(item.get("old")) for item in moved if item.get("old")}
     moved_new = {str(item.get("new")) for item in moved if item.get("new")}
+    metadata_candidates = _metadata_match_candidates(
+        {
+            path: physical_old_files[path]
+            for path in raw_removed - moved_old - paired_old
+            if path in physical_old_files
+        },
+        {
+            path: physical_new_files[path]
+            for path in raw_added - moved_new - paired_new
+            if path in physical_new_files
+        },
+    )
+    metadata_old = {str(item.get("old")) for item in metadata_candidates if item.get("old")}
+    metadata_new = {str(item.get("new")) for item in metadata_candidates if item.get("new")}
+    for item in metadata_candidates:
+        old_path = str(item.get("old") or "")
+        new_path = str(item.get("new") or "")
+        unverified.append(
+            {
+                "logical_path": _logical_file_key(new_path, strip_root=new_package_root),
+                "old": old_path,
+                "new": new_path,
+                "reason": str(item.get("reason") or "metadata_name_size_candidate"),
+                "match_reason": str(item.get("match_reason") or "same_basename_file_type_size"),
+                "confidence": str(item.get("confidence") or "candidate"),
+            }
+        )
     added = sorted(raw_added - moved_new - paired_new)
     removed = sorted(raw_removed - moved_old - paired_old)
-    unchanged = sorted((set(old_files) & set(new_files)) - set(changed))
+    added = sorted(set(added) - metadata_new)
+    removed = sorted(set(removed) - metadata_old)
+    unchanged = sorted(unchanged)
+    unverified = sorted(unverified, key=lambda item: (str(item.get("logical_path") or ""), str(item.get("old") or "")))
     package_root_migrations = _package_root_migrations(
         physical_old_files,
         physical_new_files,
@@ -374,10 +598,16 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
         "removed": removed,
         "changed": changed,
         "renamed_or_moved": moved,
+        "metadata_match_candidates": metadata_candidates,
         "logical_path_changes": logical_path_changes,
         "package_root_migrations": package_root_migrations,
         "unchanged": unchanged,
+        "unverified": unverified,
         "metadata_only_changed": metadata_only,
+        "logical_package_roots": {
+            "old": old_package_root,
+            "new": new_package_root,
+        },
         "counts": {
             "added": len(added),
             "removed": len(removed),
@@ -387,6 +617,8 @@ def _file_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
             "package_root_migrations": len(package_root_migrations),
             "package_root_migration_matched_files": package_root_migration_matched_files,
             "unchanged": len(unchanged),
+            "unverified": len(unverified),
+            "metadata_match_candidates": len(metadata_candidates),
             "metadata_only_changed": len(metadata_only),
         },
         "by_type": {
@@ -420,6 +652,12 @@ def _type_diff(file_diff: Mapping[str, Any]) -> dict[str, Any]:
     for path in file_diff.get("changed", []) or []:
         item = new_items.get(path) or old_items.get(path) or {}
         changed_by_type[str(item.get("file_type", "unknown"))] += 1
+    unverified_by_type: Counter[str] = Counter()
+    for item in file_diff.get("unverified", []) or []:
+        new_path = str((item or {}).get("new") or "")
+        old_path = str((item or {}).get("old") or "")
+        entry = new_items.get(new_path) or old_items.get(old_path) or {}
+        unverified_by_type[str(entry.get("file_type", "unknown"))] += 1
     by_type: dict[str, Any] = {}
     changed_types = 0
     added_paths = set(file_diff.get("added") or [])
@@ -430,11 +668,12 @@ def _type_diff(file_diff: Mapping[str, Any]) -> dict[str, Any]:
         old_path = str((item or {}).get("old") or "")
         entry = new_items.get(new_path) or old_items.get(old_path) or {}
         moved_by_type[str(entry.get("file_type", "unknown"))] += 1
-    for file_type in sorted(set(old_counts) | set(new_counts) | set(changed_by_type)):
+    for file_type in sorted(set(old_counts) | set(new_counts) | set(changed_by_type) | set(unverified_by_type)):
         added = sorted(path for path in added_paths if str((new_items.get(path) or {}).get("file_type", "unknown")) == file_type)
         removed = sorted(path for path in removed_paths if str((old_items.get(path) or {}).get("file_type", "unknown")) == file_type)
         changed = [p for p in file_diff.get("changed", []) or [] if str((new_items.get(p) or old_items.get(p) or {}).get("file_type", "unknown")) == file_type]
         changed_flag = bool(added or removed or changed or old_counts[file_type] + moved_by_type[file_type] != new_counts[file_type] + moved_by_type[file_type])
+        unverified_count = unverified_by_type[file_type]
         if changed_flag:
             changed_types += 1
         by_type[file_type] = {
@@ -443,21 +682,23 @@ def _type_diff(file_diff: Mapping[str, Any]) -> dict[str, Any]:
             "added_count": len(added),
             "removed_count": len(removed),
             "changed_count": len(changed),
+            "unverified_count": unverified_count,
             "moved_count": moved_by_type[file_type],
             "added": added[:50],
             "removed": removed[:50],
             "changed": changed[:50],
-            "status": "CHANGED" if changed_flag else "SAME",
+            "status": "CHANGED" if changed_flag else "UNVERIFIED" if unverified_count else "SAME",
             "review_mode": "metadata_only" if file_type in METADATA_ONLY_TYPES else "summary_only" if file_type in SUMMARY_ONLY_DIFF_TYPES else "manual_pairwise" if file_type in DEFAULT_FILE_DIFF_TYPES else "governance",
         }
     return {
         "schema_version": "1.0",
-        "status": "DIFF" if changed_types else "SAME",
+        "status": "DIFF" if changed_types else "UNVERIFIED" if unverified_by_type else "SAME",
         "by_type": by_type,
         "summary": {
             "old_type_count": len(old_counts),
             "new_type_count": len(new_counts),
             "changed_types": changed_types,
+            "unverified_types": len(unverified_by_type),
             "metadata_only_changed_types": len([t for t, row in by_type.items() if t in METADATA_ONLY_TYPES and row["status"] == "CHANGED"]),
         },
     }
@@ -549,28 +790,130 @@ def _evidence_role(item: Mapping[str, Any]) -> str | None:
 def _release_evidence_diff(file_diff: Mapping[str, Any]) -> dict[str, Any]:
     old_items = file_diff.get("_old_items") or {}
     new_items = file_diff.get("_new_items") or {}
-    roles = sorted({r for item in list(old_items.values()) + list(new_items.values()) for r in [_evidence_role(item)] if r})
+    old_paths_by_role: dict[str, set[str]] = {}
+    new_paths_by_role: dict[str, set[str]] = {}
+    for path, item in old_items.items():
+        role = _evidence_role(item)
+        if role:
+            old_paths_by_role.setdefault(role, set()).add(path)
+    for path, item in new_items.items():
+        role = _evidence_role(item)
+        if role:
+            new_paths_by_role.setdefault(role, set()).add(path)
+    role_events: dict[str, dict[str, Any]] = {}
+
+    def events(role: str | None) -> dict[str, Any] | None:
+        if not role:
+            return None
+        return role_events.setdefault(
+            role,
+            {"added": set(), "removed": set(), "changed": set(), "unverified": []},
+        )
+
+    def item_for(items: Mapping[str, Mapping[str, Any]], path: str, logical_path: str = "") -> Mapping[str, Any]:
+        return items.get(path) or (items.get(logical_path) if logical_path else None) or {}
+
+    for path in file_diff.get("added", []) or []:
+        row = events(_evidence_role(new_items.get(path) or {}))
+        if row is not None:
+            row["added"].add(path)
+    for path in file_diff.get("removed", []) or []:
+        row = events(_evidence_role(old_items.get(path) or {}))
+        if row is not None:
+            row["removed"].add(path)
+    for path in file_diff.get("changed", []) or []:
+        old_item = old_items.get(path) or {}
+        new_item = new_items.get(path) or {}
+        old_role = _evidence_role(old_item)
+        new_role = _evidence_role(new_item)
+        old_event_path = str(old_item.get("physical_path") or path)
+        new_event_path = str(new_item.get("physical_path") or path)
+        if old_role and new_role and old_role != new_role:
+            events(old_role)["removed"].add(old_event_path)  # type: ignore[index]
+            events(new_role)["added"].add(new_event_path)  # type: ignore[index]
+        else:
+            row = events(new_role or old_role)
+            if row is not None:
+                row["changed"].add(new_event_path)
+
+    pair_rows: list[Mapping[str, Any]] = []
+    for path in sorted(set(old_items) & set(new_items)):
+        old_item = old_items[path]
+        new_item = new_items[path]
+        pair_rows.append(
+            {
+                "old": str(old_item.get("physical_path") or path),
+                "new": str(new_item.get("physical_path") or path),
+                "logical_path": path,
+            }
+        )
+    pair_rows.extend(file_diff.get("renamed_or_moved", []) or [])
+    pair_rows.extend(file_diff.get("logical_path_changes", []) or [])
+    pair_rows.extend(file_diff.get("unverified", []) or [])
+    seen_pairs: set[tuple[str, str]] = set()
+    for pair in pair_rows:
+        old_path = str(pair.get("old") or "")
+        new_path = str(pair.get("new") or "")
+        logical_path = str(pair.get("logical_path") or "")
+        pair_key = (old_path, new_path)
+        if not old_path or not new_path or pair_key in seen_pairs:
+            continue
+        seen_pairs.add(pair_key)
+        old_role = _evidence_role(item_for(old_items, old_path, logical_path))
+        new_role = _evidence_role(item_for(new_items, new_path, logical_path))
+        if old_role and new_role and old_role != new_role:
+            events(old_role)["removed"].add(old_path)  # type: ignore[index]
+            events(new_role)["added"].add(new_path)  # type: ignore[index]
+
+    evidence_unverified_pairs: set[tuple[str, str]] = set()
+    for item in file_diff.get("unverified", []) or []:
+        old_path = str((item or {}).get("old") or "")
+        new_path = str((item or {}).get("new") or "")
+        logical_path = str((item or {}).get("logical_path") or "")
+        old_role = _evidence_role(item_for(old_items, old_path, logical_path))
+        new_role = _evidence_role(item_for(new_items, new_path, logical_path))
+        for role in {old_role, new_role} - {None}:
+            events(role)["unverified"].append(dict(item))  # type: ignore[index]
+            evidence_unverified_pairs.add((old_path, new_path))
+
+    roles = sorted(set(role_events) | set(old_paths_by_role) | set(new_paths_by_role))
     by_role: dict[str, Any] = {}
     changed_roles = 0
+    unverified_roles = 0
     for role in roles:
-        old_paths = {p for p, item in old_items.items() if _evidence_role(item) == role}
-        new_paths = {p for p, item in new_items.items() if _evidence_role(item) == role}
-        changed = sorted(p for p in file_diff.get("changed", []) or [] if _evidence_role(new_items.get(p) or old_items.get(p) or {}) == role)
-        added = sorted(new_paths - old_paths)
-        removed = sorted(old_paths - new_paths)
-        status = "CHANGED" if added or removed or changed else "SAME"
+        old_paths = old_paths_by_role.get(role, set())
+        new_paths = new_paths_by_role.get(role, set())
+        role_event = events(role) or {}
+        changed = sorted(role_event.get("changed") or set())
+        added = sorted(role_event.get("added") or set())
+        removed = sorted(role_event.get("removed") or set())
+        unverified = list(role_event.get("unverified") or [])
+        status = "CHANGED" if added or removed or changed else "UNVERIFIED" if unverified else "SAME"
         if status == "CHANGED":
             changed_roles += 1
+        if unverified:
+            unverified_roles += 1
         by_role[role] = {
             "old_count": len(old_paths),
             "new_count": len(new_paths),
             "added": added,
             "removed": removed,
             "changed": changed,
+            "unverified": unverified,
             "status": status,
             "release_meaning": "release evidence changed" if role in {"release_note", "waiver", "readme", "changelog"} else "documentation changed",
         }
-    return {"schema_version": "1.0", "status": "DIFF" if changed_roles else "SAME", "by_role": by_role, "summary": {"roles": len(roles), "changed_roles": changed_roles}}
+    return {
+        "schema_version": "1.0",
+        "status": "DIFF" if changed_roles else "UNVERIFIED" if unverified_roles else "SAME",
+        "by_role": by_role,
+        "summary": {
+            "roles": len(roles),
+            "changed_roles": changed_roles,
+            "unverified_roles": unverified_roles,
+            "unverified_files": len(evidence_unverified_pairs),
+        },
+    }
 
 
 def _metadata_review_tasks(file_diff: Mapping[str, Any]) -> dict[str, Any]:
@@ -667,7 +1010,6 @@ def _component_diff(old_scan: Path, new_scan: Path, old_meta: Mapping[str, Any],
         if (
             old.get("status") != new.get("status")
             or old.get("release_channel") != new.get("release_channel")
-            or old.get("component_id") != new.get("component_id")
             or view_results
         ):
             changed.append(
@@ -719,9 +1061,40 @@ def _signature_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
 def _parser_quality_diff(old_scan: Path, new_scan: Path) -> dict[str, Any]:
     old_quality = _read_json(old_scan / "summary" / "parser_quality.json", {})
     new_quality = _read_json(new_scan / "summary" / "parser_quality.json", {})
+
+    def stable_quality(value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            return {}
+        parsers = []
+        for item in value.get("parsers", []) or []:
+            if not isinstance(item, Mapping):
+                continue
+            parsers.append(
+                {
+                    key: item.get(key)
+                    for key in (
+                        "file_type",
+                        "file_types",
+                        "parser_name",
+                        "parser_version",
+                        "file_count",
+                        "parsed_count",
+                        "failed_count",
+                        "pass_empty_count",
+                        "object_count",
+                        "quality_score",
+                        "status",
+                    )
+                }
+            )
+        parsers.sort(key=lambda item: (str(item.get("file_type") or ""), str(item.get("parser_name") or "")))
+        return {"status": value.get("status"), "parsers": parsers}
+
+    old_stable = stable_quality(old_quality)
+    new_stable = stable_quality(new_quality)
     return {
         "schema_version": "1.0",
-        "changed": _stable_hash(old_quality) != _stable_hash(new_quality),
+        "changed": _stable_hash(old_stable) != _stable_hash(new_stable),
         "old_status": old_quality.get("status") if isinstance(old_quality, dict) else None,
         "new_status": new_quality.get("status") if isinstance(new_quality, dict) else None,
     }
@@ -742,22 +1115,33 @@ def _diff_issues(
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     if support["old"].get("missing") or support["new"].get("missing"):
-        issues.append(_issue("warning", "compatibility", "Diff is degraded", "One or both scan outputs are missing v5 diff inputs.", support=support))
+        issues.append(_issue("warning", "compatibility", "对比能力降级", "一个或两个扫描输出缺少完整对比输入。", support=support))
+    unverified_count = int((file_diff.get("counts") or {}).get("unverified") or 0)
+    if unverified_count:
+        issues.append(
+            _issue(
+                "warning",
+                "content_evidence",
+                "部分文件缺少内容证据",
+                f"{unverified_count} 个已配对文件只有路径和元数据证据，未判定为相同或变化。",
+                count=unverified_count,
+            )
+        )
     for path in file_diff.get("removed", []) or []:
-        issues.append(_issue("warning", "file", "File removed", f"removed file: {path}", file=path))
+        issues.append(_issue("warning", "file", "文件缺失", f"removed file: {path}", file=path))
     for path in file_diff.get("metadata_only_changed", []) or []:
-        issues.append(_issue("warning", "file", "Metadata-only file change needs review", f"metadata changed without content hash change: {path}", file=path))
+        issues.append(_issue("warning", "file", "元数据级文件发生变化，需要确认", f"metadata changed without content hash change: {path}", file=path))
     for component in component_diff.get("changed", []) or []:
         for view, change in (component.get("required_view_changes") or {}).items():
             if change.get("new_parser_status") in {"FAILED", "PASS_EMPTY"}:
-                issues.append(_issue("blocker", "component", "Required view parser regressed", f"{component.get('new_component_id')} {view}: {change.get('old_parser_status')} -> {change.get('new_parser_status')}", component_id=component.get("new_component_id"), file_type=view))
+                issues.append(_issue("blocker", "component", "必需视图解析结果退化", f"{component.get('new_component_id')} {view}: {change.get('old_parser_status')} -> {change.get('new_parser_status')}", component_id=component.get("new_component_id"), file_type=view))
     for view in (view_diff or {}).get("views", []) or []:
         if view.get("severity") == "blocker":
             issues.append(
                 _issue(
                     "blocker",
                     "view_diff",
-                    "Required view is not release-ready",
+                    "必需视图尚未达到发布条件",
                     f"{view.get('view')}: {view.get('old_status')} -> {view.get('new_status')}",
                     file_type=view.get("view"),
                 )
@@ -767,7 +1151,7 @@ def _diff_issues(
                 _issue(
                     "warning",
                     "view_diff",
-                    "Required view changed",
+                    "必需视图发生变化",
                     f"{view.get('view')}: count {view.get('old_count')} -> {view.get('new_count')}",
                     file_type=view.get("view"),
                 )
@@ -778,7 +1162,7 @@ def _diff_issues(
                 _issue(
                     "warning",
                     "release_evidence",
-                    "Release evidence changed",
+                    "发布证据发生变化",
                     f"{role}: +{len(item.get('added') or [])}/-{len(item.get('removed') or [])}/~{len(item.get('changed') or [])}",
                     role=role,
                 )
@@ -789,30 +1173,30 @@ def _diff_issues(
             _issue(
                 "warning",
                 "metadata_review",
-                "Metadata-only views need manual review",
-                f"{metadata_total} binary/metadata-only changes require manual confirmation.",
+                "元数据级视图需要人工确认",
+                f"{metadata_total} 个二进制或元数据级变化需要人工确认。",
             )
         )
     old_status = readiness_diff.get("bundle_status", {}).get("old")
     new_status = readiness_diff.get("bundle_status", {}).get("new")
     if old_status != new_status:
         severity = "blocker" if new_status == "BLOCK" else "warning"
-        issues.append(_issue(severity, "release_readiness", "Release readiness status changed", f"bundle_status: {old_status} -> {new_status}"))
+        issues.append(_issue(severity, "release_readiness", "发布准备状态发生变化", f"bundle_status: {old_status} -> {new_status}"))
     if readiness_diff.get("blocking_count", {}).get("delta", 0) > 0:
-        issues.append(_issue("blocker", "release_readiness", "New blocking release items", f"blocking_items delta={readiness_diff['blocking_count']['delta']}"))
+        issues.append(_issue("blocker", "release_readiness", "新增发布阻塞项", f"blocking_items delta={readiness_diff['blocking_count']['delta']}"))
     if readiness_diff.get("manual_review_count", {}).get("delta", 0) > 0:
-        issues.append(_issue("warning", "release_readiness", "More manual review items", f"manual_review_items delta={readiness_diff['manual_review_count']['delta']}"))
+        issues.append(_issue("warning", "release_readiness", "人工审查项增加", f"manual_review_items delta={readiness_diff['manual_review_count']['delta']}"))
     counts = Counter(item["severity"] for item in issues)
     return {"schema_version": "1.0", "issues": issues, "summary": dict(counts)}
 
 
-def _status_from_issues(issues: dict[str, Any], has_diff: bool) -> str:
+def _status_from_issues(issues: dict[str, Any], has_diff: bool, has_unverified: bool = False) -> str:
     counts = issues.get("summary", {}) or {}
     if counts.get("blocker", 0) > 0:
         return "BLOCK"
     if counts.get("error", 0) > 0:
         return "FAILED"
-    return "DIFF" if has_diff else "SAME"
+    return "DIFF" if has_diff else "UNVERIFIED" if has_unverified else "SAME"
 
 
 def _diff_summary(
@@ -840,6 +1224,7 @@ def _diff_summary(
         "added_files": file_diff["counts"]["added"],
         "removed_files": file_diff["counts"]["removed"],
         "changed_files": file_diff["counts"]["changed"],
+        "unverified_files": file_diff["counts"].get("unverified", 0),
         "renamed_or_moved": file_diff["counts"].get("renamed_or_moved", 0),
         "package_root_migrations": file_diff["counts"].get("package_root_migrations", 0),
         "package_root_migration_matched_files": file_diff["counts"].get("package_root_migration_matched_files", 0),
@@ -855,7 +1240,7 @@ def _diff_summary(
         "pairwise_tasks": pairwise_tasks,
         "breaking_changes": counts.get("blocker", 0) + counts.get("error", 0),
         "compatible_changes": file_diff["counts"]["added"],
-        "manual_review_items": readiness_diff.get("manual_review_count", {}).get("new", 0) + metadata_tasks + pairwise_tasks,
+        "manual_review_items": readiness_diff.get("manual_review_count", {}).get("new", 0) + metadata_tasks + pairwise_tasks + file_diff["counts"].get("unverified", 0),
         "recommended_actions": _recommended_actions(status, issues),
     }
 
@@ -867,6 +1252,8 @@ def _recommended_actions(status: str, issues: dict[str, Any]) -> list[str]:
         return ["发布前复核 warning，并补齐人工确认记录。"]
     if status == "DIFF":
         return ["确认重点文件证据，并把确认结果作为 release evidence 归档。"]
+    if status == "UNVERIFIED":
+        return ["确认缺少内容证据的文件，再判断是否发生变化。"]
     return ["无差异动作要求。"]
 
 
@@ -883,6 +1270,7 @@ def _report(meta: dict[str, Any], summary: dict[str, Any], issues: dict[str, Any
         "## Summary",
         "",
         f"- files added/removed/changed: {summary.get('added_files')}/{summary.get('removed_files')}/{summary.get('changed_files')}",
+        f"- files unverified: {summary.get('unverified_files')}",
         f"- components added/removed/changed: {summary.get('added_components')}/{summary.get('removed_components')}/{summary.get('changed_components')}",
         f"- breaking_changes: {summary.get('breaking_changes')}",
         f"- manual_review_items: {summary.get('manual_review_items')}",
@@ -965,7 +1353,7 @@ def diff_scan_outputs(
         "base_version": None,
     }
     relation.update(version_relation or {})
-    file_diff = _file_diff(old, new)
+    file_diff = _file_diff(old, new, old_meta=old_meta, new_meta=new_meta)
     component_diff = _component_diff(old, new, old_meta, new_meta)
     signature_diff = _signature_diff(old, new)
     parser_quality = _parser_quality_diff(old, new)
@@ -979,7 +1367,7 @@ def diff_scan_outputs(
     manual_pairwise_tasks = {
         **pairwise_tasks,
         "governance_role": "manual_deep_diff",
-        "description": "Deep semantic file comparison is intentionally manual and pairwise. Scan diff records focused evidence candidates but does not provide executable script commands.",
+        "description": "深度语义文件对比必须由人工逐对执行。扫描对比只记录重点证据候选，不生成可执行脚本命令。",
     }
     pairwise_task_status = build_pairwise_task_status(pairwise_tasks)
     issues = _diff_issues(
@@ -1000,7 +1388,6 @@ def diff_scan_outputs(
             component_diff["counts"]["removed"],
             component_diff["counts"]["changed"],
             signature_diff["changed"],
-            parser_quality["changed"],
             type_diff["summary"]["changed_types"],
             view_diff["summary"]["changed"],
             release_evidence_diff["summary"]["changed_roles"],
@@ -1008,7 +1395,8 @@ def diff_scan_outputs(
             readiness_diff.get("bundle_status", {}).get("old") != readiness_diff.get("bundle_status", {}).get("new"),
         ]
     )
-    status = _status_from_issues(issues, has_diff)
+    has_unverified = bool(file_diff["counts"].get("unverified", 0))
+    status = _status_from_issues(issues, has_diff, has_unverified)
     diff_created_at = _utc_now()
     meta = {
         "schema_version": "1.0",
@@ -1076,9 +1464,11 @@ def diff_scan_outputs(
             "added": file_diff["added"],
             "removed": file_diff["removed"],
             "changed": file_diff["changed"],
+            "unverified": file_diff.get("unverified", []),
             "added_count": file_diff["counts"]["added"],
             "removed_count": file_diff["counts"]["removed"],
             "changed_count": file_diff["counts"]["changed"],
+            "unverified_count": file_diff["counts"].get("unverified", 0),
         },
         "summary": summary,
         "parser_quality": parser_quality,

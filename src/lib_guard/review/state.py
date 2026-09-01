@@ -224,6 +224,17 @@ def _review_root_for_out(out_dir: str | Path | None) -> Path | None:
     return out / "review"
 
 
+def _static_review_root_for_out(out_dir: str | Path | None) -> Path | None:
+    if not out_dir:
+        return None
+    out = Path(out_dir)
+    if out.name == "html" and out.parent.name == "catalog":
+        return out.parent.parent / "reviews"
+    if out.name == "catalog":
+        return out.parent / "reviews"
+    return out / "reviews"
+
+
 def review_paths_for_version(out_dir: str | Path | None, lib_name: str, version_id: str) -> dict[str, str]:
     safe_lib = _safe_name(lib_name)
     safe_ver = _safe_name(version_id)
@@ -292,13 +303,14 @@ def _metadata_gate_items(diff_dir: str, *, limit: int = 20) -> list[dict[str, An
             _gate_item(
                 item_id,
                 category="metadata_only",
-                title="Metadata-only view changed",
-                message="Binary/metadata-only view changed; human acceptance is required for current.",
+                title="元数据级视图发生变化",
+                message="元数据级视图发生变化；默认只记录证据，不阻塞 IP 使用判断。",
+                severity="attention",
                 source=str(diff / "metadata_review_tasks.json"),
                 file=path,
-                rule_id="metadata_only.changed.blocks_current",
-                why="DB/GDS/OAS are metadata-only in default scan; semantic safety cannot be proven automatically.",
-                next_action="Owner accept/waive or release with --force and audit reason.",
+                rule_id="metadata_only.changed.attention",
+                why="DB/GDS/OAS 默认按元数据/规模处理，变化需要留证，但不自动等同于 IP 不可用。",
+                next_action="按当前使用场景查看文件证据；正式发布是否需要处理由发布规则单独决定。",
             )
         )
     if items:
@@ -317,13 +329,14 @@ def _metadata_gate_items(diff_dir: str, *, limit: int = 20) -> list[dict[str, An
             _gate_item(
                 f"metadata.review:{path}",
                 category="metadata_only",
-                title=title or "Metadata-only change needs review",
-                message=str(issue.get("message") or "Human acceptance is required for current."),
+                title=title or "元数据级变化需要审查",
+                message=str(issue.get("message") or "元数据变化已记录，默认不阻塞 IP 使用判断。"),
+                severity="attention",
                 source=str(diff / "diff_issues.json"),
                 file=path,
-                rule_id="metadata_only.changed.blocks_current",
-                why="Metadata-only changes cannot be proven semantically safe from the default evidence.",
-                next_action="Owner accept/waive or release with --force and audit reason.",
+                rule_id="metadata_only.changed.attention",
+                why="仅凭默认元数据证据不能说明语义细节，因此保留为关注项，不自动阻塞 IP 使用。",
+                next_action="按需查看元数据证据；如正式发布规则要求，再单独处理发布门禁。",
             )
         )
     return items
@@ -387,7 +400,9 @@ def build_review_gate_for_version(
             )
         )
 
-    blocking_items.extend(_metadata_gate_items(_diff_dir(version)))
+    # Metadata-only changes are useful review evidence, but they do not prove
+    # that an IP is unusable and therefore belong in the attention lane.
+    attention_items.extend(_metadata_gate_items(_diff_dir(version)))
 
     pairwise_status = str(version.get("pairwise_status") or "")
     pairwise_summary = version.get("pairwise_summary") or {}
@@ -500,6 +515,18 @@ def build_review_state(catalog: Mapping[str, Any], *, out_dir: str | Path | None
             review_gate["override_file"] = review_paths["override_file"]
             review_gate["gate_file"] = review_paths["gate_file"]
             item["review_gate"] = review_gate
+            static_root = _static_review_root_for_out(out_dir)
+            if static_root:
+                from .static_packet import find_static_gate
+
+                static_gate = find_static_gate(catalog, lib_name, version_id, review_root=static_root)
+                if static_gate:
+                    item["review_gate"] = static_gate
+                    item["review_packet"] = {
+                        "packet_id": static_gate.get("packet_id"),
+                        "packet_dir": static_gate.get("packet_dir"),
+                        "review_report": static_gate.get("review_report"),
+                    }
             item.update(derive_next_action(item))
             versions.append(item)
         latest = versions[-1]["version_id"] if versions else None
@@ -582,6 +609,7 @@ def build_review_version_item(
     version: Mapping[str, Any],
     *,
     out_dir: str | Path | None = None,
+    catalog: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build review-state fields for one catalog version.
 
@@ -650,6 +678,19 @@ def build_review_version_item(
     review_gate["override_file"] = review_paths["override_file"]
     review_gate["gate_file"] = review_paths["gate_file"]
     item["review_gate"] = review_gate
+    static_root = _static_review_root_for_out(out_dir)
+    if static_root:
+        from .static_packet import find_static_gate
+
+        if catalog is not None:
+            static_gate = find_static_gate(catalog, lib_name, version_id, review_root=static_root)
+            if static_gate:
+                item["review_gate"] = static_gate
+                item["review_packet"] = {
+                    "packet_id": static_gate.get("packet_id"),
+                    "packet_dir": static_gate.get("packet_dir"),
+                    "review_report": static_gate.get("review_report"),
+                }
     item["evidence_state"] = build_version_evidence_state(library=lib, version=item)
     item.update(derive_next_action(item))
     return item
@@ -686,7 +727,7 @@ def build_review_version_state(
     if selected_version is None:
         raise ValueError(f"version not found for version detail render: library={library!r} version={version!r}")
 
-    enriched = build_review_version_item(selected_lib, selected_version, out_dir=out_dir)
+    enriched = build_review_version_item(selected_lib, selected_version, out_dir=out_dir, catalog=catalog)
     formal_library_id = str(selected_lib.get("formal_library_id") or selected_lib.get("library_name") or selected_lib.get("library_id") or "unknown")
     typed_library_id = str(selected_lib.get("typed_library_id") or selected_lib.get("library_id") or formal_library_id)
     report_slug = str(selected_lib.get("report_slug") or _safe_name(typed_library_id))

@@ -83,6 +83,37 @@ class PackageFlowTest(unittest.TestCase):
             self.assertEqual(classify_package(doc, library_type="ip")["package_type"], "DOC_UPDATE")
             self.assertEqual(classify_package(reports, library_type="ip")["package_type"], "UNKNOWN_PACKAGE")
 
+    def test_classification_does_not_promote_arbitrary_views_to_full(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for name in ["a.db", "b.gds", "c.sdc", "d.cdl"]:
+                (root / name).write_text("x\n", encoding="utf-8")
+
+            from lib_guard.package.classifier import classify_package
+
+            result = classify_package(root, library_type="ip")
+
+            self.assertEqual(result["package_type"], "PARTIAL_UPDATE")
+            self.assertFalse(result["standalone"])
+            self.assertTrue(result["base_required"])
+            self.assertEqual(sorted(result["classification_evidence"]["missing_expected_views"]), ["lef", "lib", "rtl"])
+
+    def test_truncated_classification_is_not_accepted_as_a_package_type(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for name in ["000_README.md", "rtl/top.v", "lef/top.lef", "lib/top.lib"]:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("x\n", encoding="utf-8")
+
+            from lib_guard.package.classifier import classify_package
+
+            result = classify_package(root, library_type="ip", limit=1)
+
+            self.assertEqual(result["package_type"], "UNKNOWN_PACKAGE")
+            self.assertTrue(result["classification_evidence"]["truncated"])
+            self.assertIn("classification_truncated", result["classification_risks"])
+
     def test_attach_updates_catalog_only_and_assemble_inherits_base_views(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

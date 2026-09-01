@@ -11,6 +11,7 @@ import time
 
 from .common import auto_scan_id, default_cache_dir, default_state_dir, print_json, refresh_catalog_html, render_impacted_catalog_html
 from .scan import split_strategy_list
+from lib_guard.artifacts import canonical_diff_dir, canonical_scan_dir, compare_artifacts, scan_artifacts, write_run_manifest
 from lib_guard.catalog.runtime import load_catalog_view
 from lib_guard.render.impact import impacts_for_versions
 
@@ -413,7 +414,16 @@ def run_catalog_workflow(args: Namespace) -> int:
     item = find_catalog_version(args.catalog, args.library, args.version)
     finish_phase("resolve_catalog_version", started)
     scan_id = args.scan_id or auto_scan_id()
-    out_dir = args.out or str(Path(args.workdir) / "scan_out" / item["library_name"] / item["version_id"] / f"{args.mode}_{scan_id}")
+    out_dir = args.out or str(
+        canonical_scan_dir(
+            args.workdir,
+            library_type=item["library_type"],
+            library_name=item["library_name"],
+            version=item["version_id"],
+            mode=args.mode,
+            scan_id=scan_id,
+        )
+    )
     cfg = SimpleNamespace(
         root_path=item["raw_path"],
         root=item["raw_path"],
@@ -485,6 +495,28 @@ def run_catalog_workflow(args: Namespace) -> int:
     finish_phase("render_impacted_catalog_html", started)
     result["phase_timings"] = phase_timings
     _attach_render_output(result, render_impact)
+    render_summary = result.get("render_summary") if isinstance(result.get("render_summary"), Mapping) else {}
+    version_detail_htmls = render_summary.get("version_detail_htmls") or []
+    manifest_path = write_run_manifest(
+        scan_result.out_dir,
+        operation="scan",
+        status=scan_result.status,
+        run_id=scan_result.scan_id,
+        library_type=item.get("library_type"),
+        library_name=item.get("library_name"),
+        version=item.get("version_id"),
+        inputs={"catalog": str(args.catalog), "raw_root": str(item.get("raw_path") or ""), "workdir": str(args.workdir)},
+        artifacts={
+            **scan_artifacts(scan_result.out_dir, scan_html=scan_html.get("index_html")),
+            "projections": {
+                "catalog_runtime": str(Path(args.catalog).with_name("catalog_runtime.json")),
+                "version_detail": version_detail_htmls[0] if version_detail_htmls else None,
+            },
+        },
+        phase_timings=phase_timings,
+        warnings=["扫描失败：请查看 scan_error 和 scan_meta.json"] if scan_error else [],
+    )
+    result["run_manifest"] = str(manifest_path)
     print_json(result)
     return 0 if scan_result.status not in {"FAILED", "BLOCK"} else 2
 
@@ -612,8 +644,15 @@ def run_catalog_compare(args: Namespace) -> int:
     new = pair["new"]
     old = pair["old"]
     relation_mode = pair["version_relation"].get("mode") or args.mode
-    diff_leaf = f"base_{old['version_id']}" if explicit_base else args.mode
-    diff_dir = args.out or str(Path(args.workdir) / "diff" / new["library_name"] / new["version_id"] / diff_leaf)
+    diff_dir = args.out or str(
+        canonical_diff_dir(
+            args.workdir,
+            library_name=new["library_name"],
+            version=new["version_id"],
+            relation_mode="base" if explicit_base else relation_mode,
+            base_version=old["version_id"],
+        )
+    )
     diff_result = diff_scan_outputs(pair["old_scan"], pair["new_scan"], out_path=diff_dir, version_relation=pair["version_relation"])
     html_out = args.html_out or str(Path(diff_dir) / "diff_html")
     html_result = render_diff_html(diff_dir, html_out)
@@ -646,6 +685,33 @@ def run_catalog_compare(args: Namespace) -> int:
             impacted_versions.append(version_id)
     render_impact = render_impacted_catalog_html(args, impacts_for_versions(new["library_name"], impacted_versions, "compare_updated"))
     _attach_render_output(result, render_impact)
+    render_summary = result.get("render_summary") if isinstance(result.get("render_summary"), Mapping) else {}
+    version_detail_htmls = render_summary.get("version_detail_htmls") or []
+    manifest_path = write_run_manifest(
+        diff_dir,
+        operation="compare",
+        status=diff_result.get("status", "UNKNOWN"),
+        run_id=Path(diff_dir).name,
+        library_type=new.get("library_type"),
+        library_name=new.get("library_name"),
+        version=new.get("version_id"),
+        inputs={"catalog": str(args.catalog), "workdir": str(args.workdir)},
+        comparison={
+            "base_version": old.get("version_id"),
+            "base_source": pair["version_relation"].get("base_version_source"),
+            "base_scan_dir": str(pair.get("old_scan") or ""),
+            "target_scan_dir": str(pair.get("new_scan") or ""),
+            "relation_mode": relation_mode,
+        },
+        artifacts={
+            **compare_artifacts(diff_dir, compare_html=html_result.get("index_html")),
+            "projections": {
+                "catalog_runtime": str(Path(args.catalog).with_name("catalog_runtime.json")),
+                "version_detail": version_detail_htmls[0] if version_detail_htmls else None,
+            },
+        },
+    )
+    result["run_manifest"] = str(manifest_path)
     print_json(result)
     return 0 if diff_result.get("status") in {"SAME", "DIFF", "PASS_WITH_WARNING", "BLOCK"} else 2
 

@@ -74,6 +74,36 @@ project policy files are `catalog_policy.json` and `release_policy.json`.
 | Derived review model | review/model/render adapter | Base selection、normalized file changes、review lanes、evidence quality、path-restructure hints、单一 `usage_decision` |
 | Presentation model | HTML renderer | Cards、tables、folded evidence、links、中文文案 |
 
+### Version Detail Review Report
+
+`review_report` 是 `version_review_model` 生成的有界派生模型，不是第五类事实源，也不读取
+RAW 或 Markdown。它必须保持以下固定分组，供 Version Detail 折叠渲染和显式 Markdown 导出共同使用：
+
+| 字段 | 内容 | 事实来源 |
+| --- | --- | --- |
+| `base_analysis` | Target、Base、来源、对比语义、可信状态 | review context、catalog lineage、diff metadata |
+| `delivery_analysis` | 包类型、交付文件数、必需视图覆盖和缺失项 | scan inventory、readiness |
+| `view_delta_analysis` | 统一视图类型行、增删改总计、汇总核对状态，以及 `file_diff -> View Delta -> Focus Files -> File Tree` 对账 | `file_diff`、`view_diff`、`type_diff`、IP view model |
+| `focus_file_analysis` | 有界重点文件、匹配/证据字段和截断状态 | `file_diff`、review lanes |
+| `unknown_analysis` | 未知文件数量、代表路径、分类状态 | scan inventory |
+| `evidence_assessment` | scan/diff 状态、scan id、来源路径、新鲜度 | scan context、comparison context、evidence state |
+| `open_questions` | 当前事实仍无法回答的问题 | 上述各分组的缺失/阻塞条件 |
+| `recommended_actions` | 已有建议动作或由未决问题派生的动作 | diff summary、review model |
+
+IP 使用者模型另外固定提供 `decision.next_action` 和顶层 `next_action`。它们是首屏的
+单一结构化下一步，不是自动命令计划；当状态为待确认、阻塞或首版审查时，必须能在
+Decision HTML 直接看到动作和简短说明。
+
+`view_delta_analysis.evidence_reconciliation` 至少包含：`file_diff_declared`、
+`file_diff_items`、`visible_file_diff_items`、`view_matrix`、`focus_files`、
+`file_tree_changes` 和 `checks`。`MISMATCH` 只能表示证据链需要复核，不能被渲染成
+正常无变化。
+
+报告渲染必须只消费这个模型；页面使用 `data-section` 标记固定
+`decision-summary`、`comparison-context`、`impact-summary`、`view-delta`、
+`focus-files`、`file-structure`、`review-report` 和 `evidence-status`，供浏览器验收和后续
+投影维护使用。
+
 `version_evidence_state` 是 Version Detail 的事实源索引，不是新的事实源。它把
 `catalog.json`、scan evidence、diff/compare evidence、effective/window evidence
 和 HTML projection 的关系显式列出来，用来说明哪些判断来自机器事实、哪些只是页面投影。
@@ -119,23 +149,97 @@ Catalog 内部命名契约。日常命令和主 UI 只展示“库名”和“�
 它不是新的事实源，只是把“我接受的是哪一份 candidate 与哪一次 compare”固化下来，
 防止后续 release 消费到已经漂移的 effective。
 
-`review_gate.json` is a lightweight gate summary. `blocking_items` can block
-`current`; `attention_items`, including focused File Diff recommendations, do
-not block `current` by default. Human decisions are written through CLI into
-`review_overrides.json`.
+`review_gate.json` is a derived gate summary. The recommended static review
+workflow writes it only from `Review Packet` source records. The older
+`review_overrides.json` path remains a compatibility input for existing
+projects, but it is not the new department response record.
 
-## Version Detail Review Model
+页面和数据合同始终分开表达四个状态维度：
 
-`version_update_detail_model` is the structured in-memory model used by Version
-Review to render “更新详情”. HTML must be generated from this model directly;
-`current_lib_diff.md` is only an optional export from the same model and is not a
-page input.
+- `technical_decision`：scan/diff/evidence 得出的 IP 使用判断；
+- `review_gate`：仅为 `WAITING`、`BLOCKED`、`APPROVED` 的专业审查完成度；
+- `effective_state`：`accept-window` 受控写入的当前工程有效组合 / review baseline；
+- `release_state`：release check、link、postcheck 的正式发布事实。
 
-The normal Version Review update detail is populated by `cat --update-detail`.
-Base selection defaults to `current_effective`, then `previous_effective`; manual
-`cmp` remains the compare/debug path for explicit base, adjacent, or cumulative
-investigation. Focused `fd` output is a manual drill-down artifact, not the
-primary model input.
+其中 `APPROVED` 不自动写 `current_effective`，`current_effective` 也不等价于
+`Released`；HTML 只能展示这些已有事实，不能根据任意一个状态自行推断其他状态。
+
+## 静态 Review Packet 数据合同
+
+静态审查不引入数据库、服务端或第二个 HTML 入口。目录固定为：
+
+```text
+reviews/<library_id>/<target_version>/<packet_id>/
+  packet.json
+  review_items.tsv
+  responses/*.tsv
+  review_gate.json
+  review_report.md
+```
+
+其中：
+
+| 记录 | 写入方 | 作用 | 是否事实源 |
+| --- | --- | --- | --- |
+| `packet.json` | `review prepare` | 冻结 Target、Base、Compare 和策略版本 | 是 |
+| `review_items.tsv` | `review prepare` | 面向部门的问题，不是文件清单 | 是 |
+| `responses/*.tsv` | `review submit` | 追加式 PASS/BLOCK/QUESTION 与备注 | 是 |
+| `review_gate.json` | `review collect` | 汇总 WAITING/BLOCKED/APPROVED | 否，派生 |
+| `review_report.md` | `review collect` | 人类可读的完整审查记录 | 否，派生 |
+
+`packet_id` 由以下身份共同决定：
+
+```text
+library_id + target_version + target_manifest_sha256
++ base_version + base_manifest_sha256 + compare_sha256
++ review_policy_version + review_policy_sha256 + machine_facts_sha256
+```
+
+任何一个身份输入变化都必须生成新的 Packet；旧响应保留为历史记录，但不能参与新
+Gate。提交时系统重新验证当前 Packet，不能靠 reviewer 手工填写 packet/hash 字段。
+
+Review Item 是可直接回答的问题，并通过 `evidence_ref` 指向 Version Detail 或已有
+证据，不把 raw JSON、完整 diff 或文件列表复制给 reviewer。机器可以判断的缺失
+manifest、失败 scan、缺失 compare 等事实直接成为 machine blocker，不伪装成“请人批准”。
+
+Response 只允许三种决策：`PASS`、`BLOCK`、`QUESTION`。`BLOCK` 和 `QUESTION` 必须
+填写 note；每次提交写一个新 TSV，不覆盖旧记录。同一 reviewer 的当前意见按内容字段
+`submitted_at` 选择，不能依赖 mtime；不同 reviewer 只要有一个有效 `BLOCK`，Gate 就是
+`BLOCKED`。
+
+豁免不是普通 reviewer decision。它必须来自受控的 waiver 记录，包含
+`authorized_by` 和 `reason`，且只能解除一个已经存在的有效 `BLOCK`；原始 BLOCK 和提交历史
+仍保留在 response/report 中。未知 item、缺授权人或缺理由的 waiver 不改变 Gate。
+
+Gate 汇总规则固定为：
+
+```text
+machine blocker 或 active BLOCK -> BLOCKED
+required response 缺失或 QUESTION -> WAITING
+其他全部 required PASS -> APPROVED
+```
+
+`review_policy_sha256` 是规范化后的完整策略内容摘要；即使管理员忘记递增
+`review_policy_version`，只要 View/风险路由或必要规则发生变化，也会生成新的
+Packet，旧 response 不会复用于新 Gate。`review_gate.json` 不包含采集时钟等非事实
+字段，因此相同 source records 多次 collect 的结果是确定且幂等的。
+
+`current_effective` 仍然表示当前人工接受的工程有效组合 / review baseline，不等价于
+正式发布完成。`APPROVED` 也不自动写 current effective；`accept-window`、release check、
+link、postcheck 仍是独立受控步骤。HTML 只能展示这些已有事实，不能推断 Released。
+
+删除 `review_gate.json` 或 `review_report.md` 后，重新运行 `lg review collect` 即可从
+source records 重建；普通 render、cat、review submit 不会删除 responses。当前信任边界是
+内部受控文件系统和用户身份，reviewer 字段提供内部可追溯性，但不是法规级数字签名。
+
+## 版本详情页审查模型
+
+`version_update_detail_model` 是版本详情页用于渲染“更新详情”的结构化内存模型。
+HTML 必须直接由该模型生成；`current_lib_diff.md` 只是同一模型的可选导出，不是页面输入。
+
+普通版本详情页的更新详情由 `cat --update-detail` 填充。
+基准版默认依次使用 `current_effective`、`previous_effective`；手动 `cmp` 仍用于显式基准版、相邻版本或累计对比调查。
+指定文件的 `fd` 输出是人工下钻证据，不是主模型输入。
 
 The model aggregates:
 
@@ -181,6 +285,7 @@ reviewer's source of truth:
 | `review_context.role_in_window` | `candidate_base`, `candidate_overlay`, `intermediate`, or `standalone` |
 | `review_context.freshness` | Existence checks for window, candidate effective manifest, compare manifest/html, and scan evidence |
 | `file_changes[].identity` | Lightweight file identity hints: basename, suffix, size, sha/hash, parser signature, and deterministic match key |
+| `path_changes_same_content[]` | `file_diff.renamed_or_moved` 的页面投影；只保存去除 RAW、版本和包装根之后仍不同的旧/新逻辑路径、文件类型和匹配依据，按视图展示为“路径变化且内容相同”，不并入内容修改 |
 | `path_restructure` | Heuristic review hint for likely repackaging or root-path movement; it must not claim content equivalence by itself |
 
 HTML renders from this model directly. Markdown export is optional evidence
@@ -192,13 +297,13 @@ active review window member, and whether candidate effective / compare evidence
 is fresh enough to trust. Missing freshness must be shown as stale or partial;
 it must not be silently replaced with adjacent comparison output.
 
-Path movement has two separate meanings. `file_diff.renamed_or_moved` is a
-file-level match list and may be small when hashes are missing, duplicated, or
-summary-only. `file_diff.package_root_migrations` is the package-level signal:
-it groups logical-path pairs by old/new wrapper root and reports
-`matched_logical_paths`, `old_root_file_count`, and `new_root_file_count`.
-Version Review must use `package_root_migrations` when explaining repackaging;
-it must not present `renamed_or_moved` alone as the package migration scale.
+路径变化有两个不同口径。系统先去掉 RAW 根、版本目录和已识别的包装根，再比较逻辑
+路径。归一化后路径相同且内容一致的文件属于 `unchanged`；包装前缀变化只写入
+`file_diff.package_root_migrations`，不得写入 `renamed_or_moved`。只有归一化后旧、新逻辑
+路径仍不同，并且存在唯一内容 Hash 匹配时，才写入 `file_diff.renamed_or_moved`，再投影到
+`path_changes_same_content[]`。该类别不并入新增、删除或内容修改；缺少 Hash、Hash 不唯一
+或证据不足的文件不得进入。包根迁移按旧、新包根聚合，并报告
+`matched_logical_paths`、`old_root_file_count` 和 `new_root_file_count`。
 
 `file_changes[].identity` supports human review of added/removed path churn. It
 is not a fuzzy-match or equivalence algorithm. A matching basename/size/parser

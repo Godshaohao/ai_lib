@@ -4,6 +4,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from lib_guard.package.types import PACKAGE_RULES_VERSION
 from lib_guard.view_types import package_view_type
 
 FULL_PACKAGE_REQUIRED_VIEWS = {
@@ -37,18 +38,15 @@ def classify_package(root: str | Path, *, library_type: str = "ip", limit: int =
     files: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
     view_counts: Counter[str] = Counter()
+    truncated = False
     if path.exists():
-        total = 0
-        for item in sorted(path.rglob("*"), key=lambda p: p.as_posix().lower()):
-            if not item.is_file():
-                continue
+        entries = [item for item in sorted(path.rglob("*"), key=lambda p: p.as_posix().lower()) if item.is_file()]
+        truncated = len(entries) > limit
+        for item in entries[:limit]:
             rec = _classify_file(path, item)
             files.append(rec)
             counts[rec["file_type"]] += 1
             view_counts[rec["view"]] += 1
-            total += 1
-            if total >= limit:
-                break
 
     views = {view for view in view_counts if view != "unknown"}
     core_views = views & CORE_VIEWS
@@ -60,11 +58,16 @@ def classify_package(root: str | Path, *, library_type: str = "ip", limit: int =
     standalone = False
     base_required = False
     confidence = 0.25
-    if doc_only:
+    if truncated:
+        package_type = "UNKNOWN_PACKAGE"
+        base_required = True
+        confidence = 0.0
+        risks.append("classification_truncated")
+    elif doc_only:
         package_type = "DOC_UPDATE"
         base_required = True
         confidence = 0.82
-    elif required <= views or len(core_views) >= 4:
+    elif required <= views:
         package_type = "FULL_PACKAGE"
         standalone = True
         confidence = 0.9
@@ -76,9 +79,9 @@ def classify_package(root: str | Path, *, library_type: str = "ip", limit: int =
         risks.append("no_library_view_files")
         confidence = 0.35 if counts else 0.1
 
-    if package_type == "PARTIAL_UPDATE":
+    if package_type in {"PARTIAL_UPDATE", "UNKNOWN_PACKAGE"}:
         missing = sorted(required - views)
-        if missing:
+        if package_type == "PARTIAL_UPDATE" and missing:
             risks.append("base_version_not_bound")
     else:
         missing = []
@@ -87,6 +90,7 @@ def classify_package(root: str | Path, *, library_type: str = "ip", limit: int =
     scope = sorted(views, key=lambda v: view_order.index(v) if v in view_order else 99)
     return {
         "schema_version": "1.0",
+        "classification_rules_version": PACKAGE_RULES_VERSION,
         "root": str(path),
         "package_type": package_type,
         "update_scope": scope,
@@ -97,6 +101,7 @@ def classify_package(root: str | Path, *, library_type: str = "ip", limit: int =
             "file_type_counts": dict(sorted(counts.items())),
             "view_counts": dict(sorted(view_counts.items())),
             "missing_expected_views": missing,
+            "truncated": truncated,
         },
         "classification_risks": risks,
         "files": files,

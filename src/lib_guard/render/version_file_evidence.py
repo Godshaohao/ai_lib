@@ -28,6 +28,7 @@ def _evidence_records(model: Mapping[str, Any]) -> list[dict[str, Any]]:
         rows.append(
             {
                 "change": str(item.get("change") or ""),
+                "view_type": view_type,
                 "view": view_label(view_type),
                 "path": path,
                 "area": usage_area_for_view(view_type),
@@ -46,6 +47,7 @@ def _evidence_records(model: Mapping[str, Any]) -> list[dict[str, Any]]:
         rows.append(
             {
                 "change": "current",
+                "view_type": view_type,
                 "view": view_label(view_type),
                 "path": path,
                 "area": usage_area_for_view(view_type),
@@ -99,7 +101,8 @@ def _tree_file_html(record: Mapping[str, Any]) -> str:
     searchable = " ".join(str(record.get(key) or "") for key in ("path", "view", "area", "lane", "meaning"))
     return (
         "<li class='tree-file' "
-        f"data-tree-status='{ui.esc(status)}' data-tree-search='{ui.esc(searchable.lower())}'>"
+        f"data-tree-status='{ui.esc(status)}' data-tree-view-type='{ui.esc(record.get('view_type') or '')}' "
+        f"data-tree-area='{ui.esc(area)}' data-tree-search='{ui.esc(searchable.lower())}'>"
         f"<span class='tree-file-mark {ui.esc(status)}'>{ui.esc(_tree_status_label(status))}</span>"
         f"<code title='{ui.esc(record.get('path'))}'>{ui.esc(record.get('name'))}</code>"
         f"<span class='tree-file-meta'>{ui.esc(view)} / {ui.esc(area)}</span>"
@@ -124,7 +127,7 @@ def _tree_folder_html(name: str, node: Mapping[str, Any], depth: int = 0) -> str
     )
 
 
-def _file_tree_html(model: Mapping[str, Any]) -> str:
+def _file_tree_html(model: Mapping[str, Any], default_filter: str) -> str:
     root = _tree_node()
     for record in _evidence_records(model):
         _tree_add_record(root, record)
@@ -135,40 +138,86 @@ def _file_tree_html(model: Mapping[str, Any]) -> str:
         children.append(_tree_file_html(_as_mapping(item)))
     if not children:
         return "<div class='tree-empty'>当前没有可展示的文件结构。</div>"
-    return "<ul class='file-tree' data-file-tree>" + "".join(children) + "</ul>"
+    return f"<ul class='file-tree' data-file-tree data-tree-filter='{ui.esc(default_filter)}'>" + "".join(children) + "</ul>"
 
 
-def _file_tree_controls(total: int) -> str:
+def _file_tree_controls(records: list[Mapping[str, Any]], current_total: int, change_total: int, default_filter: str) -> str:
+    total = len(records)
+    labels = {
+        "changes": f"变化文件 <b>{change_total}</b>",
+        "current": f"当前交付 <b>{current_total}</b>",
+        "all": f"全部证据 <b>{total}</b>",
+    }
     chips = "".join(
-        f"<button type='button' class='tree-filter-chip{' active' if status == 'all' else ''}' data-tree-filter='{status}' onclick=\"filterFileTree('{status}', this)\">{label}</button>"
-        for status, label in (("all", "全部"), ("added", "新增"), ("removed", "删除"), ("changed", "修改"), ("current", "当前"))
+        f"<button type='button' class='tree-filter-chip{' active' if status == default_filter else ''}' data-tree-filter='{status}' onclick=\"filterFileTree('{status}', this)\">{labels[status]}</button>"
+        for status in ("changes", "current", "all")
+    )
+    view_options = {}
+    area_options = set()
+    change_counts = {status: 0 for status in ("added", "removed", "changed", "current")}
+    for record in records:
+        view_type = str(record.get("view_type") or "other")
+        view_options[view_type] = str(record.get("view") or view_type)
+        area = str(record.get("area") or "其他场景")
+        if area and area != "-":
+            area_options.add(area)
+        change_counts[_tree_status(record.get("change"))] += 1
+    view_select = "<option value='all'>全部视图</option>" + "".join(
+        f"<option value='{ui.esc(value)}'>{ui.esc(label)}</option>"
+        for value, label in sorted(view_options.items(), key=lambda item: item[1])
+    )
+    area_select = "<option value='all'>全部场景</option>" + "".join(
+        f"<option value='{ui.esc(value)}'>{ui.esc(value)}</option>"
+        for value in sorted(area_options)
+    )
+    change_labels = {
+        "added": "新增",
+        "removed": "删除",
+        "changed": "修改",
+        "current": "当前文件",
+    }
+    change_select = "<option value='all'>全部类型</option>" + "".join(
+        f"<option value='{status}'>{change_labels[status]}（{change_counts[status]}）</option>"
+        for status in ("added", "removed", "changed", "current")
+        if change_counts[status]
     )
     return (
         "<div class='file-tree-toolbar'>"
         "<label class='tree-search'><span>搜索</span><input id='file-tree-search' type='search' placeholder='搜索目录、文件名或视图' oninput=\"filterFileTree()\"></label>"
         f"<div class='tree-filters'>{chips}</div>"
-        "<div class='tree-actions'><button type='button' class='btn secondary' onclick=\"setFileTreeOpen(true)\">全部展开</button><button type='button' class='btn secondary' onclick=\"setFileTreeOpen(false)\">全部收起</button></div>"
-        f"<div class='tree-count'><span id='file-tree-visible'>{total}</span> / {total} 项</div>"
+        f"<label class='tree-select'><span>变化类型</span><select id='file-tree-change-filter' data-tree-change-filter onchange=\"filterFileTree()\">{change_select}</select></label>"
+        f"<label class='tree-select'><span>视图类型</span><select id='file-tree-view-filter' data-tree-view-filter onchange=\"filterFileTree()\">{view_select}</select></label>"
+        f"<label class='tree-select'><span>使用场景</span><select id='file-tree-area-filter' data-tree-area-filter onchange=\"filterFileTree()\">{area_select}</select></label>"
+        "<div class='tree-actions'><button type='button' class='btn secondary' data-tree-reset onclick=\"resetFileTreeFilters()\">清除筛选</button><button type='button' class='btn secondary' onclick=\"setFileTreeOpen(true)\">全部展开</button><button type='button' class='btn secondary' onclick=\"setFileTreeOpen(false)\">全部收起</button></div>"
+        f"<div class='tree-count'><span id='file-tree-visible'>{current_total if default_filter == 'current' else change_total}</span> 项；当前交付 <b>{current_total}</b>；全部证据 <b>{total}</b></div>"
         "</div>"
     )
 
 
 def render_version_file_evidence_section(model: Mapping[str, Any]) -> str:
     records = _evidence_records(model)
+    default_filter = "current" if str(model.get("review_mode") or "").lower() == "first_version" else "changes"
+    scan_evidence = _as_mapping(model.get("scan_evidence"))
+    current_total = int(scan_evidence.get("file_total") or 0)
+    if not current_total:
+        current_total = sum(1 for item in records if _tree_status(item.get("change")) != "removed")
+    change_total = sum(1 for item in records if _tree_status(item.get("change")) != "current")
     body = (
         "<style>"
         ".file-evidence-section .panel-body{padding-top:12px}"
-        ".file-tree-scroll{max-height:min(68vh,760px);overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;scrollbar-gutter:stable}"
-        ".file-tree,.file-tree ul{list-style:none;margin:0;padding:0}.file-tree ul{padding-left:22px}.tree-folder{margin:1px 0}.tree-folder details{border-left:1px solid #d9e2ea}.tree-folder summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px;padding:5px 8px;cursor:pointer;border-radius:7px;color:#243746}.tree-folder summary:hover{background:#eef5f5}.tree-folder summary:focus-visible,.tree-filter-chip:focus-visible,.tree-search:focus-within{outline:3px solid rgba(21,94,239,.22);outline-offset:1px}.tree-folder-name{display:flex;align-items:center;gap:7px;font-weight:800;min-width:0}.tree-folder-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;color:#5b7280;font-size:14px;transition:transform .15s}.tree-folder details[open]>summary .tree-folder-icon{transform:rotate(90deg)}.tree-folder-count{flex:0 0 auto;color:#758594;font:12px var(--mono);white-space:nowrap}.tree-file{display:grid;grid-template-columns:54px minmax(260px,1fr) minmax(230px,.8fr);gap:9px;align-items:center;min-height:32px;padding:4px 8px 4px 22px;border-left:1px solid #d9e2ea}.tree-file:hover{background:#f0f7f7}.tree-file code{overflow-wrap:anywhere;word-break:break-word;color:#1e3b4b}.tree-file-meta{color:#71808b;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tree-file-mark{display:inline-flex;justify-content:center;width:46px;border-radius:4px;padding:2px 4px;font-size:11px;font-weight:800}.tree-file-mark.added{color:#087443;background:#e9f7f0}.tree-file-mark.removed{color:#ae3b2c;background:#fff0ed}.tree-file-mark.changed{color:#a35c08;background:#fff3df}.tree-file-mark.current{color:#1e5baa;background:#e9f1ff}.tree-hidden{display:none!important}.tree-empty{padding:24px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:9px}.file-tree-toolbar{display:grid;grid-template-columns:minmax(280px,1.2fr) minmax(350px,1fr) auto auto;gap:10px;align-items:center;margin-bottom:10px}.tree-search{display:flex;align-items:center;gap:8px;min-width:0;border:1px solid var(--line);border-radius:999px;background:#fff;padding:7px 12px}.tree-search span{font-size:12px;color:var(--muted);font-weight:800}.tree-search input{width:100%;border:0;outline:0;background:transparent;font-size:13px}.tree-filters{display:flex;gap:6px;flex-wrap:wrap}.tree-filter-chip{border:1px solid var(--line);border-radius:999px;background:#fff;color:#344054;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer}.tree-filter-chip.active{border-color:#9cc2ff;background:#eef4ff;color:#1849a9}.tree-actions{display:flex;gap:6px}.tree-actions .btn{min-height:32px}.tree-count{color:var(--muted);font-size:12px;font-weight:800;white-space:nowrap}.file-tree-note{margin:0 0 12px;color:var(--muted);font-size:12px}.file-tree-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;color:var(--muted);font-size:12px}.file-tree-legend span{display:inline-flex;align-items:center;gap:5px}.file-tree-legend i{display:inline-block;width:9px;height:9px;border-radius:2px}.file-tree-legend .added{background:#43a782}.file-tree-legend .removed{background:#c85545}.file-tree-legend .changed{background:#d4862a}.file-tree-legend .current{background:#4b86c5}@media(max-width:1100px){.file-tree-toolbar{grid-template-columns:1fr 1fr}.tree-actions{justify-content:flex-start}.tree-count{justify-self:end}}@media(max-width:760px){.tree-file{grid-template-columns:54px minmax(0,1fr)}.tree-file-meta{grid-column:2}.file-tree-toolbar{grid-template-columns:1fr}.tree-count{justify-self:start}}"
+        ".file-tree-scroll{max-height:min(58vh,560px);overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px 12px;scrollbar-gutter:stable}"
+        ".file-tree,.file-tree ul{list-style:none;margin:0;padding:0}.file-tree ul{padding-left:22px}.tree-folder{margin:1px 0}.tree-folder details{border-left:1px solid #d9e2ea}.tree-folder summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px;padding:5px 8px;cursor:pointer;border-radius:7px;color:#243746}.tree-folder summary:hover{background:#eef5f5}.tree-folder summary:focus-visible,.tree-filter-chip:focus-visible,.tree-search:focus-within,.tree-select:focus-within{outline:3px solid rgba(21,94,239,.22);outline-offset:1px}.tree-folder-name{display:flex;align-items:center;gap:7px;font-weight:800;min-width:0}.tree-folder-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;color:#5b7280;font-size:14px;transition:transform .15s}.tree-folder details[open]>summary .tree-folder-icon{transform:rotate(90deg)}.tree-folder-count{flex:0 0 auto;color:#758594;font:12px var(--mono);white-space:nowrap}"
+        ".tree-file{display:grid;grid-template-columns:54px minmax(260px,1fr) minmax(230px,.8fr);gap:9px;align-items:center;min-height:32px;padding:4px 8px 4px 22px;border-left:1px solid #d9e2ea}.tree-file:hover{background:#f0f7f7}.tree-file code{overflow-wrap:anywhere;word-break:break-word;color:#1e3b4b}.tree-file-meta{color:#71808b;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tree-file-mark{display:inline-flex;justify-content:center;width:46px;border-radius:4px;padding:2px 4px;font-size:11px;font-weight:800}.tree-file-mark.added{color:#087443;background:#e9f7f0}.tree-file-mark.removed{color:#ae3b2c;background:#fff0ed}.tree-file-mark.changed{color:#a35c08;background:#fff3df}.tree-file-mark.current{color:#1e5baa;background:#e9f1ff}.tree-hidden{display:none!important}.tree-empty{padding:24px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:9px}"
+        ".file-tree-toolbar{display:grid;grid-template-columns:minmax(230px,1.2fr) minmax(210px,1fr) minmax(150px,.7fr) minmax(150px,.7fr);gap:10px;align-items:center;margin-bottom:10px}.tree-search{display:flex;align-items:center;gap:8px;min-width:0;border:1px solid var(--line);border-radius:999px;background:#fff;padding:7px 12px}.tree-search span,.tree-select span{font-size:12px;color:var(--muted);font-weight:800;white-space:nowrap}.tree-search input{width:100%;border:0;outline:0;background:transparent;font-size:13px}.tree-filters{display:flex;gap:6px;flex-wrap:wrap}.tree-filter-chip{border:1px solid var(--line);border-radius:999px;background:#fff;color:#344054;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer}.tree-filter-chip.active{border-color:#9cc2ff;background:#eef4ff;color:#1849a9}.tree-select{display:flex;align-items:center;gap:6px;min-width:0;border:1px solid var(--line);border-radius:8px;background:#fff;padding:5px 8px}.tree-select select{width:100%;min-width:0;border:0;outline:0;background:transparent;color:#344054;font-size:12px}.tree-actions{display:flex;gap:6px;flex-wrap:wrap}.tree-actions .btn{min-height:32px}.tree-count{grid-column:1 / -1;color:var(--muted);font-size:12px;font-weight:800;white-space:nowrap}.file-tree-note{margin:0 0 12px;color:var(--muted);font-size:12px}.file-tree-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;color:var(--muted);font-size:12px}.file-tree-legend span{display:inline-flex;align-items:center;gap:5px}.file-tree-legend i{display:inline-block;width:9px;height:9px;border-radius:2px}.file-tree-legend .added{background:#43a782}.file-tree-legend .removed{background:#c85545}.file-tree-legend .changed{background:#d4862a}.file-tree-legend .current{background:#4b86c5}@media(max-width:1100px){.file-tree-toolbar{grid-template-columns:1fr 1fr}.tree-actions{justify-content:flex-start}.tree-count{grid-column:1 / -1}}@media(max-width:760px){.tree-file{grid-template-columns:54px minmax(0,1fr)}.tree-file-meta{grid-column:2}.file-tree-toolbar{grid-template-columns:1fr}.tree-count{grid-column:auto;justify-self:start}}"
         "</style>"
-        "<section id='file-structure' class='file-evidence-section'>"
+        '<section id="file-structure" data-section="file-structure" class="file-evidence-section">'
         + ui.panel(
             "文件结构",
-            "按当前交付路径展示目录层级；删除项保留在原路径，颜色只表示本次变化。",
-            "<p class='file-tree-note'>目录默认展开前两层；文件节点直接显示状态、视图和使用场景，超过千项时在树内滚动。</p>"
-            + _file_tree_controls(len(records))
+            "按目录结构核对文件；变化文件和当前交付文件使用不同统计口径。",
+            f"<p class='file-tree-note'>{'默认显示当前交付；首版没有变化文件，删除项只保留在全部证据中。' if default_filter == 'current' else '默认显示变化文件；当前交付包含当前、新增和修改，删除项只保留在全部证据中。'}</p>"
+            + _file_tree_controls(records, current_total, change_total, default_filter)
             + "<div class='file-tree-scroll'>"
-            + _file_tree_html(model)
+            + _file_tree_html(model, default_filter)
             + "</div>"
             + "<div class='file-tree-legend'><span><i class='added'></i>新增</span><span><i class='removed'></i>删除</span><span><i class='changed'></i>修改</span><span><i class='current'></i>当前文件</span></div>",
         )
@@ -184,11 +233,19 @@ function filterFileTree(status, button){
     document.querySelectorAll('.tree-filter-chip').forEach(function(item){item.classList.toggle('active', item===button || item.getAttribute('data-tree-filter')===status);});
   }
   var query=((document.getElementById('file-tree-search')||{}).value||'').toLowerCase().trim();
-  var wanted=tree.getAttribute('data-tree-filter')||'all';
+  var wantedChange=(document.getElementById('file-tree-change-filter')||{}).value||'all';
+  var wantedView=(document.getElementById('file-tree-view-filter')||{}).value||'all';
+  var wantedArea=(document.getElementById('file-tree-area-filter')||{}).value||'all';
+  var wanted=tree.getAttribute('data-tree-filter')||'changes';
   var visible=0;
   tree.querySelectorAll('.tree-file').forEach(function(file){
     var text=file.getAttribute('data-tree-search')||'';
-    var show=(wanted==='all'||file.getAttribute('data-tree-status')===wanted)&&(!query||text.indexOf(query)>=0);
+    var fileStatus=file.getAttribute('data-tree-status')||'current';
+    var inScope=wanted==='all'||(wanted==='changes'&&fileStatus!=='current')||(wanted==='current'&&fileStatus!=='removed');
+    var changeHit=wantedChange==='all'||fileStatus===wantedChange;
+    var viewHit=wantedView==='all'||file.getAttribute('data-tree-view-type')===wantedView;
+    var areaHit=wantedArea==='all'||file.getAttribute('data-tree-area')===wantedArea;
+    var show=inScope&&changeHit&&viewHit&&areaHit&&(!query||text.indexOf(query)>=0);
     file.classList.toggle('tree-hidden', !show);
     if(show) visible++;
   });
@@ -199,7 +256,15 @@ function filterFileTree(status, button){
   });
   var count=document.getElementById('file-tree-visible'); if(count) count.textContent=visible;
 }
+function resetFileTreeFilters(){
+  var input=document.getElementById('file-tree-search'); if(input) input.value='';
+  var change=document.getElementById('file-tree-change-filter'); if(change) change.value='all';
+  var view=document.getElementById('file-tree-view-filter'); if(view) view.value='all';
+  var area=document.getElementById('file-tree-area-filter'); if(area) area.value='all';
+  filterFileTree('all', document.querySelector('.tree-filter-chip[data-tree-filter="all"]'));
+}
 """
+        + f"filterFileTree('{default_filter}', document.querySelector('.tree-filter-chip[data-tree-filter=\"{default_filter}\"]'));"
         + "</script>"
         + "</section>"
     )

@@ -94,7 +94,7 @@ parse_exclude_file_types: verilog,liberty,spef
 
 如果命令行为不符合预期，先用 `lg --dry-run ...` 看短命令展开，再检查上述顺序。
 
-## Parser Evidence
+## 解析器证据
 
 Version Review 从这些产物读取 parser 证据：
 
@@ -197,7 +197,7 @@ $WORK/actions/<library>.action
 - `catalog_state.json` 是 Catalog HTML 的页面状态模型。
 - `manager_tasks.json` 是管理者视角的缺失 scan/diff/relation evidence 任务列表；
   它有效，但不是普通 IP 使用者消费更新的主路径。
-- Version Review 会展示 `Parser Summary`、`Diff Summary`、`Count-only + Corner Summary`；
+- 版本详情页会展示“解析器摘要”“对比摘要”“仅计数与工艺角摘要”；
   这些都来自 scan 和 diff artifacts。
 - `manual_preview/**` 只是本地浏览器预览，已被 git 忽略。
 - Parser 或 summary evidence 必须通过

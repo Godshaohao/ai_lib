@@ -690,7 +690,7 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn("2", panel_html)
             self.assertIn("effective_20260620", md_text)
             self.assertIn("changed_files: 2", md_text)
-            self.assertIn("Metadata-only", panel_html)
+            self.assertIn("元数据证据", panel_html)
             self.assertIn("lef/macro.lef", panel_html)
             self.assertNotIn("$PROJ/scripts/lg.csh fd ucie patch_20260627 db/macro.db", panel_html)
             self.assertEqual(panel_html, panel_html_after_delete)
@@ -822,6 +822,7 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertFalse(first.get("skipped", False))
             state = json.loads((out / "catalog_state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["raw_root"], str(raw))
+            self.assertEqual(state["package_rules_version"], "package_rules.v2")
             self.assertIn("ucie", state["libraries"])
 
             second = scan_catalog(raw, out_dir=out, library_type="ip")
@@ -830,6 +831,11 @@ class CatalogTimelineTest(unittest.TestCase):
 
             forced = scan_catalog(raw, out_dir=out, library_type="ip", force=True)
             self.assertFalse(forced.get("skipped", False))
+
+            state["package_rules_version"] = "package_rules.v1"
+            (out / "catalog_state.json").write_text(json.dumps(state), encoding="utf-8")
+            rules_changed = scan_catalog(raw, out_dir=out, library_type="ip")
+            self.assertFalse(rules_changed.get("skipped", False))
 
     def test_catalog_scan_status_persists_scan_snapshot_identity(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2465,7 +2471,8 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn("原始 JSON、Scan 目录和 Markdown 导出默认折叠", version_html)
             self.assertNotIn("IP 使用者默认视图", version_html)
             self.assertIn("视图变化矩阵", version_html)
-            self.assertIn("展开文件", version_html)
+            self.assertIn("查看文件结构", version_html)
+            self.assertIn("文件入口", version_html)
             self.assertNotIn("按关联使用场景审查", version_html)
             self.assertNotIn("<h3>待确认事实</h3>", version_html)
             self.assertNotIn("高级审查字段", version_html)
@@ -2496,7 +2503,8 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn("parser_regressions", version_html)
             self.assertNotIn("changed_files", version_html)
             self.assertIn("变化文件", version_html)
-            self.assertNotIn("建议动作", version_html)
+            self.assertIn("完整审查报告", version_html)
+            self.assertIn("建议动作", version_html)
             self.assertNotIn("NO_DIFF_SUMMARY", version_html)
             self.assertNotIn("暂无自动 diff 结果", version_html)
             self.assertNotIn("暂无文件级 diff 明细", version_html)
@@ -2504,12 +2512,16 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn("upf/new_domain.upf", version_html)
             self.assertIn("waiver/legacy.waiver", version_html)
             self.assertIn("db/ucie_tt_0p80v_25c.db", version_html)
-            self.assertIn("Metadata-only", version_html)
+            self.assertIn("元数据证据", version_html)
             self.assertIn("rtl/top.v", version_html)
             self.assertIn("doc/release/deep_change_note_with_long_relative_path.md", version_html)
             self.assertIn("sdc/ucie.sdc", version_html)
-            self.assertNotIn("Review UPF isolation delta", version_html)
-            self.assertNotIn("Review removed waiver", version_html)
+            # Structured Review Report is intentionally the bounded place for
+            # model-provided follow-up actions. It remains below the collapsed
+            # report boundary instead of competing with the first screen.
+            self.assertIn("Review UPF isolation delta", version_html)
+            self.assertIn("Review removed waiver", version_html)
+            self.assertIn("data-section=\"review-report\"", version_html)
             self.assertIn("doc/release_note.txt", version_html)
             self.assertNotIn(str(raw / "ucie" / "stable_20250608" / "doc" / "release_note.txt"), version_html)
             self.assertNotIn("summary/dashboard_summary.json", version_html)
@@ -2783,7 +2795,7 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn("lib / liberty", html)
             self.assertNotIn("flow / flow_config", html)
             self.assertNotIn("tech / tech_config", html)
-            self.assertIn("Unknown / 待分类", html)
+            self.assertIn("未知文件", html)
             self.assertNotIn("未知文件细分", html)
             self.assertNotIn("无扩展名", html)
             self.assertIn("misc/unclassified.foo", html)
@@ -2883,6 +2895,8 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn("增量对比", html)
             self.assertIn("交付变化", html)
             self.assertIn("扫描事实已记录", html)
+            # Opaque scan IDs remain in the structured evidence model, but are
+            # not user-facing Version Detail content.
             self.assertNotIn("scan_empty", html)
             self.assertNotIn("No parser summary is available for this version", html)
             self.assertNotIn("No count-only views", html)
@@ -3143,7 +3157,7 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertEqual(runtime["release"]["link_status"], "DRY_RUN")
             self.assertTrue(runtime["release"]["manifest_json"].endswith("release_manifest.json"))
 
-    def test_final_maintenance_name_promotes_incomplete_view_set_to_full_package(self) -> None:
+    def test_version_name_does_not_promote_incomplete_view_set_to_full_package(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             raw = Path(td) / "raw"
             work = Path(td) / "work"
@@ -3184,10 +3198,10 @@ class CatalogTimelineTest(unittest.TestCase):
 
             data = json.loads(catalog.read_text(encoding="utf-8"))
             versions = {version["version_id"]: version for lib in data["libraries"] for version in lib["versions"]}
-            self.assertEqual(versions[final_full.name]["package_type"], "FULL_PACKAGE")
-            self.assertTrue(versions[final_full.name]["standalone"])
-            self.assertFalse(versions[final_full.name]["base_required"])
-            self.assertIn("name_suggests_full_but_missing_expected_views", versions[final_full.name]["classification_risks"])
+            self.assertEqual(versions[final_full.name]["package_type"], "PARTIAL_UPDATE")
+            self.assertFalse(versions[final_full.name]["standalone"])
+            self.assertTrue(versions[final_full.name]["base_required"])
+            self.assertIn("base_version_not_bound", versions[final_full.name]["classification_risks"])
             self.assertEqual(versions[adhoc_fix.name]["package_type"], "PARTIAL_UPDATE")
 
 

@@ -7,6 +7,230 @@ from unittest.mock import patch
 
 
 class VersionDetailUiContractTest(unittest.TestCase):
+    def test_web_console_exposes_one_click_review_sequence_and_manual_write_controls(self) -> None:
+        template = Path(__file__).resolve().parents[1] / "web" / "templates" / "index.html"
+        html = template.read_text(encoding="utf-8")
+        javascript = (template.parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="review-sequence-button"', html)
+        self.assertIn('data-sequence-action="review"', html)
+        self.assertIn("扫描和对比", html)
+        self.assertIn("正式发布检查单独执行", html)
+        self.assertIn('data-workflow-action="next-apply"', html)
+        self.assertIn("人工确认", html)
+        self.assertIn("runReviewSequence", javascript)
+        self.assertIn("const scan = await runAction('scan')", javascript)
+        self.assertIn("state.selectedVersion.scan_evidence_ready", javascript)
+        self.assertIn("const compare = await runAction('compare')", javascript)
+        self.assertNotIn("const release = await runAction('release-check')", javascript)
+
+    def test_review_report_has_fixed_sections_and_reconciled_counts(self) -> None:
+        from lib_guard.render.version_review_model import build_ip_user_view_model, build_review_report
+
+        source = {
+            "status": "CHANGED",
+            "base_ref": "previous_effective",
+            "base_version": "v1_full",
+            "target_version": "v2_full",
+            "base_source": "previous_effective",
+            "base_trust_status": "PASS",
+            "base_trust_note": "基准已确认",
+            "comparison_semantics": "full",
+            "delete_semantics": "real_delete",
+            "package_type": "FULL_PACKAGE",
+            "file_changes": [
+                {"change": "ADDED", "file_type": "lef", "path": "LEF/a.lef", "review_lane": "P0"},
+                {"change": "CHANGED", "file_type": "liberty", "path": "LIB/a.lib", "review_lane": "SUMMARY_ONLY", "evidence_mode": "summary-only"},
+                {"change": "REMOVED", "file_type": "verilog", "path": "RTL/old.v", "review_lane": "P1"},
+            ],
+            "added_files": 1,
+            "removed_files": 1,
+            "changed_files": 1,
+            "lane_counts": {"recommended_file_diff": 2, "summary_only": 1, "metadata_only": 0},
+            "scan_evidence": {
+                "file_total": 2,
+                "unknown_total": 1,
+                "inventory": {"files": [{"path": "LEF/a.lef", "file_type": "lef"}, {"path": "LIB/a.lib", "file_type": "liberty"}, {"path": "misc.bin", "file_type": "unknown"}]},
+                "context": {"scan_id": "scan-v2", "scan_status": "SCAN_PASS", "scan_dir": "/scan/v2"},
+            },
+            "comparison_context": {"diff_status": "CHANGED", "diff_dir": "/diff/v1-v2"},
+            "diff_summary": {"status": "DIFF", "added_files": 1, "removed_files": 1, "changed_files": 1},
+            "diff_issues": {"issues": []},
+            "path_restructure": {"suspected": False},
+            "release_notes": [],
+            "recommended_actions": ["确认 LEF 变化"],
+            "evidence_state": {"status": "PASS", "scan": {"status": "PASS"}, "diff": {"status": "PASS"}},
+        }
+
+        ip_view = build_ip_user_view_model(source)
+        report = build_review_report(source, ip_view)
+        self.assertEqual(
+            set(report),
+            {
+                "schema_version", "base_analysis", "delivery_analysis", "view_delta_analysis",
+                "focus_file_analysis", "unknown_analysis", "evidence_assessment",
+                "open_questions", "recommended_actions",
+            },
+        )
+        self.assertEqual(report["view_delta_analysis"]["totals"], {"added": 1, "removed": 1, "changed": 1})
+        self.assertEqual(report["view_delta_analysis"]["evidence_reconciliation"]["status"], "RECONCILED")
+        self.assertTrue(report["view_delta_analysis"]["evidence_reconciliation"]["checks"]["file_diff_items_match_view_matrix"])
+        self.assertTrue(report["view_delta_analysis"]["evidence_reconciliation"]["checks"]["focus_files_are_file_diff_subset"])
+        self.assertEqual(report["focus_file_analysis"]["count"], 2)
+        self.assertEqual(report["unknown_analysis"]["count"], 1)
+        self.assertEqual(report["evidence_assessment"]["scan_id"], "scan-v2")
+        self.assertTrue(report["open_questions"])
+
+    def test_review_report_marks_declared_file_diff_mismatch(self) -> None:
+        from lib_guard.render.version_review_model import build_ip_user_view_model, build_review_report
+
+        source = {
+            "status": "CHANGED",
+            "base_ref": "previous_effective",
+            "base_version": "v1_full",
+            "base_trust_status": "PASS",
+            "comparison_semantics": "full",
+            "delete_semantics": "real_delete",
+            "package_type": "FULL_PACKAGE",
+            "file_changes": [{"change": "CHANGED", "file_type": "lef", "path": "LEF/a.lef", "review_lane": "P0"}],
+            "file_diff": {"counts": {"added": 2, "removed": 0, "changed": 0}},
+            "scan_evidence": {"counts": {"lef": 1}, "context": {"scan_status": "SCAN_PASS"}},
+            "comparison_context": {"diff_status": "CHANGED"},
+            "diff_summary": {"status": "DIFF"},
+        }
+
+        report = build_review_report(source, build_ip_user_view_model(source))
+        reconciliation = report["view_delta_analysis"]["evidence_reconciliation"]
+        self.assertEqual(reconciliation["status"], "MISMATCH")
+        self.assertFalse(reconciliation["checks"]["declared_file_diff_matches_items"])
+
+    def test_review_report_preserves_first_version_and_missing_evidence_states(self) -> None:
+        from lib_guard.render.version_review_model import build_ip_user_view_model, build_review_report
+
+        source = {
+            "status": "DIFF_NOT_RUN",
+            "review_mode": "first_version",
+            "base_ref": "NEEDS_BASE_CONFIRM",
+            "base_version": "",
+            "base_trust_status": "INFO",
+            "package_type": "UNKNOWN_PACKAGE",
+            "file_changes": [],
+            "lane_counts": {},
+            "scan_evidence": {"file_total": 1, "unknown_total": 0, "inventory": {"files": [{"path": "README.md", "file_type": "doc"}]}, "context": {}},
+            "comparison_context": {"diff_status": "DIFF_NOT_RUN"},
+            "diff_summary": {},
+            "diff_issues": {},
+            "release_notes": [],
+            "recommended_actions": [],
+        }
+        report = build_review_report(source, build_ip_user_view_model(source))
+        self.assertEqual(report["base_analysis"]["status"], "INFO")
+        self.assertEqual(report["view_delta_analysis"]["status"], "NOT_AVAILABLE")
+        self.assertEqual(report["evidence_assessment"]["status"], "INCOMPLETE")
+        self.assertTrue(report["open_questions"])
+
+    def test_review_report_semantic_scenarios_a_to_h(self) -> None:
+        from lib_guard.render.version_review_model import build_ip_user_view_model, build_review_report
+
+        def source(**overrides):
+            value = {
+                "status": "CHANGED",
+                "review_mode": "baseline",
+                "base_ref": "previous_effective",
+                "base_version": "full_v1",
+                "base_trust_status": "PASS",
+                "comparison_semantics": "full",
+                "delete_semantics": "real_delete",
+                "package_type": "FULL_PACKAGE",
+                "file_changes": [{"change": "CHANGED", "file_type": "lef", "path": "LEF/a.lef", "review_lane": "P0"}],
+                "added_files": 0,
+                "removed_files": 0,
+                "changed_files": 1,
+                "lane_counts": {"recommended_file_diff": 1},
+                "scan_evidence": {"file_total": 1, "unknown_total": 0, "inventory": {"files": [{"path": "LEF/a.lef", "file_type": "lef"}]}, "context": {"scan_id": "scan-1", "scan_status": "SCAN_PASS"}},
+                "comparison_context": {"diff_status": "CHANGED"},
+                "diff_summary": {"status": "DIFF", "changed_files": 1},
+                "diff_issues": {"issues": []},
+                "release_notes": [{"path": "RELEASE.md"}],
+                "recommended_actions": [],
+            }
+            value.update(overrides)
+            return value
+
+        cases = [
+            ("A 首版", source(review_mode="first_version", status="FIRST_VERSION_REVIEW", base_ref="", base_version=""), "NOT_AVAILABLE"),
+            ("B 正常 FULL", source(), "RECONCILED"),
+            ("C 缺少必需 View", source(delivery_completeness={"status": "MISSING", "missing": ["lef"]}), "RECONCILED"),
+            ("D 缺少 diff", source(status="DIFF_NOT_RUN", comparison_context={"diff_status": "DIFF_NOT_RUN"}, diff_summary={}), "NOT_AVAILABLE"),
+            ("E 相邻回退", source(base_ref="adjacent_fallback", base_trust_status="WARNING"), "RECONCILED"),
+            ("F UNKNOWN 包", source(package_type="UNKNOWN_PACKAGE", scan_evidence={"file_total": 1, "unknown_total": 1, "inventory": {"files": [{"path": "x.bin", "file_type": "unknown"}]}, "context": {"scan_id": "scan-1", "scan_status": "SCAN_PASS"}}), "RECONCILED"),
+            ("G FULL + FIX/DOC", source(package_type="FULL_PACKAGE", package_composition=["FULL_PACKAGE", "PARTIAL_UPDATE", "DOC_UPDATE"]), "RECONCILED"),
+            ("H 证据过期", source(scan_evidence={"file_total": 1, "unknown_total": 0, "inventory": {"files": [{"path": "LEF/a.lef", "file_type": "lef"}]}, "context": {"scan_id": "scan-old", "scan_status": "STALE"}}), "RECONCILED"),
+        ]
+        for name, model, expected_delta in cases:
+            with self.subTest(scenario=name):
+                report = build_review_report(model, build_ip_user_view_model(model))
+                self.assertIn("schema_version", report)
+                self.assertIn(report["view_delta_analysis"]["status"], {expected_delta, "MISMATCH"})
+                self.assertIn("evidence_assessment", report)
+
+    def test_version_detail_has_stable_semantic_sections(self) -> None:
+        from lib_guard.render.version_detail_report import render_version_detail_page
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            page = Path(render_version_detail_page(root / "html", {"library_id": "ip/ucie", "library_name": "ucie"}, {"version_id": "v1"}))
+            html = page.read_text(encoding="utf-8")
+            for section in (
+                "decision-summary", "comparison-context", "impact-summary", "view-delta",
+                "focus-files", "file-structure", "review-report", "evidence-status",
+            ):
+                self.assertIn(f'data-section="{section}"', html)
+            self.assertIn("data-next-action='true'", html)
+            self.assertIn("下一步", html)
+            self.assertIn("review-report", html)
+            self.assertIn("<details", html)
+
+    def test_static_review_packet_is_compact_and_notes_stay_in_report(self) -> None:
+        from lib_guard.render.version_detail_report import render_version_detail_page
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            page = Path(
+                render_version_detail_page(
+                    root / "html",
+                    {"library_id": "ip/ucie", "library_name": "ucie"},
+                    {
+                        "version_id": "v2",
+                        "review_gate": {
+                            "packet_id": "rp_abc123",
+                            "status": "BLOCKED",
+                            "blocking_open": 1,
+                            "attention_count": 0,
+                            "items": [
+                                {
+                                    "department": "Physical",
+                                    "decision": "BLOCK",
+                                    "question": "请确认 lef 视图变化满足当前使用场景。",
+                                    "note": "不要把这段长备注直接铺到版本详情主页面。",
+                                }
+                            ],
+                            "review_report": str(root / "reviews" / "review_report.md"),
+                        },
+                        "review_packet": {
+                            "packet_id": "rp_abc123",
+                            "review_report": str(root / "reviews" / "review_report.md"),
+                        },
+                    },
+                )
+            )
+            html = page.read_text(encoding="utf-8")
+
+        self.assertIn('data-section="review-gate"', html)
+        self.assertIn("部门审查", html)
+        self.assertIn("已附备注；详见完整审查报告", html)
+        self.assertNotIn("不要把这段长备注直接铺到版本详情主页面", html)
+
     def test_ip_decision_matrix_uses_evidence_state_instead_of_page_defaults(self) -> None:
         from lib_guard.render.version_review_model import build_ip_user_view_model
 
@@ -187,11 +411,76 @@ class VersionDetailUiContractTest(unittest.TestCase):
 
         self.assertIn("view-delta-scroll", html)
         self.assertIn("view-delta-table", html)
-        for header in ["当前文件", "新增", "删除", "修改", "证据 / 状态", "代表文件"]:
+        self.assertIn("data-view-delta-filter", html)
+        self.assertIn("data-view-search", html)
+        self.assertIn("data-view-type-filter", html)
+        self.assertIn("data-change-filter", html)
+        self.assertIn("data-view-delta-count", html)
+        self.assertIn("仅显示有变化", html)
+        for label in ["新增", "删除", "修改"]:
+            self.assertIn(label, html)
+        for header in ["交付 / 变化", "证据 / 状态", "文件入口"]:
             self.assertIn(f"<th>{header}</th>", html)
-        self.assertIn("delta-number added", html)
-        self.assertIn("delta-number changed", html)
-        self.assertIn("展开文件", html)
+        self.assertIn("delta-compact-count added", html)
+        self.assertIn("delta-compact-count changed", html)
+        self.assertIn("data-change-kinds='added'", html)
+        self.assertIn("data-change-kinds='changed'", html)
+        self.assertIn("data-view-label='物理抽象（LEF）'", html)
+        self.assertNotIn("<th>当前文件</th>", html)
+        self.assertIn("查看文件结构", html)
+        self.assertNotIn("路径变化且内容相同", html)
+
+    def test_view_delta_shows_content_preserving_path_change_as_its_own_category(self) -> None:
+        from lib_guard.render.version_review_model import build_ip_user_view_model, build_review_report
+        from lib_guard.render.version_review_render import render_ip_user_view
+
+        source = {
+            "status": "SAME",
+            "base_ref": "previous_effective",
+            "base_version": "v1_full",
+            "base_trust_status": "PASS",
+            "comparison_semantics": "full",
+            "delete_semantics": "real_delete",
+            "file_changes": [],
+            "path_changes_same_content": [
+                {
+                    "file_type": "verilog",
+                    "old": "RTL/top.v",
+                    "new": "RTL/top_renamed.v",
+                    "reason": "unique_hash_match",
+                }
+            ],
+            "scan_evidence": {
+                "counts": {"verilog": 1},
+                "inventory": {"files": [{"path": "RTL/top_renamed.v", "file_type": "verilog"}]},
+            },
+            "file_diff": {"counts": {"added": 0, "removed": 0, "changed": 0, "renamed_or_moved": 1}},
+        }
+        model = build_ip_user_view_model(source)
+
+        row = next(item for item in model["view_rows"] if item["view_type"] == "rtl_model")
+        self.assertEqual(row["added"], 0)
+        self.assertEqual(row["removed"], 0)
+        self.assertEqual(row["changed"], 0)
+        self.assertEqual(row["path_changed_same_content"], 1)
+        self.assertEqual(row["status_label"], "路径变化，内容相同")
+
+        report = build_review_report(source, model)
+        self.assertEqual(
+            report["view_delta_analysis"]["totals"],
+            {"added": 0, "removed": 0, "changed": 0, "path_changed_same_content": 1},
+        )
+        self.assertTrue(
+            report["view_delta_analysis"]["evidence_reconciliation"]["checks"][
+                "path_changes_match_view_matrix"
+            ]
+        )
+
+        html = render_ip_user_view(model)
+        self.assertIn("路径变化且内容相同", html)
+        self.assertIn("delta-compact-count path-changed", html)
+        self.assertIn("RTL/top.v", html)
+        self.assertIn("RTL/top_renamed.v", html)
 
     def test_view_delta_evidence_links_are_relative_to_the_detail_page(self) -> None:
         from lib_guard.render.version_review_render import render_ip_user_view
@@ -242,6 +531,9 @@ class VersionDetailUiContractTest(unittest.TestCase):
             html = page.read_text(encoding="utf-8")
 
         self.assertIn("review-layout", html)
+        self.assertIn("review-top-layout", html)
+        self.assertIn("review-top-summary", html)
+        self.assertIn("review-top-matrix", html)
         self.assertIn("review-primary-column", html)
         self.assertIn("review-secondary-column", html)
         self.assertIn("review-summary-strip", html)
@@ -249,10 +541,35 @@ class VersionDetailUiContractTest(unittest.TestCase):
         self.assertIn("view-delta-toolbar", html)
         self.assertIn("delta-legend", html)
         self.assertIn("视图变化矩阵", html)
+        self.assertLess(html.index("<section class='review-top-matrix'>"), html.index("<section class='review-top-summary'>"))
         self.assertIn("正式放行管理", html)
-        self.assertIn("证据入口 / 调试", html)
+        self.assertIn("原始证据", html)
         self.assertIn("<table class='view-delta-table'>", html)
         self.assertNotIn("<details class='panel collapsible' open>", html)
+
+    def test_review_report_focus_files_use_bounded_scroll_container(self) -> None:
+        from lib_guard.render.version_review_render import render_review_report
+
+        report = {
+            "base_analysis": {},
+            "delivery_analysis": {},
+            "view_delta_analysis": {"rows": [], "totals": {}, "evidence_reconciliation": {}},
+            "focus_file_analysis": {
+                "count": 200,
+                "shown_count": 120,
+                "items": [{"review_lane": "P0", "change": "ADDED", "path": "LEF/macro.lef", "evidence_mode": "summary"}],
+            },
+            "unknown_analysis": {},
+            "evidence_assessment": {},
+            "open_questions": [],
+            "recommended_actions": [],
+        }
+
+        html = render_review_report(report)
+        self.assertIn("data-focus-scroll='true'", html)
+        self.assertIn("数量较多时在列表内滚动", html)
+        self.assertIn(".report-focus-scroll{max-height:360px;overflow:auto", html)
+        self.assertIn(".report-focus-scroll th{position:sticky", html)
 
     def test_lightweight_evidence_does_not_force_usage_review(self) -> None:
         from lib_guard.render.version_review_model import build_ip_user_view_model
@@ -341,9 +658,12 @@ class VersionDetailUiContractTest(unittest.TestCase):
         self.assertEqual(model["decision"]["status"], "BLOCKED")
         self.assertEqual(model["decision"]["label"], "不可接入")
         self.assertIn("RTL 模型", model["decision"]["reason"])
+        self.assertEqual(model["decision"]["next_action"]["kind"], "complete_required_view")
+        self.assertIn("确认必需视图", model["decision"]["next_action"]["label"])
+        self.assertIn("补齐或确认缺失的必需视图", model["next_action"]["detail"])
         self.assertEqual(model["pending_fact_items"][0]["kind"], "REQUIRED_VIEW_MISSING")
 
-    def test_ip_view_renders_usage_impact_without_repeating_usage_sections(self) -> None:
+    def test_ip_view_keeps_usage_in_matrix_without_duplicate_impact_cards(self) -> None:
         from lib_guard.render.version_review_render import render_ip_user_view
 
         html = render_ip_user_view(
@@ -359,6 +679,7 @@ class VersionDetailUiContractTest(unittest.TestCase):
                         "removed": 0,
                         "changed": 1,
                         "evidence_level": "摘要级证据（Summary-only）",
+                        "evidence_counts": {"Summary-only": 3},
                     },
                     {
                         "view": "LEF / 物理抽象",
@@ -376,17 +697,38 @@ class VersionDetailUiContractTest(unittest.TestCase):
             }
         )
 
-        self.assertIn("影响范围", html)
-        self.assertIn("时序分析 / STA", html)
-        self.assertIn("物理实现 / PD", html)
+        self.assertNotIn("impact-card", html)
+        self.assertIn("时序库（Liberty）", html)
+        self.assertIn("时序分析（STA）", html)
+        self.assertIn("物理抽象（LEF）", html)
+        self.assertIn("物理实现（PD）", html)
+        self.assertIn("摘要证据", html)
+        self.assertIn("· 3", html)
+        self.assertNotIn("摘要证据 3", html)
+        self.assertNotIn("摘要级证据（Summary-only）", html)
         self.assertNotIn("关联使用场景", html)
+
+    def test_view_delta_shows_scroll_hint_when_many_views_are_present(self) -> None:
+        from lib_guard.render.version_review_render import render_ip_user_view
+
+        html = render_ip_user_view(
+            {
+                "view_rows": [
+                    {"view": label, "view_type": str(index), "delivery_count": 1, "delta_total": 1, "added": 1}
+                    for index, label in enumerate(("LEF", "Liberty", "RTL", "GDS"))
+                ]
+            }
+        )
+
+        self.assertIn("view-delta-scroll-note", html)
+        self.assertIn("共 4 个视图", html)
 
     def test_page_prioritizes_decision_summary_and_lineage(self) -> None:
         html = self._render_doc_update_page()
 
         self.assertIn("判断摘要", html)
+        self.assertIn("summary-window", html)
         self.assertIn(">为什么<", html)
-        self.assertIn("影响范围", html)
         self.assertIn("版本关系", html)
         self.assertNotIn("证据分层</b>", html)
 
@@ -447,7 +789,7 @@ class VersionDetailUiContractTest(unittest.TestCase):
             self.assertNotIn("文件证据清单", detail_html)
             self.assertIn("file-tree-scroll", detail_html)
             self.assertIn("当前没有可展示的文件结构", detail_html)
-            self.assertIn("目录默认展开前两层", detail_html)
+            self.assertIn("默认显示变化文件", detail_html)
             self.assertIn("#file-structure", detail_html)
 
     def test_file_evidence_section_exposes_a_status_annotated_tree(self) -> None:
@@ -476,6 +818,22 @@ class VersionDetailUiContractTest(unittest.TestCase):
         self.assertIn("class='file-tree'", html)
         self.assertIn("全部展开", html)
         self.assertIn("全部收起", html)
+        self.assertIn("变化文件", html)
+        self.assertIn("当前交付", html)
+        self.assertIn("全部证据", html)
+        self.assertIn("data-tree-view-filter", html)
+        self.assertIn("data-tree-area-filter", html)
+        self.assertIn("data-tree-change-filter", html)
+        self.assertIn("视图类型", html)
+        self.assertIn("使用场景", html)
+        self.assertIn("变化类型", html)
+        self.assertIn("新增", html)
+        self.assertIn("删除", html)
+        self.assertIn("修改", html)
+        self.assertIn("data-tree-reset", html)
+        self.assertIn("data-tree-filter='changes'", html)
+        self.assertIn("data-tree-view-type='physical_abstract'", html)
+        self.assertIn("data-tree-area='物理实现（PD）'", html)
         self.assertIn("data-tree-status='added'", html)
         self.assertIn("data-tree-status='removed'", html)
         self.assertIn("data-tree-status='changed'", html)
@@ -483,6 +841,24 @@ class VersionDetailUiContractTest(unittest.TestCase):
         self.assertIn("LEF/macros/new.lef", html)
         self.assertIn("GDS/old.gds", html)
         self.assertIn("RTL/top.sv", html)
+
+    def test_first_version_file_tree_defaults_to_current_delivery(self) -> None:
+        from lib_guard.render.version_file_evidence import render_version_file_evidence_section
+
+        html = render_version_file_evidence_section(
+            {
+                "review_mode": "first_version",
+                "scan_evidence": {
+                    "file_total": 1,
+                    "inventory": {"files": [{"path": "LEF/top.lef", "file_type": "lef"}]},
+                },
+                "file_changes": [],
+            }
+        )
+
+        self.assertIn("默认显示当前交付", html)
+        self.assertIn("data-tree-filter='current'", html)
+        self.assertIn("tree-filter-chip active' data-tree-filter='current'", html)
 
     def test_file_tree_keeps_deleted_paths_and_has_bounded_scroll(self) -> None:
         from lib_guard.render.version_file_evidence import render_version_file_evidence_section
@@ -497,6 +873,28 @@ class VersionDetailUiContractTest(unittest.TestCase):
         self.assertIn("old/only.lef", html)
         self.assertIn("file-tree-scroll", html)
         self.assertIn("overflow:auto", html)
+
+    def test_file_tree_explains_delivery_and_evidence_counts(self) -> None:
+        from lib_guard.render.version_file_evidence import render_version_file_evidence_section
+
+        html = render_version_file_evidence_section(
+            {
+                "file_changes": [{"change": "removed", "file_type": "lef", "path": "old/only.lef"}],
+                "scan_evidence": {
+                    "file_total": 2,
+                    "inventory": {
+                        "files": [
+                            {"path": "LEF/a.lef", "file_type": "lef"},
+                            {"path": "RTL/a.v", "file_type": "verilog"},
+                        ]
+                    },
+                },
+            }
+        )
+
+        self.assertIn("当前交付 <b>2</b>", html)
+        self.assertIn("变化文件 <b>1</b>", html)
+        self.assertIn("全部证据 <b>3</b>", html)
 
     def test_missing_diff_is_blocked_instead_of_presented_as_normal_review(self) -> None:
         from lib_guard.render.version_review_model import build_ip_user_view_model
@@ -516,6 +914,8 @@ class VersionDetailUiContractTest(unittest.TestCase):
 
         self.assertEqual(model["decision"]["status"], "BLOCKED")
         self.assertEqual(model["decision"]["label"], "暂不可判断")
+        self.assertEqual(model["next_action"]["kind"], "generate_diff")
+        self.assertIn("生成可信对比", model["next_action"]["label"])
 
     def test_unknown_files_require_review_even_without_diff_delta(self) -> None:
         from lib_guard.render.version_review_model import build_ip_user_view_model
@@ -534,7 +934,7 @@ class VersionDetailUiContractTest(unittest.TestCase):
         )
 
         self.assertEqual(model["decision"]["status"], "USAGE_REVIEW_REQUIRED")
-        self.assertIn("Unknown", model["decision"]["reason"])
+        self.assertIn("未知文件", model["decision"]["reason"])
         self.assertEqual(model["pending_fact_items"][0]["kind"], "UNKNOWN_FILES")
         self.assertNotIn("must_check_items", model)
         self.assertNotIn("usage_area_sections", model)
@@ -611,7 +1011,7 @@ class VersionDetailUiContractTest(unittest.TestCase):
                     {
                         "kind": "UNKNOWN_FILES",
                         "label": "待分类文件",
-                        "summary": "当前交付包存在 1 个 Unknown 文件。",
+                        "summary": "当前交付包存在 1 个未知文件。",
                     },
                 ],
             }
@@ -829,7 +1229,30 @@ class VersionDetailUiContractTest(unittest.TestCase):
 
         self.assertIn("没有形成可用扫描事实", html)
         self.assertNotIn("扫描事实已记录", html)
+        self.assertNotIn("当前扫描交付文件", html)
         self.assertNotIn("scan_id", html)
+
+    def test_sidebar_hides_complete_delivery_and_duplicate_lineage_panel(self) -> None:
+        from lib_guard.render.version_detail_report import _review_evidence_sidebar
+
+        html = _review_evidence_sidebar(
+            {
+                "scan_context": {"scan_id": "scan_ok", "scan_status": "SCAN_PASS"},
+                "scan_evidence": {"file_count": 4, "inventory": {"files": [{"path": "lef/a.lef"}]}, "counts": {}},
+                "comparison_context": {"diff_status": "CHANGED", "base_version": "base_v1"},
+                "lane_counts": {"recommended_file_diff": 1},
+                "ip_user_view_model": {
+                    "delivery_completeness": {"status": "PASS", "required_total": 1, "required_present": 1, "missing": []},
+                },
+            },
+            {},
+        )
+
+        self.assertIn("证据状态", html)
+        self.assertNotIn("事实摘要", html)
+        self.assertNotIn("交付完整度", html)
+        self.assertNotIn("版本关系与来源", html)
+        self.assertIn("原始证据", html)
 
     def test_large_diff_caps_inline_rows_and_keeps_full_evidence_link(self) -> None:
         from lib_guard.render.version_detail_report import render_version_update_detail_panel

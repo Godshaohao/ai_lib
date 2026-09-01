@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from lib_guard.package.types import package_kind, package_type_from_version, normalize_package_type
 from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, SUMMARY_ONLY_TYPES
 
 P0_REVIEW_TYPES = {"lef", "cdl", "spice", "sp"}
@@ -13,7 +14,7 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
 
 
 def _package_type(version: Mapping[str, Any]) -> str:
-    return str(version.get("package_type") or version.get("version_type") or version.get("stage") or "UNKNOWN").upper()
+    return package_type_from_version(version)
 
 
 def _base_full_version(version: Mapping[str, Any]) -> str | None:
@@ -31,16 +32,13 @@ def _base_full_version(version: Mapping[str, Any]) -> str | None:
 
 def _node_package_type(version: Mapping[str, Any]) -> str:
     pkg = _package_type(version)
-    version_id = str(version.get("version_id") or version.get("version") or "").lower()
-    stage = str(version.get("stage") or "").lower()
-    if pkg in {"FULL_PACKAGE", "FULL"} or version_id.startswith(("stable_", "final_", "initial_")) or stage in {"stable", "final", "initial"}:
+    kind = package_kind(pkg)
+    if kind == "FULL":
         return "full"
-    if pkg == "HOTFIX" or stage == "ad-hoc":
+    if kind == "FIX":
         return "hotfix"
-    if pkg in {"DOC_UPDATE", "DOC_ONLY"}:
+    if kind == "DOC":
         return "doc"
-    if pkg in {"PARTIAL_UPDATE", "PARTIAL"} or version_id.startswith(("patch_", "update_")) or version.get("update_scope"):
-        return "partial"
     return "unknown"
 
 
@@ -110,9 +108,15 @@ def classify_review_lane(file_type: str) -> dict[str, str]:
 
 
 def comparison_semantics_for_package(package_type: str, node_kind: str = "") -> dict[str, str]:
-    package = str(package_type or "").upper()
+    package = normalize_package_type(package_type)
     node_type = str(node_kind or "").lower()
-    if package in {"PARTIAL_UPDATE", "PARTIAL", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"} or node_type in {"partial", "hotfix", "doc"}:
+    if package == "UNKNOWN_PACKAGE" and node_type not in {"partial", "hotfix", "doc", "full"}:
+        return {
+            "comparison_scope": "unknown",
+            "compare_strategy": "needs confirmation",
+            "delete_semantics": "needs_confirm",
+        }
+    if package in {"PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"} or node_type in {"partial", "hotfix", "doc"}:
         return {
             "comparison_scope": "incremental",
             "compare_strategy": "incremental compare",

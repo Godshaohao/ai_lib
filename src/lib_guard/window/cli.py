@@ -96,7 +96,7 @@ def _plan_followup_commands(library: str, window: dict[str, Any] | None = None) 
         return {
             "confirm_command": "无需执行：当前没有新的待审查版本",
             "relation_fix_commands": [],
-            "accept_command": "无需执行：没有 candidate effective，不能接受新有效版",
+            "accept_command": "无需执行：没有候选组合，不能接受新有效版",
             "review_hint": "当前只有已识别的基线版本；新版本到来后再运行 lg next。",
         }
     if correction_commands:
@@ -104,7 +104,7 @@ def _plan_followup_commands(library: str, window: dict[str, Any] | None = None) 
             "confirm_command": "先确认未识别包的类型；确认后重新运行 lg next。",
             "relation_fix_commands": correction_commands,
             "accept_command": "不可接受：存在未确认包类型",
-            "review_hint": "只需修正列出的 UNKNOWN 包类型；无需覆盖当前 Base。",
+            "review_hint": "只需修正列出的未确认包类型；无需覆盖当前基准版。",
         }
     if _candidate_ready_for_acceptance(window or {}):
         accept = f"lg next {lib} --accept --by <USER> --note 'review passed'"
@@ -118,13 +118,16 @@ def _plan_followup_commands(library: str, window: dict[str, Any] | None = None) 
         "confirm_command": f"lg next {lib} --apply",
         "relation_fix_commands": [],
         "accept_command": f"lg next {lib} --accept --by <USER> --note 'review passed'",
-        "review_hint": "确认 candidate、Base 和需扫描版本后执行；当前没有需要修正的包类型或 Base。",
+            "review_hint": "确认候选组合、基准版和需扫描版本后执行；当前没有需要修正的包类型或基准版。",
     }
 
 
 def _base_source_label(source: str) -> str:
     labels = {
-        "current_effective_pointer": "当前Effective指针",
+        "current_effective_pointer": "当前有效版指针",
+        "latest_full_fallback": "最新完整包回退",
+        "first_catalog_version": "目录首个版本回退",
+        "diff.base_version:explicit": "对比记录显式指定",
         "uninitialized": "尚未建立有效版",
     }
     return labels.get(source, source or "未知")
@@ -141,7 +144,7 @@ def _base_review(window: dict[str, Any]) -> dict[str, Any]:
         "当前Base": target or "未建立有效版" if uninitialized else target or "未识别",
         "来源": _base_source_label(source),
         "完整包基线": base.get("base_full") or "",
-        "确认说明": "尚未写入 current_effective.json；最新 FULL 仅作为初始接入候选，不是当前有效版。"
+        "确认说明": "尚未写入 current_effective.json；最新完整包仅作为初始接入候选，不是当前有效版。"
         if uninitialized
         else "来自已接受的 current_effective.json。",
     }
@@ -157,8 +160,8 @@ def _version_review_table(window: dict[str, Any]) -> list[dict[str, Any]]:
                 "版本名": target.split(":", 1)[1],
                 "类型猜测": "FULL",
                 "Catalog类型": "FULL_PACKAGE" if base.get("source") != "first_catalog_version" else "",
-                "当前角色": "当前Base",
-                "是否需确认": "Base来源需确认" if base.get("source") in {"latest_full_fallback", "first_catalog_version"} else "否",
+                "当前角色": "当前基准版",
+                "是否需确认": "基准版来源需确认" if base.get("source") in {"latest_full_fallback", "first_catalog_version"} else "否",
             }
         )
     for item in window.get("items", []) or []:
@@ -193,11 +196,11 @@ def _suggested_fix_commands(library: str, window: dict[str, Any]) -> list[str]:
         suggested = guessed if kind == "UNKNOWN" else kind
         if item.get("requires_package_type_confirmation"):
             if suggested == "FULL":
-                commands.append(f"lg mark {lib} {_quote(version)} --type FULL --note 'confirmed full package'")
+                commands.append(f"lg mark {lib} {_quote(version)} --type FULL --note '已确认完整包'")
             elif suggested == "FIX":
-                commands.append(f"lg mark {lib} {_quote(version)} --type FIX --note 'confirmed fix package'")
+                commands.append(f"lg mark {lib} {_quote(version)} --type FIX --note '已确认修复包'")
             else:
-                commands.append(f"lg mark {lib} {_quote(version)} --type FULL|FIX --note 'confirmed package type'")
+                commands.append(f"lg mark {lib} {_quote(version)} --type FULL|FIX --note '已确认包类型'")
     return commands
 
 
@@ -215,14 +218,14 @@ def _flow_review(window: dict[str, Any]) -> dict[str, Any]:
             "增量包": "-",
         }
     if overlays:
-        flow_type = "FULL流程 + 增量流程"
+        flow_type = "完整包流程 + 增量流程"
         detail = (
-            f"系统选择最新FULL：{base_full or '-'} 作为完整基线，"
+            f"系统选择最新完整包：{base_full or '-'} 作为完整基线，"
             f"再叠加增量包：{', '.join(overlays)}。"
         )
     else:
-        flow_type = "FULL流程"
-        detail = f"系统选择最新FULL：{base_full or '-'} 作为候选有效版；没有需要叠加的增量包。"
+        flow_type = "完整包流程"
+        detail = f"系统选择最新完整包：{base_full or '-'} 作为候选有效版；没有需要叠加的增量包。"
     if rule:
         detail += f" 规则：{rule}。"
     return {
@@ -331,12 +334,24 @@ def _format_window_text(library: str, window: dict[str, Any]) -> str:
     base = summary["base_review"]
     flow = summary.get("flow_review") or {}
     version_rows = summary["版本选择表"]
+    version_display_rows = [
+        {
+            "版本名": row.get("版本名"),
+            "类型猜测": row.get("类型猜测"),
+            "目录类型": row.get("Catalog类型"),
+            "当前角色": row.get("当前角色"),
+            "是否需确认": row.get("是否需确认"),
+            "扫描状态": row.get("Scan状态"),
+        }
+        for row in version_rows
+        if isinstance(row, dict)
+    ]
     version_table = _format_text_table(
-        version_rows,
-        ["版本名", "类型猜测", "Catalog类型", "当前角色", "是否需确认", "Scan状态"],
+        version_display_rows,
+        ["版本名", "类型猜测", "目录类型", "当前角色", "是否需确认", "扫描状态"],
     )
     if not version_rows and window.get("state") == "EMPTY":
-        version_table = "当前没有新的待审查版本；当前Base已来自有效版本指针。"
+        version_table = "当前没有新的待审查版本；当前基准版已来自有效版本指针。"
     fix_commands = summary["建议修正命令"]
 
     lines = [
@@ -344,14 +359,14 @@ def _format_window_text(library: str, window: dict[str, Any]) -> str:
         "",
         "基线确认",
         f"  状态：{base.get('状态')}",
-        f"  当前Base：{base.get('当前Base')}",
+        f"  当前基准版：{base.get('当前Base')}",
         f"  来源：{base.get('来源')}",
         f"  完整包基线：{base.get('完整包基线') or '-'}",
         f"  说明：{base.get('确认说明')}",
         "",
         "流程判断",
         f"  类型：{flow.get('流程类型') or '-'}",
-        f"  最新FULL：{flow.get('最新FULL') or '-'}",
+        f"  最新完整包：{flow.get('最新FULL') or '-'}",
         f"  增量包：{flow.get('增量包') or '-'}",
         f"  说明：{flow.get('判断') or '-'}",
         "",
@@ -370,10 +385,10 @@ def _format_window_text(library: str, window: dict[str, Any]) -> str:
         [
             "",
             "当前组合",
-            f"  Candidate：{candidate.get('effective_id') or '-'}",
-            f"  Base Full：{candidate.get('base_full') or '-'}",
-            f"  Overlay：{', '.join(str(x) for x in candidate.get('overlays', []) or []) or '-'}",
-            f"  Compare：{compare.get('old') or '-'} -> {compare.get('new') or '-'}",
+            f"  候选组合：{candidate.get('effective_id') or '-'}",
+            f"  完整包基线：{candidate.get('base_full') or '-'}",
+            f"  增量叠加：{', '.join(str(x) for x in candidate.get('overlays', []) or []) or '-'}",
+            f"  对比：{compare.get('old') or '-'} -> {compare.get('new') or '-'}",
         ]
     )
     warnings = [str(item) for item in window.get("warnings", []) or [] if str(item)]
@@ -417,12 +432,26 @@ def _format_worklist_text(output: dict[str, Any]) -> str:
     summary = output.get("summary", {}) or {}
     rows = output.get("rows", []) or []
     counts = "，".join(f"{key} {value}" for key, value in summary.items()) or "无"
+    display_rows = [
+        {
+            "库": row.get("库"),
+            "状态": row.get("状态"),
+            "当前基准版": row.get("当前Base"),
+            "基准版来源": row.get("Base来源"),
+            "新版本": row.get("新版本"),
+            "候选组合": row.get("Candidate"),
+            "需扫描": row.get("需扫描"),
+            "建议动作": row.get("建议动作"),
+        }
+        for row in rows
+        if isinstance(row, dict)
+    ]
     return "\n".join(
         [
             "接入工作清单",
             f"  汇总：{counts}",
             "",
-            _format_text_table(rows, ["库", "状态", "当前Base", "Base来源", "新版本", "Candidate", "需扫描", "建议动作"]),
+            _format_text_table(display_rows, ["库", "状态", "当前基准版", "基准版来源", "新版本", "候选组合", "需扫描", "建议动作"]),
         ]
     )
 
@@ -696,6 +725,31 @@ def _validate_review_approval(window: dict[str, Any], effective_digest: str, man
             raise ValueError(f"approval integrity is {status}; approval does not match candidate effective manifest")
 
 
+def _validate_static_review_gate(args: argparse.Namespace, window: dict[str, Any]) -> None:
+    """Honor the static Review Packet when one exists for a candidate version.
+
+    Existing projects that have not enabled domain packets keep the legacy
+    review_approval path.  Once a packet is prepared for a candidate version,
+    accept-window cannot bypass its derived Gate.
+    """
+
+    if not getattr(args, "catalog", None) or not getattr(args, "catalog_html_out", None):
+        return
+    from lib_guard.review.static_packet import find_static_gate
+
+    catalog = load_catalog_view(args.catalog)
+    html_out = Path(args.catalog_html_out)
+    review_root = html_out.parent.parent / "reviews" if html_out.name == "html" and html_out.parent.name == "catalog" else html_out / "reviews"
+    for version in _window_versions(window):
+        gate = find_static_gate(catalog, args.library, version, review_root=review_root)
+        if gate and str(gate.get("status") or "").upper() != "APPROVED":
+            raise ValueError(
+                f"accept-window requires Review Gate APPROVED for {version}; "
+                f"current status is {gate.get('status') or 'WAITING'}. "
+                "运行 lg review submit 后再运行 lg review collect。"
+            )
+
+
 def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], window: dict[str, Any], reason: str) -> None:
     if not getattr(args, "catalog", None) or not getattr(args, "library", None) or not getattr(args, "catalog_html_out", None):
         return
@@ -863,7 +917,7 @@ def cmd_accept(args: argparse.Namespace) -> int:
         raise ValueError(f"window file not found or empty: {args.window_file}")
     unknowns = _unknown_package_versions(data)
     if unknowns:
-        raise ValueError("accept-window requires confirmed package_type for: " + ", ".join(unknowns))
+        raise ValueError("接受接入窗口前必须确认以下版本的包类型：" + ", ".join(unknowns))
     manifest = (data.get("candidate_effective") or {}).get("manifest")
     if not manifest:
         raise ValueError("pending window has no candidate effective manifest")
@@ -888,6 +942,7 @@ def cmd_accept(args: argparse.Namespace) -> int:
     if not compare or not compare_manifest_path or not compare_manifest_path.exists():
         raise ValueError("accept-window requires fresh effective compare evidence; run lg next <LIBRARY> --apply --rebuild")
     _validate_accept_compare(data, compare_manifest_path)
+    _validate_static_review_gate(args, data)
     effective_manifest = read_json(manifest_path, {}) or {}
     identity = effective_identity_for_manifest(manifest_path, effective_manifest)
     if not identity["valid"]:
@@ -944,7 +999,7 @@ def cmd_accept(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Review-window intake tools")
+    parser = argparse.ArgumentParser(description="接入窗口工具")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_common(p: argparse.ArgumentParser) -> None:

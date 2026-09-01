@@ -57,12 +57,19 @@ def status_label(value: Any) -> str:
         "NEEDS_REVIEW": "需审阅", "REVIEW_REQUIRED": "需审阅", "USAGE_REVIEW_REQUIRED": "需审查后使用", "MANUAL_REVIEW": "需人工确认",
         "NEEDS_BASE_CONFIRM": "需确认基准版", "LARGE_CHANGE": "变化过大", "DIFF_EXPLOSION": "变化异常", "PATH_RESTRUCTURE": "疑似目录重组", "SCAN_EVIDENCE_INCOMPLETE": "扫描证据不完整", "FILE_DIFF_RECOMMENDED": "建议查看重点文件", "RELEASE_CHECK_REQUIRED": "发布前检查",
         "RELEASED": "已发布", "RELEASE_BLOCKED": "发布阻塞", "RELEASE_NOT_APPLICABLE": "未接入正式发布", "APPLIED": "已应用", "DRY_RUN": "预演",
+        "WAITING": "待审查", "APPROVED": "已通过", "QUESTION": "待回答", "WAIVED": "已豁免",
+        "INFO": "信息", "BLOCKER": "阻塞项", "REVIEW_REQUIRED": "需审查",
+        "FULL": "完整包", "FULL_PACKAGE": "完整包", "FIX": "修复包", "HOTFIX": "热修复包",
+        "PARTIAL": "增量包", "PARTIAL_UPDATE": "增量更新包", "DOC_UPDATE": "文档更新", "DOC_ONLY": "仅文档",
+        "SCAN_PASS": "扫描通过", "SCAN_FAILED": "扫描失败", "SCAN_EMPTY": "扫描为空", "DIFF_NOT_RUN": "尚未对比",
+        "NO_DIFF_SUMMARY": "缺少对比摘要", "NONE": "无", "CURRENT": "当前", "ADDED": "新增", "REMOVED": "删除",
+        "SUMMARY_ONLY": "摘要级证据", "METADATA_ONLY": "元数据级证据",
         "PASS_WITH_WARNING": "通过有注意项", "WARNING": "注意", "WARN": "注意", "PENDING": "待处理",
         "MISSING": "缺失", "EXTRA": "多余", "BROKEN": "断链", "MISMATCH": "不匹配",
         "TARGET_MATCH": "目标一致", "TARGET_MISMATCH": "目标不一致", "FAILED": "失败", "ERROR": "错误",
         "BLOCK": "阻塞", "BLOCKED": "阻塞", "UNKNOWN": "未确认", "FOUND": "已发现", "CLEAR": "无注意项",
         "NOT_APPLICABLE": "不适用", "EMPTY": "空", "NA": "不适用", "INFO": "信息",
-        "initial": "initial", "stable": "stable", "final": "final", "ad-hoc": "ad-hoc", "dated": "dated",
+        "initial": "初始", "stable": "稳定", "final": "最终", "ad-hoc": "临时", "dated": "按日期", "unknown": "未知",
     }
     return labels.get(text, labels.get(text.upper(), text))
 
@@ -450,6 +457,7 @@ a{color:inherit;text-decoration:none} p{margin:0;color:var(--muted)} code,.mono,
 @media(max-width:760px){.panel-head h2{overflow-wrap:anywhere;word-break:break-word}.panel-head p{overflow-wrap:anywhere}}
 @media(max-width:640px){.hero{display:block}.hero-status{margin-top:12px}.compact-meta em{white-space:normal;overflow-wrap:anywhere}.search{min-width:0;width:100%}.metric-value{white-space:normal;overflow-wrap:anywhere}}
 .faceted-table-tools{position:sticky;top:0;z-index:5;background:rgba(247,248,251,.94);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:12px;padding:8px;align-items:center}.facet-selects{display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1 1 auto}.facet-selects select{max-width:190px;border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 9px;color:#344054;font-size:12px}.table-count{font-size:12px;color:#667085;font-weight:800;white-space:nowrap}.table-reset{min-height:32px}.faceted-table-tools+.version-scroll-table,.faceted-table-tools+.table-wrap{margin-top:0}
+.view-delta-filter-bar{display:grid;grid-template-columns:minmax(190px,.7fr) minmax(0,2.3fr);gap:10px;align-items:center;margin:0 0 12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#f8fafc}.view-delta-filter-head b{display:block;color:#344054;font-size:12px}.view-delta-filter-head span{display:block;margin-top:2px;color:#667085;font-size:11px;line-height:1.45}.view-delta-filter-controls{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.view-delta-search,.view-delta-select{display:flex;align-items:center;gap:6px;min-height:32px;border:1px solid var(--line);border-radius:8px;background:#fff;padding:5px 8px}.view-delta-search{min-width:220px;flex:1 1 240px}.view-delta-search span,.view-delta-select span{color:#667085;font-size:11px;font-weight:800;white-space:nowrap}.view-delta-search input{width:100%;min-width:0;border:0;outline:0;background:transparent;font-size:12px}.view-delta-select select{min-width:145px;border:0;outline:0;background:transparent;color:#344054;font-size:12px}.view-delta-check{display:inline-flex;align-items:center;gap:5px;color:#475467;font-size:12px;font-weight:700;white-space:nowrap}.view-delta-check input{accent-color:#155eef}.view-delta-filter-count{margin-left:auto;color:#667085;font-size:11px;font-weight:800;white-space:nowrap}.view-delta-totals{grid-column:2;display:flex;gap:6px;flex-wrap:wrap;align-items:center}.view-delta-total{display:inline-flex;align-items:baseline;gap:4px;padding:3px 7px;border:1px solid transparent;border-radius:5px;font-size:11px;font-weight:700}.view-delta-total b{font-size:13px;font-variant-numeric:tabular-nums}.view-delta-total.added{color:#087443;background:#e9f7f0}.view-delta-total.removed{color:#ae3b2c;background:#fff0ed}.view-delta-total.changed{color:#a35c08;background:#fff3df}.view-delta-total.path-changed{color:#315ea8;background:#eef4ff}.view-delta-total.neutral{color:#667085;background:#f2f4f7}.view-delta-filter-empty{margin-top:10px;padding:18px;text-align:center;border:1px dashed var(--line);border-radius:8px;color:#667085;background:#fbfcfd}.view-delta-filter-bar+.view-delta-scroll-note{margin-top:0}
 @media(max-width:760px){.faceted-table-tools{align-items:stretch}.faceted-table-tools .search,.facet-selects,.facet-selects select,.table-reset{width:100%;max-width:none}.facet-selects{display:grid;grid-template-columns:1fr}}
 """
 
@@ -595,10 +603,52 @@ function resetTableFilters(tableId){
   Array.from(facetHolder ? facetHolder.querySelectorAll('select') : []).forEach(function(select){select.value='';});
   applyTableFilters(tableId);
 }
+function viewDeltaFilterRoot(){
+  return document.querySelector('[data-view-delta-filter]');
+}
+function filterViewDelta(){
+  var filter=viewDeltaFilterRoot(); if(!filter) return;
+  var section=filter.closest('[data-section="view-delta"]')||document;
+  var table=section.querySelector('.view-delta-table'); if(!table) return;
+  var q=((filter.querySelector('[data-view-search]')||{}).value||'').toLowerCase().trim();
+  var change=(filter.querySelector('[data-change-filter]')||{}).value||'all';
+  var view=(filter.querySelector('[data-view-type-filter]')||{}).value||'all';
+  var only=!!(filter.querySelector('[data-only-changes]')||{}).checked;
+  var rows=Array.from(table.querySelectorAll('tbody tr[data-view-type]'));
+  var visible=0;
+  rows.forEach(function(row){
+    var kinds=(row.getAttribute('data-change-kinds')||'current').split(/\s+/);
+    var viewHit=view==='all'||row.getAttribute('data-view-type')===view;
+    var changeHit=change==='all'||kinds.indexOf(change)>=0;
+    var onlyHit=!only||row.getAttribute('data-has-change')==='1';
+    var searchText=(row.getAttribute('data-view-search')||row.textContent||'').toLowerCase();
+    var searchHit=!q||searchText.indexOf(q)>=0;
+    var show=viewHit&&changeHit&&onlyHit&&searchHit;
+    row.hidden=!show;
+    row.classList.toggle('is-hidden-by-filter',!show);
+    if(show) visible++;
+  });
+  var count=filter.querySelector('[data-view-delta-count]');
+  if(count) count.textContent='显示 '+visible+' / '+rows.length+' 个视图';
+  var empty=section.querySelector('[data-view-delta-filter-empty]');
+  if(empty) empty.hidden=visible!==0||rows.length===0;
+}
+function resetViewDeltaFilters(){
+  var filter=viewDeltaFilterRoot(); if(!filter) return;
+  var input=filter.querySelector('[data-view-search]'); if(input) input.value='';
+  var change=filter.querySelector('[data-change-filter]'); if(change) change.value='all';
+  var view=filter.querySelector('[data-view-type-filter]'); if(view) view.value='all';
+  var only=filter.querySelector('[data-only-changes]'); if(only) only.checked=false;
+  filterViewDelta();
+}
+function initViewDeltaFilters(){
+  if(viewDeltaFilterRoot()) filterViewDelta();
+}
 function initFacetedTables(){
   document.querySelectorAll('table[data-filterable-table]').forEach(initFacetedTable);
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', initFacetedTables); else initFacetedTables();
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', initViewDeltaFilters); else initViewDeltaFilters();
 function filterComparisons(mode, btn){
   document.querySelectorAll('.filter-chip').forEach(function(x){x.classList.remove('active')}); if(btn) btn.classList.add('active');
   document.querySelectorAll('.timeline-card').forEach(function(card){ var show=mode==='all' || card.getAttribute('data-mode')===mode; card.style.display=show?'':'none'; });
