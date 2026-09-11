@@ -58,9 +58,9 @@ class StaticReviewPacketTest(unittest.TestCase):
                     "review_owner: ip_owner",
                     "max_review_items: 10",
                     "routing:",
-                    "  timing: Timing",
-                    "  physical: Physical",
-                    "  integration: Integration",
+                    "  liberty: Timing",
+                    "  lef: Physical",
+                    "  unknown: Integration",
                 ]
             )
             + "\n",
@@ -188,9 +188,30 @@ class StaticReviewPacketTest(unittest.TestCase):
             from lib_guard.review.static_packet import prepare_review_packet
 
             first = prepare_review_packet(catalog, "demo", "target", review_root=root / "reviews", policy_path=policy)
-            policy.write_text(policy.read_text(encoding="utf-8").replace("timing: Timing", "timing: Integration"), encoding="utf-8")
+            policy.write_text(policy.read_text(encoding="utf-8").replace("liberty: Timing", "liberty: Integration"), encoding="utf-8")
             second = prepare_review_packet(catalog, "demo", "target", review_root=root / "reviews", policy_path=policy)
             self.assertNotEqual(first["packet_id"], second["packet_id"])
+
+    def test_explicit_policy_is_the_only_routing_source(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog, _target_scan, _base_scan, policy = self._fixture(root)
+            policy.write_text(
+                "version: review-policy-test.v2\n"
+                "review_owner: ip_owner\n"
+                "max_review_items: 10\n"
+                "routing:\n"
+                "  unknown: CustomReview\n",
+                encoding="utf-8",
+            )
+            from lib_guard.review.static_packet import prepare_review_packet
+
+            prepared = prepare_review_packet(catalog, "demo", "target", review_root=root / "reviews", policy_path=policy)
+            items = (Path(prepared["packet_dir"]) / "review_items.tsv").read_text(encoding="utf-8")
+
+            self.assertIn("CustomReview", items)
+            self.assertNotIn("Timing", items)
+            self.assertNotIn("Physical", items)
 
     def test_compare_evidence_change_invalidates_packet(self) -> None:
         with tempfile.TemporaryDirectory() as td:

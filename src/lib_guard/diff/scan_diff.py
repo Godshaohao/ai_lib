@@ -15,6 +15,7 @@ from .pairwise import build_pairwise_diff_tasks, build_pairwise_task_status
 METADATA_ONLY_TYPES = set(BINARY_METADATA_ONLY_TYPES)
 SUMMARY_ONLY_DIFF_TYPES = set(SUMMARY_ONLY_TYPES)
 RELEASE_EVIDENCE_TYPES = {"doc", "waiver"}
+OVERLAY_PACKAGE_TYPES = {"PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "DOC_ONLY"}
 
 # These names are view directories, not delivery-package roots.  A single
 # non-view top-level directory can safely be removed from the logical path
@@ -466,6 +467,7 @@ def _file_diff(
     *,
     old_meta: Mapping[str, Any] | None = None,
     new_meta: Mapping[str, Any] | None = None,
+    new_version_type: str | None = None,
 ) -> dict[str, Any]:
     old_files = _inventory_index(old_scan)
     new_files = _inventory_index(new_scan)
@@ -579,7 +581,21 @@ def _file_diff(
             }
         )
     added = sorted(raw_added - moved_new - paired_new)
-    removed = sorted(raw_removed - moved_old - paired_old)
+    normalized_version_type = str(new_version_type or "").upper()
+    overlay_mode = normalized_version_type in OVERLAY_PACKAGE_TYPES
+    old_inventory_count = len(old_files)
+    new_inventory_count = len(new_files)
+    suspicious_full_shrink = (
+        normalized_version_type == "FULL_PACKAGE"
+        and old_inventory_count >= 20
+        and new_inventory_count * 2 < old_inventory_count
+    )
+    omitted_from_overlay = (
+        sorted(raw_removed - moved_old - paired_old - metadata_old)
+        if overlay_mode or suspicious_full_shrink
+        else []
+    )
+    removed = [] if overlay_mode or suspicious_full_shrink else sorted(raw_removed - moved_old - paired_old)
     added = sorted(set(added) - metadata_new)
     removed = sorted(set(removed) - metadata_old)
     unchanged = sorted(unchanged)
@@ -603,6 +619,15 @@ def _file_diff(
         "package_root_migrations": package_root_migrations,
         "unchanged": unchanged,
         "unverified": unverified,
+        "comparison_semantics": (
+            "overlay"
+            if overlay_mode
+            else "needs_package_confirmation"
+            if suspicious_full_shrink
+            else "complete_snapshot"
+        ),
+        "omitted_from_overlay": omitted_from_overlay,
+        "package_scope_suspect": suspicious_full_shrink,
         "metadata_only_changed": metadata_only,
         "logical_package_roots": {
             "old": old_package_root,
@@ -618,6 +643,11 @@ def _file_diff(
             "package_root_migration_matched_files": package_root_migration_matched_files,
             "unchanged": len(unchanged),
             "unverified": len(unverified),
+            "omitted_from_overlay": len(omitted_from_overlay),
+            "raw_removed": len(raw_removed),
+            "package_scope_suspect": int(suspicious_full_shrink),
+            "old_inventory": old_inventory_count,
+            "new_inventory": new_inventory_count,
             "metadata_match_candidates": len(metadata_candidates),
             "metadata_only_changed": len(metadata_only),
         },
@@ -1127,6 +1157,21 @@ def _diff_issues(
                 count=unverified_count,
             )
         )
+    if (file_diff.get("counts") or {}).get("package_scope_suspect"):
+        counts = file_diff.get("counts") or {}
+        issues.append(
+            _issue(
+                "blocker",
+                "package_scope",
+                "完整包文件数量显著缩小，暂不判定旧文件删除",
+                (
+                    f"完整包扫描文件数从 {counts.get('old_inventory', '?')} 缩小到 "
+                    f"{counts.get('new_inventory', '?')}；请确认这是完整替换还是增量包。"
+                ),
+                omitted_files=counts.get("omitted_from_overlay", 0),
+                recommended_action="确认包类型后重新对比",
+            )
+        )
     for path in file_diff.get("removed", []) or []:
         issues.append(_issue("warning", "file", "文件缺失", f"removed file: {path}", file=path))
     for path in file_diff.get("metadata_only_changed", []) or []:
@@ -1226,6 +1271,10 @@ def _diff_summary(
         "changed_files": file_diff["counts"]["changed"],
         "unverified_files": file_diff["counts"].get("unverified", 0),
         "renamed_or_moved": file_diff["counts"].get("renamed_or_moved", 0),
+        "comparison_semantics": file_diff.get("comparison_semantics", "complete_snapshot"),
+        "omitted_from_overlay_files": file_diff["counts"].get("omitted_from_overlay", 0),
+        "raw_removed_files": file_diff["counts"].get("raw_removed", file_diff["counts"].get("removed", 0)),
+        "package_scope_suspect": file_diff["counts"].get("package_scope_suspect", 0),
         "package_root_migrations": file_diff["counts"].get("package_root_migrations", 0),
         "package_root_migration_matched_files": file_diff["counts"].get("package_root_migration_matched_files", 0),
         "added_components": component_diff["counts"]["added"],
@@ -1353,7 +1402,13 @@ def diff_scan_outputs(
         "base_version": None,
     }
     relation.update(version_relation or {})
-    file_diff = _file_diff(old, new, old_meta=old_meta, new_meta=new_meta)
+    file_diff = _file_diff(
+        old,
+        new,
+        old_meta=old_meta,
+        new_meta=new_meta,
+        new_version_type=str(relation.get("new_version_type") or ""),
+    )
     component_diff = _component_diff(old, new, old_meta, new_meta)
     signature_diff = _signature_diff(old, new)
     parser_quality = _parser_quality_diff(old, new)

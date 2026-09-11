@@ -7,22 +7,21 @@ from unittest.mock import patch
 
 
 class VersionDetailUiContractTest(unittest.TestCase):
-    def test_web_console_exposes_one_click_review_sequence_and_manual_write_controls(self) -> None:
+    def test_web_console_exposes_parallel_version_actions_and_manual_write_controls(self) -> None:
         template = Path(__file__).resolve().parents[1] / "web" / "templates" / "index.html"
         html = template.read_text(encoding="utf-8")
         javascript = (template.parent.parent / "static" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('id="review-sequence-button"', html)
-        self.assertIn('data-sequence-action="review"', html)
-        self.assertIn("扫描和对比", html)
-        self.assertIn("正式发布检查单独执行", html)
+        self.assertIn('id="open-version-detail-button"', html)
+        self.assertIn("所有动作都可从这里发起", html)
+        self.assertIn("不代表它们属于同一处理阶段", html)
         self.assertIn('data-workflow-action="next-apply"', html)
-        self.assertIn("人工确认", html)
-        self.assertIn("runReviewSequence", javascript)
-        self.assertIn("const scan = await runAction('scan')", javascript)
-        self.assertIn("state.selectedVersion.scan_evidence_ready", javascript)
-        self.assertIn("const compare = await runAction('compare')", javascript)
-        self.assertNotIn("const release = await runAction('release-check')", javascript)
+        self.assertIn("审查记录", html)
+        self.assertIn("openVersionDetail", javascript)
+        self.assertNotIn("runReviewSequence", javascript)
+        self.assertNotIn("data-sequence-action", html + javascript)
+        self.assertNotIn("const scan = await runAction('scan')", javascript)
+        self.assertNotIn("const compare = await runAction('compare', { scan_if_missing: true, rescan: false })", javascript)
 
     def test_review_report_has_fixed_sections_and_reconciled_counts(self) -> None:
         from lib_guard.render.version_review_model import build_ip_user_view_model, build_review_report

@@ -619,14 +619,23 @@ class ScanRunner:
 
     def _parser_cache_key(self, record: Any, task: Any, parser_schema_version: str, context: ScanContext) -> str:
         parser_config_hash = self._parser_config_hash(context)
+        content_hash = str(_get(record, "hash") or "")
+        # Smart scan deliberately skips content hashing for large EDA views.
+        # A missing hash is not an identity: many delivered files share the
+        # same timestamp. Keep their relative path and size in the cache key
+        # so a parser result cannot be reused for a different file.
+        file_identity = (
+            f"hash:{content_hash}"
+            if content_hash
+            else f"path:{_record_path(record)}|size:{_get(record, 'size_bytes')}|mtime:{_get(record, 'mtime')}"
+        )
         parts = {
             "cache_namespace": "parser_v2",
             "parser_name": task.parser_name,
             "parser_version": task.parser_version,
             "parser_schema_version": parser_schema_version,
             "parser_config_hash": parser_config_hash,
-            "file_hash": _get(record, "hash", _record_path(record)),
-            "mtime": _get(record, "mtime"),
+            "file_identity": file_identity,
         }
         return "|".join(f"{key}={parts[key]}" for key in sorted(parts))
 

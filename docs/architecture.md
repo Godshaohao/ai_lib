@@ -261,3 +261,38 @@ File Diff 推荐默认只是 attention item，不等同 blocker。
 2. 是否引入了新的事实源？如果是，为什么不能复用已有 artifact？
 3. 是否会让单版本热路径退化成全量 catalog render？
 4. 是否有测试覆盖 stale render、错误 base、缺 scan/diff、unknown 文件和大文件 lane？
+
+## 稳定工程契约
+
+项目对外稳定面只有四类：
+
+| 契约 | 唯一实现 | 兼容要求 |
+| --- | --- | --- |
+| Workspace 配置 | `short_cli_config.WorkspaceConfig` | `load_config()` 继续返回旧字典结构 |
+| 命令入口 | `short_cli.main`, `cli.main` | `lg.csh` 只是环境包装，业务入口由 `pyproject.toml` 声明 |
+| 运行产物导航 | `artifacts.build_run_manifest()` | 新字段只做加法，历史字段继续保留 |
+| 用户判断投影 | Version Detail review model | Web、Catalog 和 Markdown 不得产生第二套使用判断 |
+
+新增脚本必须选择并且只拥有一个阶段：Catalog、Scan、Diff、Review/Effective、Release
+或 Render/Web。跨阶段调用只能消费前一阶段公开的结构化产物，不能读取页面文字、扫描目录名
+或控制台输出推断业务状态。
+
+`run_manifest.json` 统一包含 `producer`、`generated_at` 和 `identity`。其中
+`identity.library_id/version_id/run_id/evidence_id` 用于关联一次运行，不替代各事实文件自身的
+业务字段。Schema 位于 `src/lib_guard/schemas/run_manifest.v1.schema.json`，并随 Python 包发布。
+
+## 标准变更流程
+
+每次变更先写清目标用户、主判断、所属阶段、事实输入、事实输出和投影影响。新增脚本按以下
+顺序接入：
+
+1. 业务函数放入唯一所属阶段，接收显式参数并返回字典或 dataclass。
+2. `cli_commands/` 只做参数适配；成功返回 `0`，用户输入或契约错误返回 `2`，中断返回 `130`。
+3. 只有日常高频操作才能增加 short CLI；短命令只解析参数和展开底层命令。
+4. Web 只能调用 `WEB_ACTION_SPECS` 明确登记的命令，不重新实现业务判断。
+5. 事实使用原子写入；页面刷新通过 `RenderImpact` 声明，单版本操作不得触发全量 Catalog。
+6. scan、compare、release 运行通过 `run_manifest.json` 关联输入、事实、报告和投影。
+
+完成定义固定包含：单元测试、契约测试、架构不变量测试、投影重建测试和一个真实库 smoke。
+合入前运行 `compileall`、全量 `unittest`、短命令帮助和底层 CLI 帮助。PR 必须说明事实层影响、
+投影影响、兼容性和验证证据。

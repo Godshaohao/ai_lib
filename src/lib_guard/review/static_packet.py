@@ -24,29 +24,7 @@ from lib_guard.atomic import atomic_write_json, atomic_write_text
 PACKET_SCHEMA = "review_packet.v1"
 GATE_SCHEMA = "review_gate.v1"
 DECISIONS = {"PASS", "BLOCK", "QUESTION"}
-VIEW_DEPARTMENTS = {
-    "liberty": "Timing",
-    "lib": "Timing",
-    "spef": "Timing",
-    "lef": "Physical",
-    "gds": "Physical",
-    "oas": "Physical",
-    "db": "Physical",
-    "ndm": "Physical",
-    "layout": "Physical",
-    "milkyway": "Physical",
-    "verilog": "Integration",
-    "systemverilog": "Integration",
-    "sdc": "Constraint",
-    "upf": "Constraint",
-    "cpf": "Constraint",
-    "cdl": "Circuit",
-    "spice": "Circuit",
-    "sp": "Circuit",
-    "doc": "Documentation",
-    "waiver": "Documentation",
-    "unknown": "Integration",
-}
+DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[3] / "configs" / "review_policy.yaml"
 
 
 def utc_now() -> str:
@@ -114,7 +92,13 @@ def _yaml_scalar(value: str) -> Any:
 
 
 def _read_simple_policy_yaml(path: Path) -> dict[str, Any]:
-    """Read the small review policy schema without requiring PyYAML."""
+    """Read the fixed policy schema used by core installs without PyYAML.
+
+    The core CLI has no third-party dependency contract; only ``version``,
+    ``review_owner``, ``max_review_items`` and one-level ``routing`` are
+    accepted here. Web-only Flask installation must not become a core runtime
+    requirement.
+    """
 
     data: dict[str, Any] = {}
     section: str | None = None
@@ -143,20 +127,13 @@ def _read_simple_policy_yaml(path: Path) -> dict[str, Any]:
 
 
 def _load_policy(path: str | Path | None) -> dict[str, Any]:
-    if not path:
-        return {
-            "version": "review-policy.v1",
-            "review_owner": "library_owner",
-            "max_review_items": 10,
-            "routing": dict(VIEW_DEPARTMENTS),
-        }
-    policy_path = Path(path)
+    policy_path = Path(path) if path else DEFAULT_POLICY_PATH
     if not policy_path.is_file():
         return {
             "version": "review-policy.v1",
             "review_owner": "library_owner",
             "max_review_items": 10,
-            "routing": dict(VIEW_DEPARTMENTS),
+            "routing": {"unknown": "Integration"},
         }
     try:
         import yaml
@@ -174,7 +151,7 @@ def _load_policy(path: str | Path | None) -> dict[str, Any]:
     result.setdefault("review_owner", "library_owner")
     result.setdefault("max_review_items", 10)
     routing = result.get("routing")
-    result["routing"] = dict(routing) if isinstance(routing, Mapping) else dict(VIEW_DEPARTMENTS)
+    result["routing"] = dict(routing) if isinstance(routing, Mapping) else {"unknown": "Integration"}
     return result
 
 
@@ -348,16 +325,11 @@ def _view_rows(version: Mapping[str, Any]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: (row["view_type"], row["added"], row["removed"], row["changed"]))
 
 
-def _department(view_type: str, policy: Mapping[str, Any]) -> str:
-    routing = policy.get("routing") if isinstance(policy.get("routing"), Mapping) else {}
-    return str(routing.get(view_type) or VIEW_DEPARTMENTS.get(view_type) or routing.get("unknown") or "Integration")
-
-
 def _departments(view_type: str, policy: Mapping[str, Any]) -> list[str]:
     routing = policy.get("routing") if isinstance(policy.get("routing"), Mapping) else {}
     configured = routing.get(view_type)
     if configured is None:
-        configured = VIEW_DEPARTMENTS.get(view_type) or routing.get("unknown") or "Integration"
+        configured = routing.get("unknown") or "Integration"
     if isinstance(configured, (list, tuple, set)):
         values = [str(item).strip() for item in configured if str(item).strip()]
     else:

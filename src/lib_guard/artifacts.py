@@ -16,6 +16,7 @@ from lib_guard.atomic import atomic_write_json
 
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 RUN_MANIFEST_SCHEMA_VERSION = "run_manifest.v1"
+RUN_MANIFEST_PRODUCER = "lib_guard"
 
 
 def _now() -> str:
@@ -74,12 +75,23 @@ def build_run_manifest(
 ) -> dict[str, Any]:
     """Build a concise machine-readable map of one operation's outputs."""
 
+    generated_at = _now()
+    normalized_run_id = str(run_id)
+    normalized_operation = str(operation)
     return {
         "schema_version": RUN_MANIFEST_SCHEMA_VERSION,
-        "created_at": _now(),
-        "operation": str(operation),
+        "producer": RUN_MANIFEST_PRODUCER,
+        "generated_at": generated_at,
+        "created_at": generated_at,
+        "operation": normalized_operation,
         "status": str(status),
-        "run_id": str(run_id),
+        "run_id": normalized_run_id,
+        "identity": {
+            "library_id": str(library_name or ""),
+            "version_id": str(version or ""),
+            "run_id": normalized_run_id,
+            "evidence_id": f"{normalized_operation}:{normalized_run_id}",
+        },
         "library": {
             "type": str(library_type or ""),
             "name": str(library_name or ""),
@@ -190,6 +202,7 @@ def compare_artifacts(diff_dir: str | Path, *, compare_html: str | None = None) 
 __all__ = [
     "RUN_MANIFEST_FILENAME",
     "RUN_MANIFEST_SCHEMA_VERSION",
+    "RUN_MANIFEST_PRODUCER",
     "build_run_manifest",
     "canonical_diff_dir",
     "canonical_scan_dir",

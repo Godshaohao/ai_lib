@@ -388,18 +388,6 @@ def build_review_gate_for_version(
             )
         )
 
-    release_status = str(version.get("release_status") or "")
-    if release_status in {"RELEASE_BLOCKED", "RELEASE_VERIFY_FAILED"}:
-        blocking_items.append(
-            _gate_item(
-                f"release.fatal:{version_id}",
-                category="release",
-                title="发布证据阻塞或失败",
-                message=f"release_status={release_status}",
-                fatal=True,
-            )
-        )
-
     # Metadata-only changes are useful review evidence, but they do not prove
     # that an IP is unusable and therefore belong in the attention lane.
     attention_items.extend(_metadata_gate_items(_diff_dir(version)))
@@ -702,6 +690,7 @@ def build_review_version_state(
     out_dir: str | Path | None = None,
     library: str,
     version: str,
+    runtime_merged: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return an enriched ``(library, version)`` pair for one Version Detail.
 
@@ -710,7 +699,8 @@ def build_review_version_state(
     the correct dependency for hot-path Version Detail renders.
     """
 
-    catalog = merge_catalog_runtime(catalog)
+    if not runtime_merged:
+        catalog = merge_catalog_runtime(catalog)
     selected_lib: Mapping[str, Any] | None = None
     for lib in catalog.get("libraries", []) or []:
         if isinstance(lib, Mapping) and _selector_matches(_library_selector_aliases(lib), library):

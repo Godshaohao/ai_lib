@@ -65,17 +65,52 @@ class WebReadModelTest(unittest.TestCase):
 
             row = list_library_rows(state)[0]
 
-        self.assertEqual(row["review_pending_count"], 1)
+        self.assertEqual(row["workflow_pending_count"], 1)
+
+    def test_library_rows_expose_asset_facets_for_web_navigation(self) -> None:
+        from lib_guard.web.read_model import list_library_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            state = {
+                "catalog_html": Path(td),
+                "catalog": {
+                    "libraries": [
+                        {
+                            "library_name": "Vendor_A.ucie",
+                            "root_abs": "/proj/libs/Vendor_A/ucie",
+                            "vendor": "Vendor_A",
+                            "category": "IP",
+                            "library_type": "UCIE",
+                            "platform": "N7",
+                            "summary": {"version_count": 1, "latest_version": "v2"},
+                            "versions": [
+                                {
+                                    "version_id": "v2",
+                                    "release": {"status": "RELEASE_BLOCKED", "check_status": "BLOCKED"},
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+
+            row = list_library_rows(state)[0]
+
+        self.assertEqual(row["root_abs"], "/proj/libs/Vendor_A/ucie")
+        self.assertEqual(row["library_type"], "UCIE")
+        self.assertEqual(row["platform"], "N7")
+        self.assertEqual(row["release_blocked_count"], 1)
+        self.assertEqual(row["has_current_effective"], False)
 
     def test_initial_baseline_has_own_review_label_without_comparison(self) -> None:
-        from lib_guard.web.read_model import _review_decision
+        from lib_guard.web.read_model import _workflow_status
 
         with tempfile.TemporaryDirectory() as td:
             scan_dir = Path(td) / "scan"
             scan_dir.mkdir()
             (scan_dir / "file_inventory.json").write_text(json.dumps({"files": []}), encoding="utf-8")
 
-            result = _review_decision(
+            result = _workflow_status(
                 {
                     "scan": {"status": "SCANNED", "scan_dir": str(scan_dir)},
                     "diff": {"adjacent_status": "NOT_APPLICABLE"},
@@ -117,17 +152,34 @@ class WebReadModelTest(unittest.TestCase):
         self.assertIn("先完成扫描", unscanned["release-check"]["reason"])
 
     def test_unscanned_version_prioritizes_scan_before_missing_base(self) -> None:
-        from lib_guard.web.read_model import _action_readiness, _review_decision
+        from lib_guard.web.read_model import _action_readiness, _workflow_status
 
         version = {"scan": {"status": "NOT_SCANNED"}}
         readiness = _action_readiness(version)
 
         self.assertIn("先完成扫描", readiness["compare"]["reason"])
-        self.assertEqual(_review_decision(version)["label"], "待生成扫描")
-        self.assertEqual(_review_decision(version)["next_action"], "生成扫描")
+        self.assertEqual(_workflow_status(version)["label"], "待生成扫描")
+        self.assertEqual(_workflow_status(version)["next_action"], "生成扫描")
+
+    def test_scanned_catalog_record_without_evidence_requires_rescan(self) -> None:
+        from lib_guard.web.read_model import _action_readiness, _change_summary, _workflow_status, scan_evidence_ready
+
+        version = {
+            "scan": {"status": "SCANNED", "scan_dir": "/tmp/lib_guard_missing_scan_evidence"},
+            "diff": {"base_version": "v1", "base_status": "DIFF_DONE"},
+        }
+        readiness = _action_readiness(version)
+
+        self.assertFalse(scan_evidence_ready(version))
+        self.assertEqual(readiness["scan"]["label"], "补扫")
+        self.assertIn("证据文件不可用", readiness["scan"]["reason"])
+        self.assertEqual(readiness["compare"]["enabled"], False)
+        self.assertEqual(readiness["release-check"]["enabled"], False)
+        self.assertEqual(_change_summary(version, scan_ready=False), "对比记录待验证")
+        self.assertEqual(_workflow_status(version, scan_ready=False)["label"], "需补扫")
 
     def test_explicit_effective_pointer_overrides_catalog_review_flag(self) -> None:
-        from lib_guard.web.read_model import _review_decision
+        from lib_guard.web.read_model import _workflow_status
 
         with tempfile.TemporaryDirectory() as td:
             scan_dir = Path(td) / "scan"
@@ -140,7 +192,7 @@ class WebReadModelTest(unittest.TestCase):
                 "release": {"check_status": "UNKNOWN"},
             }
 
-            self.assertEqual(_review_decision(version, current_effective=True)["label"], "当前有效版")
+            self.assertEqual(_workflow_status(version, current_effective=True)["label"], "当前可用版本")
 
     def test_completed_compare_and_release_results_get_repeat_labels(self) -> None:
         from lib_guard.web.read_model import _action_readiness, _diff_status
@@ -167,6 +219,16 @@ class WebReadModelTest(unittest.TestCase):
         }
         self.assertEqual(_diff_status(version), "PENDING")
         self.assertEqual(_diff_status(version, "cumulative"), "DIFF_DONE")
+
+        same_base = {
+            "diff": {
+                "adjacent_old_version": "v1",
+                "adjacent_status": "PENDING",
+                "base_version": "v1",
+                "base_status": "DIFF_DONE",
+            }
+        }
+        self.assertEqual(_diff_status(same_base), "DIFF_DONE")
 
     def test_malformed_pending_window_is_visible_as_invalid(self) -> None:
         from lib_guard.web.read_model import _pending_window
@@ -196,6 +258,96 @@ class WebReadModelTest(unittest.TestCase):
                     cwd=td,
                 )
 
+    def test_missing_catalog_can_be_loaded_as_explicit_bootstrap_state(self) -> None:
+        from lib_guard.web.read_model import load_web_state
+
+        with tempfile.TemporaryDirectory() as td:
+            catalog = Path(td) / "catalog" / "catalog.json"
+
+            state = load_web_state(
+                config={"catalog": str(catalog), "workspace": td, "raw_root": td},
+                cwd=td,
+                allow_missing_catalog=True,
+            )
+
+        self.assertEqual(state["catalog"]["libraries"], [])
+        self.assertEqual(state["catalog_state"], "NOT_INITIALIZED")
+        self.assertEqual(state["runtime_state"]["status"], "MISSING")
+
+    def test_library_candidate_snapshot_is_read_only_and_enriches_rows(self) -> None:
+        """Candidate display reads the saved snapshot; it never walks RAW again."""
+
+        from lib_guard.library_registry import write_library_rows
+        from lib_guard.web.read_model import list_library_candidate_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            candidate_root = root / "raw" / "Vendor_A" / "ucie"
+            candidate_root.mkdir(parents=True)
+            candidates = root / "config" / "library_candidates" / "latest.tsv"
+            registry = root / "config" / "library_registry.tsv"
+            write_library_rows(
+                candidates,
+                [{
+                    "status": "REVIEW",
+                    "library_id": "Vendor_A.ucie",
+                    "root_abs": str(candidate_root),
+                    "display_name": "ucie",
+                    "vendor": "Vendor_A",
+                    "middle_path": "",
+                }],
+            )
+            candidates.with_suffix(".json").write_text(
+                json.dumps({
+                    "warnings": ["目录遍历已受上限约束"],
+                    "truncated": False,
+                    "candidates": [{
+                        "library_id": "Vendor_A.ucie",
+                        "root_abs": str(candidate_root),
+                        "version_count": 3,
+                        "example_versions": ["v1", "v2"],
+                        "confidence": 0.92,
+                        "reason": "同级目录包含多个版本",
+                    }],
+                }),
+                encoding="utf-8",
+            )
+
+            result = list_library_candidate_rows({
+                "config": {"library_candidates": str(candidates), "library_registry": str(registry)},
+            })
+
+            self.assertEqual(result["status"], "READY")
+            self.assertEqual(result["count"], 1)
+            self.assertEqual(result["warnings"], ["目录遍历已受上限约束"])
+            row = result["candidates"][0]
+            self.assertTrue(row["candidate_id"])
+            self.assertEqual(row["version_count"], 3)
+            self.assertEqual(row["confidence"], 0.92)
+            self.assertFalse(row["already_registered"])
+
+            write_library_rows(registry, [{**row, "status": "OK"}])
+            registered = list_library_candidate_rows({
+                "config": {"library_candidates": str(candidates), "library_registry": str(registry)},
+            })
+            self.assertTrue(registered["candidates"][0]["already_registered"])
+
+            other_root = root / "raw" / "Vendor_A" / "ucie_other"
+            other_root.mkdir()
+            write_library_rows(registry, [{
+                "status": "OK",
+                "library_id": "Vendor_A.ucie",
+                "root_abs": str(other_root),
+                "display_name": "ucie_other",
+                "vendor": "Vendor_A",
+                "middle_path": "",
+            }])
+            conflicting = list_library_candidate_rows({
+                "config": {"library_candidates": str(candidates), "library_registry": str(registry)},
+            })
+            self.assertFalse(conflicting["candidates"][0]["already_registered"])
+            self.assertTrue(conflicting["candidates"][0]["name_conflict"])
+
     def test_scan_evidence_requires_this_version_inventory(self) -> None:
         from lib_guard.web.read_model import scan_evidence_ready
 
@@ -224,13 +376,13 @@ class WebReadModelTest(unittest.TestCase):
             self.assertFalse(scan_evidence_ready(version))
 
     def test_failed_compare_is_not_reported_as_completed(self) -> None:
-        from lib_guard.web.read_model import _review_decision
+        from lib_guard.web.read_model import _workflow_status
 
         with tempfile.TemporaryDirectory() as td:
             scan_dir = Path(td) / "scan"
             scan_dir.mkdir()
             (scan_dir / "file_inventory.json").write_text(json.dumps({"files": []}), encoding="utf-8")
-            result = _review_decision(
+            result = _workflow_status(
                 {
                     "scan": {"status": "SCANNED", "scan_dir": str(scan_dir)},
                     "diff": {"base_version": "base", "base_status": "FAILED"},

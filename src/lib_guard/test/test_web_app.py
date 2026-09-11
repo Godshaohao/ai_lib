@@ -12,6 +12,79 @@ LIBRARY = "vendor_A.openroad_platform.openroad_asap7"
 
 
 class WebAppTest(unittest.TestCase):
+    def test_many_libraries_and_versions_stay_browseable_with_pagination(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "work"
+            catalog_path = workspace / "catalog" / "catalog.json"
+            catalog_path.parent.mkdir(parents=True)
+            libraries = []
+            for lib_index in range(4):
+                versions = []
+                for version_index in range(50):
+                    version_id = f"202607{version_index + 1:02d}_lib{lib_index}_v{version_index + 1:02d}"
+                    previous = f"202607{version_index:02d}_lib{lib_index}_v{version_index:02d}" if version_index else ""
+                    versions.append(
+                        {
+                            "version_id": version_id,
+                            "raw_path": str(root / "raw" / f"lib{lib_index}" / version_id),
+                            "stage": "candidate" if version_index >= 45 else "stable",
+                            "package_type": "PARTIAL_UPDATE" if version_index % 5 == 0 else "FULL_PACKAGE",
+                            "current_effective": version_index == 44,
+                            "scan": {"status": "NOT_SCANNED" if version_index >= 48 else "SCANNED"},
+                            "diff": {
+                                "adjacent_old_version": previous,
+                                "adjacent_status": "PENDING" if version_index >= 45 else "DIFF_DONE",
+                            },
+                            "release": {"check_status": "RELEASE_BLOCKED" if version_index == 49 else "UNKNOWN"},
+                        }
+                    )
+                libraries.append(
+                    {
+                        "library_name": f"Vendor_{lib_index}.demo_ip",
+                        "library_id": f"ip/Vendor_{lib_index}.demo_ip",
+                        "display_name": f"demo_ip_{lib_index}",
+                        "vendor": f"Vendor_{lib_index}",
+                        "report_slug": f"ip_Vendor_{lib_index}.demo_ip",
+                        "summary": {"version_count": 50, "latest_version": versions[-1]["version_id"]},
+                        "versions": versions,
+                    }
+                )
+            catalog_path.write_text(json.dumps({"libraries": libraries}), encoding="utf-8")
+            config_path = workspace / "lib_guard.yml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {root / 'raw'}",
+                        f"catalog: {catalog_path}",
+                        f"catalog_html: {workspace / 'catalog' / 'html'}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True, "job_root": str(workspace / "jobs")})
+            client = app.test_client()
+
+            libraries_payload = client.get("/api/libraries").get_json()
+            first_page = client.get("/api/libraries/Vendor_2.demo_ip/versions", query_string={"offset": 0, "limit": 25}).get_json()
+            second_page = client.get("/api/libraries/Vendor_2.demo_ip/versions", query_string={"offset": 25, "limit": 25}).get_json()
+
+        self.assertEqual(libraries_payload["status"], "PASS")
+        self.assertEqual(len(libraries_payload["libraries"]), 4)
+        self.assertEqual({row["version_count"] for row in libraries_payload["libraries"]}, {50})
+        self.assertTrue(all(row["workflow_pending_count"] > 0 for row in libraries_payload["libraries"]))
+        self.assertEqual(first_page["pagination"]["total"], 50)
+        self.assertEqual(len(first_page["versions"]), 25)
+        self.assertEqual(first_page["pagination"]["next_offset"], 25)
+        self.assertEqual(len(second_page["versions"]), 25)
+        self.assertIsNone(second_page["pagination"]["next_offset"])
+        self.assertEqual(first_page["versions"][0]["version_id"], "20260750_lib2_v50")
+        self.assertEqual(first_page["versions"][0]["release_status"], "RELEASE_BLOCKED")
+
     def test_file_change_rows_expose_old_and_new_paths_without_reading_raw(self) -> None:
         from lib_guard.web.read_model import list_file_diff_rows
 
@@ -55,6 +128,47 @@ class WebAppTest(unittest.TestCase):
             self.assertEqual(moved["new_path"], "upstream/LEF/macro.lef")
             self.assertTrue(moved["deep_diff_available"])
             self.assertFalse(next(row for row in rows if row["change"] == "ADDED")["deep_diff_available"])
+
+    def test_file_change_page_filters_and_counts_existing_diff_evidence(self) -> None:
+        """Large change sets must be filtered before they reach the browser."""
+
+        from lib_guard.web.read_model import list_file_diff_page
+
+        with tempfile.TemporaryDirectory() as td:
+            diff_dir = Path(td) / "diff"
+            diff_dir.mkdir()
+            (diff_dir / "file_diff.json").write_text(
+                json.dumps(
+                    {
+                        "added": ["new/lef/a.lef", "new/lef/b.lef", "new/gds/top.gds"],
+                        "removed": ["old/rtl/legacy.v"],
+                        "changed": ["new/rtl/top.v", "new/rtl/helper.v"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = {
+                "catalog": {
+                    "libraries": [{"library_name": "demo", "versions": [{"version_id": "v2", "diff": {"adjacent_diff_dir": str(diff_dir)}}]}]
+                }
+            }
+
+            page = list_file_diff_page(
+                state,
+                "demo",
+                "v2",
+                change="ADDED",
+                file_type="lef",
+                query="b.lef",
+                offset=0,
+                limit=1,
+            )
+
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(page["rows"][0]["new_path"], "new/lef/b.lef")
+        self.assertEqual(page["next_offset"], None)
+        self.assertEqual(page["counts"]["by_change"], {"ADDED": 3, "REMOVED": 1, "CHANGED": 2})
+        self.assertEqual(page["counts"]["by_file_type"]["lef"], 2)
 
     def test_health_and_library_routes_are_read_only(self) -> None:
         from lib_guard.web.app import create_app
@@ -122,6 +236,232 @@ class WebAppTest(unittest.TestCase):
         self.assertTrue(payload["children"])
         self.assertTrue(all(item["path"].startswith(str(raw_root) + "/") for item in payload["children"]))
 
+    def test_new_workspace_allows_path_browse_and_library_add_before_catalog_exists(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "workspace"
+            raw_root = Path(td) / "raw"
+            library_root = raw_root / "Vendor_A" / "demo"
+            library_root.mkdir(parents=True)
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {raw_root}",
+                        f"catalog: {workspace / 'catalog' / 'catalog.json'}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(
+                config_path=config_path,
+                cwd=ROOT,
+                test_config={"TESTING": True, "job_root": str(workspace / "jobs")},
+            )
+            client = app.test_client()
+
+            workspace_response = client.get("/api/workspace")
+            browse_response = client.get("/api/path-children")
+            add_response = client.post(
+                "/api/library/add",
+                json={"library_id": "Vendor_A.demo", "root": str(library_root), "apply": True, "refresh_catalog": True},
+            )
+
+            self.assertEqual(workspace_response.status_code, 200)
+            self.assertEqual(workspace_response.get_json()["catalog_state"], "NOT_INITIALIZED")
+            self.assertEqual(browse_response.status_code, 200)
+            self.assertEqual(add_response.status_code, 202)
+
+    def test_library_discover_accepts_explicit_discover_root(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "workspace"
+            raw_root = Path(td) / "raw"
+            discover_root = raw_root / "Vendor_A"
+            discover_root.mkdir(parents=True)
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {raw_root}",
+                        f"catalog: {workspace / 'catalog' / 'catalog.json'}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(
+                config_path=config_path,
+                cwd=ROOT,
+                test_config={"TESTING": True, "job_root": str(workspace / "jobs")},
+            )
+
+            response = app.test_client().post(
+                "/api/library/discover",
+                json={"root": str(discover_root), "max_depth": 3, "min_versions": 1, "max_dirs": 99, "max_candidates": 7},
+            )
+
+            self.assertEqual(response.status_code, 202)
+            request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
+            self.assertIn("library", request["args"])
+            self.assertIn("discover", request["args"])
+            self.assertIn("--root", request["args"])
+            self.assertEqual(request["args"][request["args"].index("--root") + 1], str(discover_root.resolve()))
+            self.assertIn("--min-versions", request["args"])
+            self.assertEqual(request["args"][request["args"].index("--min-versions") + 1], "1")
+
+    def test_library_discover_defaults_to_single_version_candidates_from_config(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "workspace"
+            raw_root = Path(td) / "raw"
+            raw_root.mkdir(parents=True)
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {raw_root}",
+                        f"catalog: {workspace / 'catalog' / 'catalog.json'}",
+                        "discover_min_versions: 1",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True, "job_root": str(workspace / "jobs")})
+
+            response = app.test_client().post("/api/library/discover", json={})
+
+            self.assertEqual(response.status_code, 202)
+            request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
+            self.assertEqual(request["args"][request["args"].index("--min-versions") + 1], "1")
+
+    def test_workspace_config_update_saves_safe_defaults_and_keeps_backup(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "workspace"
+            raw_root = Path(td) / "raw"
+            raw_root.mkdir(parents=True)
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {raw_root}",
+                        f"catalog: {workspace / 'catalog' / 'catalog.json'}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True, "job_root": str(workspace / "jobs")})
+
+            response = app.test_client().post(
+                "/api/workspace/config",
+                json={
+                    "raw_root": str(raw_root),
+                    "hash_policy": "smart",
+                    "parse_jobs": 4,
+                    "force_hash_file_types": ["lef"],
+                    "skip_hash_file_types": ["gds"],
+                    "render_detail": True,
+                    "discover_min_versions": 1,
+                    "discover_max_depth": 3,
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["scan_strategy"]["parse_jobs"], "4")
+            self.assertEqual(payload["scan_strategy"]["force_hash_file_types"], "lef")
+            self.assertEqual(payload["discovery_strategy"]["min_versions"], "1")
+            self.assertEqual(payload["discovery_strategy"]["max_depth"], "3")
+            self.assertTrue(Path(payload["backup"]).is_file())
+            text = config_path.read_text(encoding="utf-8")
+            self.assertIn("discover_min_versions: 1", text)
+            self.assertIn("parse_jobs: 4", text)
+
+    def test_workspace_config_update_rejects_unknown_fields(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "workspace"
+            raw_root = Path(td) / "raw"
+            raw_root.mkdir(parents=True)
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                "\n".join([f"workspace: {workspace}", f"raw_root: {raw_root}"]) + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True})
+
+            response = app.test_client().post("/api/workspace/config", json={"shell": "rm -rf /", "raw_root": str(raw_root)})
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("不支持", response.get_json()["error"])
+            self.assertNotIn("shell", config_path.read_text(encoding="utf-8"))
+
+    def test_library_accept_only_registers_checked_candidate_rows(self) -> None:
+        from lib_guard.library_registry import write_library_rows
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "workspace"
+            raw_root = root / "raw"
+            candidate_a = raw_root / "Vendor_A" / "alpha"
+            candidate_b = raw_root / "Vendor_B" / "beta"
+            candidate_a.mkdir(parents=True)
+            candidate_b.mkdir(parents=True)
+            candidates_path = workspace / "config" / "library_candidates" / "latest.tsv"
+            registry_path = workspace / "config" / "library_registry.tsv"
+            write_library_rows(candidates_path, [
+                {"status": "REVIEW", "library_id": "Vendor_A.alpha", "root_abs": str(candidate_a), "display_name": "alpha", "vendor": "Vendor_A", "middle_path": ""},
+                {"status": "REVIEW", "library_id": "Vendor_B.beta", "root_abs": str(candidate_b), "display_name": "beta", "vendor": "Vendor_B", "middle_path": ""},
+            ])
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                "\n".join([
+                    f"workspace: {workspace}",
+                    f"raw_root: {raw_root}",
+                    f"catalog: {workspace / 'catalog' / 'catalog.json'}",
+                    f"library_candidates: {candidates_path}",
+                    f"library_registry: {registry_path}",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            jobs = workspace / "jobs"
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True, "job_root": str(jobs)})
+            client = app.test_client()
+
+            snapshot = client.get("/api/library-candidates")
+            self.assertEqual(snapshot.status_code, 200)
+            selected_id = snapshot.get_json()["candidates"][0]["candidate_id"]
+            response = client.post("/api/library/accept", json={"candidate_ids": [selected_id]})
+
+            self.assertEqual(response.status_code, 202)
+            request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
+            self.assertIn("--input", request["args"])
+            selected_input = Path(request["args"][request["args"].index("--input") + 1])
+            selected_text = selected_input.read_text(encoding="utf-8")
+            self.assertIn("Vendor_A.alpha", selected_text)
+            self.assertNotIn("Vendor_B.beta", selected_text)
+            self.assertEqual(request["candidate_selection"]["count"], 1)
+
     def test_path_children_rejects_path_outside_allowed_roots(self) -> None:
         from lib_guard.web.app import create_app
 
@@ -173,6 +513,8 @@ class WebAppTest(unittest.TestCase):
                 f"/api/libraries/{LIBRARY}/versions/20260627_asap7/scan",
                 json={
                     "hash_policy": "smart",
+                    "force_hash_file_types": ["lef", "liberty"],
+                    "skip_hash_file_types": ["gds"],
                     "parse_jobs": 4,
                     "parse_file_types": "lef,cdl",
                     "parse_exclude_file_types": "verilog,liberty",
@@ -183,6 +525,9 @@ class WebAppTest(unittest.TestCase):
 
             self.assertIn("--hash-policy", request["args"])
             self.assertIn("--parse-file-types", request["args"])
+            self.assertIn("--force-hash-file-types", request["args"])
+            self.assertIn("lef,liberty", request["args"])
+            self.assertIn("--skip-hash-file-types", request["args"])
             self.assertIn("--no-render", request["args"])
 
     def test_boolean_strategy_values_must_be_json_booleans(self) -> None:
@@ -338,7 +683,8 @@ class WebAppTest(unittest.TestCase):
             )
 
             self.assertEqual(response.status_code, 409)
-            self.assertIn("候选有效版", response.get_json()["error"])
+            self.assertIn("可确认的新版本", response.get_json()["error"])
+            self.assertIn("处理建议", response.get_json()["error"])
             self.assertEqual(list(Path(td).iterdir()), [])
 
     def test_window_actions_are_allowlisted_and_do_not_accept_arbitrary_commands(self) -> None:
@@ -392,16 +738,16 @@ class WebAppTest(unittest.TestCase):
 
             status = _job_status(root, None)
 
-            self.assertEqual(status["status"], "UNKNOWN")
+            self.assertEqual(status["status"], "FAILED")
             self.assertIn("未接管", status["message"])
 
-    def test_unmanaged_job_with_missing_or_invalid_status_is_terminal_unknown(self) -> None:
+    def test_unmanaged_job_with_missing_or_invalid_status_is_terminal_failed(self) -> None:
         from lib_guard.web.app import _job_status
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             status = _job_status(root, None)
-            self.assertEqual(status["status"], "UNKNOWN")
+            self.assertEqual(status["status"], "FAILED")
             self.assertIn("状态文件", status["message"])
 
     def test_run_status_exposes_terminal_tail_and_scan_progress(self) -> None:
@@ -443,12 +789,12 @@ class WebAppTest(unittest.TestCase):
 
             (root / "status.json").write_text(json.dumps({"status": "BOGUS"}), encoding="utf-8")
             status = _job_status(root, None)
-            self.assertEqual(status["status"], "UNKNOWN")
+            self.assertEqual(status["status"], "FAILED")
             self.assertIn("未知", status["message"])
 
             (root / "status.json").write_text("{", encoding="utf-8")
             status = _job_status(root, None)
-            self.assertEqual(status["status"], "UNKNOWN")
+            self.assertEqual(status["status"], "FAILED")
             self.assertIn("状态文件", status["message"])
 
     def test_failed_release_job_exposes_a_short_failure_summary(self) -> None:
@@ -478,6 +824,51 @@ class WebAppTest(unittest.TestCase):
             self.assertIn("发布检查被阻塞", status["error"])
             self.assertIn("审查门禁未关闭", status["error"])
             self.assertLessEqual(len(status["error"]), 240)
+
+    def test_completed_job_exposes_a_bounded_operator_summary(self) -> None:
+        from lib_guard.web.app import _job_result_summary, _job_status
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "status.json").write_text(
+                json.dumps({"status": "COMPLETED", "return_code": 0}),
+                encoding="utf-8",
+            )
+            (root / "result.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "web_job_result.v1",
+                        "result": "ok",
+                        "exit_code": 0,
+                        "cli_result": {
+                            "release_check_status": "PASS_WITH_WARNING",
+                            "version": "v2",
+                            "block_reasons": [],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            status = _job_status(root, None)
+
+            self.assertEqual(status["result_summary"], "发布检查通过（有提醒） · v2")
+            self.assertLessEqual(len(status["result_summary"]), 240)
+
+            (root / "result.json").write_text(
+                json.dumps(
+                    {
+                        "cli_result": {
+                            "status": "DIFF",
+                            "summary": {"file_type": "lef", "changed": True},
+                            "pairwise_result": str(root / "pairwise_result.json"),
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(_job_result_summary(root), "深度核对完成 · LEF · 内容有变化")
 
     def test_arbitrary_action_route_does_not_exist(self) -> None:
         from lib_guard.web.app import create_app
@@ -646,6 +1037,26 @@ class WebAppTest(unittest.TestCase):
             self.assertEqual(payload["base_version"], "20260624_asap7")
             self.assertGreater(payload["count"], 0)
             self.assertIn("file_type", payload["rows"][0])
+            self.assertIn("pagination", payload)
+            self.assertIn("counts", payload)
+            self.assertIn("comparison_semantics", payload)
+            self.assertIn("omitted_from_overlay", payload)
+
+    def test_file_changes_endpoint_filters_and_pages_on_the_server(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            app = create_app(config_path=SMOKE_CONFIG, cwd=ROOT, test_config={"TESTING": True, "job_root": td})
+            response = app.test_client().get(
+                f"/api/libraries/{LIBRARY}/versions/20260627_asap7/file-changes?change=ADDED&limit=1"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertLessEqual(len(payload["rows"]), 1)
+        self.assertTrue(all(row["change"] == "ADDED" for row in payload["rows"]))
+        self.assertGreaterEqual(payload["counts"]["total"], payload["count"])
+        self.assertIn("next_offset", payload["pagination"])
 
     def test_file_tree_endpoint_exposes_scan_inventory_as_relative_paths(self) -> None:
         from lib_guard.web.app import create_app
@@ -730,6 +1141,7 @@ class WebAppTest(unittest.TestCase):
 
             self.assertEqual(response.status_code, 400)
             self.assertIn("浏览目录", response.get_json()["error"])
+            self.assertIn(str(ROOT / "tests" / "fixtures" / "raw"), response.get_json()["error"])
             self.assertEqual(list(Path(td).iterdir()), [])
 
 

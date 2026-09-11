@@ -15,6 +15,75 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class CatalogTimelineTest(unittest.TestCase):
+    def test_catalog_requires_confirmation_for_full_candidate_with_large_inventory_drop(self) -> None:
+        """A small package with core views must not silently replace a much larger FULL."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            library_root = raw / "Vendor_A" / "demo"
+            base = library_root / "20260601_full"
+            candidate = library_root / "20260608_update"
+            for version in (base, candidate):
+                for relative, content in (
+                    ("rtl/top.v", "module top; endmodule\n"),
+                    ("lef/top.lef", "MACRO TOP\nEND TOP\n"),
+                    ("lib/top.lib", "library(top) {}\n"),
+                ):
+                    path = version / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content, encoding="utf-8")
+            for index in range(30):
+                path = base / "gds" / f"cell_{index:02d}.gds"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"gds")
+
+            library_map = root / "library_map.yml"
+            library_map.write_text(
+                "\n".join(
+                    [
+                        "libraries:",
+                        "  Vendor_A.demo:",
+                        "    root: raw/Vendor_A/demo",
+                        "    display_name: demo",
+                        "    vendor: Vendor_A",
+                        "    library_type: ip",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            policy = root / "catalog_policy.json"
+            policy.write_text(
+                json.dumps({"library_type": "ip", "discovery": {"library_map": str(library_map), "pattern_fallback": False}}),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import apply_catalog_override, scan_catalog
+
+            result = scan_catalog(raw, out_dir=root / "catalog", library_type="ip", policy_path=policy)
+            versions = {item["version_id"]: item for item in result["catalog"]["libraries"][0]["versions"]}
+            flagged = versions[candidate.name]
+
+            self.assertEqual(flagged["package_type"], "UNKNOWN_PACKAGE")
+            self.assertTrue(flagged["base_required"])
+            self.assertTrue(flagged["manual_review"])
+            self.assertIn("full_package_inventory_shrink", flagged["classification_risks"])
+            self.assertEqual(flagged["classification_evidence"]["previous_full_version"], base.name)
+
+            confirmed = apply_catalog_override(
+                result["catalog_path"],
+                version_key=flagged["version_key"],
+                package_type="FULL_PACKAGE",
+                standalone=True,
+                base_required=False,
+                note="已确认该缩减包是完整替换包",
+            )
+            rebuilt = {
+                item["version_id"]: item
+                for item in confirmed["catalog"]["libraries"][0]["versions"]
+            }
+            self.assertEqual(rebuilt[candidate.name]["package_type"], "FULL_PACKAGE")
+
     def test_runtime_updates_write_sidecar_without_changing_catalog_asset(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

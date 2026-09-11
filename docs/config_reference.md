@@ -48,6 +48,7 @@ Status: current
 `lg init` 会在 workspace 下写出 `lib_guard.yml`。常用字段如下：
 
 ```yaml
+config_version: lib_guard_config.v1
 workspace: <work root>
 raw_root: <raw library root>
 catalog: <workspace>/catalog/catalog.json
@@ -64,7 +65,13 @@ parse_jobs: 8
 hash_policy: smart
 parse_file_types: lef,cdl
 parse_exclude_file_types: verilog,liberty,spef
+render_detail: true
 ```
+
+`config_version` 是配置契约版本。旧配置缺少该字段时按
+`lib_guard_config.v1` 读取；未知版本会立即失败，避免新旧语义被静默混用。
+`load_workspace_config()` 提供类型化的 `parse_jobs`、`render_detail` 等字段；
+现有调用方仍可通过 `load_config()` 读取兼容字典。
 
 也支持 `config_dir`、`library_list`、`library_catalog`、`library_versions`。
 如果自定义 `config_dir`，除非显式覆盖，派生配置文件会跟随这个目录。
@@ -91,6 +98,9 @@ parse_exclude_file_types: verilog,liberty,spef
 | 3 | Workspace registry / overrides | 人工确认库根、版本关系、package type/Base |
 | 4 | 项目 `configs/*.json` | 默认策略 |
 | 5 | 代码默认值 `project_config.py` | 最后兜底，不应散落在业务代码里 |
+
+实现代码必须使用 `merge_config_overrides()` 合并本次运行参数。值为 `None` 表示
+“未覆盖”，不能清空 workspace 配置；未知覆盖项必须失败。
 
 如果命令行为不符合预期，先用 `lg --dry-run ...` 看短命令展开，再检查上述顺序。
 

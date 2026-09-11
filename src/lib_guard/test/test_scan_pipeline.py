@@ -17,6 +17,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class ScanPipelineTest(unittest.TestCase):
+    def test_hashless_parser_cache_key_keeps_file_identity(self) -> None:
+        """Same timestamp must not let one parsed file satisfy another."""
+        from lib_guard.scan.scanner import ScanRunner
+
+        runner = ScanRunner(
+            SimpleNamespace(
+                root_path=".",
+                out_dir="scan_out",
+                library_type="ip",
+                library_name="demo",
+                version="v1",
+                scan_mode="scan",
+                scan_id="cache-key-test",
+                state_dir="state",
+                cache_dir="cache",
+                tool_version="0.5.0",
+                schema_version="1.0",
+            )
+        )
+        task = SimpleNamespace(parser_name="LefParser", parser_version="2.0")
+        context = SimpleNamespace(scan_mode="scan", schema_version="1.0", tool_version="0.5.0")
+        common = {"hash": None, "size_bytes": 713492, "mtime": 1782525186.0}
+
+        left = runner._parser_cache_key(
+            {**common, "path": "lef/left.lef"}, task, "1.0", context
+        )
+        right = runner._parser_cache_key(
+            {**common, "path": "lef/right.lef"}, task, "1.0", context
+        )
+
+        self.assertNotEqual(left, right)
+
     def test_parser_loader_prefers_per_file_results_when_aggregate_is_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             scan_dir = Path(td) / "scan"
@@ -453,6 +485,27 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertEqual(quick["hash_policy"], "none")
         self.assertEqual(inventory["hash_policy"], "none")
         self.assertEqual(full["hash_policy"], "full")
+
+    def test_scan_policy_supports_type_level_hash_overrides_without_overriding_none(self) -> None:
+        from lib_guard.scan.policy import ScanPolicy
+
+        context = SimpleNamespace(scan_mode="scan")
+        large_lef = {"file_type": "lef", "extension": ".lef", "size_bytes": 64 * 1024 * 1024}
+        verilog = {"file_type": "verilog", "extension": ".v", "size_bytes": 1024}
+
+        forced = ScanPolicy({"hash_policy": "smart", "force_hash_file_types": ["lef"]})
+        skipped = ScanPolicy({"hash_policy": "full", "skip_hash_file_types": ["verilog"]})
+        none = ScanPolicy({"hash_policy": "none", "force_hash_file_types": ["lef"]})
+
+        self.assertEqual(forced.hash_decision(large_lef, context)["reason"], "force_hash_file_type")
+        self.assertTrue(forced.should_hash(large_lef, context))
+        self.assertEqual(skipped.hash_decision(verilog, context)["reason"], "skip_hash_file_type")
+        self.assertFalse(skipped.should_hash(verilog, context))
+        self.assertFalse(none.should_hash(large_lef, context))
+        self.assertEqual(
+            forced.identity_payload(context)["force_hash_file_types"],
+            ["lef"],
+        )
 
     def test_scan_fatal_error_is_written_to_progress_latest(self) -> None:
         from lib_guard.scan.scanner import ScanRunner
@@ -1788,6 +1841,68 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(move["new_logical_path"], "RTL/top_renamed.v")
             self.assertEqual(move["reason"], "unique_hash_match")
 
+    def test_partial_update_does_not_mark_omitted_full_files_as_removed(self) -> None:
+        """A FIX inventory is an overlay, not a complete replacement snapshot."""
+
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            (old_scan / "file_inventory.json").write_text(
+                json.dumps(
+                    {"files": [
+                        {"path": "LEF/a.lef", "file_type": "lef", "size_bytes": 10, "hash": "sha256:a"},
+                        {"path": "LEF/untouched.lef", "file_type": "lef", "size_bytes": 20, "hash": "sha256:b"},
+                    ]}
+                ),
+                encoding="utf-8",
+            )
+            (new_scan / "file_inventory.json").write_text(
+                json.dumps(
+                    {"files": [
+                        {"path": "LEF/a.lef", "file_type": "lef", "size_bytes": 11, "hash": "sha256:c"},
+                    ]}
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.diff.scan_diff import _file_diff
+
+            result = _file_diff(old_scan, new_scan, new_version_type="PARTIAL_UPDATE")
+
+        self.assertEqual(result["counts"]["removed"], 0)
+        self.assertEqual(result["removed"], [])
+        self.assertEqual(result["counts"]["omitted_from_overlay"], 1)
+        self.assertEqual(result["omitted_from_overlay"], ["LEF/untouched.lef"])
+
+    def test_suspicious_full_shrink_requires_package_confirmation_before_deletions(self) -> None:
+        """A stale FULL label must not turn a small overlay into mass deletion."""
+
+        with tempfile.TemporaryDirectory() as td:
+            old_scan = Path(td) / "old_scan"
+            new_scan = Path(td) / "new_scan"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            old = [{"path": f"LEF/{index}.lef", "file_type": "lef", "size_bytes": 10, "hash": f"sha256:{index}"} for index in range(40)]
+            new = [{"path": f"LEF/{index}.lef", "file_type": "lef", "size_bytes": 11, "hash": f"sha256:new-{index}"} for index in range(5)]
+            (old_scan / "file_inventory.json").write_text(json.dumps({"files": old}), encoding="utf-8")
+            (new_scan / "file_inventory.json").write_text(json.dumps({"files": new}), encoding="utf-8")
+
+            from lib_guard.diff.scan_diff import diff_scan_outputs
+
+            result = diff_scan_outputs(
+                old_scan,
+                new_scan,
+                version_relation={"new_version_type": "FULL_PACKAGE"},
+            )
+            result = result["summary"]
+
+        self.assertEqual(result["comparison_semantics"], "needs_package_confirmation")
+        self.assertEqual(result["removed_files"], 0)
+        self.assertEqual(result["omitted_from_overlay_files"], 35)
+        self.assertEqual(result["package_scope_suspect"], 1)
+
     def test_diff_does_not_treat_missing_content_evidence_as_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             old_scan = Path(td) / "old_scan"
@@ -2953,6 +3068,24 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("--max-candidates", library_discover_cmds[0])
             self.assertIn("200", library_discover_cmds[0])
 
+            library_discover_root_cmds = build_cli_commands(
+                ["library", "discover", "--root", str(raw / "vendor_A"), "--min-versions", "1"],
+                cwd=workspace,
+            )
+            self.assertEqual(library_discover_root_cmds[0][0:2], ["library", "discover"])
+            self.assertEqual(
+                library_discover_root_cmds[0][library_discover_root_cmds[0].index("--root") + 1],
+                str(raw),
+            )
+            self.assertEqual(
+                library_discover_root_cmds[0][library_discover_root_cmds[0].index("--start-root") + 1],
+                str(raw / "vendor_A"),
+            )
+            self.assertEqual(
+                library_discover_root_cmds[0][library_discover_root_cmds[0].index("--min-versions") + 1],
+                "1",
+            )
+
             library_apply_cmds = build_cli_commands(["library", "apply"], cwd=workspace)
             self.assertEqual(library_apply_cmds[0][0:2], ["library", "apply"])
             self.assertIn(str(workspace / "config" / "library_registry.tsv"), library_apply_cmds[0])
@@ -3768,13 +3901,14 @@ class ScanPipelineTest(unittest.TestCase):
             from lib_guard.short_cli import build_cli_commands, write_default_config
 
             config = write_default_config(workspace, raw_root=raw)
-            config.write_text(
-                config.read_text(encoding="utf-8")
-                + "hash_policy: full\n"
-                + "parse_file_types: lef,cdl\n"
-                + "parse_exclude_file_types: verilog,liberty\n",
-                encoding="utf-8",
+            configured = config.read_text(encoding="utf-8")
+            configured = configured.replace("hash_policy: smart", "hash_policy: full")
+            configured = configured.replace("parse_file_types:", "parse_file_types: lef,cdl")
+            configured = configured.replace(
+                "parse_exclude_file_types:",
+                "parse_exclude_file_types: verilog,liberty",
             )
+            config.write_text(configured, encoding="utf-8")
 
             scan_cmd = build_cli_commands(["scan", "ucie", "stable_20250608"], cwd=workspace)[0]
             refresh_cmd = build_cli_commands(["refresh", "ucie"], cwd=workspace)[0]

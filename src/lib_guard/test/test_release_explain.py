@@ -189,6 +189,43 @@ class ReleaseExplainTest(unittest.TestCase):
         write_result.assert_called_once()
         update_status.assert_called_once()
 
+    def test_catalog_release_check_uses_completed_explicit_base_diff_by_default(self) -> None:
+        from lib_guard.cli_commands.catalog import run_catalog_release_check
+
+        args = Namespace(
+            catalog="catalog.json",
+            library="ucie",
+            version="stable_20250608",
+            policy=None,
+            alias="current",
+            diff=None,
+            diff_mode=None,
+            review_gate=None,
+            explain=True,
+        )
+        item = {
+            "version_key": "ip/ucie/stable_20250608",
+            "scan": {"scan_dir": "scan"},
+            "diff": {
+                "adjacent_status": "PENDING",
+                "adjacent_diff_dir": None,
+                "base_status": "DIFF_DONE",
+                "base_diff_dir": "diff/explicit",
+            },
+        }
+        check_result = {"release_check_status": "PASS"}
+
+        with (
+            patch("lib_guard.catalog.index.find_catalog_version", return_value=item),
+            patch("lib_guard.cli_commands.catalog._review_gate_for_catalog_version", return_value=(None, {})),
+            patch("lib_guard.release.checker.check_release_scan", return_value=check_result) as check,
+        ):
+            with redirect_stdout(StringIO()):
+                code = run_catalog_release_check(args)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(check.call_args.kwargs["diff_dir"], "diff/explicit")
+
     def test_release_batch_defaults_to_fail_closed_for_blocked_check_status(self) -> None:
         from lib_guard.cli_commands.catalog import run_catalog_release_batch
 

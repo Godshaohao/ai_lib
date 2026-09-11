@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lib-guard.local/schemas/run_manifest.v1.schema.json",
+  "title": "lib_guard 运行产物清单",
+  "description": "连接一次 scan、compare 或 release 操作的输入、事实和投影；本身不是业务事实源。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "producer",
+    "generated_at",
+    "operation",
+    "status",
+    "run_id",
+    "identity",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {"const": "run_manifest.v1"},
+    "producer": {"const": "lib_guard"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "created_at": {"type": "string", "format": "date-time", "deprecated": true},
+    "operation": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["library_id", "version_id", "run_id", "evidence_id"],
+      "properties": {
+        "library_id": {"type": "string"},
+        "version_id": {"type": "string"},
+        "run_id": {"type": "string", "minLength": 1},
+        "evidence_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "library": {"type": "object"},
+    "inputs": {"type": "object"},
+    "comparison": {"type": "object"},
+    "artifacts": {"type": "object"},
+    "phase_timings": {"type": "array"},
+    "warnings": {"type": "array", "items": {"type": "string"}}
+  }
+}

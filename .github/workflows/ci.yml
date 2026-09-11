@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  contracts-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install project
+        run: python -m pip install -e '.[web]'
+      - name: Compile
+        run: python -m compileall -q src
+      - name: Test
+        run: python -m unittest discover -s src/lib_guard/test -p 'test*.py' -q
+      - name: Verify command contracts
+        run: |
+          python -m lib_guard.short_cli --help >/dev/null
+          python -m lib_guard.cli --help >/dev/null
+          lg --help >/dev/null
+          lib-guard --help >/dev/null

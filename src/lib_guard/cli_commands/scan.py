@@ -94,6 +94,8 @@ def build_scan_config(args: Namespace) -> SimpleNamespace:
         skip_cache=args.skip_cache,
         no_cache=args.no_cache,
         hash_policy=getattr(args, "hash_policy", None),
+        force_hash_file_types=split_strategy_list(getattr(args, "force_hash_file_types", None)),
+        skip_hash_file_types=split_strategy_list(getattr(args, "skip_hash_file_types", None)),
         parse_file_types=split_strategy_list(getattr(args, "parse_file_types", None)),
         parse_exclude_file_types=split_strategy_list(getattr(args, "parse_exclude_file_types", None)),
         tool_version="0.5.0",

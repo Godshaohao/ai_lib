@@ -12,6 +12,8 @@ routing:
   oas: Physical
   db: Physical
   ndm: Physical
+  layout: Physical
+  milkyway: Physical
   verilog: Integration
   systemverilog: Integration
   sdc: Constraint

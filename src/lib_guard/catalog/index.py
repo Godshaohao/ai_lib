@@ -931,6 +931,78 @@ def _apply_runtime(version: dict[str, Any], runtime_state: Mapping[str, Any]) ->
     return _sync_version_relation_fields(item)
 
 
+def _classification_file_count(version: Mapping[str, Any]) -> int:
+    evidence = version.get("classification_evidence")
+    if not isinstance(evidence, Mapping):
+        return 0
+    counts = evidence.get("file_type_counts")
+    if not isinstance(counts, Mapping):
+        return 0
+    total = 0
+    for value in counts.values():
+        try:
+            total += max(0, int(value or 0))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _guard_shrunken_full_candidates(versions: list[dict[str, Any]], overrides: Mapping[str, Any]) -> None:
+    """Require confirmation before a much smaller package replaces a FULL.
+
+    A directory can prove that core views exist, but not that it is a complete
+    replacement for a prior full package. An explicit package-type override is
+    the owner's confirmation and takes precedence over this guard.
+    """
+
+    previous_full: dict[str, Any] | None = None
+    for version in versions:
+        if str(version.get("package_type") or "").upper() != "FULL_PACKAGE":
+            continue
+        manual = _manual_for(overrides, str(version.get("version_key") or ""))
+        if "package_type" in manual:
+            previous_full = version
+            continue
+        if previous_full is None:
+            previous_full = version
+            continue
+        previous_count = _classification_file_count(previous_full)
+        candidate_count = _classification_file_count(version)
+        if previous_count < 20 or candidate_count * 2 >= previous_count:
+            previous_full = version
+            continue
+
+        evidence = dict(version.get("classification_evidence") or {})
+        evidence.update(
+            {
+                "previous_full_version": str(previous_full.get("version_id") or ""),
+                "previous_full_file_count": previous_count,
+                "candidate_file_count": candidate_count,
+                "candidate_to_previous_file_ratio": round(candidate_count / previous_count, 4),
+            }
+        )
+        risks = list(version.get("classification_risks") or [])
+        if "full_package_inventory_shrink" not in risks:
+            risks.append("full_package_inventory_shrink")
+        suggested_base = str(previous_full.get("version_id") or "")
+        version.update(
+            {
+                "package_type": "UNKNOWN_PACKAGE",
+                "standalone": False,
+                "base_required": True,
+                "base_version": suggested_base,
+                "base_full_version": suggested_base,
+                "classification_confidence": min(float(version.get("classification_confidence") or 0.0), 0.5),
+                "classification_evidence": evidence,
+                "classification_risks": risks,
+                "manual_review": True,
+                "recommended_action": "confirm_package_type",
+            }
+        )
+        version.setdefault("lineage", {})["base_candidate"] = suggested_base
+        _sync_version_relation_fields(version)
+
+
 def _library_match_names(lib: Mapping[str, Any]) -> set[str]:
     names = {str(lib.get("library_id") or ""), str(lib.get("library_name") or "")}
     names.update(str(a) for a in lib.get("aliases", []) or [] if str(a))
@@ -1062,6 +1134,8 @@ def _build_library(library_type: str, library_name: str, discovered: list[dict[s
             latest_known = version_id
         elif _item_looks_like_version(item):
             latest_known = version_id
+
+    _guard_shrunken_full_candidates(versions, overrides)
 
     stage_counts = {stage: 0 for stage in STAGES}
     for version in versions:
@@ -1620,6 +1694,8 @@ def resolve_catalog_pair(catalog_path: str | Path, library: str, new: str, *, mo
             "base_version_source": base_source,
             "compare_policy": relation_mode,
             "release_line": new_item.get("release_line") or old_item.get("release_line"),
+            "old_version_type": old_item.get("package_type") or old_item.get("version_type"),
+            "new_version_type": new_item.get("package_type") or new_item.get("version_type"),
         },
     }
 

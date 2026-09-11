@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from lib_guard.project_config import canonical_view_type
+
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
@@ -60,6 +62,18 @@ class ScanPolicy:
     def should_hash(self, record: Any, context: Any) -> bool:
         return self.hash_decision(record, context)["should_hash"]
 
+    def _configured_types(self, key: str) -> set[str]:
+        value = _get(self.config, key, []) or []
+        if isinstance(value, str):
+            value = value.replace(";", ",").replace(" ", ",").split(",")
+        if not isinstance(value, (list, tuple, set)):
+            value = [value]
+        return {canonical_view_type(str(item)) for item in value if str(item).strip()}
+
+    @staticmethod
+    def _record_type(record: Any) -> str:
+        return canonical_view_type(str(_get(record, "file_type", "unknown") or "unknown"))
+
     def identity_payload(self, context: Any = None) -> dict[str, Any]:
         mode = str(_get(context, "scan_mode", "scan"))
         configured_policy = str(_get(self.config, "hash_policy", _get(self.config, "hash", "smart")) or "smart").lower()
@@ -74,6 +88,8 @@ class ScanPolicy:
             "schema_version": "scan_policy_identity.v1",
             "scan_mode": mode,
             "hash_policy": effective_policy,
+            "force_hash_file_types": sorted(self._configured_types("force_hash_file_types")),
+            "skip_hash_file_types": sorted(self._configured_types("skip_hash_file_types")),
             "small_file_sha256_max_bytes": int(
                 _get(self.config, "small_file_sha256_max_bytes", self.DEFAULT_SMALL_FILE_MAX_BYTES)
                 or self.DEFAULT_SMALL_FILE_MAX_BYTES
@@ -94,6 +110,11 @@ class ScanPolicy:
         policy = str(_get(self.config, "hash_policy", _get(self.config, "hash", "smart")) or "smart").lower()
         if policy == "none":
             return {"policy": "none", "should_hash": False, "hash_status": "NOT_REQUIRED", "reason": "hash_policy"}
+        file_type = self._record_type(record)
+        if file_type in self._configured_types("skip_hash_file_types"):
+            return {"policy": policy, "should_hash": False, "hash_status": "NOT_REQUIRED", "reason": "skip_hash_file_type"}
+        if file_type in self._configured_types("force_hash_file_types"):
+            return {"policy": policy, "should_hash": True, "hash_status": "CALCULATED", "reason": "force_hash_file_type"}
         if mode == "full" or policy == "full":
             return {"policy": "full", "should_hash": True, "hash_status": "CALCULATED", "reason": "full_hash"}
         extension = str(_get(record, "extension", "") or "").lower()

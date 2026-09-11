@@ -37,6 +37,7 @@ DEFAULT_IGNORE_DIRS = {
 }
 DEFAULT_VERSION_PATTERNS = ["20*", "v*", "initial_*", "stable_*", "release_*", "final_*"]
 DEFAULT_DISCOVER_MAX_DEPTH = 4
+DEFAULT_DISCOVER_MIN_VERSIONS = 1
 DEFAULT_DISCOVER_MAX_DIRS = 5000
 DEFAULT_DISCOVER_MAX_CANDIDATES = 200
 NEGATIVE_CANDIDATE_DIR_NAMES = DEFAULT_IGNORE_DIRS | {
@@ -288,7 +289,7 @@ def _key_file_hint(path: Path, sample_versions: list[tuple[Path, set[str]]]) -> 
     return len(hits), hits
 
 
-def _candidate_from_path(raw_root: Path, path: Path, *, min_versions: int) -> LibraryCandidate | None:
+def _candidate_from_path(raw_root: Path, path: Path, *, min_versions: int, status: str = "REVIEW") -> LibraryCandidate | None:
     if _is_negative_candidate_dir_name(path.name):
         return None
     if _is_top_level_vendor_dir(raw_root, path):
@@ -307,11 +308,13 @@ def _candidate_from_path(raw_root: Path, path: Path, *, min_versions: int) -> Li
     middle_path = "/".join(parts[1:-1]) if len(parts) > 2 else ""
     library_id = library_id_from_root(raw_root, path)
     reason_parts = [f"delivery_instances={len(versions)}", cohort_reason]
+    if len(versions) == 1:
+        reason_parts.append("single_version_needs_confirmation")
     if key_count:
         reason_parts.append("key_files_hint")
     confidence = 0.55 + min(0.25, len(versions) * 0.02) + (0.15 if key_count else 0.0)
     return LibraryCandidate(
-        status="REVIEW",
+        status=status,
         library_id=library_id,
         root_abs=str(path.resolve()),
         display_name=display_name,
@@ -354,14 +357,16 @@ def _suppress_ancestor_candidates(candidates: list[LibraryCandidate]) -> list[Li
 def discover_library_candidates(
     raw_root: str | Path,
     *,
+    start_root: str | Path | None = None,
     max_depth: int = DEFAULT_DISCOVER_MAX_DEPTH,
-    min_versions: int = 2,
+    min_versions: int = DEFAULT_DISCOVER_MIN_VERSIONS,
     default_status: str = "REVIEW",
     max_dirs: int = DEFAULT_DISCOVER_MAX_DIRS,
     max_candidates: int = DEFAULT_DISCOVER_MAX_CANDIDATES,
 ) -> list[LibraryCandidate]:
     result = _discover_library_candidates_with_stats(
         raw_root,
+        start_root=start_root,
         max_depth=max_depth,
         min_versions=min_versions,
         default_status=default_status,
@@ -374,8 +379,9 @@ def discover_library_candidates(
 def _discover_library_candidates_with_stats(
     raw_root: str | Path,
     *,
+    start_root: str | Path | None = None,
     max_depth: int = DEFAULT_DISCOVER_MAX_DEPTH,
-    min_versions: int = 2,
+    min_versions: int = DEFAULT_DISCOVER_MIN_VERSIONS,
     default_status: str = "REVIEW",
     max_dirs: int = DEFAULT_DISCOVER_MAX_DIRS,
     max_candidates: int = DEFAULT_DISCOVER_MAX_CANDIDATES,
@@ -383,6 +389,13 @@ def _discover_library_candidates_with_stats(
     raw = Path(raw_root).resolve()
     if not raw.exists() or not raw.is_dir():
         raise FileNotFoundError(f"raw_root does not exist or is not a directory: {raw}")
+    start = Path(start_root).resolve() if start_root is not None else raw
+    if not start.exists() or not start.is_dir():
+        raise FileNotFoundError(f"start_root does not exist or is not a directory: {start}")
+    try:
+        start.relative_to(raw)
+    except ValueError as exc:
+        raise ValueError(f"start_root is outside raw_root: {start}") from exc
     status = default_status.upper()
     if status not in {"REVIEW", "OK"}:
         raise ValueError("default_status must be REVIEW or OK")
@@ -396,7 +409,7 @@ def _discover_library_candidates_with_stats(
     warnings: list[str] = []
     visited_dirs = 0
     truncated = False
-    stack: list[tuple[Path, int]] = [(raw, 0)]
+    stack: list[tuple[Path, int]] = [(start, 0)]
     while stack:
         if visited_dirs >= max_dirs:
             truncated = True
@@ -404,12 +417,12 @@ def _discover_library_candidates_with_stats(
             break
         path, depth = stack.pop()
         visited_dirs += 1
-        if depth > 0:
+        if path != raw:
             try:
                 path.resolve().relative_to(raw)
             except (OSError, ValueError):
                 continue
-            item = _candidate_from_path(raw, path, min_versions=min_versions)
+            item = _candidate_from_path(raw, path, min_versions=min_versions, status=status)
             if item:
                 candidates.append(item)
                 if len(candidates) >= max_candidates:
@@ -649,6 +662,12 @@ def _formal_library_identity(item: Mapping[str, str]) -> tuple[str, str | None]:
     return ".".join(formal_parts), category
 
 
+def suggest_formal_library_id(item: Mapping[str, str]) -> str:
+    """Return the library id a candidate would receive after registry apply."""
+
+    return _formal_library_identity(item)[0]
+
+
 def _rel_root(raw_root: Path, root_abs: Path) -> str:
     return root_abs.resolve().relative_to(raw_root.resolve()).as_posix()
 
@@ -766,17 +785,19 @@ def write_library_catalog(raw_root: str | Path, rows: list[dict[str, str]], out_
 def discover_to_files(
     raw_root: str | Path,
     *,
+    start_root: str | Path | None = None,
     list_out: str | Path,
     json_out: str | Path | None = None,
     html_out: str | Path | None = None,
     max_depth: int = DEFAULT_DISCOVER_MAX_DEPTH,
-    min_versions: int = 2,
+    min_versions: int = DEFAULT_DISCOVER_MIN_VERSIONS,
     default_status: str = "REVIEW",
     max_dirs: int = DEFAULT_DISCOVER_MAX_DIRS,
     max_candidates: int = DEFAULT_DISCOVER_MAX_CANDIDATES,
 ) -> dict[str, Any]:
     discovery = _discover_library_candidates_with_stats(
         raw_root,
+        start_root=start_root,
         max_depth=max_depth,
         min_versions=min_versions,
         default_status=default_status,
@@ -790,6 +811,7 @@ def discover_to_files(
             json_out,
             {
                 "raw_root": str(Path(raw_root).resolve()),
+                "start_root": str(Path(start_root).resolve()) if start_root is not None else str(Path(raw_root).resolve()),
                 "max_depth": max_depth,
                 "min_versions": min_versions,
                 "max_dirs": max_dirs,

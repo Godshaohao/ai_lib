@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from argparse import Namespace
+from importlib.resources import files
 from pathlib import Path
 
 
@@ -90,6 +91,17 @@ class ArtifactContractTest(unittest.TestCase):
             self.assertFalse((root / ".run_manifest.json.lock").exists())
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(data["schema_version"], "run_manifest.v1")
+            self.assertEqual(data["producer"], "lib_guard")
+            self.assertEqual(data["generated_at"], data["created_at"])
+            self.assertEqual(
+                data["identity"],
+                {
+                    "library_id": "ucie",
+                    "version_id": "v1",
+                    "run_id": "base_v0_to_v1",
+                    "evidence_id": "compare:base_v0_to_v1",
+                },
+            )
             self.assertEqual(data["operation"], "compare")
             self.assertEqual(data["comparison"]["base_version"], "v0")
             self.assertEqual(data["artifacts"]["facts"]["diff"], str(root / "diff.json"))
@@ -132,6 +144,22 @@ class ArtifactContractTest(unittest.TestCase):
             self.assertIn("view_diff.json", artifacts["facts"])
             self.assertNotIn("diff.json", artifacts["facts"])
             self.assertEqual(artifacts["reports"]["compare_html"], str(root / "diff_html" / "index.html"))
+
+    def test_run_manifest_schema_covers_the_public_contract(self) -> None:
+        schema_resource = files("lib_guard").joinpath("schemas/run_manifest.v1.schema.json")
+        self.assertTrue(schema_resource.is_file())
+        schema = json.loads(schema_resource.read_text(encoding="utf-8"))
+
+        self.assertEqual(schema["$id"], "https://lib-guard.local/schemas/run_manifest.v1.schema.json")
+        self.assertEqual(schema["properties"]["schema_version"]["const"], "run_manifest.v1")
+        self.assertTrue(
+            {"schema_version", "producer", "generated_at", "operation", "status", "identity", "artifacts"}
+            <= set(schema["required"])
+        )
+        self.assertTrue(
+            {"library_id", "version_id", "run_id", "evidence_id"}
+            <= set(schema["properties"]["identity"]["required"])
+        )
 
 
 if __name__ == "__main__":

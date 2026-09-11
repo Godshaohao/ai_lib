@@ -10,6 +10,10 @@ import sys
 from lib_guard.project_config import (
     BINARY_METADATA_ONLY_TYPES,
     CONFIG_NAME,
+    DEFAULT_DISCOVER_MAX_CANDIDATES,
+    DEFAULT_DISCOVER_MAX_DEPTH,
+    DEFAULT_DISCOVER_MAX_DIRS,
+    DEFAULT_DISCOVER_MIN_VERSIONS,
     DEFAULT_FILE_DIFF_TYPES,
     PROJECT_CONFIG_DIR,
     SCAN_STRATEGY_CONFIG_KEYS,
@@ -634,6 +638,8 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--stage", choices=["initial", "stable", "final", "ad-hoc", "dated", "unknown"], help="只扫描目录中的某个阶段")
     p.add_argument("--with-evidence", action="store_true", help="不再由 scan 触发目录刷新；请改用 cat --refresh-catalog，确需轻量文件证据时再加此项")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次扫描的内容哈希策略")
+    p.add_argument("--force-hash-file-types", help="本次扫描中额外读取完整内容的视图类型，例如 lef,liberty")
+    p.add_argument("--skip-hash-file-types", help="本次扫描中跳过完整内容哈希的视图类型，例如 gds,oas")
     p.add_argument("--parse-file-types", help="覆盖本次扫描进入解析器的文件类型，例如 lef,cdl")
     p.add_argument("--parse-exclude-file-types", help="覆盖本次扫描不进入解析器的文件类型，例如 verilog,liberty,spef")
     p.add_argument("--parse-jobs", help="覆盖本次扫描的解析器并发数")
@@ -654,13 +660,14 @@ def _build_parser() -> ArgumentParser:
     root_library = sub.add_parser("library", help="维护人工确认的库登记表，并生成正式库映射")
     lsp = root_library.add_subparsers(dest="library_cmd", required=True)
     p = lsp.add_parser("discover", help="从 RAW 中发现候选库根，写出候选快照；不会覆盖人工登记表")
+    p.add_argument("--root", dest="discover_root", help="本次发现起点；默认使用配置中的 raw_root，可传入 raw_root 下的子目录以减少候选噪音")
     p.add_argument("--out", help="候选 TSV 输出，默认 $WORK/config/library_candidates/latest.tsv")
     p.add_argument("--json-out", help="机器发现 evidence JSON，默认 $WORK/config/library_candidates/latest.json")
     p.add_argument("--html-out", help="发现结果审查 HTML，默认 $WORK/config/library_candidates/latest.html")
-    p.add_argument("--max-depth", type=int, default=4)
-    p.add_argument("--min-versions", type=int, default=2)
-    p.add_argument("--max-dirs", type=int, default=5000)
-    p.add_argument("--max-candidates", type=int, default=200)
+    p.add_argument("--max-depth", type=int, default=None)
+    p.add_argument("--min-versions", type=int, default=None)
+    p.add_argument("--max-dirs", type=int, default=None)
+    p.add_argument("--max-candidates", type=int, default=None)
     p.add_argument("--default-status", choices=["REVIEW", "OK"], default="REVIEW")
 
     p = lsp.add_parser("accept", help="把候选 TSV 中标为 OK/ENABLE 的行合并进人工登记表")
@@ -762,6 +769,8 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--rebuild", action="store_true", help="传入库名时，强制重建候选组合和对比")
     p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次扫描的哈希策略")
+    p.add_argument("--force-hash-file-types", help="本次扫描中额外读取完整内容的视图类型")
+    p.add_argument("--skip-hash-file-types", help="本次扫描中跳过完整内容哈希的视图类型")
     p.add_argument("--parse-file-types", help="覆盖本次扫描的解析器类型")
     p.add_argument("--parse-exclude-file-types", help="覆盖本次扫描排除的解析器类型")
     p.add_argument("--parse-jobs", help="覆盖本次解析器并发数")
@@ -773,6 +782,8 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--rebuild", action="store_true", help="强制重建候选组合和对比")
     p.add_argument("--json", action="store_true", help="配合 --plan-only 输出机器可读 JSON；默认输出人工可读表")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="覆盖本次 scan hash 策略")
+    p.add_argument("--force-hash-file-types", help="本次 scan 中额外读取完整内容的视图类型")
+    p.add_argument("--skip-hash-file-types", help="本次 scan 中跳过完整内容哈希的视图类型")
     p.add_argument("--parse-file-types", help="覆盖本次 scan parser 类型")
     p.add_argument("--parse-exclude-file-types", help="覆盖本次 scan parser 排除类型")
     p.add_argument("--parse-jobs", help="覆盖本次 parser worker 数")
@@ -948,6 +959,8 @@ def _library_discover_command(cfg: dict[str, str], args: Any) -> list[str]:
         "discover",
         "--root",
         cfg["raw_root"],
+        "--start-root",
+        args.discover_root or cfg["raw_root"],
         "--out",
         args.out or str(candidates),
         "--json-out",
@@ -955,13 +968,13 @@ def _library_discover_command(cfg: dict[str, str], args: Any) -> list[str]:
         "--html-out",
         args.html_out or str(candidates.with_suffix(".html")),
         "--max-depth",
-        str(args.max_depth),
+        str(args.max_depth if args.max_depth is not None else cfg.get("discover_max_depth") or DEFAULT_DISCOVER_MAX_DEPTH),
         "--min-versions",
-        str(args.min_versions),
+        str(args.min_versions if args.min_versions is not None else cfg.get("discover_min_versions") or DEFAULT_DISCOVER_MIN_VERSIONS),
         "--max-dirs",
-        str(args.max_dirs),
+        str(args.max_dirs if args.max_dirs is not None else cfg.get("discover_max_dirs") or DEFAULT_DISCOVER_MAX_DIRS),
         "--max-candidates",
-        str(args.max_candidates),
+        str(args.max_candidates if args.max_candidates is not None else cfg.get("discover_max_candidates") or DEFAULT_DISCOVER_MAX_CANDIDATES),
         "--default-status",
         args.default_status,
     ]
@@ -1322,6 +1335,8 @@ def _next_command(cfg: dict[str, str], args: Any) -> list[str]:
             rebuild=getattr(args, "rebuild", False),
             json=getattr(args, "json", False),
             hash_policy=getattr(args, "hash_policy", None),
+            force_hash_file_types=getattr(args, "force_hash_file_types", None),
+            skip_hash_file_types=getattr(args, "skip_hash_file_types", None),
             parse_file_types=getattr(args, "parse_file_types", None),
             parse_exclude_file_types=getattr(args, "parse_exclude_file_types", None),
             parse_jobs=getattr(args, "parse_jobs", None),

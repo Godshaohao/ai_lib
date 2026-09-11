@@ -114,6 +114,23 @@ class ReviewGateTest(unittest.TestCase):
             self.assertEqual(gate["attention_items"][0]["category"], "metadata_only")
             self.assertGateItemsExplainTheRule(gate["attention_items"])
 
+    def test_review_gate_does_not_feed_back_previous_release_failure(self) -> None:
+        from lib_guard.review.state import build_review_gate_for_version
+
+        gate = build_review_gate_for_version(
+            {
+                "version_id": "stable",
+                "catalog_status": "OK",
+                "scan_status": "SCAN_PASS",
+                "diff_status": "DIFF_SAME",
+                "pairwise_status": "PAIRWISE_EMPTY",
+                "release_status": "RELEASE_BLOCKED",
+            }
+        )
+
+        self.assertEqual(gate["blocking_open"], 0)
+        self.assertFalse(any(str(item.get("id", "")).startswith("release.fatal:") for item in gate["blocking_items"]))
+
     def test_release_checker_consumes_review_gate(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lib-guard"
+version = "0.5.0"
+description = "Evidence-driven library scan, comparison, review, and release tooling"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+web = ["Flask==3.0.3"]
+
+[project.scripts]
+lg = "lib_guard.short_cli:main"
+lib-guard = "lib_guard.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["lib_guard.test*"]
+
+[tool.setuptools.package-data]
+lib_guard = ["schemas/*.json"]

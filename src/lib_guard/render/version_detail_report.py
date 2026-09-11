@@ -952,6 +952,9 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     diff_dir = _select_diff_dir(version, base_ref=base_ref, base_version=base_version)
     diff_meta = dict(common.version_diff_json(diff_dir, "diff_meta.json"))
     summary = dict(common.version_diff_summary(diff_dir))
+    evidence_semantics = str(summary.get("comparison_semantics") or "")
+    if evidence_semantics in {"overlay", "needs_package_confirmation"}:
+        comparison_semantics = evidence_semantics
     file_diff = dict(common.version_file_diff(diff_dir))
     view_diff = dict(common.version_diff_json(diff_dir, "view_diff.json"))
     type_diff = dict(common.version_diff_json(diff_dir, "type_diff.json"))
@@ -1417,6 +1420,10 @@ def _cn_semantics(value: Any) -> str:
         return "增量"
     if text == "full":
         return "全量"
+    if text == "overlay":
+        return "增量包叠加（未提供不等于删除）"
+    if text == "needs_package_confirmation":
+        return "包范围待确认（暂不判定删除）"
     return text or "-"
 
 

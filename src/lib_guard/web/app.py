@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 import json
@@ -19,10 +20,25 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised by dependency
         "Flask is required for the web console. Install with: python -m pip install -r requirements-web.txt"
     ) from exc
 
-from .read_model import _pending_window, list_file_diff_rows, list_file_tree_rows, list_library_rows, list_version_rows, load_web_state
+from .read_model import (
+    _pending_window,
+    list_file_diff_page,
+    list_file_tree_rows,
+    list_library_candidate_rows,
+    list_library_rows,
+    list_version_rows,
+    load_web_state,
+)
 from lib_guard.atomic import atomic_write_json
-from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
-from lib_guard.short_cli_config import load_config
+from lib_guard.library_registry import LIST_COLUMNS, write_library_rows
+from lib_guard.project_config import (
+    HASH_POLICIES,
+    MAX_PARSE_JOBS,
+    MIN_PARSE_JOBS,
+    file_diff_allowed,
+    file_diff_requires_force_large,
+)
+from lib_guard.short_cli_config import find_config, load_config, update_config_file
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -56,14 +72,45 @@ def _bounded_int(value: Any, *, label: str, minimum: int, maximum: int, default:
     return number
 
 
-_HASH_POLICIES = {"none", "smart", "full"}
 _COMPARE_MODES = {"adjacent", "cumulative"}
 _MARK_TYPES = {"FULL", "FIX", "HOTFIX", "UNKNOWN"}
 _PACKAGE_TYPES = {"FULL_PACKAGE", "PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "UNKNOWN_PACKAGE"}
 _COMPARE_DEFAULTS = {"previous_effective", "full_baseline", "none"}
 _STAGES = {"initial", "stable", "final", "ad-hoc", "dated", "unknown"}
-_JOB_STATUSES = {"QUEUED", "RUNNING", "COMPLETED", "FAILED", "UNKNOWN"}
+
+
+@dataclass(frozen=True)
+class WebActionSpec:
+    scope: str
+    cli_action: str
+
+
+WEB_ACTION_SPECS = {
+    "catalog-refresh": WebActionSpec("library", "cat"),
+    "worklist": WebActionSpec("workspace", "worklist"),
+    "library-discover": WebActionSpec("workspace", "library"),
+    "library-accept": WebActionSpec("workspace", "library"),
+    "library-apply": WebActionSpec("workspace", "library"),
+    "library-add": WebActionSpec("workspace", "library"),
+    "scan": WebActionSpec("version", "scan"),
+    "cmp": WebActionSpec("version", "cmp"),
+    "rel": WebActionSpec("version", "rel"),
+    "next": WebActionSpec("library", "next"),
+    "intake": WebActionSpec("library", "intake"),
+    "window": WebActionSpec("library", "window"),
+    "accept-window": WebActionSpec("library", "accept-window"),
+    "mark": WebActionSpec("version", "mark"),
+    "override": WebActionSpec("version", "override"),
+    "file-diff": WebActionSpec("version", "fd"),
+    "review-gate": WebActionSpec("version", "rv"),
+    "review-packet": WebActionSpec("version", "review"),
+    "action-file": WebActionSpec("library", "action"),
+    "effective-rollback": WebActionSpec("library", "effective"),
+}
+WEB_MUTATING_ACTIONS = frozenset(WEB_ACTION_SPECS)
+_JOB_STATUSES = {"QUEUED", "RUNNING", "COMPLETED", "FAILED"}
 _MAX_BROWSE_CHILDREN = 500
+_MAX_MACHINE_RESULT_BYTES = 8 * 1024 * 1024
 
 
 def _bounded_text(value: Any, *, label: str, limit: int = 400) -> str:
@@ -273,6 +320,8 @@ def _job_failure_summary(output: str) -> str:
 
 
 def _list_setting(value: Any, *, label: str) -> str:
+    if isinstance(value, (list, tuple, set)):
+        value = ",".join(str(item).strip() for item in value if str(item).strip())
     text = _bounded_text(value, label=label, limit=300)
     if text and any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.,- " for char in text):
         raise ValueError(f"{label} 只允许文件类型名称、逗号、空格和连字符")
@@ -282,7 +331,7 @@ def _list_setting(value: Any, *, label: str) -> str:
 def _append_scan_settings(args: list[str], payload: Mapping[str, Any], *, include_no_render: bool = True) -> None:
     hash_policy = _bounded_text(payload.get("hash_policy"), label="哈希策略")
     if hash_policy:
-        if hash_policy not in _HASH_POLICIES:
+        if hash_policy not in HASH_POLICIES:
             raise ValueError("哈希策略只能是 none、smart 或 full")
         args.extend(["--hash-policy", hash_policy])
     parse_jobs = payload.get("parse_jobs")
@@ -291,10 +340,12 @@ def _append_scan_settings(args: list[str], payload: Mapping[str, Any], *, includ
             jobs = int(parse_jobs)
         except (TypeError, ValueError) as exc:
             raise ValueError("解析并发数必须是 1 到 32 的整数") from exc
-        if not 1 <= jobs <= 32:
-            raise ValueError("解析并发数必须是 1 到 32 的整数")
+        if not MIN_PARSE_JOBS <= jobs <= MAX_PARSE_JOBS:
+            raise ValueError(f"解析并发数必须是 {MIN_PARSE_JOBS} 到 {MAX_PARSE_JOBS} 的整数")
         args.extend(["--parse-jobs", str(jobs)])
     for key, flag, label in (
+        ("force_hash_file_types", "--force-hash-file-types", "强制完整哈希类型"),
+        ("skip_hash_file_types", "--skip-hash-file-types", "跳过完整哈希类型"),
         ("parse_file_types", "--parse-file-types", "解析文件类型"),
         ("parse_exclude_file_types", "--parse-exclude-file-types", "排除文件类型"),
     ):
@@ -303,6 +354,105 @@ def _append_scan_settings(args: list[str], payload: Mapping[str, Any], *, includ
             args.extend([flag, value])
     if include_no_render and _payload_bool(payload, "no_render"):
         args.append("--no-render")
+
+
+def parse_machine_result(stdout_path: Path) -> dict[str, Any] | None:
+    """Read the final structured CLI result without interpreting log prose."""
+
+    try:
+        with stdout_path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - _MAX_MACHINE_RESULT_BYTES))
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+    decoder = json.JSONDecoder()
+    starts: list[int] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("{"):
+            starts.append(offset + len(line) - len(stripped))
+        offset += len(line)
+    for start in reversed(starts):
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, Mapping) and not text[end:].strip():
+            return dict(value)
+    return None
+
+
+def _record_machine_result(job_dir: Path, return_code: int) -> dict[str, Any] | None:
+    result = parse_machine_result(job_dir / "stdout.log")
+    if result is None:
+        return None
+    result_path = job_dir / "result.json"
+    _write_json(
+        result_path,
+        {
+            "schema_version": "web_job_result.v1",
+            "result": "ok" if return_code == 0 else "failed",
+            "exit_code": return_code,
+            "cli_result": result,
+        },
+    )
+    return result
+
+
+def _job_result_summary(job_dir: Path) -> str:
+    """Return one bounded operator-facing sentence from the structured result."""
+
+    try:
+        payload = json.loads((job_dir / "result.json").read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return ""
+    result = payload.get("cli_result") if isinstance(payload, Mapping) else None
+    if not isinstance(result, Mapping):
+        return ""
+
+    release_status = str(result.get("release_check_status") or "").upper()
+    release_labels = {
+        "PASS": "发布检查通过",
+        "PASS_WITH_WARNING": "发布检查通过（有提醒）",
+        "BLOCK": "发布检查未通过",
+        "BLOCKED": "发布检查未通过",
+        "FAILED": "发布检查失败",
+    }
+    if release_status:
+        summary = release_labels.get(release_status, f"发布检查：{release_status}")
+        version = str(result.get("version") or "").strip()
+        reasons = [str(item).strip() for item in result.get("block_reasons", []) or [] if str(item).strip()]
+        if version:
+            summary += f" · {version}"
+        if reasons:
+            summary += " · " + "；".join(reasons[:2])
+        return summary[:240]
+
+    status = str(result.get("status") or "").upper()
+    pairwise = result.get("summary")
+    if result.get("pairwise_result") and isinstance(pairwise, Mapping):
+        file_type = str(pairwise.get("file_type") or "文件").upper()
+        changed = "内容有变化" if pairwise.get("changed") else "内容相同"
+        return f"深度核对完成 · {file_type} · {changed}"[:240]
+    if result.get("old_version") and result.get("new_version"):
+        return f"版本对比完成 · {result['old_version']} → {result['new_version']}"[:240]
+    if result.get("scan_dir") and result.get("version"):
+        return f"扫描完成 · {result.get('library') or result.get('library_name') or ''} / {result['version']}"[:240]
+    candidate = result.get("candidate_effective")
+    if isinstance(candidate, Mapping) and candidate.get("effective_id"):
+        return f"处理计划已生成 · 可确认版本 {candidate['effective_id']}"[:240]
+    if result.get("current_effective"):
+        return "已设为当前可用版本"
+    message = str(result.get("message") or "").strip()
+    if message:
+        return message[:240]
+    if status:
+        return f"任务结果：{status}"[:240]
+    return ""
 
 
 def _job_status(job_dir: Path, process: subprocess.Popen[str] | None) -> dict[str, Any]:
@@ -330,37 +480,39 @@ def _job_status(job_dir: Path, process: subprocess.Popen[str] | None) -> dict[st
             log_path = job_dir / "stdout.log"
             if log_path.exists():
                 text = _read_tail(log_path, max_bytes=64_000, max_lines=1_000)
-                marker = '"run_manifest"'
-                marker_index = text.rfind(marker)
-                if marker_index >= 0:
-                    value_start = text.find('"', text.find(":", marker_index) + 1)
-                    value_end = text.find('"', value_start + 1)
-                    if value_start >= 0 and value_end > value_start:
-                        status["run_manifest"] = text[value_start + 1:value_end]
+                machine_result = _record_machine_result(job_dir, return_code)
+                if machine_result is not None:
+                    status["result_file"] = str(job_dir / "result.json")
+                    if machine_result.get("run_manifest"):
+                        status["run_manifest"] = str(machine_result["run_manifest"])
                 if return_code != 0:
-                    status["error"] = _job_failure_summary(text)
+                    failure_source = json.dumps(machine_result, ensure_ascii=False) if machine_result is not None else text
+                    status["error"] = _job_failure_summary(failure_source)
             _write_json(status_path, status)
     else:
         current_status = str(status.get("status") or "").upper()
         if current_status in {"QUEUED", "RUNNING"}:
             status.update({
-                "status": "UNKNOWN",
-                "message": "服务重启后未接管此任务，无法确认最终结果。",
+                "status": "FAILED",
+                "message": "服务重启后未接管此任务，执行结果无法确认。",
             })
         elif not status_file_valid or not current_status:
             status = {
-                "status": "UNKNOWN",
+                "status": "FAILED",
                 "message": "任务状态文件缺失或格式损坏，无法确认最终结果。",
             }
         elif current_status not in _JOB_STATUSES:
             status = {
-                "status": "UNKNOWN",
+                "status": "FAILED",
                 "message": f"任务状态未知（{current_status}），无法确认最终结果。",
             }
         _write_json(status_path, status)
     if str(status.get("status") or "").upper() == "FAILED" and not status.get("error"):
         status["error"] = _job_failure_summary(_read_tail(job_dir / "stdout.log", max_bytes=64_000, max_lines=1_000))
         _write_json(status_path, status)
+    result_summary = _job_result_summary(job_dir)
+    if result_summary:
+        status["result_summary"] = result_summary
     status.update(_job_observation(job_dir, status))
     return status
 
@@ -390,6 +542,7 @@ def create_app(
         return load_web_state(
             config_path=app.config.get("LIB_GUARD_CONFIG"),
             cwd=app.config.get("LIB_GUARD_CWD"),
+            allow_missing_catalog=True,
         )
 
     def job_root(web_state: Mapping[str, Any]) -> Path:
@@ -539,17 +692,27 @@ def create_app(
         return unique
 
     def create_job(action: str, library: str, version: str | None, payload: Mapping[str, Any], web_state: Mapping[str, Any]) -> dict[str, Any]:
+        action_spec = WEB_ACTION_SPECS.get(action)
+        if action_spec is None:
+            raise ValueError(f"网页不允许执行该动作: {action}")
+        if action_spec.scope in {"library", "version"} and library is None:
+            raise ValueError(f"{action} 需要库")
+        if action_spec.scope == "version" and version is None:
+            raise ValueError(f"{action} 需要版本")
         if library is not None:
             _safe_component(library)
         if version is not None:
             _safe_component(version)
         job_id = f"{action}_{secrets.token_hex(6)}"
         root = job_root(web_state) / job_id
+        selected_candidates: list[dict[str, str]] = []
+        candidate_selection: dict[str, Any] | None = None
+        selected_candidate_input: Path | None = None
         args = [sys.executable, "-m", "lib_guard.short_cli"]
         config_value = app.config.get("LIB_GUARD_CONFIG")
         if config_value:
             args.extend(["--config", str(config_value)])
-        cli_action = "rel" if action == "release-check" else action
+        cli_action = action_spec.cli_action
         if action == "catalog-refresh":
             if library is None:
                 raise ValueError("目录刷新需要库")
@@ -577,7 +740,7 @@ def create_app(
             args.extend(["review", "prepare", library, version])
         elif action == "effective-rollback":
             if library is None:
-                raise ValueError("有效组合回退需要库")
+                raise ValueError("当前可用版本回退需要库")
             args.extend(["effective", "rollback", library])
         elif action == "action-file":
             if library is None:
@@ -610,22 +773,85 @@ def create_app(
             if _payload_bool(payload, "json"):
                 args.append("--json")
         elif action == "library-discover":
+            discover_root_text = _bounded_text(payload.get("root"), label="发现起点", limit=1000)
+            if discover_root_text:
+                discover_root = Path(discover_root_text).expanduser().resolve()
+                allowed_roots = _browse_roots(web_state)
+                if not discover_root.is_dir():
+                    raise ValueError("发现起点不存在或不是目录；请填写原始库根下的目录")
+                if not _path_is_within(discover_root, allowed_roots):
+                    allowed = "；".join(str(item) for item in allowed_roots) or "未配置"
+                    raise ValueError(f"发现起点不在允许范围内。当前允许范围：{allowed}")
+                args.extend(["--root", str(discover_root)])
+            discovery = web_state.get("discovery_strategy") if isinstance(web_state.get("discovery_strategy"), Mapping) else {}
             options = (
-                ("max_depth", "--max-depth", "发现深度", 1, 8, 4),
-                ("min_versions", "--min-versions", "最少版本数", 1, 100, 2),
-                ("max_dirs", "--max-dirs", "最大目录数", 1, 100000, 5000),
-                ("max_candidates", "--max-candidates", "最大候选数", 1, 10000, 200),
+                ("max_depth", "--max-depth", "发现深度", 1, 8, int(str(discovery.get("max_depth") or 4))),
+                ("min_versions", "--min-versions", "最少版本数", 1, 100, int(str(discovery.get("min_versions") or 1))),
+                ("max_dirs", "--max-dirs", "最大目录数", 1, 100000, int(str(discovery.get("max_dirs") or 5000))),
+                ("max_candidates", "--max-candidates", "最大候选数", 1, 10000, int(str(discovery.get("max_candidates") or 200))),
             )
             for key, flag, label, minimum, maximum, default in options:
                 args.extend([flag, str(_bounded_int(payload.get(key), label=label, minimum=minimum, maximum=maximum, default=default))])
+        elif action == "library-accept" and "candidate_ids" in payload:
+            candidate_ids = payload.get("candidate_ids")
+            if not isinstance(candidate_ids, list):
+                raise ValueError("候选库必须以勾选列表提交")
+            if not 1 <= len(candidate_ids) <= 200:
+                raise ValueError("每次登记候选库数量必须在 1 到 200 之间")
+            normalized_ids: list[str] = []
+            for value in candidate_ids:
+                candidate_id = _bounded_text(value, label="候选库标识", limit=64)
+                if not candidate_id or candidate_id in normalized_ids:
+                    raise ValueError("候选库勾选项无效或重复")
+                normalized_ids.append(candidate_id)
+            snapshot = list_library_candidate_rows(web_state)
+            if snapshot.get("status") != "READY":
+                raise ValueError("没有可用的候选库快照；请先执行“发现候选库”")
+            by_id = {
+                str(row.get("candidate_id")): row
+                for row in snapshot.get("candidates", [])
+                if isinstance(row, Mapping)
+            }
+            missing = [candidate_id for candidate_id in normalized_ids if candidate_id not in by_id]
+            if missing:
+                raise ValueError("候选库快照已变化；请重新读取列表后再登记")
+            unavailable = [
+                candidate_id
+                for candidate_id in normalized_ids
+                if bool(by_id[candidate_id].get("already_registered")) or bool(by_id[candidate_id].get("name_conflict"))
+            ]
+            if unavailable:
+                raise ValueError("所选候选库已经登记或与现有库名冲突；请取消勾选后重试")
+            selected_candidates = [
+                {
+                    "status": "OK",
+                    **{column: str(by_id[candidate_id].get(column) or "") for column in LIST_COLUMNS if column != "status"},
+                }
+                for candidate_id in normalized_ids
+            ]
+            selected_candidate_input = root / "selected_candidates.tsv"
+            args.extend(["--input", str(selected_candidate_input)])
+            candidate_selection = {
+                "count": len(selected_candidates),
+                "candidate_ids": normalized_ids,
+                "source": str(snapshot.get("source") or ""),
+                "selected_input": str(selected_candidate_input),
+            }
         elif action == "library-add":
             library_id = _bounded_text(payload.get("library_id"), label="正式库名", limit=180)
             root_path = _bounded_text(payload.get("root"), label="库根目录", limit=1000)
             if not library_id or not root_path:
                 raise ValueError("新增库需要填写正式库名和库根目录")
             library_root = Path(root_path).expanduser().resolve()
-            if not library_root.is_dir() or not _path_is_within(library_root, _browse_roots(web_state)):
-                raise ValueError("库根目录必须是允许范围内的现有目录；请点击“浏览目录”选择")
+            browse_roots = _browse_roots(web_state)
+            if not library_root.is_dir():
+                raise ValueError("库根目录不存在或不是目录；请点击“浏览目录”选择")
+            if not _path_is_within(library_root, browse_roots):
+                allowed = "；".join(str(item) for item in browse_roots) or "未配置"
+                raise ValueError(
+                    "库根目录不在当前允许范围内。当前可登记范围："
+                    f"{allowed}。请点击“浏览目录”从原始库根中选择真实库交付目录；项目代码根目录不能直接登记为库。"
+                )
             args.extend([library_id, "--root", root_path])
             for key, flag, label in (
                 ("display_name", "--display-name", "显示名称"),
@@ -645,8 +871,7 @@ def create_app(
             file_type = _bounded_text(payload.get("type"), label="文件类型", limit=80).lower()
             if not base or not file_type:
                 raise ValueError("文件对比需要填写基准版本和文件类型")
-            allowed_types = DEFAULT_FILE_DIFF_TYPES | SUMMARY_ONLY_TYPES | BINARY_METADATA_ONLY_TYPES
-            if file_type not in allowed_types:
+            if not file_diff_allowed(file_type):
                 raise ValueError(f"不支持的文件类型：{file_type}。请使用已登记的视图类型。")
             force_large = _payload_bool(payload, "force_large")
             old_relpath = _bounded_text(payload.get("old_relpath"), label="旧文件相对路径", limit=500)
@@ -656,7 +881,7 @@ def create_app(
                     raise ValueError("旧文件基准版本不能与当前版本相同")
                 old_file = resolve_catalog_file(web_state, library, base, old_relpath, label="旧文件")
                 new_file = resolve_catalog_file(web_state, library, version, relpath, label="新文件")
-                if file_type in (SUMMARY_ONLY_TYPES | BINARY_METADATA_ONLY_TYPES) and not force_large:
+                if file_diff_requires_force_large(file_type) and not force_large:
                     raise ValueError(f"{file_type} 属于轻量证据类型；深度文件对比需要显式勾选 force-large。")
                 args.extend(["fd", "--old", str(old_file), "--new", str(new_file), "--type", file_type])
             else:
@@ -704,11 +929,11 @@ def create_app(
             if _payload_bool(payload, "no_render"):
                 args.append("--no-render")
         elif action == "effective-rollback":
-            target = _bounded_text(payload.get("to"), label="目标有效组合", limit=180)
+            target = _bounded_text(payload.get("to"), label="目标版本组合", limit=180)
             by = _bounded_text(payload.get("by"), label="回退人", limit=80)
             reason = _bounded_text(payload.get("reason"), label="回退原因", limit=500)
             if not target or not by or not reason:
-                raise ValueError("有效组合回退需要填写目标、处理人和原因")
+                raise ValueError("当前可用版本回退需要填写目标、处理人和原因")
             args.extend(["--to", target, "--by", by, "--reason", reason])
         elif action == "cmp":
             base = str(payload.get("base") or "").strip()
@@ -747,7 +972,7 @@ def create_app(
             if _payload_bool(payload, "accept"):
                 accepted_by = _bounded_text(payload.get("accepted_by"), label="接受人", limit=80)
                 if not accepted_by:
-                    raise ValueError("接受候选有效版必须填写接受人")
+                    raise ValueError("设为当前可用版本必须填写确认人")
                 args.extend(["--by", accepted_by])
                 note = _bounded_text(payload.get("note"), label="接受说明")
                 if note:
@@ -765,7 +990,7 @@ def create_app(
         elif action == "accept-window":
             accepted_by = _bounded_text(payload.get("accepted_by"), label="接受人", limit=80)
             if not accepted_by:
-                raise ValueError("接受候选有效版必须填写接受人")
+                raise ValueError("设为当前可用版本必须填写确认人")
             args.extend(["--accepted-by", accepted_by])
             note = _bounded_text(payload.get("note"), label="接受说明")
             if note:
@@ -818,12 +1043,20 @@ def create_app(
             },
             "created_by": "web_console",
         }
+        if candidate_selection is not None:
+            request_payload["candidate_selection"] = candidate_selection
         with jobs_lock:
             if not app.config.get("TESTING"):
                 if any(process.poll() is None and job_targets.get(existing) == library for existing, process in jobs.items()):
                     raise RuntimeError(f"库正在执行其他动作，请等待当前任务结束：{library}")
             created_epoch = time.time()
             root.mkdir(parents=True, exist_ok=False)
+            if selected_candidate_input is not None:
+                write_library_rows(
+                    selected_candidate_input,
+                    selected_candidates,
+                    header_note="网页勾选的候选库；仅用于本次登记任务，原始候选快照未改写。",
+                )
             _write_json(root / "request.json", request_payload)
             _write_json(root / "status.json", {"job_id": job_id, "status": "QUEUED", "action": action, "created_epoch": created_epoch})
 
@@ -861,9 +1094,48 @@ def create_app(
             "status": "PASS",
             "paths": web_state["paths"],
             "scan_strategy": web_state["scan_strategy"],
+            "discovery_strategy": web_state["discovery_strategy"],
             "runtime_state": web_state["runtime_state"],
-            "catalog_source": "existing_catalog",
+            "catalog_state": web_state["catalog_state"],
+            "catalog_source": "existing_catalog" if web_state["catalog_state"] == "READY" else "not_initialized",
             "write_policy": "web_actions_are_allowlisted",
+        })
+
+    @app.post("/api/workspace/config")
+    def workspace_config_update() -> Any:
+        try:
+            payload = request_payload()
+            config_file = find_config(app.config.get("LIB_GUARD_CWD") or Path.cwd(), app.config.get("LIB_GUARD_CONFIG"))
+            allowed_keys = (
+                "raw_root",
+                "library_type",
+                "parse_jobs",
+                "hash_policy",
+                "force_hash_file_types",
+                "skip_hash_file_types",
+                "parse_file_types",
+                "parse_exclude_file_types",
+                "render_detail",
+                "discover_max_depth",
+                "discover_min_versions",
+                "discover_max_dirs",
+                "discover_max_candidates",
+            )
+            unknown = sorted(str(key) for key in payload if str(key) not in allowed_keys)
+            if unknown:
+                raise ValueError(f"网页配置不支持这些字段：{', '.join(unknown)}")
+            updates = {key: payload[key] for key in allowed_keys if key in payload}
+            if not updates:
+                raise ValueError("没有可保存的配置项")
+            result = update_config_file(config_file, updates)
+            web_state = state()
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 400
+        return jsonify({
+            **result,
+            "paths": web_state["paths"],
+            "scan_strategy": web_state["scan_strategy"],
+            "discovery_strategy": web_state["discovery_strategy"],
         })
 
     @app.get("/api/path-children")
@@ -888,6 +1160,14 @@ def create_app(
         except (FileNotFoundError, OSError) as exc:
             return jsonify({"status": "ERROR", "error": str(exc)}), 503
         return jsonify({"status": "PASS", "libraries": list_library_rows(web_state)})
+
+    @app.get("/api/library-candidates")
+    def library_candidates() -> Any:
+        try:
+            web_state = state()
+            return jsonify(list_library_candidate_rows(web_state))
+        except (FileNotFoundError, OSError) as exc:
+            return jsonify({"status": "ERROR", "error": f"工作区暂不可用：{exc}"}), 503
 
     @app.get("/api/libraries/<library>/versions")
     def versions(library: str) -> Any:
@@ -921,7 +1201,24 @@ def create_app(
             return jsonify({"status": "ERROR", "error": f"工作区暂不可用：{exc}"}), 503
         if find_catalog_version(web_state, library, version) is None:
             return jsonify({"status": "NOT_FOUND", "error": f"版本不存在: {library}/{version}"}), 404
-        rows = list_file_diff_rows(web_state, library, version)
+        try:
+            offset = _bounded_int(request.args.get("offset"), label="offset", minimum=0, maximum=1_000_000, default=0)
+            limit = _bounded_int(request.args.get("limit"), label="limit", minimum=1, maximum=200, default=100)
+            change = _bounded_text(request.args.get("change"), label="变化类型", limit=32).upper()
+            file_type = _bounded_text(request.args.get("file_type"), label="视图类型", limit=64).lower()
+            query = _bounded_text(request.args.get("query"), label="文件搜索词", limit=240)
+        except ValueError as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 400
+        page = list_file_diff_page(
+            web_state,
+            library,
+            version,
+            change=change or None,
+            file_type=file_type or None,
+            query=query or None,
+            offset=offset,
+            limit=limit,
+        )
         version_item = find_catalog_version(web_state, library, version) or {}
         diff = version_item.get("diff") if isinstance(version_item.get("diff"), Mapping) else {}
         base_version = next(
@@ -933,8 +1230,13 @@ def create_app(
             "library": library,
             "version": version,
             "base_version": base_version,
-            "rows": rows,
-            "count": len(rows),
+            "rows": page["rows"],
+            "count": page["total"],
+            "pagination": {"offset": offset, "limit": limit, "total": page["total"], "next_offset": page["next_offset"]},
+            "counts": page["counts"],
+            "comparison_semantics": page.get("comparison_semantics", "complete_snapshot"),
+            "omitted_from_overlay": page.get("omitted_from_overlay", 0),
+            "raw_removed": page.get("raw_removed", 0),
             "source": "existing_file_diff_evidence",
         })
 
@@ -1017,11 +1319,11 @@ def create_app(
                 window_state = str(window.get("state") or "MISSING").upper()
                 candidate = str(window.get("candidate_effective_id") or "")
                 if window_state == "INVALID":
-                    return jsonify({"status": "ERROR", "error": "接入窗口文件无法读取，请重新生成接入窗口。"}), 422
+                    return jsonify({"status": "ERROR", "error": "接入建议文件无法读取，请重新生成处理建议。"}), 422
                 if window_state != "PENDING" or not candidate:
-                    return jsonify({"status": "BLOCKED", "error": "当前没有处于待接受状态的候选有效版；请先生成接入窗口。"}), 409
+                    return jsonify({"status": "BLOCKED", "error": "当前没有可确认的新版本；请先生成处理建议。"}), 409
                 if not window.get("candidate_manifest_exists", False):
-                    return jsonify({"status": "BLOCKED", "error": "候选有效版尚未生成完整清单；请先完成接入计划。"}), 409
+                    return jsonify({"status": "BLOCKED", "error": "候选版本尚未生成完整清单；请先生成处理计划。"}), 409
             return jsonify(create_job(action, library, None, payload, web_state)), 202
         except (FileNotFoundError, OSError) as exc:
             return jsonify({"status": "ERROR", "error": f"工作区暂不可用：{exc}"}), 503

@@ -15,6 +15,7 @@ CLI 参考负责命令契约，配置参考负责可修改项，数据契约负�
 | 工程维护者 | [架构说明](architecture.md) -> [数据契约](data_contract.md) | 理清事实源、状态模型和渲染边界 |
 | 策略维护者 | [配置参考](config_reference.md) | 修改 policy、workspace 配置和扫描策略 |
 | 测试/发布维护者 | [测试计划](test_plan.md) | 确认修改满足回归和手工验收 |
+| 代码贡献者/AI | [架构说明](architecture.md#标准变更流程) | 按统一契约新增脚本、配置和测试 |
 
 ## 当前文档
 

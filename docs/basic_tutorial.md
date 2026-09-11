@@ -13,7 +13,7 @@ Status: current
 | 项 | 说明 |
 | --- | --- |
 | 目标读者 | 库管理员、IP 使用者、首次接入新版本的人 |
-| 目标判断 | 新库/新版本是否能进入审查、是否能成为当前有效版、是否能 release |
+| 目标判断 | 新库/新版本是否能进入审查、是否能成为当前可用版本、是否能 release |
 | 允许输入 | RAW 库根、人工确认的库名/版本名、package type/Base 修正、review 决策 |
 | 主要输出 | `catalog.json`、`catalog_runtime.json`、scan evidence、diff evidence、Version Detail、current effective、release manifest、每次运行的 `run_manifest.json` |
 | 禁止做法 | 手改生成 HTML、手改 `catalog.json` 的 scan/diff 字段、用全量 discover 代替已知库入库 |
@@ -143,7 +143,7 @@ $WORK/config/library_catalog.yml
 大 RAW 树上不要把 discover 当成日常刷新。默认 discover 是浅层、有上限的候选发现：
 
 ```csh
-$PROJ/scripts/lg.csh library discover --max-depth 4 --max-dirs 5000 --max-candidates 200
+$PROJ/scripts/lg.csh library discover --max-depth 4 --min-versions 1 --max-dirs 5000 --max-candidates 200
 ```
 
 如果已经知道库根，优先用 `library add ... --apply --refresh-catalog`，不要递归扫整棵树。
@@ -151,7 +151,7 @@ $PROJ/scripts/lg.csh library discover --max-depth 4 --max-dirs 5000 --max-candid
 discover 的最小规则是：
 
 - RAW root 第一层 `Vendor*` 目录只当供应商分组，不作为库候选。
-- 候选库根必须直接包含多个版本/交付实例目录。
+- 候选库根必须直接包含至少一个带交付视图的版本/交付实例目录；只有一个版本时会标为待确认候选。
 - 版本/交付实例目录是搜索边界。
 - `phys_ver`、`dft`、`lef`、`lib` 等版本内部 view/实现目录不会作为库候选。
 - 同一个 resolved root 只输出一次；被更深层候选覆盖的祖先目录不会写进候选 TSV。
@@ -174,7 +174,7 @@ lg next --ready
 lg library list --plain
 lg library list Vendor_Z.npu --versions --plain
 
-# 4. 单库预演：不执行 scan/diff，只看 FULL/增量、Base、候选有效版
+# 4. 单库预演：不执行 scan/diff，只看完整包/增量包、基准版和可确认版本
 lg next Vendor_Z.npu
 
 # 5. 如果提示需要修正包类型/Base，先看修正建议
@@ -183,7 +183,7 @@ lg next Vendor_Z.npu --fix
 # 6. 确认 Base、Catalog类型、需扫描版本后执行 scan/effective compare/render
 lg next Vendor_Z.npu --apply
 
-# 7. Version Detail 审查通过后接受候选有效版
+# 7. Version Detail 审查通过后，把审查后的版本设为当前可用版本
 lg next Vendor_Z.npu --accept --by <USER> --note "review passed"
 ```
 
@@ -249,18 +249,18 @@ $PROJ/scripts/lg.csh library list <LIBRARY> --versions --plain
 | 场景 | 判断方式 | 推荐命令 |
 | --- | --- | --- |
 | 完整包流程 | 最新交付本身是完整包，作为新的完整基线 | `lg next <LIBRARY>` 预演，确认后 `lg next <LIBRARY> --apply` |
-| 增量流程 | 最新完整包作为基线，后续 FIX/HOTFIX 叠加成候选组合 | `lg next <LIBRARY>` 预演，确认后 `lg next <LIBRARY> --apply` |
+| 增量流程 | 最新完整包作为基线，后续 FIX/HOTFIX 叠加成可确认版本 | `lg next <LIBRARY>` 预演，确认后 `lg next <LIBRARY> --apply` |
 | 包类型不确定 | 有版本被识别为 `UNKNOWN_PACKAGE` 或 Base 不可信 | `lg next <LIBRARY> --fix` 看修正建议，再 `lg mark ...` 或 `lg library override ...` |
-| 审查通过 | 版本详情页确认可用后写入当前有效版 | `lg next <LIBRARY> --accept --by <USER> --note "审查通过"` |
+| 审查通过 | 版本详情页确认可用后写入当前可用版本 | `lg next <LIBRARY> --accept --by <USER> --note "审查通过"` |
 
-`lg next <LIBRARY>` 默认只读，不执行 scan/diff，不改 current effective。它会显示：
+`lg next <LIBRARY>` 默认只读，不执行 scan/diff，不改当前可用版本。它会显示：
 
 ```text
 基线确认
 流程判断：完整包流程 / 完整包流程 + 增量流程
 版本选择表
 建议修正命令
-当前组合
+当前可用版本
 执行计划
 ```
 
@@ -277,7 +277,7 @@ lg next <LIBRARY> --accept --by <USER> --note "review passed"
 ```
 
 第一步只读，第二步执行 scan/diff/effective compare 并刷新 Version Detail，第三步在审查通过后
-写入 current effective。遇到异常再看 `lg next <LIBRARY> --fix`。
+写入当前可用版本。遇到异常再看 `lg next <LIBRARY> --fix`。
 
 ## 2.2 手动测试最小闭环
 
@@ -331,15 +331,15 @@ firefox <render_summary.open_first>
 | `scan <LIBRARY> <VERSION>` | 是 | 否 | 是，仅该版本 | 生成 scan evidence |
 | `scan <LIBRARY> --missing` | 是，批量缺失项 | 否 | 是，成功版本集合 | 补齐 scan evidence |
 | `next` | 否 | 否 | 否 | 小白入口：批量查看库下一步 |
-| `next <LIBRARY>` | 否 | 否 | 否 | 预演该库完整包/增量流程、基准版和候选组合 |
+| `next <LIBRARY>` | 否 | 否 | 否 | 预演该库完整包/增量流程、基准版和可确认版本 |
 | `next <LIBRARY> --apply` | 是，window 内版本 | 是，effective compare | 是，window 内版本 | 确认后执行 scan、effective compare、刷新详情页 |
-| `next <LIBRARY> --accept --by ...` | 否 | 否 | 是，窗口内版本 | 接受候选组合 |
+| `next <LIBRARY> --accept --by ...` | 否 | 否 | 是，窗口内版本 | 设为当前可用版本 |
 | `worklist` | 否 | 否 | 否 | 专家别名：批量查看哪些库可执行、需人工确认或无新版本 |
 | `cmp <LIBRARY> <VERSION> --base ...` | 仅 `--scan-if-missing/--rescan` 时 | 是 | 是，target 版本 | 手动 compare/debug |
-| `intake <LIBRARY> --plan-only` | 否 | 否 | 否 | 专家入口：生成接入计划；默认人工可读，`--json` 才输出机器 JSON |
-| `intake <LIBRARY>` | 是，window 内版本 | 是，effective compare | 是，window 内版本 | 专家入口：执行接入计划 |
-| `window <LIBRARY>` | 否 | 否 | 否 | 专家入口：查看 Base、候选版本、Catalog 类型和建议修正命令 |
-| `accept-window <LIBRARY>` | 否 | 否 | 是，窗口内版本 | 接受候选组合 |
+| `intake <LIBRARY> --plan-only` | 否 | 否 | 否 | 专家入口：生成完整处理计划；默认人工可读，`--json` 才输出机器 JSON |
+| `intake <LIBRARY>` | 是，window 内版本 | 是，effective compare | 是，window 内版本 | 专家入口：执行完整处理计划 |
+| `window <LIBRARY>` | 否 | 否 | 否 | 专家入口：查看系统已生成的接入建议文件 |
+| `accept-window <LIBRARY>` | 否 | 否 | 是，窗口内版本 | 专家入口：把候选结果设为当前可用版本 |
 | `effective rollback <LIBRARY> --to <ID>` | 否 | 否 | 是，库级页面 | 错误 accept 后把 current effective 指回旧 manifest |
 | `mark <LIBRARY> <VERSION>` | 否 | 否 | 是，该版本 | 修正 package type |
 | `rv ...` | 否 | 否 | 否 | Review Gate 决策 |
@@ -486,9 +486,9 @@ Catalog 首页只负责“找库”和进入库工作台。普通 `cat` 不重�
 
 进入某个库后，二级库页默认只展示：
 
-- 当前有效版：当前建议使用/已接受的版本或 effective 组合。
+- 当前可用版本：当前建议使用或已接受的版本；底层可能对应 raw 版本或 effective 组合。
 - 最新待审版：最新 raw 交付或候选版本。
-- 本次审查：最新待审版相对当前/上一有效版的 scan/diff 状态。
+- 本次审查：最新待审版相对当前/上一可用版本的 scan/diff 状态。
 - 证据入口：进入 Version Detail、Effective、Release Preview。
 
 历史版本、历史 scan/diff 和 compare 记录默认折叠。不要把库工作台当成全版本
@@ -498,12 +498,12 @@ Catalog 首页只负责“找库”和进入库工作台。普通 `cat` 不重�
 
 | 字段 | 含义 | 典型来源 |
 | --- | --- | --- |
-| 当前有效版 | 当前建议接入/已接受的 raw 版本或 effective 组合 | `current_effective.json`、catalog current 指针、版本 `current_effective` 标记 |
-| 最新待审版 | 最新 raw 交付或候选版本 | `latest_version`，否则取非当前有效版的最新版本 |
+| 当前可用版本 | 当前建议接入或已接受的 raw 版本/effective 组合 | `current_effective.json`、catalog current 指针、版本 `current_effective` 标记 |
+| 最新待审版 | 最新 raw 交付或候选版本 | `latest_version`，否则取非当前可用版本的最新版本 |
 | Effective 证据 | 已生成的 effective manifest/release preview 证据入口 | `$WORK/catalog/html/libraries/.../effective/...` |
 
-Effective 证据存在不等于它一定是当前有效版；只有被 current 指针或 manifest 标记为
-current 时，才会升级为“当前有效版”。
+Effective 证据存在不等于它一定是当前可用版本；只有被 current 指针或 manifest 标记为
+current 时，才会升级为“当前可用版本”。
 
 `cat --refresh-catalog --with-evidence` 的作用是从正式 `library_catalog.yml` 重新生成
 `$WORK/catalog/catalog.json` 和 Catalog HTML，并顺手收集轻量文件类型 evidence。
@@ -559,7 +559,7 @@ python3 -c "import json; d=json.load(open('$WORK/catalog/catalog.json')); print(
 2. catalog.json：版本是否被 catalog 识别
 3. scan_out：目标版本是否有 scan evidence
 4. diff：目标版本是否有相对正确 base 的 diff evidence
-5. effective/window：当前有效版和候选窗口是否正确
+5. current/effective/window：当前可用版本和新版本建议是否正确
 6. HTML：是否只是投影陈旧
 ```
 
@@ -574,7 +574,7 @@ python3 -c "import json; d=json.load(open('$WORK/catalog/catalog.json')); print(
 | `cat --refresh-catalog --with-evidence` | Catalog 首页、library 页、version 页投影 | 否 | 否 | 低频全局 catalog 重建 |
 | `cat <LIBRARY> --refresh-catalog --with-evidence` | 指定库二层工作台和相关 Version Detail | 否 | 否 | 推荐用于大库日常局部刷新；仍受 shrink guard 保护 |
 | `cat <LIBRARY> <VERSION>` | 指定 Version Detail | 否 | 否 | 只重新投影页面，不更新证据 |
-| `cat <LIBRARY> --update-detail` | update-detail 目标版本 | 按需 | 是 | 用上一有效版/当前有效版生成更新详情 |
+| `cat <LIBRARY> --update-detail` | update-detail 目标版本 | 按需 | 是 | 用上一可用版本/当前可用版本生成更新详情 |
 | `scan <LIBRARY> <VERSION>` | 该版本 Version Detail、scan HTML | 是 | 否 | Catalog 导航页可能延迟刷新 |
 | `scan <LIBRARY> <VERSION> --no-render` | 只更新 scan HTML | 是 | 否 | 诊断慢 scan；Version Detail 不刷新 |
 | `cmp <LIBRARY> <VERSION> --base ...` | target Version Detail | 仅 `--scan-if-missing/--rescan` | 是 | 手动 compare/debug |
@@ -599,7 +599,7 @@ render_summary.deferred_file
 ```text
 Version Detail 是否已刷新：render_summary.open_first
 库工作台是否只是导航延迟：render_summary.deferred_file
-当前有效版/最新待审版是否选择正确：库工作台第一屏
+当前可用版本/最新待审版是否选择正确：库工作台第一屏
 ```
 
 ## 4. 人工确认版本关系

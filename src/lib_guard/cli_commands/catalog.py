@@ -449,6 +449,8 @@ def run_catalog_workflow(args: Namespace) -> int:
         skip_cache=args.skip_cache,
         no_cache=args.no_cache,
         hash_policy=getattr(args, "hash_policy", None),
+        force_hash_file_types=split_strategy_list(getattr(args, "force_hash_file_types", None)),
+        skip_hash_file_types=split_strategy_list(getattr(args, "skip_hash_file_types", None)),
         parse_file_types=split_strategy_list(getattr(args, "parse_file_types", None)),
         parse_exclude_file_types=split_strategy_list(getattr(args, "parse_exclude_file_types", None)),
         tool_version="0.5.0",
@@ -550,6 +552,8 @@ def _compare_scan_child(args: Namespace, library: str, version: str) -> Namespac
         skip_cache=getattr(args, "skip_cache", False),
         no_cache=getattr(args, "no_cache", False),
         hash_policy=getattr(args, "hash_policy", None),
+        force_hash_file_types=getattr(args, "force_hash_file_types", None),
+        skip_hash_file_types=getattr(args, "skip_hash_file_types", None),
         parse_file_types=getattr(args, "parse_file_types", None),
         parse_exclude_file_types=getattr(args, "parse_exclude_file_types", None),
     )
@@ -997,9 +1001,18 @@ def run_catalog_release_check(args: Namespace) -> int:
     if not scan_dir:
         raise ValueError(f"catalog version {item['version_key']} has no scan_dir; run it first")
     diff_dir = getattr(args, "diff", None)
+    diff = item.get("diff", {}) or {}
     if not diff_dir and args.diff_mode:
-        diff = item.get("diff", {}) or {}
         diff_dir = diff.get("cumulative_diff_dir") if args.diff_mode == "cumulative" else diff.get("adjacent_diff_dir")
+    if not diff_dir and not args.diff_mode:
+        diff_dir = next(
+            (
+                diff.get(key)
+                for key in ("base_diff_dir", "adjacent_diff_dir", "cumulative_diff_dir")
+                if diff.get(key)
+            ),
+            None,
+        )
     review_gate_path, review_gate = _review_gate_for_catalog_version(args)
     result = check_release_scan(
         scan_dir,

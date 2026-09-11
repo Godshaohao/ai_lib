@@ -37,6 +37,7 @@ def render_version_detail_only(
     library: str,
     version: str,
     export_markdown: bool = False,
+    catalog_view: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Render exactly one Version Detail page using single-version enrichment.
 
@@ -48,12 +49,13 @@ def render_version_detail_only(
     from lib_guard.review.state import build_review_version_state
     from lib_guard.render.version_detail_report import render_version_detail_page
 
-    catalog = load_catalog_view(catalog_path)
+    catalog = catalog_view if catalog_view is not None else load_catalog_view(catalog_path)
     lib_state, version_state = build_review_version_state(
         catalog,
         out_dir=out_dir,
         library=library,
         version=version,
+        runtime_merged=True,
     )
     page = render_version_detail_page(out_dir, lib_state, version_state, export_markdown=export_markdown)
     return {
@@ -125,6 +127,7 @@ def render_impacted_version_details(
     """Render affected Version Detail pages without full catalog render."""
 
     selected = _version_impacts(impacts)
+    catalog_view = load_catalog_view(catalog_path) if selected else None
     rendered: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     for item in selected:
@@ -135,6 +138,7 @@ def render_impacted_version_details(
                     out_dir=out_dir,
                     library=str(item.library),
                     version=str(item.version),
+                    catalog_view=catalog_view,
                 )
             )
         except Exception as exc:  # pragma: no cover - exercised by integration failures

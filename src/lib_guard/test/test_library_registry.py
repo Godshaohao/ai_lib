@@ -27,7 +27,7 @@ class LibraryRegistryTest(unittest.TestCase):
 
             from lib_guard.library_registry import discover_library_candidates
 
-            candidates = discover_library_candidates(raw, default_status="OK")
+            candidates = discover_library_candidates(raw)
             active_ids = [item.library_id for item in candidates if item.status == "REVIEW"]
 
             self.assertEqual(
@@ -42,6 +42,55 @@ class LibraryRegistryTest(unittest.TestCase):
             self.assertFalse(any(item.library_id == "vendor_A" for item in candidates))
             self.assertFalse(any("source_package" in item for item in active_ids))
             self.assertFalse(any(item.status == "IGNORE" for item in candidates))
+
+    def test_discover_honors_explicit_default_status(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "Vendor_A" / "ucie"
+            for version in ["20260701_full", "20260801_fix"]:
+                view_dir = root / version / "lef"
+                view_dir.mkdir(parents=True)
+                (view_dir / "top.lef").write_text("MACRO U\n", encoding="utf-8")
+
+            from lib_guard.library_registry import discover_library_candidates
+
+            candidates = discover_library_candidates(raw, default_status="OK")
+
+            self.assertEqual([item.library_id for item in candidates], ["Vendor_A_ucie"])
+            self.assertEqual([item.status for item in candidates], ["OK"])
+
+    def test_discover_start_root_preserves_identity_relative_to_raw_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "Vendor_A" / "ucie"
+            for version in ["20260701_full", "20260801_fix"]:
+                view_dir = root / version / "LEF"
+                view_dir.mkdir(parents=True)
+                (view_dir / "top.lef").write_text("MACRO U\n", encoding="utf-8")
+
+            from lib_guard.library_registry import discover_library_candidates
+
+            candidates = discover_library_candidates(raw, start_root=raw / "Vendor_A")
+
+            self.assertEqual([item.library_id for item in candidates], ["Vendor_A_ucie"])
+            self.assertEqual(candidates[0].vendor, "Vendor_A")
+
+    def test_discover_includes_single_version_libraries_by_default_but_marks_for_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "Vendor_A" / "single_drop"
+            view_dir = root / "20260901_full" / "LEF"
+            view_dir.mkdir(parents=True)
+            (view_dir / "top.lef").write_text("MACRO U\n", encoding="utf-8")
+
+            from lib_guard.library_registry import discover_library_candidates
+
+            candidates = discover_library_candidates(raw)
+
+            self.assertEqual([item.library_id for item in candidates], ["Vendor_A_single_drop"])
+            self.assertEqual(candidates[0].version_count, 1)
+            self.assertEqual(candidates[0].status, "REVIEW")
+            self.assertIn("single_version_needs_confirmation", candidates[0].reason)
 
     def test_discover_deduplicates_same_resolved_library_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:

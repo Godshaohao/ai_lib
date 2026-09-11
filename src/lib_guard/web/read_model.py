@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Mapping
+import hashlib
 import json
 import re
 
@@ -17,6 +18,7 @@ from lib_guard.catalog.runtime import (
     merge_catalog_runtime,
 )
 from lib_guard.effective.pointer import load_current_pointer
+from lib_guard.library_registry import read_library_list, suggest_formal_library_id
 from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
 from lib_guard.short_cli_config import load_config
 from lib_guard.window.resolver import default_window_path
@@ -30,6 +32,7 @@ def load_web_state(
     config_path: str | Path | None = None,
     cwd: str | Path | None = None,
     config: Mapping[str, Any] | None = None,
+    allow_missing_catalog: bool = False,
 ) -> dict[str, Any]:
     """Load the existing workspace state without refreshing or discovering."""
 
@@ -37,18 +40,25 @@ def load_web_state(
     cfg = dict(config) if config is not None else load_config(root, config_path)
     catalog_path = Path(str(cfg.get("catalog") or "catalog/catalog.json")).expanduser().resolve()
     if not catalog_path.exists():
-        raise FileNotFoundError(f"catalog not found: {catalog_path}")
-    try:
-        raw_catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError) as exc:
-        raise OSError(f"catalog 无法读取或格式已损坏: {catalog_path}") from exc
-    if not isinstance(raw_catalog, Mapping):
-        raise OSError(f"catalog 顶层必须是 JSON 对象: {catalog_path}")
+        if not allow_missing_catalog:
+            raise FileNotFoundError(f"catalog not found: {catalog_path}")
+        raw_catalog: Mapping[str, Any] = {"libraries": []}
+        catalog_state = "NOT_INITIALIZED"
+    else:
+        try:
+            loaded_catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError) as exc:
+            raise OSError(f"catalog 无法读取或格式已损坏: {catalog_path}") from exc
+        if not isinstance(loaded_catalog, Mapping):
+            raise OSError(f"catalog 顶层必须是 JSON 对象: {catalog_path}")
+        raw_catalog = loaded_catalog
+        catalog_state = "READY"
     runtime = load_catalog_runtime(catalog_path, raw_catalog)
     catalog = merge_catalog_runtime(raw_catalog, runtime)
     return {
         "config": cfg,
         "catalog_path": catalog_path,
+        "catalog_state": catalog_state,
         "runtime_state": inspect_catalog_runtime(catalog_path, raw_catalog),
         "catalog_html": Path(str(cfg.get("catalog_html") or catalog_path.parent / "html")).expanduser().resolve(),
         "workspace": Path(str(cfg.get("workspace") or catalog_path.parent.parent)).expanduser().resolve(),
@@ -63,12 +73,130 @@ def load_web_state(
         "scan_strategy": {
             "hash_policy": str(cfg.get("hash_policy") or "smart"),
             "parse_jobs": str(cfg.get("parse_jobs") or "8"),
+            "force_hash_file_types": str(cfg.get("force_hash_file_types") or ""),
+            "skip_hash_file_types": str(cfg.get("skip_hash_file_types") or ""),
             "parse_file_types": str(cfg.get("parse_file_types") or ""),
             "parse_exclude_file_types": str(cfg.get("parse_exclude_file_types") or ""),
             "render_detail": str(cfg.get("render_detail") or "true").lower() not in {"0", "false", "no"},
         },
+        "discovery_strategy": {
+            "max_depth": str(cfg.get("discover_max_depth") or "4"),
+            "min_versions": str(cfg.get("discover_min_versions") or "1"),
+            "max_dirs": str(cfg.get("discover_max_dirs") or "5000"),
+            "max_candidates": str(cfg.get("discover_max_candidates") or "200"),
+        },
         "catalog": catalog,
     }
+
+
+def _candidate_id(library_id: str, root_abs: str) -> str:
+    """Return a stable browser-safe identity for one persisted candidate row."""
+
+    source = f"{library_id}\0{Path(root_abs).expanduser().resolve()}"
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:20]
+
+
+def list_library_candidate_rows(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the saved library-candidate snapshot without rediscovering RAW.
+
+    Discovery is intentionally a separate, bounded job.  The console only
+    projects its persisted TSV/JSON evidence so selecting a candidate cannot
+    accidentally walk a large library tree again.
+    """
+
+    config = state.get("config") if isinstance(state.get("config"), Mapping) else {}
+    candidates_path = Path(str(config.get("library_candidates") or "config/library_candidates/latest.tsv")).expanduser()
+    registry_path = Path(str(config.get("library_registry") or "config/library_registry.tsv")).expanduser()
+    result: dict[str, Any] = {
+        "status": "MISSING",
+        "source": str(candidates_path.resolve()),
+        "evidence": str(candidates_path.with_suffix(".json").resolve()),
+        "registry": str(registry_path.resolve()),
+        "candidates": [],
+        "count": 0,
+        "warnings": [],
+        "truncated": False,
+    }
+    if not candidates_path.is_file():
+        return result
+    try:
+        rows = read_library_list(candidates_path)
+    except (OSError, ValueError) as exc:
+        result.update({"status": "INVALID", "error": f"候选库快照无法读取：{exc}"})
+        return result
+
+    metadata_by_key: dict[tuple[str, str], Mapping[str, Any]] = {}
+    evidence_path = candidates_path.with_suffix(".json")
+    if evidence_path.is_file():
+        try:
+            loaded = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            loaded = None
+            result["warnings"].append("候选库补充证据无法读取；仍显示 TSV 中的可登记项。")
+        if isinstance(loaded, Mapping):
+            result["warnings"].extend(str(item) for item in loaded.get("warnings", []) if str(item).strip())
+            result["truncated"] = bool(loaded.get("truncated"))
+            for item in loaded.get("candidates", []) or []:
+                if isinstance(item, Mapping):
+                    library_id = str(item.get("library_id") or "").strip()
+                    root_abs = str(item.get("root_abs") or "").strip()
+                    if library_id and root_abs:
+                        metadata_by_key[(library_id, str(Path(root_abs).expanduser().resolve()))] = item
+
+    registry_roots: set[str] = set()
+    registry_roots_by_id: dict[str, set[str]] = {}
+    if registry_path.is_file():
+        try:
+            for row in read_library_list(registry_path):
+                if str(row.get("status") or "").upper() not in {"OK", "ENABLE", "ENABLED"}:
+                    continue
+                library_id = str(row.get("library_id") or "").strip()
+                root_abs = str(row.get("root_abs") or "").strip()
+                if root_abs:
+                    root_key = str(Path(root_abs).expanduser().resolve())
+                    registry_roots.add(root_key)
+                    if library_id:
+                        registry_roots_by_id.setdefault(library_id, set()).add(root_key)
+        except (OSError, ValueError):
+            result["warnings"].append("人工登记表无法读取；未标记已登记状态。")
+
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        library_id = str(row.get("library_id") or "").strip()
+        root_abs = str(row.get("root_abs") or "").strip()
+        if not library_id or not root_abs:
+            continue
+        root_key = str(Path(root_abs).expanduser().resolve())
+        metadata = metadata_by_key.get((library_id, root_key), {})
+        row_for_suggestion = {
+            "library_id": library_id,
+            "display_name": str(row.get("display_name") or ""),
+            "vendor": str(row.get("vendor") or ""),
+            "middle_path": str(row.get("middle_path") or ""),
+        }
+        example_versions = metadata.get("example_versions") if isinstance(metadata, Mapping) else []
+        same_id_roots = registry_roots_by_id.get(library_id, set())
+        already_registered = root_key in registry_roots
+        candidates.append(
+            {
+                "candidate_id": _candidate_id(library_id, root_key),
+                "status": str(row.get("status") or "REVIEW").upper(),
+                "library_id": library_id,
+                "suggested_library_id": suggest_formal_library_id(row_for_suggestion),
+                "root_abs": root_key,
+                "display_name": str(row.get("display_name") or ""),
+                "vendor": str(row.get("vendor") or ""),
+                "middle_path": str(row.get("middle_path") or ""),
+                "version_count": int(metadata.get("version_count") or 0) if isinstance(metadata, Mapping) else 0,
+                "example_versions": [str(item) for item in example_versions[:5]] if isinstance(example_versions, list) else [],
+                "confidence": metadata.get("confidence") if isinstance(metadata, Mapping) else None,
+                "reason": str(metadata.get("reason") or "") if isinstance(metadata, Mapping) else "",
+                "already_registered": already_registered,
+                "name_conflict": bool(same_id_roots and root_key not in same_id_roots),
+            }
+        )
+    result.update({"status": "READY", "candidates": candidates, "count": len(candidates)})
+    return result
 
 
 def _sort_key(version: Mapping[str, Any]) -> tuple[int, str]:
@@ -86,6 +214,11 @@ def _diff_status(version: Mapping[str, Any], mode: str = "adjacent") -> str:
     if mode == "cumulative" and diff.get("cumulative_base_version"):
         return str(diff.get("cumulative_status") or "NOT_APPLICABLE")
     if mode != "cumulative" and diff.get("adjacent_old_version"):
+        if (
+            diff.get("base_version") == diff.get("adjacent_old_version")
+            and str(diff.get("base_status") or "").upper() not in {"", "PENDING", "NOT_APPLICABLE"}
+        ):
+            return str(diff.get("base_status"))
         return str(diff.get("adjacent_status") or "NOT_APPLICABLE")
     if diff.get("base_version"):
         return str(diff.get("base_status") or "NOT_APPLICABLE")
@@ -106,12 +239,21 @@ def _is_initial_baseline(versions: list[Mapping[str, Any]], version: Mapping[str
     return bool(ordered) and ordered[0] is version
 
 
-def _change_summary(version: Mapping[str, Any], *, is_initial_baseline: bool = False) -> str:
+def _change_summary(
+    version: Mapping[str, Any],
+    *,
+    is_initial_baseline: bool = False,
+    scan_ready: bool | None = None,
+) -> str:
     if is_initial_baseline:
         return "初始基线"
+    if scan_ready is None:
+        scan_ready = scan_evidence_ready(version)
     status = _diff_status(version).upper()
     if status in {"PENDING", "NOT_APPLICABLE"}:
         return "待生成对比"
+    if not scan_ready:
+        return "对比记录待验证"
     if status in {"SAME", "NO_DIFF"}:
         return "无变化"
     diff = version.get("diff") if isinstance(version.get("diff"), Mapping) else {}
@@ -333,6 +475,91 @@ def list_file_diff_rows(web_state: Mapping[str, Any], library_name: str, version
     return rows
 
 
+def list_file_diff_page(
+    web_state: Mapping[str, Any],
+    library_name: str,
+    version_id: str,
+    *,
+    change: str | None = None,
+    file_type: str | None = None,
+    query: str | None = None,
+    offset: int = 0,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Project existing file-diff evidence into one bounded browser page.
+
+    ``file_diff.json`` remains the source artifact.  The console deliberately
+    does not inspect RAW files here: filtering and pagination only reduce the
+    data transferred to the browser and the number of DOM rows it renders.
+    Counts are calculated from the same complete evidence set before filters
+    are applied, so filter chips never invent a second set of facts.
+    """
+
+    rows = list_file_diff_rows(web_state, library_name, version_id)
+    diff_semantics = "complete_snapshot"
+    omitted_from_overlay = 0
+    raw_removed = 0
+    catalog = web_state.get("catalog") if isinstance(web_state.get("catalog"), Mapping) else {}
+    library = next(
+        (item for item in catalog.get("libraries", []) or [] if isinstance(item, Mapping) and str(item.get("library_name")) == library_name),
+        None,
+    )
+    version = next(
+        (item for item in (library or {}).get("versions", []) or [] if isinstance(item, Mapping) and str(item.get("version_id")) == version_id),
+        None,
+    )
+    if isinstance(version, Mapping):
+        diff_path = _diff_file_path(version)
+        if diff_path is not None:
+            try:
+                summary = json.loads((diff_path.parent / "diff_summary.json").read_text(encoding="utf-8"))
+            except (OSError, TypeError, ValueError):
+                summary = {}
+            if isinstance(summary, Mapping):
+                diff_semantics = str(summary.get("comparison_semantics") or diff_semantics)
+                omitted_from_overlay = int(summary.get("omitted_from_overlay_files") or 0)
+                raw_removed = int(summary.get("raw_removed_files") or 0)
+    by_change: dict[str, int] = {}
+    by_file_type: dict[str, int] = {}
+    for row in rows:
+        row_change = str(row.get("change") or "UNKNOWN").upper()
+        row_file_type = str(row.get("file_type") or "unknown").lower()
+        by_change[row_change] = by_change.get(row_change, 0) + 1
+        by_file_type[row_file_type] = by_file_type.get(row_file_type, 0) + 1
+
+    selected_change = str(change or "").strip().upper()
+    selected_file_type = str(file_type or "").strip().lower()
+    needle = str(query or "").strip().casefold()
+    filtered = [
+        row
+        for row in rows
+        if (not selected_change or str(row.get("change") or "").upper() == selected_change)
+        and (not selected_file_type or str(row.get("file_type") or "").lower() == selected_file_type)
+        and (
+            not needle
+            or needle in str(row.get("old_path") or "").casefold()
+            or needle in str(row.get("new_path") or "").casefold()
+        )
+    ]
+    page_offset = max(0, int(offset))
+    page_limit = max(1, int(limit))
+    page_rows = filtered[page_offset : page_offset + page_limit]
+    next_offset = page_offset + len(page_rows)
+    return {
+        "rows": page_rows,
+        "total": len(filtered),
+        "next_offset": next_offset if next_offset < len(filtered) else None,
+        "counts": {
+            "total": len(rows),
+            "by_change": dict(sorted(by_change.items())),
+            "by_file_type": dict(sorted(by_file_type.items())),
+        },
+        "comparison_semantics": diff_semantics,
+        "omitted_from_overlay": omitted_from_overlay,
+        "raw_removed": raw_removed,
+    }
+
+
 def list_file_tree_rows(web_state: Mapping[str, Any], library_name: str, version_id: str) -> dict[str, Any]:
     """Return the current version's file structure from scan evidence.
 
@@ -463,11 +690,18 @@ def _action_readiness(
     base_version = _base_version(version)
     if scan_ready is None:
         scan_ready = scan_evidence_ready(version)
+    scan_record_without_evidence = scan_status_ready(scan_status) and not scan_ready
     return {
         "scan": {
             "enabled": True,
-            "label": "重新扫描" if scan_ready else "生成扫描",
-            "reason": "可重新生成扫描事实" if scan_ready else "尚未生成可用的扫描证据",
+            "label": "重新扫描" if scan_ready else "补扫" if scan_record_without_evidence else "生成扫描",
+            "reason": (
+                "可重新生成扫描事实"
+                if scan_ready
+                else "目录里有扫描记录，但证据文件不可用；请重新扫描补齐证据。"
+                if scan_record_without_evidence
+                else "尚未生成可用的扫描证据"
+            ),
         },
         "compare": {
             "enabled": bool(base_version) and scan_ready,
@@ -488,14 +722,14 @@ def _action_readiness(
     }
 
 
-def _review_decision(
+def _workflow_status(
     version: Mapping[str, Any],
     *,
     current_effective: bool | None = None,
     scan_ready: bool | None = None,
     is_initial_baseline: bool = False,
 ) -> dict[str, str]:
-    """Return one explainable workbench decision and its next action."""
+    """Return operational fact readiness without making an IP usage decision."""
 
     if scan_ready is None:
         scan_ready = scan_evidence_ready(version)
@@ -507,48 +741,63 @@ def _review_decision(
             "label": "扫描失败",
             "reason": "请先查看扫描结果，再决定是否重新扫描。",
             "next_action": "查看扫描结果",
+            "source": "catalog_runtime",
         }
     if not scan_ready:
+        if scan_status_ready(scan_status):
+            return {
+                "label": "需补扫",
+                "reason": "目录里有扫描记录，但扫描证据文件不可用；请重新扫描补齐证据。",
+                "next_action": "补扫",
+                "source": "catalog_runtime",
+            }
         return {
             "label": "待生成扫描",
             "reason": "当前版本还没有可用的扫描证据。",
             "next_action": "生成扫描",
+            "source": "catalog_runtime",
         }
     if is_initial_baseline:
         return {
             "label": "初始基线",
             "reason": "这是库内最早版本，当前只检查版本自身事实，无需版本对比。",
             "next_action": "查看详情",
+            "source": "catalog_runtime",
         }
     if "FAIL" in diff_status or "ERROR" in diff_status:
         return {
             "label": "对比失败",
             "reason": "扫描证据已存在，但最近一次对比失败；不能按已完成处理。",
             "next_action": "查看对比结果",
+            "source": "catalog_runtime",
         }
     is_current = bool(version.get("current_effective")) if current_effective is None else current_effective
     if is_current:
         return {
-            "label": "当前有效版",
-            "reason": "这是目录记录的当前使用基线。",
+            "label": "当前可用版本",
+            "reason": "这是目录记录的当前可用基线。",
             "next_action": "查看详情",
+            "source": "catalog_runtime",
         }
     if not readiness["compare"]["enabled"] and diff_status != "NOT_APPLICABLE":
         return {
             "label": "待确认基准",
             "reason": "当前版本缺少可用的对比基准。",
             "next_action": "补充基准",
+            "source": "catalog_runtime",
         }
     if diff_status in {"PENDING", "NOT_APPLICABLE"}:
         return {
             "label": "已读取，待处理",
             "reason": "扫描事实已读取，是否对比取决于版本关系和基准。",
             "next_action": "执行对比" if readiness["compare"]["enabled"] else "查看详情",
+            "source": "catalog_runtime",
         }
     return {
-        "label": "已完成",
-        "reason": "扫描和对比已有结果；正式发布状态单独维护，不影响这里的 IP 使用判断。",
+        "label": "事实已生成",
+        "reason": "扫描和对比已有结果；IP 使用判断请以版本详情页为准。",
         "next_action": "查看详情",
+        "source": "catalog_runtime",
     }
 
 
@@ -612,22 +861,35 @@ def list_library_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
             if pointer_invalid
             else next((str(item.get("version_id")) for item in versions if item.get("current_effective")), None)
         )
+        release_blocked_count = sum(
+            1
+            for item in versions
+            if str((item.get("release") if isinstance(item.get("release"), Mapping) else {}).get("status") or "").upper()
+            in {"RELEASE_BLOCKED", "BLOCKED"}
+            or str((item.get("release") if isinstance(item.get("release"), Mapping) else {}).get("check_status") or "").upper()
+            in {"RELEASE_BLOCKED", "BLOCKED"}
+        )
         rows.append(
             {
                 "library_name": str(library.get("library_name") or ""),
                 "display_name": str(library.get("display_name") or library.get("library_name") or ""),
                 "vendor": str(library.get("vendor") or ""),
                 "category": str(library.get("category") or ""),
+                "library_type": str(library.get("library_type") or library.get("type") or library.get("category") or ""),
+                "platform": str(library.get("platform") or library.get("process") or library.get("technology") or ""),
+                "root_abs": str(library.get("root_abs") or library.get("root") or library.get("path") or ""),
                 "version_count": int(summary.get("version_count") or len(versions)),
                 "latest_version": str(summary.get("latest_version") or ""),
                 "current_effective": current,
                 "current_effective_id": pointer_current or current or "",
                 "scan_pending": int(summary.get("scan_pending") or 0),
-                 "diff_pending": int(summary.get("diff_pending") or 0),
-                "review_pending_count": sum(
+                "diff_pending": int(summary.get("diff_pending") or 0),
+                "release_blocked_count": release_blocked_count,
+                "has_current_effective": bool(pointer_current or current),
+                "workflow_pending_count": sum(
                     1
                     for item in ordered_versions
-                    if _review_decision(
+                    if _workflow_status(
                         item,
                         scan_ready=cached_scan_ready(item),
                         is_initial_baseline=_is_initial_baseline(ordered_versions, item),
@@ -636,7 +898,7 @@ def list_library_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
                             if pointer_current
                             else (False if pointer_invalid else bool(item.get("current_effective")))
                         ),
-                    )["label"] not in {"已完成", "当前有效版", "初始基线"}
+                    )["label"] not in {"事实已生成", "当前可用版本", "初始基线"}
                 ),
                 "effective_pointer_state": "INVALID" if pointer_invalid else ("SET" if pointer_current else "CATALOG"),
                 "pending_window": _pending_window(state, library),
@@ -702,7 +964,7 @@ def list_version_rows(
         )
         scan_ready = cached_scan_ready(version)
         initial_baseline = _is_initial_baseline(sorted_versions, version)
-        review_decision = _review_decision(
+        workflow_status = _workflow_status(
             version,
             current_effective=current_effective,
             scan_ready=scan_ready,
@@ -730,13 +992,18 @@ def list_version_rows(
                 "cumulative_base_version": str(diff.get("cumulative_base_version") or "") or None,
                 "release_status": _release_status(version),
                 "raw_path": str(version.get("raw_path") or ""),
-                "version_detail_path": str(detail_path) if detail_path.exists() else None,
-                "version_detail_url": f"/artifacts/{detail_path.relative_to(catalog_html).as_posix()}" if detail_path.exists() else None,
+                "version_detail_path": str(detail_path),
+                "version_detail_url": f"/artifacts/{detail_path.relative_to(catalog_html).as_posix()}",
+                "version_detail_exists": detail_path.exists(),
                 "action_readiness": _action_readiness(version, scan_ready=scan_ready),
-                "review_decision": review_decision,
-                "ip_decision": review_decision["label"],
-                "change_summary": _change_summary(version, is_initial_baseline=initial_baseline),
-                "next_action": review_decision["next_action"],
+                "workflow_status": workflow_status,
+                "usage_decision_source": "version_detail_model",
+                "change_summary": _change_summary(
+                    version,
+                    is_initial_baseline=initial_baseline,
+                    scan_ready=scan_ready,
+                ),
+                "next_action": workflow_status["next_action"],
                 "effective_pointer_state": "INVALID" if pointer_invalid else ("SET" if pointer_current else "CATALOG"),
             }
         )

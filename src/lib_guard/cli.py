@@ -22,6 +22,7 @@ import sys
 
 from lib_guard.project_config import (
     BINARY_METADATA_ONLY_TYPES,
+    DEFAULT_DISCOVER_MIN_VERSIONS,
     DEFAULT_FILE_DIFF_TYPES,
     DEFAULT_RELEASE_POLICY_PATH,
     PROJECT_CONFIG_DIR,
@@ -137,6 +138,8 @@ def add_scan_parser(subparsers: Any) -> None:
     p.add_argument("--version", dest="version", required=True, help="Library version")
     p.add_argument("--mode", default="scan", choices=["scan"], help="Single scan action; depth is controlled by scan strategy options")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="Scan strategy: content hash policy")
+    p.add_argument("--force-hash-file-types", help="Scan strategy: comma/space separated file types that always read content")
+    p.add_argument("--skip-hash-file-types", help="Scan strategy: comma/space separated file types that never read content")
     p.add_argument("--parse-file-types", help="Scan strategy: comma/space separated file types to parse")
     p.add_argument("--parse-exclude-file-types", help="Scan strategy: comma/space separated file types excluded from parser tasks")
     p.add_argument("--out")
@@ -416,11 +419,12 @@ def add_library_parser(subparsers: Any) -> None:
 
     p = sp.add_parser("discover", help="Discover candidate library roots from RAW")
     p.add_argument("--root", required=True)
+    p.add_argument("--start-root", help="Optional subtree to walk while keeping --root as the library identity base")
     p.add_argument("--out", required=True, help="Candidate TSV output; this should not be the stable registry")
     p.add_argument("--json-out", help="Machine discovery evidence JSON")
     p.add_argument("--html-out", help="Discovery review HTML")
     p.add_argument("--max-depth", type=int, default=4)
-    p.add_argument("--min-versions", type=int, default=2)
+    p.add_argument("--min-versions", type=int, default=int(DEFAULT_DISCOVER_MIN_VERSIONS))
     p.add_argument("--max-dirs", type=int, default=5000)
     p.add_argument("--max-candidates", type=int, default=200)
     p.add_argument("--default-status", choices=["REVIEW", "OK"], default="REVIEW")
@@ -561,6 +565,8 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--version", required=True)
     p.add_argument("--mode", default="scan", choices=["scan"], help="Single scan action; depth is controlled by scan strategy options")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="Scan strategy: content hash policy")
+    p.add_argument("--force-hash-file-types", help="Scan strategy: file types that always read content")
+    p.add_argument("--skip-hash-file-types", help="Scan strategy: file types that never read content")
     p.add_argument("--parse-file-types", help="Scan strategy: comma/space separated file types to parse")
     p.add_argument("--parse-exclude-file-types", help="Scan strategy: comma/space separated file types excluded from parser tasks")
     p.add_argument("--workdir", default="work")
@@ -603,6 +609,8 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--rescan", action="store_true", help="Force rescan of old and new versions before compare")
     p.add_argument("--scan-mode", default="scan", choices=["scan"], help="Single scan action for --scan-if-missing/--rescan")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="Scan strategy used when compare has to scan")
+    p.add_argument("--force-hash-file-types", help="Scan strategy: file types that always read content")
+    p.add_argument("--skip-hash-file-types", help="Scan strategy: file types that never read content")
     p.add_argument("--parse-file-types", help="Scan strategy used when compare has to scan")
     p.add_argument("--parse-exclude-file-types", help="Scan strategy used when compare has to scan")
     p.add_argument("--config-dir", default=PROJECT_CONFIG_DIR)
@@ -626,6 +634,8 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.add_argument("--limit", type=int)
     p.add_argument("--mode", default="scan", choices=["scan"], help="Single scan action; depth is controlled by scan strategy options")
     p.add_argument("--hash-policy", choices=["none", "smart", "full"], help="Scan strategy: content hash policy")
+    p.add_argument("--force-hash-file-types", help="Scan strategy: file types that always read content")
+    p.add_argument("--skip-hash-file-types", help="Scan strategy: file types that never read content")
     p.add_argument("--parse-file-types", help="Scan strategy: comma/space separated file types to parse")
     p.add_argument("--parse-exclude-file-types", help="Scan strategy: comma/space separated file types excluded from parser tasks")
     p.add_argument("--workdir", default="work")

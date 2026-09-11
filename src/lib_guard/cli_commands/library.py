@@ -13,6 +13,7 @@ def run_library_discover(args: Namespace) -> int:
 
     result = discover_to_files(
         args.root,
+        start_root=args.start_root,
         list_out=args.out,
         json_out=args.json_out,
         html_out=args.html_out,
