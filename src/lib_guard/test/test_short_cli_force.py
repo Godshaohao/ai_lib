@@ -62,6 +62,7 @@ class ShortCliForceTest(unittest.TestCase):
                     "rel",
                     "ucie",
                     "stable",
+                    "--apply",
                     "--force",
                     "--force-reason",
                     "owner accepted",
@@ -90,6 +91,33 @@ class ShortCliForceTest(unittest.TestCase):
             write_default_config(workspace, raw_root=workspace / "raw")
             with self.assertRaisesRegex(ValueError, "lg rel --force requires --force-reason"):
                 build_cli_command(["rel", "ucie", "stable", "--apply", "--force"], cwd=workspace)
+
+    def test_short_cli_rel_force_without_apply_fails_before_release_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            self._write_catalog(workspace)
+
+            from lib_guard.short_cli import build_cli_command, write_default_config
+
+            write_default_config(workspace, raw_root=workspace / "raw")
+            with self.assertRaisesRegex(ValueError, "lg rel --force requires --apply"):
+                build_cli_command(
+                    ["rel", "ucie", "stable", "--force", "--force-reason", "owner accepted"],
+                    cwd=workspace,
+                )
+
+    def test_short_cli_rel_no_render_also_skips_catalog_html_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            self._write_catalog(workspace)
+
+            from lib_guard.short_cli import build_cli_command, write_default_config
+
+            write_default_config(workspace, raw_root=workspace / "raw")
+            command = build_cli_command(["rel", "ucie", "stable", "--no-render"], cwd=workspace)
+
+            self.assertIn("--no-render", command)
+            self.assertIn("--no-catalog-render", command)
 
     def test_short_cli_rel_without_version_uses_current_effective_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:

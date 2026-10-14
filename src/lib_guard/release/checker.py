@@ -41,6 +41,7 @@ class ReleaseChecker:
         alias: str | None = None,
         review_gate: Mapping[str, Any] | None = None,
         review_gate_path: str | Path | None = None,
+        catalog_path: str | Path | None = None,
     ) -> dict[str, Any]:
         scan = Path(scan_dir)
         out = Path(out_dir) if out_dir else scan / "release"
@@ -103,6 +104,8 @@ class ReleaseChecker:
                 issues.append(_issue(sev, "doc", f"缺少建议文档：{doc_type}", f"doc_type={doc_type} not found"))
 
         diff_gate = self._check_diff_gate(diff_dir)
+        if not diff_dir and catalog_path and self._is_first_full_package(catalog_path, scan, scan_meta):
+            diff_gate = {"status": "NOT_APPLICABLE", "reason": "首个完整包，没有上一版本；版本对比不适用。", "issues": []}
         issues.extend(diff_gate.get("issues", []))
         review_gate_data = self._load_review_gate(review_gate=review_gate, review_gate_path=review_gate_path)
         review_status = str(review_gate_data.get("status") or "").upper()
@@ -157,6 +160,28 @@ class ReleaseChecker:
 
         _write_json(out / "release_result.json", release_result_from_check(result))
         return result
+
+    def _is_first_full_package(self, catalog_path: str | Path, scan: Path, scan_meta: Mapping[str, Any]) -> bool:
+        from lib_guard.catalog.runtime import load_catalog_view
+
+        catalog = load_catalog_view(catalog_path)
+        matches = []
+        for library in catalog.get("libraries", []) or []:
+            versions = library.get("versions", []) or []
+            for version in versions:
+                scan_dir = (version.get("scan") or {}).get("scan_dir")
+                if scan_dir and Path(scan_dir).resolve() == scan.resolve():
+                    matches.append((versions, version))
+        if len(matches) != 1:
+            return False
+        versions, version = matches[0]
+        version_id = version.get("version_id")
+        return (len(versions) == 1 and bool(version_id)
+                and version_id == scan_meta.get("release_version")
+                and version.get("package_type") == "FULL_PACKAGE"
+                and not version.get("base_required")
+                and all(version.get(key) in (None, "", version_id)
+                        for key in ("base_full_version", "base_version", "previous_effective_version")))
 
     def _load_review_gate(
         self,
@@ -272,6 +297,7 @@ def check_release_scan(
     alias: str | None = None,
     review_gate_path: str | Path | None = None,
     review_gate: Mapping[str, Any] | None = None,
+    catalog_path: str | Path | None = None,
 ) -> dict[str, Any]:
     return ReleaseChecker(ReleasePolicy.from_file(policy_path)).check(
         scan_dir,
@@ -280,6 +306,7 @@ def check_release_scan(
         alias=alias,
         review_gate=review_gate,
         review_gate_path=review_gate_path,
+        catalog_path=catalog_path,
     )
 
 

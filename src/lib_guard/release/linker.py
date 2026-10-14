@@ -397,15 +397,19 @@ def _promotion_legacy_paths(release_root: Path, staging_dir: Path, active_alias:
 def _rollback_promotion(state: dict[str, Any]) -> None:
     for path, backup in reversed(state.get("legacy_backups", [])):
         _restore_backup(path, backup)
-    _restore_backup(state["active_alias"], state.get("alias_backup"))
-    _restore_backup(state["immutable_dir"], state.get("immutable_backup"))
+    if state.get("alias_touched"):
+        _restore_backup(state["active_alias"], state.get("alias_backup"))
+    if state.get("immutable_touched"):
+        _restore_backup(state["immutable_dir"], state.get("immutable_backup"))
+    if state.get("daily_backup"):
+        _restore_backup(state["daily_backup"], state.get("daily_previous"))
 
 
 def _finalize_promotion(state: dict[str, Any]) -> None:
     for _path, backup in state.get("legacy_backups", []):
         if backup is not None:
             _remove_path(backup)
-    for backup_key in ("alias_backup", "immutable_backup"):
+    for backup_key in ("alias_backup", "immutable_backup", "daily_previous"):
         backup = state.get(backup_key)
         if backup is not None:
             _remove_path(backup)
@@ -418,6 +422,7 @@ def _promote_staging(
     *,
     overwrite: bool,
     release_root: Path | None = None,
+    daily_backup: Path | None = None,
 ) -> dict[str, Any]:
     """Promote a verified tree while retaining rollback state until postcheck passes."""
 
@@ -430,26 +435,52 @@ def _promote_staging(
         "immutable_backup": None,
         "alias_backup": None,
         "legacy_backups": [],
+        "daily_backup": None,
+        "daily_previous": None,
+        "immutable_touched": False,
+        "alias_touched": False,
     }
     try:
         if _path_exists(immutable_dir):
             if not overwrite:
                 raise FileExistsError(f"immutable release already exists: {immutable_dir}")
+            if daily_backup is not None:
+                daily_backup.parent.mkdir(parents=True, exist_ok=True)
+                temporary = _tmp_sibling(daily_backup)
+                try:
+                    shutil.copytree(immutable_dir, temporary, symlinks=True)
+                    # Relative links must keep their original targets after moving into history.
+                    for link in temporary.rglob("*"):
+                        if link.is_symlink() and not os.path.isabs(os.readlink(link)):
+                            original = immutable_dir / link.relative_to(temporary)
+                            target = os.path.abspath(original.parent / os.readlink(link))
+                            link.unlink()
+                            link.symlink_to(target)
+                    state["daily_previous"] = _move_to_backup(daily_backup)
+                    state["daily_backup"] = daily_backup
+                    os.replace(temporary, daily_backup)
+                finally:
+                    _remove_path(temporary)
             state["immutable_backup"] = _move_to_backup(immutable_dir)
+            state["immutable_touched"] = True
         if _path_exists(active_alias):
             state["alias_backup"] = _move_to_backup(active_alias)
-        for legacy_path in _promotion_legacy_paths(root, staging_dir, active_alias):
+            state["alias_touched"] = True
+        for legacy_path in ([] if daily_backup is not None else _promotion_legacy_paths(root, staging_dir, active_alias)):
             backup = _move_to_backup(legacy_path)
             state["legacy_backups"].append((legacy_path, backup))
 
         os.replace(staging_dir, immutable_dir)
+        state["immutable_touched"] = True
         tmp_alias = _tmp_sibling(active_alias)
         try:
             tmp_alias.symlink_to(immutable_dir.resolve(strict=False), target_is_directory=True)
             os.replace(tmp_alias, active_alias)
+            state["alias_touched"] = True
         finally:
             _remove_path(tmp_alias)
-        _publish_legacy_view_links(root, active_alias, immutable_dir)
+        if daily_backup is None:
+            _publish_legacy_view_links(root, active_alias, immutable_dir)
         return state
     except Exception:
         _rollback_promotion(state)
@@ -515,8 +546,28 @@ def link_release_from_manifest(
     staging_dir = release_staging_dir_for(manifest)
     immutable_dir = immutable_release_dir_for(manifest)
     active_alias = release_alias_for(manifest)
+    named_release = bool(manifest.get("publish_name"))
+    if named_release:
+        overwrite = True
+    daily_backup = release_root_path / "history" / f"{manifest['publish_name']}_{datetime.now():%Y%m%d}" if named_release else None
     planned = iter_release_files(manifest, target_root=staging_dir)
-    final_planned = iter_release_files(manifest, target_root=immutable_dir)
+    excluded_files: list[dict[str, Any]] = []
+    final_planned = iter_release_files(manifest, target_root=immutable_dir, excluded_files=excluded_files)
+    skipped = [
+        {**item, "status": "SKIPPED_COLLISION", "link_path": item["target_path"],
+         "target_path": item["source_path"]}
+        for item in final_planned if item.get("error_code") == "TARGET_COLLISION"
+    ]
+    planned = [item for item in planned if item.get("error_code") != "TARGET_COLLISION"]
+    verification_manifest_path = manifest_path
+    if skipped:
+        manifest = {
+            **manifest, "libraries": [],
+            "files": [{**item, "target_relpath": item["relative_path"]} for item in planned],
+            "skipped_files": skipped, "delivery_status": "PARTIAL_DRY_RUN" if dry_run else "PARTIAL_APPLIED",
+        }
+        verification_manifest_path = run_dir / "release_delivery_manifest.json"
+        _write_json(verification_manifest_path, manifest)
     alias_exists = _path_exists(active_alias)
     alias_is_symlink = active_alias.is_symlink()
     immutable_exists = _path_exists(immutable_dir)
@@ -526,7 +577,9 @@ def link_release_from_manifest(
     def _status_for_failure() -> str:
         return "FORCE_FAILED" if force else "FAILED"
 
-    if migration_required:
+    if not planned:
+        status = _status_for_failure()
+    elif migration_required:
         status = "MIGRATION_REQUIRED"
     elif blocked_by_existing_release:
         status = "BLOCKED"
@@ -555,17 +608,22 @@ def link_release_from_manifest(
                     raise ValueError(str(plan.get("error")))
                 if not source.exists():
                     raise FileNotFoundError(f"release source does not exist: {source}")
-                exists = _path_exists(target)
-                item["status"] = "WOULD_REPLACE" if exists and overwrite else ("TARGET_EXISTS" if exists else "WOULD_LINK")
-                if exists and not overwrite:
-                    item["warning"] = "target exists; apply would fail without overwrite"
+                previous = (immutable_dir if immutable_exists else active_alias) / str(plan.get("relative_path") or "")
+                exists = _path_exists(previous)
+                item["link_path"] = str(immutable_dir / str(plan.get("relative_path") or ""))
+                item["previous_link_path"] = str(previous) if exists else ""
+                item["previous_target"] = str(previous.resolve(strict=False)) if exists else ""
+                same_link = previous.is_symlink() and mode == "symlink" and previous.resolve(strict=False) == source.resolve(strict=False)
+                item["status"] = "WOULD_KEEP" if same_link else ("WOULD_REPLACE" if exists else "WOULD_LINK")
+                if previous.is_symlink() and not previous.exists():
+                    item["warning"] = "existing symlink is broken; candidate will replace it"
                 created.append(item)
             except Exception as exc:
                 failed_item = dict(item)
                 failed_item["status"] = "FAILED"
                 failed_item["error"] = str(exc)
                 failed.append(failed_item)
-        status = _status_for_failure() if failed else ("FORCE_DRY_RUN" if force else "DRY_RUN")
+        status = _status_for_failure() if failed else ("PARTIAL_DRY_RUN" if skipped else "FORCE_DRY_RUN" if force else "DRY_RUN")
     else:
         with file_lock(_release_lock_path(release_root_path)):
             release_root_path.mkdir(parents=True, exist_ok=True)
@@ -595,6 +653,12 @@ def link_release_from_manifest(
                         raise ValueError(str(plan.get("error")))
                     if not source.exists():
                         raise FileNotFoundError(f"release source does not exist: {source}")
+                    previous_root = immutable_dir if _path_exists(immutable_dir) else active_alias
+                    previous = previous_root / str(plan.get("relative_path") or "")
+                    existed = _path_exists(previous)
+                    item["previous_target"] = str(previous.resolve(strict=False)) if existed else ""
+                    same_link = previous.is_symlink() and mode == "symlink" and previous.resolve(strict=False) == source.resolve(strict=False)
+                    item["link_action"] = "KEEP" if same_link else "REPLACE" if existed else "LINK"
                     item["status"] = _copy_or_link_source(source, target, mode=mode, overwrite=overwrite)
                     created.append(item)
                 except Exception as exc:
@@ -610,8 +674,17 @@ def link_release_from_manifest(
                 from .postcheck import verify_release_manifest
 
                 try:
+                    if named_release or skipped:
+                        actions = {item['relative_path']: item for item in created}
+                        delivered_files = []
+                        for item in manifest.get('files', []):
+                            action = actions.get(item.get('target_relpath') or item.get('relative_path'), {})
+                            delivered_files.append({**item, 'delivery_action': action.get('link_action'),
+                                                    'previous_target': action.get('previous_target', '')})
+                        _write_json(staging_dir / 'release_manifest.json', {**manifest, 'files': delivered_files,
+                                    'published_at': utc_now(), 'link_mode': mode})
                     verify_result = verify_release_manifest(
-                        manifest_path,
+                        verification_manifest_path,
                         link_result={"created_links": created, "failed_links": failed},
                         candidate_root=staging_dir,
                     )
@@ -640,11 +713,12 @@ def link_release_from_manifest(
                             active_alias,
                             overwrite=overwrite,
                             release_root=release_root_path,
+                            daily_backup=daily_backup,
                         )
                         _rebase_link_paths(created, immutable_dir)
                         try:
                             post_verify = verify_release_manifest(
-                                manifest_path,
+                                verification_manifest_path,
                                 link_result={"created_links": created, "failed_links": failed},
                                 candidate_root=immutable_dir,
                             )
@@ -675,7 +749,7 @@ def link_release_from_manifest(
                                 verify_result["html"] = render_release_html(verify_result, run_dir)
                             _finalize_promotion(promotion_state)
                             promotion_state = None
-                            status = "FORCED_APPLIED" if force else "APPLIED"
+                            status = "PARTIAL_APPLIED" if skipped else "FORCED_APPLIED" if force else "APPLIED"
                     except Exception as exc:
                         if promotion_state is not None:
                             _rollback_promotion(promotion_state)
@@ -731,8 +805,12 @@ def link_release_from_manifest(
         "staging_dir": str(staging_dir),
         "immutable_release_dir": str(immutable_dir),
         "target_alias": str(active_alias),
+        "daily_backup": str(daily_backup) if daily_backup and immutable_exists else "",
+        "publish_name": str(manifest.get("publish_name") or ""),
+        "latest_name": str(manifest.get("latest_name") or ""),
         "release_lock": str(_release_lock_path(release_root_path)),
         "manifest_path": str(Path(manifest_path)),
+        "delivery_manifest_path": str(verification_manifest_path),
         "status": status,
         "dry_run": dry_run,
         "apply": bool(apply),
@@ -750,16 +828,27 @@ def link_release_from_manifest(
         "created_links": created,
         "removed_links": removed,
         "failed_links": failed,
+        "skipped_links": skipped,
+        "excluded_files": excluded_files,
         "summary": {
-            "planned_files": len(planned),
+            "planned_files": len(final_planned),
             "created_files": len(created),
             "removed_files": len(removed),
             "failed_files": len(failed),
+            "skipped_files": len(skipped),
+            "excluded_files": len(excluded_files),
         },
         "verify": verify_result,
     }
     _write_json(run_dir / "release_link_result.json", result)
     from lib_guard.release.result import release_result_from_link
 
-    _write_json(run_dir / "release_result.json", release_result_from_link(result))
+    _write_json(
+        run_dir / "release_result.json",
+        release_result_from_link(
+            result,
+            verify_result=verify_result,
+            html=((verify_result or {}).get("html") or {}).get("index_html"),
+        ),
+    )
     return result

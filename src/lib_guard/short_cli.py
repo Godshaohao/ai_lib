@@ -673,6 +673,8 @@ def _build_parser() -> ArgumentParser:
     p = lsp.add_parser("accept", help="把候选 TSV 中标为 OK/ENABLE 的行合并进人工登记表")
     p.add_argument("--input", help="候选 TSV 输入，默认 $WORK/config/library_candidates/latest.tsv")
     p.add_argument("--registry", help="人工确认 registry，默认 $WORK/config/library_registry.tsv")
+    p.add_argument("--apply", action="store_true", help="登记候选后立即生成正式 library_catalog.yml")
+    p.add_argument("--refresh-catalog", action="store_true", help="配合 --apply 立即刷新 catalog.json 和 HTML")
 
     p = lsp.add_parser("list", help="列出目录中可直接用于命令的正式库名和版本名")
     p.add_argument("library", nargs="?", help="正式库名；传入后可配合 --versions 列出版本")
@@ -693,6 +695,19 @@ def _build_parser() -> ArgumentParser:
     p = lsp.add_parser("apply", help="把人工确认后的登记表转成正式 library_catalog.yml")
     p.add_argument("--input", help="输入 registry，默认 $WORK/config/library_registry.tsv")
     p.add_argument("--out", help="正式 library_catalog.yml 输出，默认 $WORK/config/library_catalog.yml")
+    p.add_argument("--refresh-catalog", action="store_true", help="应用登记后立即刷新 catalog.json 和 HTML")
+
+    root_release_library = sub.add_parser("release-library", help="读取和查询正式发布库；不会扫描 RAW 或执行发布")
+    rlsp = root_release_library.add_subparsers(dest="release_library_cmd", required=True)
+    p = rlsp.add_parser("refresh", help="从正式发布目录读取发布清单，生成可查询索引")
+    p.add_argument("--root", help="正式发布根目录；默认配置 release_root")
+    p.add_argument("--out", help="索引 JSON；默认配置 release_library_index")
+    p.add_argument("--max-depth", type=int, default=8, help="发布目录最大读取深度")
+    p.add_argument("--max-manifests", type=int, default=2000, help="最多读取的发布清单数")
+    p = rlsp.add_parser("list", help="查询已生成的正式发布库索引")
+    p.add_argument("library", nargs="?", help="正式库名，例如 ip/ucie")
+    p.add_argument("--input", help="索引 JSON；默认配置 release_library_index")
+    p.add_argument("--plain", action="store_true", help="每行输出一个正式库名")
 
     p = lsp.add_parser("override", help="人工确认或修正目录版本的阶段、基准版和包类型关系")
     p.add_argument("library")
@@ -734,6 +749,8 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--force-large", action="store_true", help="专家入口：允许摘要级/元数据级证据文件类型运行手动深度对比")
 
     p = sub.add_parser("rel", help="对已扫描版本执行发布检查、链接和验证规划；不会运行扫描")
+    p.add_argument("--publish-name", help="正式发布目录名，例如 lib_NL7；同日备份覆盖")
+    p.add_argument("--latest-name", help="最新指针名；默认读取配置或使用 latest")
     p.add_argument("library")
     p.add_argument("version", nargs="?")
     p.add_argument("--alias", default="current")
@@ -756,6 +773,8 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--action", help="显式动作文件路径；默认使用 $WORK/actions/<library>.action")
 
     p = sub.add_parser("next", help="小白入口：查看下一步、只读预演、执行或接受候选有效版")
+    p.add_argument("--base-full", help="人工选择完整包；优先于自动推荐")
+    p.add_argument("--include", action="append", default=[], help="人工选择叠加版本，可重复；按参数顺序覆盖")
     p.add_argument("library", nargs="?", help="正式库名；不传则查看全部库工作清单")
     p.add_argument("--ready", action="store_true", help="不传 library 时，只显示可执行/可接受的库")
     p.add_argument("--blocked", action="store_true", help="不传 library 时，只显示需要人工处理的库")
@@ -776,6 +795,8 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--parse-jobs", help="覆盖本次解析器并发数")
 
     p = sub.add_parser("intake", help="预演或执行审查窗口；已有有效版则对比更新，否则建立初始接入候选")
+    p.add_argument("--base-full", help="人工选择完整包；优先于自动推荐")
+    p.add_argument("--include", action="append", default=[], help="人工选择叠加版本，可重复；按参数顺序覆盖")
     p.add_argument("library")
     p.add_argument("--since", help="从指定原始版本之后开始构建窗口")
     p.add_argument("--plan-only", action="store_true", help="只读预演窗口和命令计划，不执行、不写文件、不修改数据")
@@ -800,6 +821,7 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--json", action="store_true", help="输出机器可读 JSON；默认输出人工可读表")
 
     p = sub.add_parser("accept-window", help="接受当前候选组合，并写入 current_effective.json")
+    p.add_argument("--expected-effective-id", help="只确认指定的已核对候选")
     p.add_argument("library")
     p.add_argument("--accepted-by", default="manual")
     p.add_argument("--note")
@@ -1048,6 +1070,30 @@ def _library_apply_command(cfg: dict[str, str], args: Any) -> list[str]:
     ]
 
 
+def _release_library_command(cfg: dict[str, str], args: Any) -> list[str]:
+    if args.release_library_cmd == "refresh":
+        return [
+            "release-library",
+            "refresh",
+            "--root",
+            args.root or cfg["release_root"],
+            "--out",
+            args.out or cfg["release_library_index"],
+            "--max-depth",
+            str(args.max_depth),
+            "--max-manifests",
+            str(args.max_manifests),
+        ]
+    if args.release_library_cmd == "list":
+        command = ["release-library", "list", "--input", args.input or cfg["release_library_index"]]
+        if args.library:
+            command.extend(["--library", args.library])
+        if args.plain:
+            command.append("--plain")
+        return command
+    raise ValueError(f"unsupported release-library command: {args.release_library_cmd}")
+
+
 def _override_command(cfg: dict[str, str], args: Any) -> list[str]:
     data = _catalog_data(cfg)
     lib = _find_library(data, args.library)
@@ -1251,6 +1297,12 @@ def _window_common_command(cfg: dict[str, str], args: Any, subcommand: str) -> l
     if getattr(args, "since", None):
         command.extend(["--since", args.since])
     if subcommand == "intake":
+        if getattr(args, "include", None) and not getattr(args, "base_full", None):
+            raise ValueError("选择叠加版本时必须同时指定 --base-full")
+        if getattr(args, "base_full", None):
+            command.extend(["--base-full", args.base_full])
+        for version in getattr(args, "include", []) or []:
+            command.extend(["--include", version])
         _append_scan_strategy(command, cfg, args)
         if getattr(args, "plan_only", False):
             command.append("--plan-only")
@@ -1302,6 +1354,8 @@ def _window_accept_command(cfg: dict[str, str], args: Any) -> list[str]:
     ]
     if getattr(args, "note", None):
         command.extend(["--note", args.note])
+    if getattr(args, "expected_effective_id", None):
+        command.extend(["--expected-effective-id", args.expected_effective_id])
     return command
 
 
@@ -1331,6 +1385,8 @@ def _next_command(cfg: dict[str, str], args: Any) -> list[str]:
         Namespace(
             library=args.library,
             since=getattr(args, "since", None),
+            base_full=getattr(args, "base_full", None),
+            include=getattr(args, "include", []),
             plan_only=not getattr(args, "apply", False),
             rebuild=getattr(args, "rebuild", False),
             json=getattr(args, "json", False),
@@ -1585,7 +1641,16 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
         if args.library_cmd == "discover":
             return [_library_discover_command(cfg, args)]
         if args.library_cmd == "accept":
-            return [_library_accept_command(cfg, args)]
+            commands = [_library_accept_command(cfg, args)]
+            if getattr(args, "refresh_catalog", False) and not getattr(args, "apply", False):
+                raise ValueError("library accept --refresh-catalog requires --apply so library_catalog.yml is updated first")
+            if getattr(args, "apply", False):
+                commands.append(_library_apply_command(cfg, Namespace(input=args.registry, out=None)))
+            if getattr(args, "refresh_catalog", False):
+                refresh_cfg = dict(cfg)
+                refresh_cfg["catalog_policy"] = cfg["library_catalog"]
+                commands.append(_catalog_scan_command(refresh_cfg, None))
+            return commands
         if args.library_cmd == "list":
             return [_library_list_command(cfg, args)]
         if args.library_cmd == "add":
@@ -1604,10 +1669,17 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
                 commands.append(_catalog_scan_command(refresh_cfg, args.library_id))
             return commands
         if args.library_cmd == "apply":
-            return [_library_apply_command(cfg, args)]
+            commands = [_library_apply_command(cfg, args)]
+            if getattr(args, "refresh_catalog", False):
+                refresh_cfg = dict(cfg)
+                refresh_cfg["catalog_policy"] = args.out or cfg["library_catalog"]
+                commands.append(_catalog_scan_command(refresh_cfg, None))
+            return commands
         if args.library_cmd == "override":
             return [_override_command(cfg, args)]
         raise ValueError(f"unsupported library command: {args.library_cmd}")
+    if args.short_command == "release-library":
+        return [_release_library_command(cfg, args)]
     if args.short_command == "cat":
         if getattr(args, "update_detail", False):
             return _refresh_commands(cfg, args)
@@ -1773,6 +1845,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
     if args.short_command == "rel":
         if args.force and not args.force_reason:
             raise ValueError("lg rel --force requires --force-reason")
+        if args.force and not args.apply:
+            raise ValueError("lg rel --force requires --apply")
         effective_manifest = ""
         if not args.version:
             if args.explain or args.check_only:
@@ -1822,6 +1896,9 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             command.extend(["--version", args.version])
         else:
             command.extend(["--effective-manifest", effective_manifest])
+        publish_name = args.publish_name or cfg.get("release_publish_name")
+        if publish_name:
+            command.extend(["--publish-name", publish_name, "--latest-name", args.latest_name or cfg.get("release_latest_name") or "latest"])
         if args.apply:
             command.append("--apply")
         if args.overwrite:
@@ -1840,6 +1917,7 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             command.append("--no-verify")
         if args.no_render:
             command.append("--no-render")
+            command.append("--no-catalog-render")
         commands.append(command)
         return commands
     raise ValueError(f"unsupported short command: {args.short_command}")
@@ -1877,6 +1955,13 @@ def _print_post_command_hint(args: Any) -> None:
         )
         return
     if getattr(args, "library_cmd", "") == "apply":
+        if bool(getattr(args, "refresh_catalog", False)):
+            print(
+                "[NEXT] library_catalog.yml、catalog.json 和目录 HTML 已更新；"
+                "左侧库列表或 `lg library list` 可直接查看正式库。",
+                file=sys.stderr,
+            )
+            return
         print(
             "[NEXT] library_catalog.yml 已更新；运行 `lg cat --refresh-catalog` "
             "刷新 catalog.json。已有明确新库时可用 `lg cat <LIBRARY> --refresh-catalog` 做局部刷新。",
@@ -1886,7 +1971,28 @@ def _print_post_command_hint(args: Any) -> None:
 
 def run_init(args: Namespace) -> int:
     path = write_default_config(args.workspace, raw_root=args.raw_root, library_type=args.library_type)
-    print(json.dumps({"status": "PASS", "config": _norm(path)}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "status": "PASS",
+                "message": "配置已生成",
+                "config": _norm(path),
+                "env_commands": [
+                    f"setenv LIB_GUARD_CONFIG {_norm(path)}",
+                    "setenv LIB_GUARD_PYTHON /path/to/python3.11",
+                ],
+                "next_steps": [
+                    "进入 workspace：cd <WORK>",
+                    "已知库根时登记：lg library add <正式库名> --root <库根目录> --apply --refresh-catalog",
+                    "未知库根时发现候选：lg library discover --root <RAW或子目录>",
+                    "刷新目录和 HTML：lg cat <正式库名> --refresh-catalog",
+                    "查看下一步：lg next <正式库名>",
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 

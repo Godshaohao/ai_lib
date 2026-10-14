@@ -77,6 +77,32 @@ class IntegrityBuilder:
             "schema_version": getattr(context, "schema_version", "1.0"),
             "status": "PASS",
             "issues": [],
+            "lib_db_correspondence": build_lib_db_correspondence(records, _get(context, 'root_path', '')),
             "summary_count": len(summaries),
             "signature_count": len(signatures.get("file_signatures", [])) if isinstance(signatures, dict) else 0,
         }
+
+
+def build_lib_db_correspondence(records: list[Any], root_path: str | Path = '') -> dict[str, Any]:
+    groups: dict[str, dict[str, list[str]]] = {}
+    counts = {'liberty':0, 'db':0}
+    for record in records:
+        path = str(_get(record, 'path', '') or '')
+        name = Path(path).name
+        lower = name.lower()
+        suffix = next((suffix for suffix in ('.lib.gz','.db.gz','.lib','.db') if lower.endswith(suffix)), None)
+        if suffix is None:
+            continue
+        kind = 'liberty' if suffix.startswith('.lib') else 'db'
+        stem = name[:-len(suffix)]
+        absolute = str(_get(record, 'abs_path', '') or (Path(root_path)/path if not Path(path).is_absolute() else Path(path)).absolute())
+        group = groups.setdefault(stem, {'liberty_files':[], 'db_files':[]})
+        group[kind+'_files'].append(absolute)
+        counts[kind] += 1
+    rows=[]
+    for name, group in sorted(groups.items()):
+        left, right=group['liberty_files'],group['db_files']
+        relation='同名多文件' if len(left)>1 or len(right)>1 else '同名两侧均有' if left and right else '仅 Liberty' if left else '仅 DB'
+        rows.append({'name':name,'relation':relation,**group})
+    return {'liberty_count':counts['liberty'],'db_count':counts['db'],'rows':rows,
+            'basis':'范围为当前扫描目录，增量包可能只交付一侧。仅按去除 .lib/.db（含 gzip）后的完整文件名分组；不代表内容等价或缺件，不改变扫描和发布判断。'}

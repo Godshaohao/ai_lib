@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -317,6 +318,46 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("meta http-equiv", alias_text)
             self.assertIn("index.html", alias_text)
             self.assertLess(len(alias_text), 1000)
+
+    def test_pairwise_file_diff_exports_html_and_markdown_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old = root / "old_top.v"
+            new = root / "new_top.v"
+            out = root / "pairwise"
+            old.write_text("module top(input a, output y); assign y = a; endmodule\n", encoding="utf-8")
+            new.write_text("module top(input a, input b, output y); assign y = a & b; endmodule\n", encoding="utf-8")
+
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            result = diff_pairwise_files("verilog", old, new, out)
+
+            self.assertEqual(result["status"], "DIFF")
+            markdown = out / "pairwise_summary.md"
+            html = out / "index.html"
+            export_zip = out / "file_diff_export.zip"
+            pairwise = json.loads((out / "pairwise_result.json").read_text(encoding="utf-8"))
+            self.assertTrue(html.is_file())
+            self.assertTrue(markdown.is_file())
+            self.assertTrue(export_zip.is_file())
+            self.assertEqual(pairwise["markdown"], str(markdown))
+            self.assertEqual(pairwise["export"], str(export_zip))
+            self.assertEqual(result["markdown"], str(markdown))
+            self.assertEqual(result["export"], str(export_zip))
+            markdown_text = markdown.read_text(encoding="utf-8")
+            self.assertIn("# 单文件深度对比摘要", markdown_text)
+            self.assertIn("旧文件", markdown_text)
+            self.assertIn("新文件", markdown_text)
+            self.assertIn("结构化变化", markdown_text)
+            self.assertIn("双栏文本对比", markdown_text)
+            html_text = html.read_text(encoding="utf-8")
+            self.assertIn("对比对象", html_text)
+            self.assertIn("旧侧文件", html_text)
+            self.assertIn("新侧文件", html_text)
+            self.assertIn("导出对比结果", html_text)
+            self.assertIn("file_diff_export.zip", html_text)
+            self.assertIn("Markdown 摘要", html_text)
+            self.assertIn("pairwise_summary.md", html_text)
 
     def test_scan_html_limits_inline_file_evidence_per_view(self) -> None:
         from lib_guard.render.html_report import _representative_file_rows
@@ -1217,7 +1258,7 @@ class ScanPipelineTest(unittest.TestCase):
 
             self.assertEqual(forced["status"], "FORCED_DONE")
             immutable = release_root / "releases" / "hotfix_v1.0.1"
-            self.assertTrue((immutable / "RTL" / "empty.v").exists())
+            self.assertTrue((immutable / "VERILOG" / "empty.v").exists())
             self.assertTrue((release_root / "current").is_symlink())
             self.assertEqual((release_root / "current").resolve(), immutable.resolve())
             override = json.loads((scan / "release" / "release_override.json").read_text(encoding="utf-8"))
@@ -1810,8 +1851,8 @@ class ScanPipelineTest(unittest.TestCase):
             old_scan.mkdir()
             new_scan.mkdir()
             for scan, path in (
-                (old_scan, "RTL/top.v"),
-                (new_scan, "RTL/top_renamed.v"),
+                (old_scan, "VERILOG/top.v"),
+                (new_scan, "VERILOG/top_renamed.v"),
             ):
                 (scan / "file_inventory.json").write_text(
                     json.dumps(
@@ -1837,8 +1878,8 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(file_diff["counts"]["added"], 0)
             self.assertEqual(file_diff["counts"]["removed"], 0)
             move = file_diff["renamed_or_moved"][0]
-            self.assertEqual(move["old_logical_path"], "RTL/top.v")
-            self.assertEqual(move["new_logical_path"], "RTL/top_renamed.v")
+            self.assertEqual(move["old_logical_path"], "VERILOG/top.v")
+            self.assertEqual(move["new_logical_path"], "VERILOG/top_renamed.v")
             self.assertEqual(move["reason"], "unique_hash_match")
 
     def test_partial_update_does_not_mark_omitted_full_files_as_removed(self) -> None:
@@ -2668,6 +2709,10 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(file_diff["counts"]["unchanged"], 2)
             self.assertEqual(file_diff["counts"]["package_root_migrations"], 1)
             self.assertEqual(file_diff["counts"]["package_root_migration_matched_files"], 2)
+            self.assertEqual(file_diff["counts"]["unmatched_added_under_package_root"], 1)
+            self.assertEqual(file_diff["counts"]["unmatched_removed_under_package_root"], 0)
+            self.assertEqual(file_diff["unmatched_added_under_package_root"], ["upstream_ae9a8ed9/lib/c.lib"])
+            self.assertEqual(file_diff["unmatched_removed_under_package_root"], [])
             migration = file_diff["package_root_migrations"][0]
             self.assertEqual(migration["old_root"], "asap7_source_package")
             self.assertEqual(migration["new_root"], "upstream_ae9a8ed9")
@@ -2782,6 +2827,16 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertTrue((out / "new_extract.json").exists())
             self.assertTrue((out / "semantic_diff.json").exists())
             self.assertTrue((out / "raw_text_diff.html").exists())
+            raw_diff = (out / "raw_text_diff.html").read_text(encoding="utf-8")
+            self.assertIn('class="text-diff-workbench"', raw_diff)
+            self.assertIn('data-diff-row', raw_diff)
+            self.assertIn('data-change-block', raw_diff)
+            self.assertIn('id="diff-prev"', raw_diff)
+            self.assertIn('id="diff-next"', raw_diff)
+            self.assertIn('id="diff-mode"', raw_diff)
+            self.assertIn("仅看变化", raw_diff)
+            self.assertIn("双栏文本对比", raw_diff)
+            self.assertNotIn("Legends", raw_diff)
             self.assertTrue((out / "pairwise_result.json").exists())
             pairwise = json.loads((out / "pairwise_result.json").read_text(encoding="utf-8"))
             self.assertEqual(pairwise["schema_version"], "pairwise_result.v1")
@@ -2791,6 +2846,93 @@ class ScanPipelineTest(unittest.TestCase):
             html = (out / "index.html").read_text(encoding="utf-8")
             self.assertIn("单文件深度对比报告", html)
             self.assertIn("专家复核提示", html)
+
+    def test_raw_text_diff_uses_full_mode_when_small_files_are_identical(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_file = Path(td) / "old.v"
+            new_file = Path(td) / "new.v"
+            out = Path(td) / "pair"
+            content = "module top;\nendmodule\n"
+            old_file.write_text(content, encoding="utf-8")
+            new_file.write_text(content, encoding="utf-8")
+
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            diff_pairwise_files("verilog", old_file, new_file, out)
+
+            raw_diff = (out / "raw_text_diff.html").read_text(encoding="utf-8")
+            self.assertIn('<body data-mode="full">', raw_diff)
+            self.assertIn('<option value="full">完整文件</option>', raw_diff)
+            self.assertIn("文本相同，显示完整文件", raw_diff)
+            self.assertNotIn('<option value="compact">仅看变化</option>', raw_diff)
+
+    def test_file_diff_ignores_bookkeeping_source_when_content_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            old_file = Path(td) / "old_root" / "tech.lef"
+            new_file = Path(td) / "new_root" / "tech.lef"
+            out = Path(td) / "pair"
+            old_file.parent.mkdir(parents=True, exist_ok=True)
+            new_file.parent.mkdir(parents=True, exist_ok=True)
+            text = "VERSION 5.8 ;\nMACRO U\n  SIZE 1 BY 1 ;\nEND U\n"
+            old_file.write_text(text, encoding="utf-8")
+            new_file.write_text(text, encoding="utf-8")
+
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            result = diff_pairwise_files("lef", old_file, new_file, out)
+
+            self.assertEqual(result["status"], "SAME")
+            summary = json.loads((out / "file_diff_summary.json").read_text(encoding="utf-8"))
+            semantic = json.loads((out / "semantic_diff.json").read_text(encoding="utf-8"))
+            self.assertFalse(summary["changed"])
+            self.assertEqual(semantic["summary"]["change_count"], 0)
+            self.assertEqual(semantic["changes"], [])
+
+    def test_file_diff_accepts_renamed_explicit_files(self) -> None:
+        """Manual pairwise comparison treats supplied paths as the intended pair."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_file = root / "base" / "macro_rev_a.lef"
+            new_file = root / "candidate" / "macro_release_final.lef"
+            out = root / "pair"
+            old_file.parent.mkdir(parents=True, exist_ok=True)
+            new_file.parent.mkdir(parents=True, exist_ok=True)
+            text = "VERSION 5.8 ;\nMACRO SRAM\n  SIZE 10 BY 20 ;\nEND SRAM\n"
+            old_file.write_text(text, encoding="utf-8")
+            new_file.write_text(text, encoding="utf-8")
+
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            result = diff_pairwise_files("lef", old_file, new_file, out)
+
+            self.assertEqual(result["status"], "SAME")
+            meta = json.loads((out / "file_diff_meta.json").read_text(encoding="utf-8"))
+            report = (out / "index.html").read_text(encoding="utf-8")
+            self.assertEqual(meta["old_file"], str(old_file))
+            self.assertEqual(meta["new_file"], str(new_file))
+            self.assertIn("macro_rev_a.lef", report)
+            self.assertIn("macro_release_final.lef", report)
+
+    def test_raw_text_diff_bounds_large_file_html_to_change_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_file = root / "old.lib"
+            new_file = root / "new.lib"
+            out = root / "pair"
+            common = [f"line_{index}" for index in range(20_050)]
+            changed = list(common)
+            changed[10_025] = "line_changed"
+            old_file.write_text("\n".join(common) + "\n", encoding="utf-8")
+            new_file.write_text("\n".join(changed) + "\n", encoding="utf-8")
+
+            from lib_guard.diff.file_diff import _render_raw_text_diff
+
+            _render_raw_text_diff(old_file, new_file, out)
+
+            raw_diff = (out / "raw_text_diff.html").read_text(encoding="utf-8")
+            self.assertIn("大文件仅呈现差异上下文", raw_diff)
+            self.assertIn('<mark class="inline-change">changed</mark>', raw_diff)
+            self.assertLess(len(raw_diff), 200_000)
 
     def test_file_diff_does_not_hide_parser_registry_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2989,9 +3131,86 @@ class ScanPipelineTest(unittest.TestCase):
                 html = (out / "index.html").read_text(encoding="utf-8")
                 self.assertIn("单文件深度对比报告", html)
                 self.assertIn("结构化变化", html)
-                self.assertIn("原始文本差异", html)
+                if file_type == "db":
+                    self.assertIn("不提供文本逐行对比", html)
+                    self.assertFalse((out / "raw_text_diff.html").exists())
+                else:
+                    self.assertIn("双栏文本对比", html)
                 self.assertIn(file_type, html)
                 self.assertNotIn("鍗曟枃浠", html)
+
+    def test_text_file_diffs_declare_parameters_and_write_side_by_side_evidence(self) -> None:
+        samples = {
+            "lef": ("old.lef", "new.lef"),
+            "liberty": ("old.lib", "new.lib"),
+            "verilog": ("old.v", "new.v"),
+            "cdl": ("old.cdl", "new.cdl"),
+            "sdc": ("old.sdc", "new.sdc"),
+            "upf": ("old.upf", "new.upf"),
+            "cpf": ("old.cpf", "new.cpf"),
+            "spef": ("old.spef", "new.spef"),
+            "waiver": ("old.waiver", "new.waiver"),
+            "ibis": ("old.ibs", "new.ibs"),
+            "pwl": ("old.pwl", "new.pwl"),
+            "snp": ("old.s2p", "new.s2p"),
+            "cpm": ("old.cpm", "new.cpm"),
+        }
+        with tempfile.TemporaryDirectory() as td:
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            root = Path(td)
+            for file_type, (old_name, new_name) in samples.items():
+                old_file = root / file_type / old_name
+                new_file = root / file_type / new_name
+                old_file.parent.mkdir(parents=True, exist_ok=True)
+                old_file.write_text("before_value\n", encoding="utf-8")
+                new_file.write_text("after_value\n", encoding="utf-8")
+                out = root / "out" / file_type
+
+                diff_pairwise_files(file_type, old_file, new_file, out)
+
+                html = (out / "index.html").read_text(encoding="utf-8")
+                markdown = (out / "pairwise_summary.md").read_text(encoding="utf-8")
+                self.assertIn("本类型比较参数", html, file_type)
+                self.assertIn("本类型比较参数", markdown, file_type)
+                self.assertIn("双栏文本对比", html, file_type)
+                self.assertTrue((out / "raw_text_diff.html").is_file(), file_type)
+
+    def test_binary_file_diffs_do_not_emit_text_diff_artifacts(self) -> None:
+        samples = {
+            "db": ("old.db", "new.db"),
+            "gds": ("old.gds", "new.gds"),
+            "oas": ("old.oas", "new.oas"),
+            "ndm": ("old.ndm", "new.ndm"),
+        }
+        with tempfile.TemporaryDirectory() as td:
+            from lib_guard.diff.file_diff import diff_pairwise_files
+
+            root = Path(td)
+            for file_type, (old_name, new_name) in samples.items():
+                old_file = root / file_type / old_name
+                new_file = root / file_type / new_name
+                old_file.parent.mkdir(parents=True, exist_ok=True)
+                old_file.write_bytes(b"\x00\x01old\xff")
+                new_file.write_bytes(b"\x00\x02new\xff")
+                out = root / "out" / file_type
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "raw_text_diff.html").write_text("stale text comparison", encoding="utf-8")
+
+                result = diff_pairwise_files(file_type, old_file, new_file, out)
+
+                html = (out / "index.html").read_text(encoding="utf-8")
+                markdown = (out / "pairwise_summary.md").read_text(encoding="utf-8")
+                summary = json.loads((out / "file_diff_summary.json").read_text(encoding="utf-8"))
+                self.assertEqual(result["status"], "DIFF", file_type)
+                self.assertTrue(summary["changed"], file_type)
+                self.assertNotEqual(summary["content_sha256"]["old"], summary["content_sha256"]["new"], file_type)
+                self.assertIn("元数据级证据", html, file_type)
+                self.assertIn("不提供文本逐行对比", html, file_type)
+                self.assertIn("不提供文本逐行对比", markdown, file_type)
+                self.assertFalse((out / "raw_text_diff.html").exists(), file_type)
+                with zipfile.ZipFile(out / "file_diff_export.zip") as archive:
+                    self.assertNotIn("raw_text_diff.html", archive.namelist(), file_type)
 
     def test_file_diff_cli_exposes_all_review_types(self) -> None:
         from lib_guard.cli import build_parser
@@ -3382,10 +3601,14 @@ class ScanPipelineTest(unittest.TestCase):
 
         self.assertTrue(wrapper.exists())
         text = wrapper.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("#!/bin/csh -f"))
         self.assertIn("lib_guard.short_cli", text)
         self.assertIn("PYTHONPATH", text)
         self.assertIn("LIB_GUARD_PYTHON", text)
         self.assertIn("setenv LIB_GUARD_PYTHON", text)
+        self.assertIn("lib_guard 不会自动寻找 Python", text)
+        self.assertNotIn("foreach candidate", text)
+        self.assertIn("sys.version_info >= (3, 11)", text)
 
     def test_short_cli_help_shows_minimal_workflow_examples(self) -> None:
         from lib_guard.short_cli import _build_parser
@@ -3397,7 +3620,7 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertIn("lg.csh scan", help_text)
         self.assertIn("lg.csh next ucie --apply", help_text)
         self.assertIn("lg.ps1 scan", help_text)
-        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv,review}", help_text)
+        self.assertIn("{init,scan,cat,library,release-library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv,review}", help_text)
         self.assertIn("lg.csh intake ucie --plan-only", help_text)
         self.assertIn("lg.csh worklist", help_text)
         self.assertIn("lg.csh window ucie", help_text)
@@ -3856,8 +4079,10 @@ class ScanPipelineTest(unittest.TestCase):
         self.assertEqual(render.mode, "scan")
         self.assertEqual(status.mode, "scan")
 
-        with self.assertRaises(SystemExit):
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(stderr):
             parser.parse_args(["scan", "--root", "raw", "--profile", "ip", "--name", "ucie", "--version", "stable_20250608", "--mode", "candidate"])
+        self.assertIn("invalid choice: 'candidate'", stderr.getvalue())
 
     def test_short_cli_init_defaults_to_version_review_scan_mode(self) -> None:
         from lib_guard.short_cli import write_default_config

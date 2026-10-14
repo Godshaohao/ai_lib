@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import io
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,63 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class CatalogTimelineTest(unittest.TestCase):
+    def test_runtime_sidecar_prefers_workspace_relative_artifacts_after_workspace_move(self) -> None:
+        """Runtime evidence remains usable when a complete work directory is relocated."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_work = root / "source" / "work"
+            catalog_path = source_work / "catalog" / "catalog.json"
+            scan_one = source_work / "scan_out" / "demo" / "v1"
+            scan_two = source_work / "scan_out" / "demo" / "v2"
+            diff_dir = source_work / "diff" / "demo" / "v2"
+            for path in (catalog_path.parent, scan_one, scan_two, diff_dir):
+                path.mkdir(parents=True, exist_ok=True)
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_id": "ip/demo",
+                                "library_name": "demo",
+                                "versions": [
+                                    {"version_id": "v1", "version_key": "ip/demo/v1"},
+                                    {"version_id": "v2", "version_key": "ip/demo/v2"},
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            from lib_guard.catalog.index import update_catalog_diff_status, update_catalog_scan_status
+            from lib_guard.catalog.runtime import catalog_runtime_path, load_catalog_view
+
+            update_catalog_scan_status(catalog_path, version_key="ip/demo/v1", scan_dir=scan_one, scan_id="scan-v1", status="PASS")
+            update_catalog_scan_status(catalog_path, version_key="ip/demo/v2", scan_dir=scan_two, scan_id="scan-v2", status="PASS")
+            update_catalog_diff_status(
+                catalog_path,
+                version_key="ip/demo/v2",
+                mode="adjacent",
+                old_version="v1",
+                diff_dir=diff_dir,
+                status="PASS",
+            )
+
+            sidecar = json.loads(catalog_runtime_path(catalog_path).read_text(encoding="utf-8"))
+            v2_runtime = sidecar["runtime_state"]["ip/demo/v2"]
+            self.assertEqual(v2_runtime["scan"]["scan_dir_relative"], "scan_out/demo/v2")
+            self.assertEqual(v2_runtime["diff"]["adjacent_diff_dir_relative"], "diff/demo/v2")
+
+            moved_work = root / "moved" / "work"
+            shutil.copytree(source_work, moved_work)
+            moved_catalog = moved_work / "catalog" / "catalog.json"
+            moved_view = load_catalog_view(moved_catalog)
+            moved_v2 = moved_view["libraries"][0]["versions"][1]
+
+            self.assertEqual(moved_v2["scan"]["scan_dir"], str(moved_work / "scan_out" / "demo" / "v2"))
+            self.assertEqual(moved_v2["diff"]["adjacent_diff_dir"], str(moved_work / "diff" / "demo" / "v2"))
+
     def test_catalog_requires_confirmation_for_full_candidate_with_large_inventory_drop(self) -> None:
         """A small package with core views must not silently replace a much larger FULL."""
         with tempfile.TemporaryDirectory() as td:
@@ -759,7 +817,7 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn("2", panel_html)
             self.assertIn("effective_20260620", md_text)
             self.assertIn("changed_files: 2", md_text)
-            self.assertIn("元数据证据", panel_html)
+            self.assertIn("仅检查文件信息", panel_html)
             self.assertIn("lef/macro.lef", panel_html)
             self.assertNotIn("$PROJ/scripts/lg.csh fd ucie patch_20260627 db/macro.db", panel_html)
             self.assertEqual(panel_html, panel_html_after_delete)
@@ -2531,7 +2589,8 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertNotIn("版本事实审查", version_html)
             self.assertLess(version_html.find("<h2>使用判断"), version_html.find("<h2>视图变化矩阵"))
             self.assertNotIn("绝对 Raw 路径", version_html)
-            self.assertNotIn(str(raw / "ucie" / "stable_20250608"), version_html)
+            self.assertIn(str(raw / "ucie" / "stable_20250608"), version_html)
+            self.assertIn("复制本版源目录路径", version_html)
             self.assertNotIn(f"<b>Raw Path</b><em>{raw / 'ucie' / 'stable_20250608'}</em>", version_html)
             self.assertNotIn("必需 View 覆盖证据", version_html)
             self.assertNotIn("大文件与 Corner 线索", version_html)
@@ -2581,7 +2640,7 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn("upf/new_domain.upf", version_html)
             self.assertIn("waiver/legacy.waiver", version_html)
             self.assertIn("db/ucie_tt_0p80v_25c.db", version_html)
-            self.assertIn("元数据证据", version_html)
+            self.assertIn("仅检查文件信息", version_html)
             self.assertIn("rtl/top.v", version_html)
             self.assertIn("doc/release/deep_change_note_with_long_relative_path.md", version_html)
             self.assertIn("sdc/ucie.sdc", version_html)
@@ -2592,7 +2651,7 @@ class CatalogTimelineTest(unittest.TestCase):
             self.assertIn("Review removed waiver", version_html)
             self.assertIn("data-section=\"review-report\"", version_html)
             self.assertIn("doc/release_note.txt", version_html)
-            self.assertNotIn(str(raw / "ucie" / "stable_20250608" / "doc" / "release_note.txt"), version_html)
+            self.assertIn(str(raw / "ucie" / "stable_20250608" / "doc" / "release_note.txt"), version_html)
             self.assertNotIn("summary/dashboard_summary.json", version_html)
             self.assertNotIn("summary rebuild", version_html)
             self.assertNotIn("解析对象明细", version_html)
@@ -2962,8 +3021,8 @@ class CatalogTimelineTest(unittest.TestCase):
 
             self.assertIn("使用判断", html)
             self.assertIn("增量对比", html)
-            self.assertIn("交付变化", html)
-            self.assertIn("扫描事实已记录", html)
+            self.assertIn("主要变化", html)
+            self.assertIn("扫描结果已记录", html)
             # Opaque scan IDs remain in the structured evidence model, but are
             # not user-facing Version Detail content.
             self.assertNotIn("scan_empty", html)

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 import getpass
 import json
+import re
 
 from lib_guard.atomic import atomic_write_json
 from lib_guard.view_types import RELEASE_VIEW_DIR_ALIASES, release_view_dir
@@ -54,6 +55,11 @@ def load_release_manifest(
         manifest["release_root"] = str(release_root)
     if not manifest.get("release_root"):
         raise ValueError("release manifest requires release_root")
+    if manifest.get("publish_name"):
+        manifest["publish_name"] = validate_release_name(manifest["publish_name"])
+        manifest["latest_name"] = validate_release_name(manifest.get("latest_name") or "latest")
+        if manifest["publish_name"] == manifest["latest_name"]:
+            raise ValueError("正式目录名与最新指针名不能相同")
     libraries = manifest.get("libraries")
     files = manifest.get("files")
     if (not isinstance(libraries, list) or not libraries) and (not isinstance(files, list) or not files):
@@ -92,8 +98,9 @@ def load_release_manifest(
         entry["target_relpath"] = normalize_release_relpath(
             str(entry.get("target_relpath") or entry.get("relative_path")).replace("\\", "/"),
             file_type=entry.get("file_type"),
+            source_path=entry.get("source_path"),
         ).as_posix()
-        entry.setdefault("relative_path", entry["target_relpath"])
+        entry["relative_path"] = entry["target_relpath"]
         entry.setdefault("library_type", manifest.get("library_type", "unknown"))
         entry.setdefault("library_name", manifest.get("library_name", "unknown"))
         entry.setdefault("version_id", manifest.get("snapshot_id") or manifest.get("release_id"))
@@ -111,11 +118,22 @@ def release_staging_dir_for(manifest: Mapping[str, Any]) -> Path:
 
 
 def immutable_release_dir_for(manifest: Mapping[str, Any]) -> Path:
+    if manifest.get("publish_name"):
+        return release_dir_for(manifest) / validate_release_name(manifest["publish_name"])
     return release_dir_for(manifest) / "releases" / str(manifest.get("release_id"))
 
 
 def release_alias_for(manifest: Mapping[str, Any]) -> Path:
+    if manifest.get("publish_name"):
+        return release_dir_for(manifest) / validate_release_name(manifest.get("latest_name") or "latest")
     return release_dir_for(manifest) / str(manifest.get("alias") or "current")
+
+
+def validate_release_name(value: Any) -> str:
+    name = str(value or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name) or name.lower() in {"history", "releases"}:
+        raise ValueError("发布目录或指针名只能包含字母、数字、下划线、点和横线，不能是路径或保留目录名")
+    return name
 
 
 def target_for_library(manifest: Mapping[str, Any], library: Mapping[str, Any]) -> Path:
@@ -138,16 +156,19 @@ def _release_view_for_file_type(file_type: Any) -> str:
     return release_view_dir(file_type)
 
 
-def normalize_release_relpath(relpath: str | Path, *, file_type: Any = None) -> Path:
+def normalize_release_relpath(
+    relpath: str | Path, *, file_type: Any = None, source_path: str | Path | None = None,
+) -> Path:
+    """Flatten folders into uppercase views while preserving the source filename."""
     rel = Path(str(relpath).replace("\\", "/"))
     parts = [part for part in rel.parts if part not in {"", "."}]
-    for idx, part in enumerate(parts):
+    name = Path(str(source_path).replace("\\", "/")).name if source_path else (parts[-1] if parts else "")
+    for part in parts[:-1]:
         view = VIEW_DIR_ALIASES.get(part.lower())
         if view:
-            tail = parts[idx + 1 :]
-            return Path(view, *tail) if tail else Path(view)
+            return Path(view, name)
     view = _release_view_for_file_type(file_type)
-    return Path(view, *parts) if parts else Path(view)
+    return Path(view, name) if name else Path(view)
 
 
 def release_relative_path(source_root: str | Path, file_path: str | Path) -> Path:
@@ -162,12 +183,17 @@ def iter_release_files(
     manifest: Mapping[str, Any],
     *,
     target_root: str | Path | None = None,
+    excluded_files: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     planned: list[dict[str, Any]] = []
     seen_targets: dict[str, dict[str, Any]] = {}
     release_target_root = Path(target_root) if target_root is not None else release_dir_for(manifest)
     for entry in manifest.get("files", []) or []:
-        rel_text = str(entry.get("target_relpath") or entry.get("relative_path") or "").replace("\\", "/")
+        rel_text = normalize_release_relpath(
+            str(entry.get("target_relpath") or entry.get("relative_path") or ""),
+            file_type=entry.get("file_type"),
+            source_path=entry.get("source_path"),
+        ).as_posix()
         source = Path(str(entry.get("source_path") or ""))
         item = {
             "library_type": entry.get("library_type") or manifest.get("library_type"),
@@ -242,7 +268,51 @@ def iter_release_files(
             else:
                 seen_targets[rel_text] = item
             planned.append(item)
+    payload = []
+    for item in planned:
+        reason = _payload_exclusion_reason(item)
+        if reason:
+            if excluded_files is not None:
+                excluded_files.append({**item, "status": "EXCLUDED", "reason": reason})
+        else:
+            payload.append(item)
+    planned = payload
+    # A flat target must not select whichever source happened to be listed first.
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in planned:
+        if item.get("relative_path"):
+            groups.setdefault(str(item["relative_path"]), []).append(item)
+    for relpath, candidates in groups.items():
+        if len(candidates) < 2:
+            continue
+        sources = [str(item.get("source_path") or "") for item in candidates]
+        for item in candidates:
+            item["error_code"] = "TARGET_COLLISION"
+            item["error"] = f"同名发布冲突，已跳过：{relpath}；来源：{'；'.join(sources)}"
     return planned
+
+
+def _payload_exclusion_reason(item: Mapping[str, Any]) -> str:
+    if item.get("error") and not item.get("relative_path"):
+        return ""
+    source = Path(str(item.get("source_path") or ""))
+    try:
+        rel = source.relative_to(str(item.get("source_root") or source.parent))
+    except ValueError:
+        rel = source
+    if any(part.lower() in {"bak", "backup", "backups", "logs", "__pycache__"}
+           for part in rel.parts[:-1]):
+        return "备份或日志文件，不参与交付链接"
+    name = source.name.lower()
+    if (name.startswith(("readme", "license", "changelog"))
+            or source.suffix.lower() in {".md", ".txt", ".pdf", ".html", ".log", ".bak"}):
+        return "说明文档或辅助文件，保留为审查证据，不参与交付链接"
+    view = str(item.get("relative_path") or "").split("/", 1)[0]
+    allowed = {"VERILOG", "LEF", "LIB", "DB", "GDS", "OAS", "CDL", "SPICE",
+               "SDC", "UPF", "CPF", "SPEF", "SDF", "NDM", "NDM_wo_lib", "DFT", "PGV"}
+    if view not in allowed:
+        return "未明确归类为交付视图，不参与交付链接"
+    return ""
 
 
 def _selected_versions(catalog: Mapping[str, Any], library: str | None, versions: set[str], stage: str | None) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
@@ -343,6 +413,7 @@ def create_manifest_from_snapshot(
         target_relpath = normalize_release_relpath(
             str(item.get("target_relpath") or ""),
             file_type=item.get("file_type"),
+            source_path=item.get("source_path"),
         ).as_posix()
         files.append(
             {
@@ -403,7 +474,9 @@ def create_manifest_from_effective_manifest(
         raw_root = str(info.get("raw_root") or "")
         if source_path and raw_root and not str(source_path).startswith("/"):
             source_path = str(Path(raw_root) / str(source_path))
-        target_relpath = normalize_release_relpath(str(relpath), file_type=info.get("file_type")).as_posix()
+        target_relpath = normalize_release_relpath(
+            str(relpath), file_type=info.get("file_type"), source_path=source_path,
+        ).as_posix()
         files.append(
             {
                 "target_relpath": target_relpath,

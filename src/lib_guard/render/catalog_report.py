@@ -1866,7 +1866,7 @@ def render_catalog_html(
     from lib_guard.render.catalog_workspace_report import render_catalog_index_page, render_library_workspace_page
     from lib_guard.render.version_detail_report import render_version_detail_page
 
-    out = Path(out_dir)
+    out = Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
     catalog = load_catalog_view(catalog_json)
     state = build_review_state(catalog, out_dir=out)

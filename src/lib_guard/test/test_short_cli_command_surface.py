@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from argparse import Namespace
@@ -11,6 +12,18 @@ from pathlib import Path
 
 
 class ShortCliCommandSurfaceTest(unittest.TestCase):
+    def test_next_and_intake_preserve_manual_composition_order(self):
+        from lib_guard.short_cli import main
+        td, root = self._workspace()
+        with td:
+            for action in ['next', 'intake']:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code = main(['--config', str(root/'lib_guard.yml'), '--dry-run', action, 'ucie', '--base-full', 'base', '--include', 'fix2', '--include', 'patch'])
+                self.assertEqual(code, 0)
+                self.assertIn('--base-full base', out.getvalue())
+                self.assertIn('--include fix2 --include patch', out.getvalue())
+
     def _workspace(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
         td = tempfile.TemporaryDirectory()
         root = Path(td.name)
@@ -61,7 +74,7 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             main(["--help"])
         self.assertEqual(cm.exception.code, 0)
         help_text = stdout.getvalue()
-        self.assertIn("{init,scan,cat,library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv,review}", help_text)
+        self.assertIn("{init,scan,cat,library,release-library,cmp,fd,rel,action,next,intake,window,worklist,accept-window,mark,effective,rv,review}", help_text)
         for name in [
             "init",
             "library",
@@ -86,6 +99,49 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
         self.assertIn("只读预演", help_text)
         self.assertIn("初始接入候选", help_text)
         self.assertIn("不修改数据", help_text)
+
+    def test_init_prints_human_next_steps(self) -> None:
+        from lib_guard.short_cli import main
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "work"
+            raw = Path(td) / "raw"
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                code = main(["init", str(workspace), "--raw-root", str(raw), "--library-type", "ip"])
+
+            self.assertEqual(code, 0)
+            text = stdout.getvalue()
+            self.assertIn("配置已生成", text)
+            self.assertIn("setenv LIB_GUARD_CONFIG", text)
+            self.assertIn("setenv LIB_GUARD_PYTHON", text)
+            self.assertIn("lg library add", text)
+            self.assertIn("lg cat", text)
+
+    def test_csh_wrapper_fails_cleanly_without_explicit_python(self) -> None:
+        root = Path(__file__).resolve().parents[3]
+        wrapper = root / "scripts" / "lg.csh"
+        env = dict(os.environ)
+        env.pop("LIB_GUARD_PYTHON", None)
+        env.pop("WORK", None)
+
+        result = subprocess.run(
+            [str(wrapper), "--help"],
+            cwd=root,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 127)
+        output = result.stdout + result.stderr
+        self.assertIn("LIB_GUARD_PYTHON 没有设置", output)
+        self.assertIn("lib_guard 不会自动寻找 Python", output)
+        self.assertIn("setenv LIB_GUARD_PYTHON", output)
+        self.assertNotIn("Undefined variable", output)
 
     def test_cat_update_detail_replaces_refresh_as_visible_entry(self) -> None:
         td, workspace = self._workspace()
@@ -112,6 +168,19 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             self.assertIn("--library", command)
             self.assertEqual(command[command.index("--library") + 1], "ucie")
             self.assertNotIn("refresh", command)
+
+    def test_release_library_refresh_uses_release_root_not_raw_root(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            command = build_cli_commands(["release-library", "refresh"], cwd=workspace)[0]
+
+            self.assertEqual(command[:2], ["release-library", "refresh"])
+            self.assertIn("--root", command)
+            self.assertEqual(command[command.index("--root") + 1], str(workspace / "release_area"))
+            self.assertIn("--out", command)
+            self.assertNotIn(str(workspace / "raw"), command)
 
     def test_cat_refresh_catalog_is_explicit_catalog_rebuild(self) -> None:
         td, workspace = self._workspace()
@@ -423,6 +492,79 @@ class ShortCliCommandSurfaceTest(unittest.TestCase):
             self.assertEqual(refresh[refresh.index("--policy") + 1], str(workspace / "config" / "library_catalog.yml"))
             self.assertIn("--fast", refresh)
             self.assertNotIn("--with-evidence", refresh)
+
+    def test_library_apply_refresh_catalog_chains_catalog_refresh(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            commands = build_cli_commands(["library", "apply", "--refresh-catalog"], cwd=workspace)
+
+            self.assertEqual([cmd[:2] for cmd in commands], [["library", "apply"], ["catalog", "refresh"]])
+            refresh = commands[-1]
+            self.assertIn("--policy", refresh)
+            self.assertEqual(refresh[refresh.index("--policy") + 1], str(workspace / "config" / "library_catalog.yml"))
+            self.assertIn("--fast", refresh)
+            self.assertNotIn("--with-evidence", refresh)
+
+    def test_library_accept_apply_refresh_catalog_chains_full_intake_refresh(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            commands = build_cli_commands(["library", "accept", "--apply", "--refresh-catalog"], cwd=workspace)
+
+            self.assertEqual([cmd[:2] for cmd in commands], [["library", "accept"], ["library", "apply"], ["catalog", "refresh"]])
+            self.assertIn("--policy", commands[-1])
+            self.assertEqual(commands[-1][commands[-1].index("--policy") + 1], str(workspace / "config" / "library_catalog.yml"))
+            self.assertIn("--fast", commands[-1])
+
+    def test_library_accept_refresh_catalog_requires_apply(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            from lib_guard.short_cli import build_cli_commands
+
+            with self.assertRaises(ValueError) as cm:
+                build_cli_commands(["library", "accept", "--refresh-catalog"], cwd=workspace)
+
+            self.assertIn("requires --apply", str(cm.exception))
+
+    def test_library_apply_refresh_catalog_prints_completed_hint(self) -> None:
+        td, workspace = self._workspace()
+        with td:
+            import contextlib
+            import io
+            import os
+
+            from lib_guard.short_cli import main
+
+            registry = workspace / "config" / "library_registry.tsv"
+            root = workspace / "raw" / "newlib"
+            (root / "v1").mkdir(parents=True)
+            registry.parent.mkdir(parents=True, exist_ok=True)
+            registry.write_text(
+                "\n".join(
+                    [
+                        "status\tlibrary_id\troot_abs\tdisplay_name\tvendor\tmiddle_path",
+                        f"OK\tnewlib\t{root}\tnewlib\t\t",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            old_cwd = Path.cwd()
+            stderr = io.StringIO()
+            try:
+                os.chdir(workspace)
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+                    code = main(["library", "apply", "--refresh-catalog"])
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 0)
+            message = stderr.getvalue()
+            self.assertIn("catalog.json 和目录 HTML 已更新", message)
+            self.assertNotIn("运行 `lg cat --refresh-catalog`", message)
 
     def test_library_list_plain_is_copyable_and_short_cli_expands_it(self) -> None:
         td, workspace = self._workspace()

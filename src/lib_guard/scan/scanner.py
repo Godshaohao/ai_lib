@@ -842,6 +842,12 @@ class ScanRunner:
 
     def _issues(self, integrity: dict[str, Any], parser_quality: dict[str, Any], context: ScanContext) -> dict[str, Any]:
         issues = list(integrity.get("issues", [])) if isinstance(integrity, dict) else []
+        walk = getattr(self.services.file_walker, 'coverage', {})
+        if walk.get('skipped_count'):
+            issues.append({'severity': 'warning', 'category': 'inventory_scope',
+                           'title': '部分目录或文件无法读取',
+                           'message': f"跳过 {walk['skipped_count']} 项，文件清单可能不完整；不能据此确认基准缺少这些文件。",
+                           'files': [item['path'] for item in walk.get('examples', [])]})
         for err in self.parser_errors:
             if _is_doc_review_type(err.get("file_type")):
                 issues.append({"severity": "error" if context.scan_mode == "release" else "warning", "category": "parser", "title": "Document parser failed", "message": err["error"], "files": [err["file"]]})
@@ -921,6 +927,7 @@ class ScanRunner:
             "version_kind": self._version_kind(inventory_files, context),
             "base_version_source": "CONFIG" if _get(context.config, "base_version", None) else "AUTO_CATALOG_OR_UNSET",
             "input_fingerprint": fingerprint,
+            "inventory_walk": dict(getattr(self.services.file_walker, 'coverage', {})),
             "snapshot_identity": snapshot_identity,
             "hash_policy": self._hash_policy(inventory_files),
             "started_at_ms": context.started_at_ms,

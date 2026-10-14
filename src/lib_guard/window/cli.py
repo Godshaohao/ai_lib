@@ -755,8 +755,29 @@ def _attach_render_impact(args: argparse.Namespace, output: dict[str, Any], wind
         return
     render_impact = render_impacted_catalog_html(args, impacts_for_versions(args.library, _window_versions(window), reason))
     output["render_impact"] = render_impact
-    output["rendered_pages"] = render_impact.get("affected_pages", [])
+    output["impacted_pages"] = render_impact.get("affected_pages", [])
+    render_result = render_impact.get("render_result")
+    output["rendered_pages"] = _actual_rendered_pages(render_result if isinstance(render_result, dict) else {})
     output["catalog_html_out"] = render_impact.get("catalog_html_out")
+
+
+def _actual_rendered_pages(render_result: dict[str, Any]) -> list[dict[str, Any]]:
+    if str(render_result.get("status") or "").upper() == "SKIPPED":
+        return []
+    pages: list[dict[str, Any]] = []
+    for item in render_result.get("version_detail_pages", []) or []:
+        if isinstance(item, dict) and item.get("version_detail_html"):
+            pages.append(
+                {
+                    "kind": "version_detail",
+                    "library": item.get("library"),
+                    "version": item.get("version"),
+                    "html": item.get("version_detail_html"),
+                }
+            )
+    if render_result.get("index_html"):
+        pages.append({"kind": "catalog_index", "html": render_result.get("index_html")})
+    return pages
 
 
 def cmd_worklist(args: argparse.Namespace) -> int:
@@ -811,6 +832,8 @@ def cmd_intake(args: argparse.Namespace) -> int:
         since=args.since,
         window_path=args.window_file,
         force_rebuild=args.rebuild,
+        base_full=getattr(args, "base_full", None),
+        includes=getattr(args, "include", None),
         parse_jobs=str(args.parse_jobs or ""),
         hash_policy=args.hash_policy or "",
         parse_file_types=args.parse_file_types or "",
@@ -906,7 +929,9 @@ def cmd_rollback(args: argparse.Namespace) -> int:
     output = {"status": "PASS", "library": args.library, "current_effective": str(pointer), "effective_id": effective_id}
     render_impact = render_impacted_catalog_html(args, impacts_for_versions(args.library, [], "effective_rollback"))
     output["render_impact"] = render_impact
-    output["rendered_pages"] = render_impact.get("affected_pages", [])
+    output["impacted_pages"] = render_impact.get("affected_pages", [])
+    render_result = render_impact.get("render_result")
+    output["rendered_pages"] = _actual_rendered_pages(render_result if isinstance(render_result, dict) else {})
     _print_json(output)
     return 0
 
@@ -915,6 +940,9 @@ def cmd_accept(args: argparse.Namespace) -> int:
     data = read_json(args.window_file, {}) or {}
     if not data:
         raise ValueError(f"window file not found or empty: {args.window_file}")
+    expected_candidate = getattr(args, "expected_effective_id", None)
+    if expected_candidate and expected_candidate != (data.get("candidate_effective") or {}).get("effective_id"):
+        raise ValueError("候选组合已经改变，请重新读取并核对后再确认生效")
     unknowns = _unknown_package_versions(data)
     if unknowns:
         raise ValueError("接受接入窗口前必须确认以下版本的包类型：" + ", ".join(unknowns))
@@ -1016,6 +1044,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("intake")
     add_common(p)
+    p.add_argument("--base-full", help="人工选择完整包基线")
+    p.add_argument("--include", action="append", default=[], help="有序叠加版本，可重复")
     p.add_argument("--plan-only", action="store_true")
     p.add_argument("--rebuild", action="store_true")
     p.add_argument("--format", choices=["json", "text"], default="json")
@@ -1046,6 +1076,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_rollback)
 
     p = sub.add_parser("accept")
+    p.add_argument("--expected-effective-id", help="只确认已核对的候选；候选改变则拒绝")
     p.add_argument("--catalog")
     p.add_argument("--library")
     p.add_argument("--workdir", default="work")

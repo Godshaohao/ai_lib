@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -321,6 +322,8 @@ def resolve_review_window(
     hash_policy: str = "",
     parse_file_types: str = "",
     parse_exclude_file_types: str = "",
+    base_full: str | None = None,
+    includes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     catalog = load_catalog_view(catalog_path)
     library_row = find_library(catalog, library)
@@ -334,6 +337,30 @@ def resolve_review_window(
     pending_path = Path(window_path) if window_path else default_window_path(html_out, library_row, library)
     pending = read_json(pending_path, {}) or {}
     has_pending = bool(pending and str(pending.get("state") or "").upper() not in {"ACCEPTED", "CLOSED"})
+    saved_candidate = pending.get("candidate_effective") or {}
+    if base_full is None and has_pending and saved_candidate.get("rule") == "manual_selection":
+        base_full = saved_candidate.get("base_full")
+        includes = saved_candidate.get("overlays", [])
+    manual_candidate = None
+    if includes and not base_full:
+        raise ValueError("选择增量包时必须同时选择完整包基线")
+    if base_full is not None:
+        selected = [base_full, *(includes or [])]
+        if len(set(selected)) != len(selected):
+            raise ValueError("组成版本不能重复；完整包不能同时作为增量包")
+        for vid in selected:
+            if vid not in versions_by_id:
+                raise ValueError(f"版本不属于当前库：{vid}")
+        if package_kind(versions_by_id[base_full]) != "FULL":
+            raise ValueError(f"完整包基线必须是已确认的 FULL：{base_full}")
+        for vid in selected[1:]:
+            if package_kind(versions_by_id[vid]) not in {"FIX", "HOTFIX", "DOC"}:
+                raise ValueError(f"叠加包必须是已确认的增量或文档更新：{vid}")
+        manual_candidate = {
+            "base_full": base_full, "overlays": selected[1:], "intermediate_items": [],
+            "rule": "manual_selection", "unknown_package_versions": [],
+            "last_material_version": selected[-1],
+        }
 
     lib_id = str(library_row.get("library_id") or library_row.get("library_name") or library)
     pointer = load_current_pointer(html_out, lib_id) or load_current_pointer(html_out, library)
@@ -366,6 +393,9 @@ def resolve_review_window(
     seen_existing = set(existing_ids)
     new_ids = [version_id(item) for item in new_versions if version_id(item) not in seen_existing]
     item_ids = [*existing_ids, *new_ids]
+    if manual_candidate is not None:
+        item_ids = [manual_candidate["base_full"], *manual_candidate["overlays"]]
+        new_ids = [vid for vid in new_ids if vid in item_ids]
     if not item_ids:
         window = dict(pending if has_pending else {})
         window.update(
@@ -398,7 +428,7 @@ def resolve_review_window(
         )
         return window
 
-    candidate = _resolve_candidate(anchor, item_ids, versions_by_id)
+    candidate = manual_candidate or _resolve_candidate(anchor, item_ids, versions_by_id)
     if not candidate.get("base_full"):
         items = [_window_item(versions_by_id[vid], role="needs_full_base") for vid in item_ids]
         return {
@@ -435,6 +465,9 @@ def resolve_review_window(
 
     last_material = str(candidate.get("last_material_version") or item_ids[-1])
     effective_id = f"candidate_{safe_name(last_material)}"
+    if manual_candidate is not None:
+        composition = json.dumps(item_ids, ensure_ascii=False, separators=(",", ":"))
+        effective_id += "_" + hashlib.sha256(composition.encode("utf-8")).hexdigest()[:12]
     old_target = str(anchor.get("old_target") or "")
     is_bootstrap = str(anchor.get("source") or "") == "uninitialized"
     compare_old_target = f"raw:{candidate['base_full']}" if is_bootstrap else old_target
@@ -468,15 +501,15 @@ def resolve_review_window(
         )
         for vid in dedup_scan
     ]
-    if force_rebuild or not manifest.exists() or new_ids:
+    if manual_candidate is not None or force_rebuild or not manifest.exists() or new_ids:
         commands.append(_effective_build_command(str(catalog_path), library, candidate, effective_id, manifest, eff_dir / "index.html"))
-    if force_rebuild or not (compare_dir / "compare_manifest.json").exists() or new_ids:
+    if manual_candidate is not None or force_rebuild or not (compare_dir / "compare_manifest.json").exists() or new_ids:
         commands.append(_effective_compare_command(str(catalog_path), library, compare_old_target, effective_id, compare_id, compare_dir, html_out))
 
     overlays = set(candidate.get("overlays", []) or [])
     items = []
     for vid in item_ids:
-        role = "candidate_base" if vid == candidate.get("base_full") and candidate.get("rule") == "latest_full_in_window" else "candidate_overlay" if vid in overlays else "intermediate"
+        role = "candidate_base" if vid == candidate.get("base_full") and candidate.get("rule") in {"latest_full_in_window", "manual_selection"} else "candidate_overlay" if vid in overlays else "intermediate"
         items.append(_window_item(versions_by_id[vid], role=role))
 
     warnings: list[str] = []

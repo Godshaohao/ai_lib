@@ -137,28 +137,41 @@ def corner_filename_summary(records: list[Mapping[str, Any]]) -> dict[str, Any]:
 class FileWalker:
     def __init__(self, config: Any = None) -> None:
         self.config = config
+        self.coverage: dict[str, Any] = {'complete': False, 'skipped_count': 0, 'examples': []}
 
     def walk(self, root_path: str | Path, context: Any = None) -> Iterator[dict[str, Any]]:
         root = Path(root_path).resolve()
         ignore_dirs = _scan_ignore_dirs(self.config, context)
-        for dirpath, dirnames, filenames in os.walk(root):
+        self.coverage = {'complete': True, 'skipped_count': 0, 'examples': [], 'ignore_dirs': sorted(ignore_dirs)}
+        def skipped(error: OSError) -> None:
+            self.coverage['complete'] = False
+            self.coverage['skipped_count'] += 1
+            if len(self.coverage['examples']) < 10:
+                self.coverage['examples'].append({'path': str(error.filename or root), 'error': str(error)})
+            if error.filename and Path(error.filename) == root:
+                raise error
+        for dirpath, dirnames, filenames in os.walk(root, onerror=skipped):
             dirnames[:] = sorted(d for d in dirnames if d.lower() not in ignore_dirs)
             for name in sorted(filenames):
                 abs_path = Path(dirpath) / name
                 try:
                     stat = abs_path.stat()
-                except OSError:
+                    resolved_path = str(abs_path.resolve())
+                    is_symlink = abs_path.is_symlink()
+                    symlink_target = os.readlink(abs_path) if is_symlink else None
+                except OSError as error:
+                    skipped(error)
                     continue
                 logical_path = abs_path.relative_to(root).as_posix()
                 yield {
                     "path": logical_path,
-                    "abs_path": str(abs_path.resolve()),
+                    "abs_path": resolved_path,
                     "name": name,
                     "extension": abs_path.suffix.lower(),
                     "size_bytes": stat.st_size,
                     "mtime": stat.st_mtime,
-                    "is_symlink": abs_path.is_symlink(),
-                    "symlink_target": os.readlink(abs_path) if abs_path.is_symlink() else None,
+                    "is_symlink": is_symlink,
+                    "symlink_target": symlink_target,
                 }
 
 

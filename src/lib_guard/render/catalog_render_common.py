@@ -7,6 +7,7 @@ from typing import Any, Mapping
 import os
 import re
 
+from lib_guard.atomic import atomic_write_text
 from lib_guard.review.io import as_file_href, read_json
 from lib_guard.package.types import package_kind, package_type_from_version
 from lib_guard.render import product_theme as ui
@@ -18,8 +19,7 @@ def safe(value: Any) -> str:
 
 
 def write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    atomic_write_text(path, text, lock=False)
 
 
 def version_links(version: Mapping[str, Any]) -> Mapping[str, Any]:

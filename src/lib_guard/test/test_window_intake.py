@@ -14,6 +14,135 @@ from unittest import mock
 
 
 class WindowIntakeTest(unittest.TestCase):
+    def test_accept_rejects_candidate_replaced_since_operator_review(self):
+        from lib_guard.window.cli import cmd_accept
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            window, _, _, _ = self._write_accept_fixture(root, {'old_target': 'effective:E0', 'new_target': 'effective:candidate_fix1'})
+            with self.assertRaisesRegex(ValueError, '候选.*改变'):
+                cmd_accept(argparse.Namespace(window_file=str(window), expected_effective_id='candidate_other', workdir=str(root/'work'), library='ucie', accepted_by='owner', note=''))
+
+    def test_manual_selection_real_files_preview_build_compare_and_accept(self):
+        from lib_guard.cli import main
+        from lib_guard.window.resolver import resolve_review_window
+        from lib_guard.effective.pointer import load_current_pointer
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            versions = []
+            for vid, kind, files in [
+                ('full1', 'FULL_PACKAGE', {'rtl/a.v': 'module a; endmodule\n', 'rtl/b.v': 'module b; endmodule\n'}),
+                ('fix1', 'PARTIAL_UPDATE', {'rtl/a.v': 'module a; wire fixed; endmodule\n'}),
+                ('fix2', 'HOTFIX', {'rtl/a.v': 'module a; wire hotfix; endmodule\n'}),
+                ('full2', 'FULL_PACKAGE', {'rtl/new.v': 'module newer; endmodule\n'}),
+            ]:
+                raw = root/'raw'/vid
+                for rel, content in files.items():
+                    p = raw/rel
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(content)
+                versions.append({'version_id': vid, 'version_key': f'ip/ucie/{vid}', 'package_type': kind, 'raw_path': str(raw), 'update_scope': ['verilog']})
+            catalog = self._write_catalog(root, versions)
+            html = root/'catalog/html'
+            common = ['window', 'intake', '--catalog', str(catalog), '--library', 'ucie', '--workdir', str(root/'work'), '--catalog-html-out', str(html), '--base-full', 'full1', '--include', 'fix1']
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([*common, '--plan-only']), 0)
+            preview = json.loads(out.getvalue())
+            self.assertEqual(preview['candidate_effective']['overlays'], ['fix1'])
+            self.assertFalse(Path(preview['window']).exists())
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(common), 0)
+            window = json.loads(Path(preview['window']).read_text())
+            manifest = json.loads(Path(window['candidate_effective']['manifest']).read_text())
+            self.assertEqual(manifest['base_full_version'], 'full1')
+            self.assertEqual(manifest['accepted_updates'], ['fix1'])
+            self.assertEqual(manifest['effective_files']['rtl/a.v']['source_version'], 'fix1')
+            self.assertEqual(manifest['effective_files']['rtl/b.v']['source_version'], 'full1')
+            self.assertTrue(Path(window['compare']['html']).exists())
+            self.assertFalse(load_current_pointer(html, 'ip/ucie'))
+            rescanned = resolve_review_window(catalog_path=catalog, library='ucie', workdir=root/'work', catalog_html_out=html, base_full='full1', includes=['fix1'])
+            self.assertEqual(rescanned['scan_versions'], [])
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(common), 0)
+                self.assertEqual(main(['window', 'accept', '--catalog', str(catalog), '--library', 'ucie', '--workdir', str(root/'work'), '--catalog-html-out', str(html), '--window-file', preview['window'], '--accepted-by', 'test_owner']), 0)
+            pointer = load_current_pointer(html, 'ip/ucie')
+            self.assertEqual(pointer['base_full_version'], 'full1')
+            self.assertEqual(pointer['accepted_updates'], ['fix1'])
+            # A second overlay on the same file remains visible as a conflict;
+            # constructing it does not replace the accepted pointer.
+            before = dict(pointer)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main([*common, '--include', 'fix2']), 0)
+            pending = json.loads(Path(preview['window']).read_text())
+            conflicting = json.loads(Path(pending['candidate_effective']['manifest']).read_text())
+            self.assertEqual(conflicting['accepted_updates'], ['fix1', 'fix2'])
+            self.assertEqual(conflicting['effective_files']['rtl/a.v']['source_version'], 'fix2')
+            self.assertGreater(conflicting['summary']['conflict_count'], 0)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertNotEqual(main(['window', 'accept', '--catalog', str(catalog), '--library', 'ucie', '--workdir', str(root/'work'), '--catalog-html-out', str(html), '--window-file', preview['window'], '--accepted-by', 'test_owner']), 0)
+            self.assertEqual(load_current_pointer(html, 'ip/ucie'), before)
+            self.assertFalse((root/'release_area').exists())
+
+    def test_manual_composition_preserves_selected_base_order_and_reuses_scan(self):
+        from lib_guard.window.resolver import resolve_review_window
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scan = root / 'scan/full1'
+            scan.mkdir(parents=True)
+            catalog = self._write_catalog(root, [
+                {'version_id': 'full1', 'package_type': 'FULL_PACKAGE', 'scan': {'status': 'PASS', 'scan_dir': str(scan)}},
+                {'version_id': 'fix1', 'package_type': 'PARTIAL_UPDATE'},
+                {'version_id': 'fix2', 'package_type': 'HOTFIX'},
+                {'version_id': 'full2', 'package_type': 'FULL_PACKAGE'},
+            ])
+            kwargs = dict(catalog_path=catalog, library='ucie', workdir=root/'work', catalog_html_out=root/'catalog/html')
+            selected = resolve_review_window(**kwargs, base_full='full1', includes=['fix2', 'fix1'])
+            candidate = selected['candidate_effective']
+            self.assertEqual(candidate['base_full'], 'full1')
+            self.assertEqual(candidate['overlays'], ['fix2', 'fix1'])
+            self.assertEqual(candidate['rule'], 'manual_selection')
+            self.assertEqual(selected['scan_versions'], ['fix2', 'fix1'])
+            self.assertNotIn('full2', selected['new_versions'])
+            build = next(c for c in selected['commands'] if c[:2] == ['effective', 'build'])
+            self.assertEqual([build[i+1] for i, x in enumerate(build) if x == '--include'], ['fix2', 'fix1'])
+            full_only = resolve_review_window(**kwargs, base_full='full1', includes=[])
+            self.assertEqual(full_only['candidate_effective']['overlays'], [])
+            self.assertNotEqual(candidate['effective_id'], full_only['candidate_effective']['effective_id'])
+            reordered = resolve_review_window(**kwargs, base_full='full1', includes=['fix1', 'fix2'])
+            self.assertNotEqual(candidate['effective_id'], reordered['candidate_effective']['effective_id'])
+            self.assertFalse(Path(selected['pending_window_path']).exists())
+
+    def test_manual_composition_rejects_unknown_duplicate_and_wrong_package_choices(self):
+        from lib_guard.window.resolver import resolve_review_window
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(root, [
+                {'version_id': 'full', 'package_type': 'FULL_PACKAGE'},
+                {'version_id': 'fix', 'package_type': 'PARTIAL_UPDATE'},
+                {'version_id': 'unknown', 'package_type': 'UNKNOWN_PACKAGE'},
+            ])
+            kwargs = dict(catalog_path=catalog, library='ucie', workdir=root/'work', catalog_html_out=root/'catalog/html')
+            for base, updates in [('foreign', []), ('fix', []), ('full', ['foreign']), ('full', ['fix', 'fix']), ('full', ['full']), ('full', ['unknown'])]:
+                with self.subTest(base=base, updates=updates), self.assertRaises(ValueError):
+                    resolve_review_window(**kwargs, base_full=base, includes=updates)
+
+    def test_saved_manual_choice_is_not_replaced_by_automatic_recommendation(self):
+        from lib_guard.window.resolver import resolve_review_window, write_json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = self._write_catalog(root, [
+                {'version_id': 'full1', 'package_type': 'FULL_PACKAGE'},
+                {'version_id': 'fix', 'package_type': 'PARTIAL_UPDATE'},
+                {'version_id': 'full2', 'package_type': 'FULL_PACKAGE'},
+            ])
+            kwargs = dict(catalog_path=catalog, library='ucie', workdir=root/'work', catalog_html_out=root/'catalog/html')
+            selected = resolve_review_window(**kwargs, base_full='full1', includes=['fix'])
+            write_json(selected['pending_window_path'], selected)
+            reread = resolve_review_window(**kwargs)
+            self.assertEqual(reread['candidate_effective']['base_full'], 'full1')
+            self.assertEqual(reread['candidate_effective']['overlays'], ['fix'])
+            self.assertEqual(reread['candidate_effective']['effective_id'], selected['candidate_effective']['effective_id'])
+
     def test_unknown_package_is_not_included_in_candidate_overlay(self) -> None:
         from lib_guard.window.resolver import _resolve_candidate
 

@@ -461,6 +461,8 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     review_large_metadata = read_tsv(review_dir / "large_metadata_files.tsv")
     review_parser_evidence = read_tsv(review_dir / "parser_evidence.tsv")
     files = inventory.get("files", []) or []
+    from lib_guard.scan.artifacts import build_lib_db_correspondence
+    pairing = build_lib_db_correspondence(files, inventory.get('root_path') or meta.get('root_path') or '')
     issue_items = list(issues.get("issues", []) or [])
     counts = _type_counts(inventory, parser_manifest, dashboard)
     corner_summary = inventory.get("corner_filename_summary") or {}
@@ -484,6 +486,7 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             build_scan_review_markdown(
                 {
                     "scan_review": legacy_review,
+                    "lib_db_correspondence": pairing,
                     "view_coverage": review_view_rows,
                     "unknown_files": review_unknown_files,
                     "large_metadata_files": review_large_metadata,
@@ -535,6 +538,11 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             ),
         )
         + ui.panel("优先关注", "只显示会影响继续对比 / 使用判断的注意项。", ui.attention_items(attention))
+        + (ui.panel('Liberty / DB 配套清单', f"Liberty {pairing['liberty_count']} 个 / DB {pairing['db_count']} 个。" + pairing['basis'],
+            ui.filterable_table('lib-db-correspondence', ['文件名主体','对应情况','Liberty 绝对路径','DB 绝对路径'],
+                ['<tr>'+''.join(f'<td>{ui.esc(value)}</td>' for value in [row['name'],row['relation'],'；'.join(row['liberty_files']) or '—','；'.join(row['db_files']) or '—'])+'</tr>' for row in pairing['rows'][:200]],
+                '当前目录没有 Liberty / DB 文件','筛选文件名、对应情况或路径')
+            + (ui.callout('清单范围', '本页展示前 200 组；完整配套清单见 review/scan_review.md。','INFO') if len(pairing['rows'])>200 else '')) if pairing['rows'] else '')
         + ui.panel(
             "文件证据表",
                 "数量必须能追到文件。这里按视图列出具体路径、角色和证据等级；大表支持筛选。",

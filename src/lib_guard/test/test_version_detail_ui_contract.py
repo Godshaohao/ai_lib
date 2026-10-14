@@ -7,14 +7,124 @@ from unittest.mock import patch
 
 
 class VersionDetailUiContractTest(unittest.TestCase):
+    def test_file_tree_exposes_source_paths_without_guessing_missing_roots(self) -> None:
+        from lib_guard.render.version_file_evidence import _evidence_records, render_version_file_evidence_section
+        model = {
+            'source_roots': {'current': '/raw/new', 'base': '/raw/old'},
+            'scan_evidence': {'inventory': {'files': [
+                {'path': 'wrapper/a.lef', 'abs_path': '/mounted/new/wrapper/a.lef', 'file_type': 'lef'},
+            ]}},
+            'file_changes': [
+                {'path': 'wrapper/a.lef', 'change': 'added', 'file_type': 'lef'},
+                {'path': 'old_wrapper/b.lef', 'change': 'removed', 'file_type': 'lef'},
+                {'path': 'a.lef', 'change': 'changed', 'file_type': 'lef'},
+            ],
+            'file_diff': {'logical_path_changes': [{'logical_path': 'a.lef', 'old': 'old_wrapper/a.lef', 'new': 'wrapper/a.lef'}]},
+        }
+        rows = {row['path']: row for row in _evidence_records(model)}
+        self.assertEqual(rows['wrapper/a.lef']['source_path'], '/mounted/new/wrapper/a.lef')
+        self.assertEqual(rows['old_wrapper/b.lef']['source_path'], '/raw/old/old_wrapper/b.lef')
+        self.assertEqual(rows['wrapper/a.lef']['source_path'], '/mounted/new/wrapper/a.lef')
+        html = render_version_file_evidence_section(model)
+        self.assertIn('本版源目录', html)
+        self.assertIn('基准版源目录', html)
+        self.assertIn('原始路径', html)
+        self.assertIn('copyText(this.dataset.sourcePath, this)', html)
+        self.assertNotIn('file://', html)
+        unknown = _evidence_records({'file_changes': [{'path': 'x.lef', 'change': 'removed'}]})
+        self.assertEqual(unknown[0]['source_path'], '')
+
+    def test_first_version_matrix_shows_delivery_not_a_fictitious_zero_diff(self) -> None:
+        from lib_guard.render.version_review_render import render_ip_user_view
+        html = render_ip_user_view({'review_mode': 'first_version', 'view_rows': [{'view_type': 'lef', 'delivery_count': 1, 'evidence_level': '无变化'}]})
+        self.assertIn('本次交付', html)
+        self.assertIn('扫描证据', html)
+        self.assertIn('data-view-type-filter', html)
+        self.assertNotIn('data-change-filter', html)
+        self.assertNotIn('data-only-changes', html)
+        self.assertNotIn('<b>0</b>文件变化', html)
+        self.assertNotIn('无变化', html)
+
+    def test_matrix_file_entry_targets_the_corresponding_delivered_view(self) -> None:
+        from lib_guard.render.version_review_render import _view_delta_file_evidence
+        from lib_guard.render.version_file_evidence import render_version_file_evidence_section
+        link = _view_delta_file_evidence({'view_type': 'lef', 'total_evidence_count': 27})
+        self.assertIn("data-file-view='physical_abstract'", link)
+        self.assertIn('selectFileTreeView(this.dataset.fileView)', link)
+        tree = render_version_file_evidence_section({})
+        self.assertIn('function selectFileTreeView(view)', tree)
+        self.assertIn("filterFileTree('current')", tree)
+
+    def test_library_report_internal_detail_links_are_portable(self) -> None:
+        from lib_guard.render.catalog_workspace_report import _library_card, _library_focus_styles, render_library_workspace_page
+        self.assertIn('min-height:132px', _library_focus_styles())
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / 'html'
+            version = {'version_id': 'v1', 'links': {'version_review_html': str(out / 'libraries/ip_ucie/versions/v1/index.html')}}
+            page = Path(render_library_workspace_page(out, {'library_id': 'ip/ucie', 'versions': [version]}, []))
+            html = page.read_text()
+            self.assertIn("href='versions/v1/index.html'", html)
+            self.assertNotIn('file://', html)
+            card = _library_card(out, {'library_id': 'ip/ucie', 'versions': [version], 'library_home_html': str(page)}, [])
+            self.assertIn("href='libraries/ip_ucie/index.html'", card)
+            self.assertNotIn('file://', card)
+
+    def test_relative_output_directory_produces_correct_internal_report_links(self) -> None:
+        import json
+        import os
+        from lib_guard.render.catalog_report import render_catalog_html
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = root / 'catalog.json'
+            catalog.write_text(json.dumps({'libraries': [{'library_id': 'ip/ucie', 'library_name': 'ucie', 'versions': [{'version_id': 'v1'}]}]}))
+            out = root / 'html'
+            result = render_catalog_html(catalog, Path(os.path.relpath(out, Path.cwd())))
+            self.assertEqual(result['status'], 'PASS')
+            index = (out / 'index.html').read_text()
+            library = (out / 'libraries/ip_ucie/index.html').read_text()
+            self.assertIn("href='libraries/ip_ucie/index.html'", index)
+            self.assertIn("href='versions/v1/index.html'", library)
+            self.assertNotIn('file://', index + library)
+            self.assertNotIn("href='#'>发布证据", index)
+            self.assertNotIn('setTimeout(filterCatalogBrowser,0)', index)
+            self.assertIn("addEventListener('DOMContentLoaded', filterCatalogBrowser)", index)
+            self.assertNotIn("+' libraries / '", index)
+
+    def test_static_report_navigation_and_secondary_maintenance_are_visible_but_compact(self) -> None:
+        from lib_guard.render import product_theme as ui
+        from lib_guard.render.version_detail_report import _render_freshness_panel, _version_update_note_panel, render_version_detail_page
+
+        shell = ui.review_page_shell('库', '目录', '', '', nav="<a href='index.html'>总目录</a>")
+        self.assertIn("<nav class='report-nav' aria-label='报告导航'>", shell)
+        self.assertIn("<a href='index.html'>总目录</a>", shell)
+        self.assertNotIn("class='report-nav'", ui.review_page_shell('库', '目录', '', ''))
+        freshness = _render_freshness_panel({})
+        self.assertIn("<details", freshness)
+        self.assertNotIn(" open", freshness.split('>', 1)[0])
+        note = _version_update_note_panel({'update_note': {'summary': '核对引脚', 'risks': ['注意极性'], 'must_check': ['确认端口'], 'updated_by': 'owner'}})
+        self.assertIn('<summary>备注来源与更新时间</summary>', note)
+        self.assertIn('注意极性', note)
+        self.assertIn('确认端口', note)
+        self.assertNotIn('机器结论只作为旁证', note)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / 'html'
+            page = Path(render_version_detail_page(out, {'library_id': 'ip/ucie', 'library_name': 'ucie'}, {'version_id': 'v1'}))
+            html = page.read_text()
+            self.assertIn("href='../../../../index.html'", html)
+            self.assertIn("href='../../index.html'", html)
+            self.assertEqual((page.parent / '../../../../index.html').resolve(), (out / 'index.html').resolve())
+            self.assertIn('.hero h1{font-size:22px', html)
+
     def test_web_console_exposes_parallel_version_actions_and_manual_write_controls(self) -> None:
         template = Path(__file__).resolve().parents[1] / "web" / "templates" / "index.html"
         html = template.read_text(encoding="utf-8")
         javascript = (template.parent.parent / "static" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('id="open-version-detail-button"', html)
-        self.assertIn("所有动作都可从这里发起", html)
-        self.assertIn("不代表它们属于同一处理阶段", html)
+        for workspace in ('version-workspace', 'action-workspace', 'release-workspace'):
+            self.assertIn(f'data-stage-target="{workspace}"', html)
+        for control in ('scan-action-button', 'compare-action-button', 'file-diff', 'release-action-button'):
+            self.assertIn(control, html)
         self.assertIn('data-workflow-action="next-apply"', html)
         self.assertIn("审查记录", html)
         self.assertIn("openVersionDetail", javascript)
@@ -71,7 +181,10 @@ class VersionDetailUiContractTest(unittest.TestCase):
                 "open_questions", "recommended_actions",
             },
         )
-        self.assertEqual(report["view_delta_analysis"]["totals"], {"added": 1, "removed": 1, "changed": 1})
+        self.assertEqual(
+            report["view_delta_analysis"]["totals"],
+            {"added": 1, "removed": 1, "changed": 1, "unmatched_new": 0, "unmatched_base": 0},
+        )
         self.assertEqual(report["view_delta_analysis"]["evidence_reconciliation"]["status"], "RECONCILED")
         self.assertTrue(report["view_delta_analysis"]["evidence_reconciliation"]["checks"]["file_diff_items_match_view_matrix"])
         self.assertTrue(report["view_delta_analysis"]["evidence_reconciliation"]["checks"]["focus_files_are_file_diff_subset"])
@@ -186,7 +299,8 @@ class VersionDetailUiContractTest(unittest.TestCase):
             ):
                 self.assertIn(f'data-section="{section}"', html)
             self.assertIn("data-next-action='true'", html)
-            self.assertIn("下一步", html)
+            self.assertIn("需要确认", html)
+            self.assertNotIn("下一步", html)
             self.assertIn("review-report", html)
             self.assertIn("<details", html)
 
@@ -304,7 +418,10 @@ class VersionDetailUiContractTest(unittest.TestCase):
             changes,
         )
 
-        self.assertEqual(result["visible_counts"], {"added": 1, "removed": 0, "changed": 1})
+        self.assertEqual(
+            result["visible_counts"],
+            {"added": 1, "removed": 0, "changed": 1, "unmatched_new": 0, "unmatched_base": 0},
+        )
         self.assertEqual(result["baseline_only_count"], 1)
         self.assertEqual(result["baseline_only_changes"][0]["path"], "LEF/a.lef")
         self.assertNotIn("LEF/a.lef", [item["path"] for item in result["visible_changes"]])
@@ -319,7 +436,10 @@ class VersionDetailUiContractTest(unittest.TestCase):
             changes,
         )
 
-        self.assertEqual(result["visible_counts"], {"added": 0, "removed": 1, "changed": 0})
+        self.assertEqual(
+            result["visible_counts"],
+            {"added": 0, "removed": 1, "changed": 0, "unmatched_new": 0, "unmatched_base": 0},
+        )
         self.assertEqual(result["baseline_only_count"], 0)
         self.assertEqual(result["visible_changes"][0]["path"], "LEF/a.lef")
 
@@ -467,7 +587,14 @@ class VersionDetailUiContractTest(unittest.TestCase):
         report = build_review_report(source, model)
         self.assertEqual(
             report["view_delta_analysis"]["totals"],
-            {"added": 0, "removed": 0, "changed": 0, "path_changed_same_content": 1},
+            {
+                "added": 0,
+                "removed": 0,
+                "changed": 0,
+                "unmatched_new": 0,
+                "unmatched_base": 0,
+                "path_changed_same_content": 1,
+            },
         )
         self.assertTrue(
             report["view_delta_analysis"]["evidence_reconciliation"]["checks"][
@@ -566,7 +693,7 @@ class VersionDetailUiContractTest(unittest.TestCase):
 
         html = render_review_report(report)
         self.assertIn("data-focus-scroll='true'", html)
-        self.assertIn("数量较多时在列表内滚动", html)
+        self.assertNotIn("数量较多时在列表内滚动", html)
         self.assertIn(".report-focus-scroll{max-height:360px;overflow:auto", html)
         self.assertIn(".report-focus-scroll th{position:sticky", html)
 
@@ -701,9 +828,9 @@ class VersionDetailUiContractTest(unittest.TestCase):
         self.assertIn("时序分析（STA）", html)
         self.assertIn("物理抽象（LEF）", html)
         self.assertIn("物理实现（PD）", html)
-        self.assertIn("摘要证据", html)
+        self.assertIn("摘要检查", html)
         self.assertIn("· 3", html)
-        self.assertNotIn("摘要证据 3", html)
+        self.assertNotIn("摘要检查 3", html)
         self.assertNotIn("摘要级证据（Summary-only）", html)
         self.assertNotIn("关联使用场景", html)
 
@@ -725,9 +852,9 @@ class VersionDetailUiContractTest(unittest.TestCase):
     def test_page_prioritizes_decision_summary_and_lineage(self) -> None:
         html = self._render_doc_update_page()
 
-        self.assertIn("判断摘要", html)
+        self.assertIn("版本摘要", html)
         self.assertIn("summary-window", html)
-        self.assertIn(">为什么<", html)
+        self.assertIn(">主要变化<", html)
         self.assertIn("版本关系", html)
         self.assertNotIn("证据分层</b>", html)
 
@@ -1174,7 +1301,7 @@ class VersionDetailUiContractTest(unittest.TestCase):
         html = self._render_doc_update_page()
         self.assertEqual(html.count("需审查后使用"), 1)
         self.assertEqual(html.count(">视图变化矩阵<"), 1)
-        self.assertIn("交付变化", html)
+        self.assertIn("已确认变化", html)
         self.assertNotIn("候选有效版 未生成", html)
         self.assertNotIn("由当前 scan / diff / effective 事实生成", html)
         self.assertNotIn("关联使用场景", html)
@@ -1226,8 +1353,8 @@ class VersionDetailUiContractTest(unittest.TestCase):
             {},
         )
 
-        self.assertIn("没有形成可用扫描事实", html)
-        self.assertNotIn("扫描事实已记录", html)
+        self.assertIn("未获得可用的交付文件清单", html)
+        self.assertNotIn("扫描结果已记录", html)
         self.assertNotIn("当前扫描交付文件", html)
         self.assertNotIn("scan_id", html)
 
@@ -1247,7 +1374,7 @@ class VersionDetailUiContractTest(unittest.TestCase):
             {},
         )
 
-        self.assertIn("证据状态", html)
+        self.assertIn("检查记录", html)
         self.assertNotIn("事实摘要", html)
         self.assertNotIn("交付完整度", html)
         self.assertNotIn("版本关系与来源", html)
@@ -1285,7 +1412,7 @@ class VersionDetailUiContractTest(unittest.TestCase):
         html = render_version_update_detail_panel(model)
 
         self.assertLessEqual(html.count("<tr>"), 160)
-        self.assertIn("完整变化证据", html)
+        self.assertIn("对比数据（JSON）", html)
         self.assertIn("file_diff.json", html)
 
 

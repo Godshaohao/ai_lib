@@ -152,8 +152,11 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(model["review_context"]["role_in_window"], "candidate_overlay")
             self.assertIn("对比基准", rendered)
             self.assertIn("审查窗口基准 / full1", rendered)
-            self.assertIn("交付变化", rendered)
+            self.assertIn("主要变化", rendered)
             self.assertNotIn("版本详情是唯一审查投影", rendered)
+            self.assertIn("报告来源", rendered)
+            self.assertIn("报告反映生成时的检查结果", rendered)
+            self.assertNotIn("scan 或 cmp 成功后", rendered)
 
     def test_accepted_window_base_overrides_stale_explicit_catalog_base(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -231,7 +234,7 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(model["status"], "CHANGED")
             self.assertIn("审查窗口基准", rendered)
             self.assertIn("对比基准", rendered)
-            self.assertIn("交付变化", rendered)
+            self.assertIn("主要变化", rendered)
             self.assertNotIn("stale_manual_full", rendered)
             self.assertNotIn("独立版本", rendered)
 
@@ -254,6 +257,24 @@ class VersionDetailReportTest(unittest.TestCase):
         unknown = comparison_semantics_for_package("UNKNOWN_PACKAGE")
         self.assertEqual(unknown["comparison_scope"], "unknown")
         self.assertEqual(unknown["delete_semantics"], "needs_confirm")
+
+    def test_version_detail_explains_refresh_and_rebuild_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lib, version = _write_version_detail_lane_fixture(root)
+
+            from lib_guard.render.version_detail_report import build_version_update_detail_model, render_version_detail_page
+
+            model = build_version_update_detail_model(root / "html", lib, version)
+            page = Path(render_version_detail_page(root / "html", lib, version))
+            rendered = page.read_text(encoding="utf-8")
+
+            self.assertEqual(model["render_context"]["render_scope"], "single_version_detail")
+            self.assertEqual(model["render_context"]["write_mode"], "atomic_replace")
+            self.assertIn("报告来源", rendered)
+            self.assertIn("报告反映生成时的检查结果", rendered)
+            self.assertIn("本报告不保证生成后源文件没有再次变更", rendered)
+            self.assertNotIn("库页和目录页是导航摘要", rendered)
 
     def test_version_detail_groups_file_diff_evidence_by_review_lane(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -295,6 +316,8 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertIn("摘要级证据按类型汇总", html)
             self.assertIn("元数据级证据按类型汇总", html)
             self.assertIn("证据分层", html)
+            self.assertNotIn("lg lib-diff", html)
+            self.assertNotIn("--rescan", html)
             self.assertNotIn("混合证据", main_html)
             self.assertNotIn("摘要级 3", main_html)
             self.assertNotIn("metadata-only 3", main_html)
@@ -431,6 +454,8 @@ class VersionDetailReportTest(unittest.TestCase):
                             "renamed_or_moved": 23,
                             "package_root_migrations": 1,
                             "package_root_migration_matched_files": 31,
+                            "unmatched_added_under_package_root": 1,
+                            "unmatched_removed_under_package_root": 1,
                         },
                     },
                     ensure_ascii=False,
@@ -455,7 +480,15 @@ class VersionDetailReportTest(unittest.TestCase):
             html = render_version_update_detail_panel(model)
 
             self.assertTrue(model["path_restructure"]["suspected"])
-            self.assertIn("修改文件 0 个，新增 181 个，删除 10 个", model["headline"])
+            self.assertEqual(model["package_root_unmatched"], {"new": 1, "base": 1})
+            self.assertIn("修改文件 0 个，真实新增 180 个，真实删除 9 个，未匹配新侧 1 个，未匹配基准侧 1 个", model["headline"])
+            view_rows = model["ip_user_view_model"]["view_rows"]
+            lef_row = next(row for row in view_rows if row.get("view_type") == "physical_abstract")
+            self.assertEqual(lef_row["added"], 0)
+            self.assertEqual(lef_row["removed"], 0)
+            self.assertEqual(lef_row["unmatched_new"], 1)
+            self.assertEqual(lef_row["unmatched_base"], 1)
+            self.assertIn("未匹配新侧", str(lef_row["changed_examples"]))
             migration = next(group for group in model["version_review_model"]["groups"] if group["key"] == "package_root_migration")
             self.assertEqual(migration["status"], "WARNING")
             self.assertIn("旧包根", str(migration["facts"]))
@@ -1787,7 +1820,8 @@ class VersionDetailReportTest(unittest.TestCase):
 
             html = page.read_text(encoding="utf-8")
             self.assertIn("doc/release_note.txt", html)
-            self.assertNotIn(str(raw / "doc" / "release_note.txt"), html)
+            self.assertIn(str(raw / "doc" / "release_note.txt"), html)
+            self.assertIn("复制本版文件路径", html)
 
     def test_version_detail_shows_unified_evidence_source_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1830,6 +1864,22 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertNotIn("事实源与审计证据", html)
             self.assertNotIn("scan_review_tables", html)
             self.assertNotIn("HTML 是投影", html)
+
+    def test_stale_file_evidence_is_removed_only_after_detail_page_publish_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "html"
+            stale = out / "libraries" / "ip_ucie" / "versions" / "v1" / "file-evidence.html"
+            stale.parent.mkdir(parents=True)
+            stale.write_text("old evidence page", encoding="utf-8")
+
+            from lib_guard.render.version_detail_report import render_version_detail_page
+
+            with patch("lib_guard.render.version_detail_report.common.write_text", side_effect=RuntimeError("publish failed")):
+                with self.assertRaises(RuntimeError):
+                    render_version_detail_page(out, {"library_id": "ip/ucie", "library_name": "ucie"}, {"version_id": "v1"})
+
+            self.assertEqual(stale.read_text(encoding="utf-8"), "old evidence page")
 
 
 if __name__ == "__main__":

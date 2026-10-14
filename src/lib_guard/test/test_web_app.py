@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -12,6 +13,294 @@ LIBRARY = "vendor_A.openroad_platform.openroad_asap7"
 
 
 class WebAppTest(unittest.TestCase):
+    def test_candidate_plan_feedback_names_composition_without_claiming_accept_ready(self):
+        from lib_guard.web.app import _job_result_summary
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root/'result.json').write_text(json.dumps({'cli_result': {'status': 'PASS', 'candidate_effective': {'effective_id': 'candidate_fix', 'base_full': 'full1', 'overlays': ['fix2', 'fix1']}, 'scan_versions': ['fix1']}}))
+            summary = _job_result_summary(root)
+            self.assertIn('full1', summary)
+            self.assertIn('fix2 → fix1', summary)
+            self.assertIn('需补扫 1', summary)
+            self.assertNotIn('可确认', summary)
+
+    def test_manual_effective_selection_reaches_existing_next_and_intake(self):
+        from lib_guard.web.app import create_app
+        with tempfile.TemporaryDirectory() as td:
+            client = create_app(config_path=SMOKE_CONFIG, cwd=ROOT, test_config={'TESTING': True, 'job_root': td}).test_client()
+            for action in ['next', 'intake']:
+                response = client.post(f'/api/libraries/{LIBRARY}/{action}', json={
+                    'plan_only': True, 'base_full': '20260624_asap7', 'includes': ['20260627_asap7'],
+                })
+                self.assertEqual(response.status_code, 202)
+                request = json.loads(Path(response.get_json()['request']).read_text())
+                args = request['args']
+                self.assertIn('--base-full', args)
+                self.assertEqual(args[args.index('--base-full')+1], '20260624_asap7')
+                self.assertEqual(args[args.index('--include')+1], '20260627_asap7')
+            response = client.post(f'/api/libraries/{LIBRARY}/next', json={'base_full': '20260624_asap7', 'includes': 'not-a-list'})
+            self.assertEqual(response.status_code, 400)
+
+    def test_job_feedback_never_calls_failed_or_unverified_evidence_success(self):
+        from lib_guard.web.app import _job_result_summary
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for result, expected in (
+                ({'status': 'FAILED', 'scan_dir': '/scan', 'version': 'v2', 'scan_error': 'Permission denied'}, '扫描失败'),
+                ({'status': 'FAILED', 'old_version': 'v1', 'new_version': 'v2'}, '版本对比失败'),
+                ({'status': 'UNSUPPORTED', 'summary': {'file_type': 'db', 'changed': False}, 'pairwise_result': '/pair'}, '未完成'),
+                ({'status': 'DONE', 'summary': {'file_type': 'db'}, 'pairwise_result': '/pair'}, '未确认内容一致'),
+                ({'status': 'SAME', 'summary': {'file_type': 'lef', 'status': 'SAME', 'changed': False}, 'pairwise_result': '/pair'}, '内容相同'),
+            ):
+                (root / 'result.json').write_text(json.dumps({'cli_result': result}))
+                summary = _job_result_summary(root)
+                self.assertIn(expected, summary)
+                if result['status'] == 'FAILED':
+                    self.assertNotIn('完成', summary)
+
+    def test_workspace_reopens_after_web_initialization_without_rescanning(self):
+        from lib_guard.catalog.runtime import write_catalog_runtime
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td, patch.dict('os.environ', {}, clear=True):
+            root = Path(td)
+            raw = root / 'raw'
+            raw.mkdir()
+            workspace = root / 'data'
+            client = create_app(cwd=root, test_config={'TESTING': True}).test_client()
+            response = client.post('/api/workspace/init', json={'workspace': str(workspace), 'raw_root': str(raw)})
+            self.assertEqual(response.status_code, 200)
+            catalog = workspace / 'catalog/catalog.json'
+            catalog.parent.mkdir(parents=True)
+            catalog.write_text(json.dumps({'libraries': [{'library_name': 'A', 'library_id': 'ip/A', 'versions': [{'version_id': 'full'}]}]}))
+            scan_dir = workspace / 'scan_out/A/full/scan_1'
+            scan_dir.mkdir(parents=True)
+            (scan_dir / 'scan_meta.json').write_text(json.dumps({'status': 'PASS'}))
+            (scan_dir / 'file_inventory.json').write_text(json.dumps({'files': []}))
+            runtime_path = write_catalog_runtime(catalog, {'ip/A/full': {'scan': {'status': 'PASS', 'scan_dir': str(scan_dir)}}})
+            runtime_before = runtime_path.read_bytes()
+            before = catalog.read_bytes()
+            reopened = create_app(cwd=root, test_config={'TESTING': True}).test_client()
+            with patch('lib_guard.web.app.subprocess.Popen') as process:
+                payload = reopened.get('/api/workspace').get_json()
+                self.assertFalse(payload['setup_required'])
+                self.assertEqual(payload['paths']['workspace'], str(workspace))
+                libraries = reopened.get('/api/libraries').get_json()
+                self.assertEqual(libraries['libraries'][0]['library_name'], 'A')
+                versions = reopened.get('/api/libraries/A/versions').get_json()
+                self.assertEqual(versions['versions'][0]['scan_status'], 'PASS')
+                self.assertEqual(versions['versions'][0]['scan_dir'], str(scan_dir))
+                process.assert_not_called()
+            self.assertEqual(catalog.read_bytes(), before)
+            self.assertEqual(runtime_path.read_bytes(), runtime_before)
+
+    def test_connecting_existing_workspace_does_not_reset_configuration(self):
+        from lib_guard.short_cli_config import write_default_config
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td, patch.dict('os.environ', {}, clear=True):
+            root = Path(td)
+            raw = root / 'raw'
+            raw.mkdir()
+            workspace = root / 'data'
+            config = write_default_config(workspace, raw_root=raw)
+            config.write_text(config.read_text().replace('hash_policy: smart', 'hash_policy: full'))
+            before = config.read_bytes()
+            client = create_app(cwd=root, test_config={'TESTING': True}).test_client()
+            response = client.post('/api/workspace/init', json={'workspace': str(workspace), 'raw_root': str(raw)})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(config.read_bytes(), before)
+
+    def test_explicit_config_wins_over_previous_workspace(self):
+        from lib_guard.short_cli_config import write_default_config
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td, patch.dict('os.environ', {}, clear=True):
+            root = Path(td)
+            saved = write_default_config(root / 'saved', raw_root=root)
+            explicit = write_default_config(root / 'explicit', raw_root=root)
+            (root / 'work').mkdir()
+            (root / 'work/web_workspace.json').write_text(json.dumps({'config': str(saved)}))
+            client = create_app(config_path=explicit, cwd=root, test_config={'TESTING': True}).test_client()
+            self.assertEqual(client.get('/api/workspace').get_json()['paths']['workspace'], str(root / 'explicit'))
+            missing = create_app(config_path=root / 'missing.yml', cwd=root, test_config={'TESTING': True}).test_client()
+            self.assertTrue(missing.get('/api/workspace').get_json()['setup_required'])
+
+    def test_missing_saved_workspace_is_not_recreated(self):
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td, patch.dict('os.environ', {}, clear=True):
+            root = Path(td)
+            missing = root / 'removed/lib_guard.yml'
+            (root / 'work').mkdir()
+            pointer = root / 'work/web_workspace.json'
+            pointer.write_text(json.dumps({'config': str(missing)}))
+            before = pointer.read_bytes()
+            client = create_app(cwd=root, test_config={'TESTING': True}).test_client()
+            payload = client.get('/api/workspace').get_json()
+            self.assertTrue(payload['setup_required'])
+            self.assertIn(str(missing), payload['error'])
+            self.assertFalse(missing.parent.exists())
+            self.assertEqual(pointer.read_bytes(), before)
+
+    def test_multi_release_jobs_validate_stage_and_require_apply_confirmation(self):
+        from lib_guard.web.app import create_app
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config = root / 'lib_guard.yml'
+            config.write_text(f'workspace: {root}\nraw_root: {root}/raw\nrelease_root: {root}/release\n')
+            catalog = root / 'catalog/catalog.json'
+            catalog.parent.mkdir()
+            catalog.write_text(json.dumps({'libraries': [{'library_id': 'ip/A', 'library_name': 'A', 'versions': []}]}))
+            app = create_app(config_path=config, cwd=ROOT, test_config={'TESTING': True})
+            client = app.test_client()
+            payload = {'libraries': ['A'], 'publish_name': 'lib_NL2.1.0', 'latest_name': 'latest'}
+            self.assertEqual(client.post('/api/release-set/apply', json=payload).status_code, 400)
+            self.assertEqual(client.post('/api/release-set/plan', json={**payload, 'publish_name':'../escape'}).status_code, 400)
+            response = client.post('/api/release-set/plan', json=payload)
+            self.assertEqual(response.status_code, 202, response.get_json())
+            request = json.loads(Path(response.get_json()['request']).read_text())
+            self.assertIn('lib_guard.release.set_publish', request['args'])
+            task = json.loads(Path(request['args'][-1]).read_text())
+            self.assertEqual(task['libraries'], ['ip/A'])
+            self.assertFalse(task['apply'])
+            response = client.post('/api/release-set/apply', json={**payload, 'acknowledged': True})
+            self.assertEqual(response.status_code, 202)
+            self.assertFalse((root / 'release').exists())
+
+    def test_catalog_report_entry_is_available_only_when_html_exists(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / 'raw'
+            raw.mkdir()
+            html = root / 'catalog' / 'html'
+            config = root / 'lib_guard.yml'
+            config.write_text(f'workspace: {root}\nraw_root: {raw}\ncatalog_html: {html}\n', encoding='utf-8')
+            client = create_app(config_path=config, cwd=ROOT, test_config={'TESTING': True}).test_client()
+            report = client.get('/api/workspace').get_json()['catalog_report']
+            self.assertFalse(report['available'])
+            self.assertIsNone(report['url'])
+            html.mkdir(parents=True)
+            (html / 'index.html').write_text('<h1>Catalog smoke</h1>', encoding='utf-8')
+            report = client.get('/api/workspace').get_json()['catalog_report']
+            self.assertTrue(report['available'])
+            self.assertEqual(report['path'], str(html / 'index.html'))
+            with client.get(report['url']) as response:
+                self.assertEqual(response.status_code, 200)
+
+    def test_formal_release_refresh_accepts_an_initialized_empty_root(self) -> None:
+        """An empty initialized release root is valid; it means no formal release yet."""
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "work"
+            raw_root = root / "raw"
+            release_root = workspace / "release_area"
+            raw_root.mkdir(parents=True)
+            release_root.mkdir(parents=True)
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {raw_root}",
+                        f"catalog: {workspace / 'catalog' / 'catalog.json'}",
+                        f"release_root: {release_root}",
+                        f"release_library_index: {workspace / 'config' / 'release_libraries' / 'latest.json'}",
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True})
+
+            response = app.test_client().post("/api/release-libraries/refresh", json={})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["summary"]["library_count"], 0)
+
+    def test_formal_release_library_routes_refresh_and_keep_raw_catalog_separate(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "work"
+            release_root = root / "formal_release"
+            release_dir = release_root / "ucie" / "releases" / "R1"
+            release_dir.mkdir(parents=True)
+            (release_dir / "release_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "release_manifest.v1",
+                        "release_id": "R1",
+                        "alias": "current",
+                        "release_root": str(release_root / "ucie"),
+                        "libraries": [{"library_type": "ip", "library_name": "ucie", "version_id": "v1"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {root / 'raw'}",
+                        f"catalog: {workspace / 'catalog' / 'catalog.json'}",
+                        f"release_root: {release_root}",
+                        f"release_library_index: {workspace / 'config' / 'release_libraries' / 'latest.json'}",
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True})
+            client = app.test_client()
+
+            refresh = client.post("/api/release-libraries/refresh", json={"root": str(release_root)})
+            listed = client.get("/api/release-libraries")
+
+        self.assertEqual(refresh.status_code, 200)
+        self.assertEqual(refresh.get_json()["summary"]["library_count"], 1)
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.get_json()["libraries"][0]["library_id"], "ip/ucie")
+        self.assertEqual(listed.get_json()["libraries"][0]["raw_catalog_match"], "")
+
+    def _write_current_effective(
+        self,
+        catalog_html: Path,
+        *,
+        library: str,
+        effective_id: str,
+        digest_suffix: str,
+    ) -> None:
+        from lib_guard.effective.manifest import build_effective_manifest
+        from lib_guard.effective.pointer import safe_name, write_current_pointer
+
+        manifest_dir = catalog_html / "libraries" / safe_name(library) / "effective" / effective_id
+        manifest_dir.mkdir(parents=True)
+        catalog = {
+            "libraries": [
+                {
+                    "library_id": library,
+                    "library_name": library.split("/")[-1],
+                    "versions": [
+                        {
+                            "version_id": "full",
+                            "scan": {"snapshot_identity": {"digest": f"sha256:{digest_suffix}", "strength": "full"}},
+                        }
+                    ],
+                }
+            ]
+        }
+        manifest = build_effective_manifest(catalog, library, "full", [], effective_id=effective_id)
+        manifest_path = manifest_dir / "effective_manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        write_current_pointer(manifest_path, accepted_by="owner", note="web test")
+
     def test_many_libraries_and_versions_stay_browseable_with_pagination(self) -> None:
         from lib_guard.web.app import create_app
 
@@ -221,6 +510,153 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(payload["status"], "PASS")
         self.assertIn("catalog", payload["paths"])
         self.assertIn("hash_policy", payload["scan_strategy"])
+        self.assertIn("web_actions", payload)
+        self.assertEqual(payload["web_actions"]["scan"]["label"], "扫描")
+        self.assertEqual(payload["web_actions"]["file-diff"]["cli_action"], "fd")
+        self.assertTrue(payload["web_actions"]["library-add"]["requires_confirmation"])
+
+    def test_workspace_route_guides_bootstrap_when_config_is_missing(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            missing_config = Path(td) / "workspace" / "lib_guard.yml"
+            app = create_app(config_path=missing_config, cwd=ROOT, test_config={"TESTING": True})
+            response = app.test_client().get("/api/workspace")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["status"], "NEEDS_INIT")
+            self.assertTrue(payload["setup_required"])
+            self.assertEqual(payload["catalog_state"], "CONFIG_MISSING")
+            self.assertIn("初始化", payload["message"])
+            self.assertIn("web_actions", payload)
+            self.assertEqual(payload["web_actions"]["cmp"]["label"], "对比")
+
+    def test_workspace_init_creates_config_and_activates_session(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            raw_root = Path(td) / "raw"
+            raw_root.mkdir()
+            workspace = Path(td) / "workspace"
+            app = create_app(cwd=td, test_config={"TESTING": True, "job_root": str(workspace / "jobs")})
+            client = app.test_client()
+
+            init_response = client.post(
+                "/api/workspace/init",
+                json={"workspace": str(workspace), "raw_root": str(raw_root), "library_type": "ip"},
+            )
+            workspace_response = client.get("/api/workspace")
+
+            self.assertEqual(init_response.status_code, 200)
+            init_payload = init_response.get_json()
+            self.assertEqual(init_payload["status"], "PASS")
+            self.assertTrue((workspace / "lib_guard.yml").exists())
+            self.assertEqual(Path(init_payload["paths"]["raw_root"]).resolve(), raw_root.resolve())
+            self.assertEqual(workspace_response.status_code, 200)
+            self.assertEqual(workspace_response.get_json()["catalog_state"], "NOT_INITIALIZED")
+
+    def test_release_set_api_builds_manifest_from_selected_current_effectives(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "work"
+            catalog_html = workspace / "catalog" / "html"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True)
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {"library_id": "ip/libA", "library_name": "libA", "versions": []},
+                            {"library_id": "ip/libB", "library_name": "libB", "versions": []},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config_path = workspace / "lib_guard.yml"
+            config_path.write_text(
+                f"workspace: {workspace}\nraw_root: {root / 'raw'}\ncatalog: {catalog}\ncatalog_html: {catalog_html}\n",
+                encoding="utf-8",
+            )
+            self._write_current_effective(catalog_html, library="ip/libA", effective_id="E1", digest_suffix="a")
+            self._write_current_effective(catalog_html, library="ip/libB", effective_id="E2", digest_suffix="b")
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True})
+
+            response = app.test_client().post("/api/release-set/build", json={"libraries": ["ip/libA", "ip/libB"], "set_id": "set_current"})
+            payload = response.get_json()
+            manifest_exists = Path(payload["manifest_path"]).is_file()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "PASS")
+        self.assertEqual(payload["manifest"]["summary"]["library_count"], 2)
+        self.assertTrue(manifest_exists)
+        self.assertEqual(payload["manifest"]["libraries"][0]["source"], "current_effective_pointer")
+
+    def test_release_set_api_resolves_display_library_names_to_catalog_library_ids(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "work"
+            catalog_html = workspace / "catalog" / "html"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True)
+            catalog.write_text(
+                json.dumps({"libraries": [{"library_id": "ip/libA", "library_name": "libA", "display_name": "Lib A", "versions": []}]}),
+                encoding="utf-8",
+            )
+            config_path = workspace / "lib_guard.yml"
+            config_path.write_text(
+                f"workspace: {workspace}\nraw_root: {root / 'raw'}\ncatalog: {catalog}\ncatalog_html: {catalog_html}\n",
+                encoding="utf-8",
+            )
+            self._write_current_effective(catalog_html, library="ip/libA", effective_id="E1", digest_suffix="a")
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True})
+
+            response = app.test_client().post("/api/release-set/build", json={"libraries": ["libA"], "set_id": "set_current"})
+            payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["manifest"]["libraries"][0]["library_id"], "ip/libA")
+        self.assertEqual(payload["manifest"]["summary"]["missing_current_effective"], 0)
+
+    def test_release_set_api_compares_manifests_at_library_digest_level(self) -> None:
+        from lib_guard.effective.release_set import build_release_set_manifest, write_release_set_manifest
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "work"
+            catalog_html_old = workspace / "old_html"
+            catalog_html_new = workspace / "catalog" / "html"
+            catalog = workspace / "catalog" / "catalog.json"
+            catalog.parent.mkdir(parents=True)
+            catalog.write_text(json.dumps({"libraries": [{"library_id": "ip/libA", "library_name": "libA", "versions": []}]}), encoding="utf-8")
+            config_path = workspace / "lib_guard.yml"
+            config_path.write_text(
+                f"workspace: {workspace}\nraw_root: {root / 'raw'}\ncatalog: {catalog}\ncatalog_html: {catalog_html_new}\n",
+                encoding="utf-8",
+            )
+            self._write_current_effective(catalog_html_old, library="ip/libA", effective_id="E1", digest_suffix="old")
+            self._write_current_effective(catalog_html_new, library="ip/libA", effective_id="E2", digest_suffix="new")
+            old_path = workspace / "release_sets" / "old" / "release_set_manifest.json"
+            new_path = workspace / "release_sets" / "new" / "release_set_manifest.json"
+            write_release_set_manifest(old_path, build_release_set_manifest(catalog_html_old, ["ip/libA"], set_id="old"))
+            write_release_set_manifest(new_path, build_release_set_manifest(catalog_html_new, ["ip/libA"], set_id="new"))
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True})
+
+            response = app.test_client().post("/api/release-set/compare", json={"old_manifest": str(old_path), "new_manifest": str(new_path)})
+            payload = response.get_json()
+            compare_exists = Path(payload["compare_path"]).is_file()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "PASS")
+        self.assertEqual(payload["compare"]["summary"]["actions"], {"CHANGE_EFFECTIVE": 1})
+        self.assertTrue(compare_exists)
+        self.assertNotIn("changed_files", json.dumps(payload["compare"]))
 
     def test_path_children_defaults_to_configured_raw_root(self) -> None:
         from lib_guard.web.app import create_app
@@ -352,7 +788,9 @@ class WebAppTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             workspace = Path(td) / "workspace"
             raw_root = Path(td) / "raw"
+            release_root = Path(td) / "release"
             raw_root.mkdir(parents=True)
+            release_root.mkdir()
             config_path = workspace / "lib_guard.yml"
             config_path.parent.mkdir(parents=True)
             config_path.write_text(
@@ -372,6 +810,7 @@ class WebAppTest(unittest.TestCase):
                 "/api/workspace/config",
                 json={
                     "raw_root": str(raw_root),
+                    "release_root": str(release_root),
                     "hash_policy": "smart",
                     "parse_jobs": 4,
                     "force_hash_file_types": ["lef"],
@@ -392,6 +831,7 @@ class WebAppTest(unittest.TestCase):
             text = config_path.read_text(encoding="utf-8")
             self.assertIn("discover_min_versions: 1", text)
             self.assertIn("parse_jobs: 4", text)
+            self.assertIn(f"release_root: {release_root}", text)
 
     def test_workspace_config_update_rejects_unknown_fields(self) -> None:
         from lib_guard.web.app import create_app
@@ -615,6 +1055,266 @@ class WebAppTest(unittest.TestCase):
             self.assertEqual(response.status_code, 202)
             request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
             self.assertEqual(request["observability"]["progress_roots"], [])
+
+    def test_release_plan_uses_cli_dry_run_without_apply_or_force(self) -> None:
+        """Preview remains non-mutating even when actual publication is available."""
+
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            app = create_app(config_path=SMOKE_CONFIG, cwd=ROOT, test_config={"TESTING": True, "job_root": td})
+            response = app.test_client().post(
+                f"/api/libraries/{LIBRARY}/versions/20260627_asap7/release-plan",
+                json={"alias": "stage", "link_mode": "copy", "overwrite": True},
+            )
+
+            self.assertEqual(response.status_code, 202)
+            request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
+            self.assertEqual(request["action"], "release-plan")
+            self.assertIn("rel", request["args"])
+            self.assertIn("--alias", request["args"])
+            self.assertIn("stage", request["args"])
+            self.assertIn("--link-mode", request["args"])
+            self.assertIn("copy", request["args"])
+            self.assertIn("--overwrite", request["args"])
+            self.assertNotIn("--apply", request["args"])
+            self.assertNotIn("--force", request["args"])
+            self.assertNotIn("--force-reason", request["args"])
+            self.assertNotIn("--no-verify", request["args"])
+
+    def test_release_apply_requires_confirmation_and_keeps_verification(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            app = create_app(config_path=SMOKE_CONFIG, cwd=ROOT, test_config={"TESTING": True, "job_root": td})
+            client = app.test_client()
+            url = f"/api/libraries/{LIBRARY}/versions/20260627_asap7/release-apply"
+            self.assertEqual(client.post(url, json={}).status_code, 400)
+            self.assertEqual(client.post(url, json={"acknowledged": True, "force": True}).status_code, 400)
+            response = client.post(url, json={"acknowledged": True, "alias": "stage"})
+            self.assertEqual(response.status_code, 202)
+            request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
+            self.assertEqual(request["action"], "release-apply")
+            self.assertIn("--apply", request["args"])
+            self.assertIn("stage", request["args"])
+            self.assertNotIn("--force", request["args"])
+            self.assertNotIn("--no-verify", request["args"])
+
+    def test_actual_release_projection_preserves_cli_verification_and_links(self) -> None:
+        from lib_guard.web.app import _release_plan_projection
+
+        projection = _release_plan_projection(
+            {"dry_run": False, "verify_status": "PASS", "link_result": {
+                "status": "APPLIED", "release_dir": "/release/releases/R1",
+                "target_alias": "/release/current", "summary": {"planned_files": 1, "failed_files": 0},
+                "created_links": [{"relative_path": "LEF/top.lef", "status": "LINKED"}],
+            }},
+            {"action": "release-apply", "library": LIBRARY, "version": "20260627_asap7"},
+        )
+        self.assertFalse(projection["dry_run"])
+        self.assertEqual(projection["status"], "APPLIED")
+        self.assertEqual(projection["verify_status"], "PASS")
+        self.assertEqual(projection["planned_files"], 1)
+        self.assertEqual(projection["link_rows"][0]["status"], "LINKED")
+
+    def test_named_release_defaults_can_be_saved_and_read_back(self) -> None:
+        from lib_guard.web.app import create_app
+        with tempfile.TemporaryDirectory() as td:
+            config = Path(td) / "lib_guard.yml"
+            config.write_text(SMOKE_CONFIG.read_text())
+            app = create_app(config_path=config, cwd=ROOT, test_config={"TESTING": True, "job_root": str(Path(td) / "jobs")})
+            client = app.test_client()
+            response = client.post("/api/workspace/config", json={"release_publish_name": "lib_NL7", "release_latest_name": "latest_NL7"})
+            self.assertEqual(response.status_code, 200)
+            expected = {"publish_name": "lib_NL7", "latest_name": "latest_NL7"}
+            self.assertEqual(response.get_json()["release_settings"], expected)
+            self.assertEqual(client.get("/api/workspace").get_json()["release_settings"], expected)
+            self.assertEqual(client.post("/api/workspace/config", json={"release_publish_name": "../escape"}).status_code, 400)
+
+    def test_release_pyramid_keeps_missing_counts_and_source_evidence(self) -> None:
+        from lib_guard.web.app import _release_plan_projection
+        projected = _release_plan_projection({
+            "dry_run": False, "verify_status": "FAILED", "link_result": {
+                "status": "FAILED", "created_links": [{"status": "LINKED", "link_action": "REPLACE", "library_name": "A", "version_id": "v2", "previous_target": "/old/a"}],
+                "verify": {"issues": [{"message": "target mismatch", "file": "LEF/a.lef"}]},
+            }, "verify_issues": [{"message": "target mismatch", "file": "LEF/a.lef"}],
+        }, {"action": "release-apply"})
+        self.assertIsNone(projected["planned_files"])
+        self.assertEqual(projected["status"], "FAILED")
+        self.assertEqual(len(projected["issues"]), 1)
+        self.assertEqual(projected["link_rows"][0]["library_name"], "A")
+        self.assertEqual(projected["link_rows"][0]["link_action"], "REPLACE")
+
+    def test_job_summary_distinguishes_release_check_from_publication(self) -> None:
+        from lib_guard.web.app import _job_result_summary
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result = {"release_check_status": "PASS", "link_result": {"status": "FAILED"}}
+            (root / "result.json").write_text(json.dumps({"cli_result": result}))
+            self.assertIn("发布未完成", _job_result_summary(root))
+            result.update({"verify_status": "PASS", "link_result": {"status": "APPLIED", "summary": {"planned_files": 205}}})
+            (root / "result.json").write_text(json.dumps({"cli_result": result}))
+            self.assertIn("已执行发布", _job_result_summary(root))
+            self.assertIn("205", _job_result_summary(root))
+
+    def test_formal_release_overwrite_preview_is_dry_run_only(self) -> None:
+        """A formal release target may only create a validated overwrite preview."""
+
+        from lib_guard.web.app import create_app
+
+        formal_row = {
+            "library_id": "ip/formal_ucie",
+            "current_release": "R20260921",
+            "current_version": "20260627_asap7",
+            "source": "release_manifest",
+            "raw_catalog_match": f"ip/{LIBRARY}",
+            "raw_catalog_name": LIBRARY,
+            "history": [],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            app = create_app(config_path=SMOKE_CONFIG, cwd=ROOT, test_config={"TESTING": True, "job_root": td})
+            client = app.test_client()
+            with patch("lib_guard.web.app.list_release_library_rows", return_value={"status": "READY", "libraries": [formal_row]}):
+                blocked_responses = [
+                    client.post(
+                        "/api/release-libraries/ip/formal_ucie/versions/20260627_asap7/preview-overwrite",
+                        json={key: value},
+                    )
+                    for key, value in (("apply", True), ("force", True), ("force_reason", "manual"), ("no_verify", True))
+                ]
+                response = client.post(
+                    "/api/release-libraries/ip/formal_ucie/versions/20260627_asap7/preview-overwrite",
+                    json={"alias": "stage", "link_mode": "copy"},
+                )
+
+            for blocked in blocked_responses:
+                self.assertEqual(blocked.status_code, 400)
+                self.assertIn("不允许", blocked.get_json()["error"])
+            self.assertEqual(response.status_code, 202)
+            request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(request["action"], "release-overwrite-preview")
+        self.assertEqual(request["library"], f"ip/{LIBRARY}")
+        self.assertEqual(request["formal_release_target"]["library_id"], "ip/formal_ucie")
+        self.assertIn("rel", request["args"])
+        self.assertIn("--overwrite", request["args"])
+        self.assertNotIn("--apply", request["args"])
+        self.assertNotIn("--force", request["args"])
+        self.assertNotIn("--force-reason", request["args"])
+        self.assertNotIn("--no-verify", request["args"])
+
+    def test_formal_release_force_requires_audited_confirmation(self) -> None:
+        """The Web force path is explicit, audited, and cannot skip verification."""
+
+        from lib_guard.web.app import create_app
+
+        formal_row = {
+            "library_id": "ip/formal_ucie",
+            "current_release": "R20260921",
+            "current_version": "20260627_asap7",
+            "source": "release_manifest",
+            "raw_catalog_match": f"ip/{LIBRARY}",
+            "raw_catalog_name": LIBRARY,
+            "history": [],
+        }
+        endpoint = "/api/release-libraries/ip/formal_ucie/versions/20260627_asap7/force-overwrite"
+        with tempfile.TemporaryDirectory() as td:
+            app = create_app(config_path=SMOKE_CONFIG, cwd=ROOT, test_config={"TESTING": True, "job_root": td})
+            client = app.test_client()
+            with patch("lib_guard.web.app.list_release_library_rows", return_value={"status": "READY", "libraries": [formal_row]}):
+                for payload in (
+                    {"force_by": "owner", "acknowledged": True},
+                    {"force_reason": "紧急修复已人工确认", "acknowledged": True},
+                    {"force_reason": "紧急修复已人工确认", "force_by": "owner"},
+                    {"force_reason": "紧急修复已人工确认", "force_by": "owner", "acknowledged": True, "no_verify": True},
+                ):
+                    response = client.post(endpoint, json=payload)
+                    self.assertEqual(response.status_code, 400)
+
+                response = client.post(
+                    endpoint,
+                    json={
+                        "alias": "current",
+                        "link_mode": "symlink",
+                        "force_reason": "紧急修复已人工确认",
+                        "force_by": "release_owner",
+                        "acknowledged": True,
+                    },
+                )
+                request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(request["action"], "release-force")
+        self.assertEqual(request["formal_release_target"]["library_id"], "ip/formal_ucie")
+        self.assertIn("--apply", request["args"])
+        self.assertIn("--force", request["args"])
+        self.assertIn("--overwrite", request["args"])
+        self.assertIn("--force-reason", request["args"])
+        self.assertIn("紧急修复已人工确认", request["args"])
+        self.assertIn("--force-by", request["args"])
+        self.assertIn("release_owner", request["args"])
+        self.assertIn("--no-render", request["args"])
+        self.assertNotIn("--no-verify", request["args"])
+
+    def test_completed_release_plan_exposes_compact_configuration_and_manifest(self) -> None:
+        from lib_guard.web.app import _job_status
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "release_manifest.json"
+            manifest.write_text("{}", encoding="utf-8")
+            (root / "status.json").write_text(
+                json.dumps({"status": "COMPLETED", "return_code": 0}),
+                encoding="utf-8",
+            )
+            (root / "request.json").write_text(
+                json.dumps(
+                    {
+                        "library": LIBRARY,
+                        "version": "20260627_asap7",
+                        "args": ["python", "-m", "lib_guard.short_cli", "rel", LIBRARY, "20260627_asap7", "--overwrite", "--no-render"],
+                        "formal_release_target": {"library_id": "ip/formal_ucie", "release_id": "R20260921"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "result.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "web_job_result.v1",
+                        "result": "ok",
+                        "exit_code": 0,
+                        "cli_result": {
+                            "status": "PASS",
+                            "dry_run": True,
+                            "link_status": "DRY_RUN",
+                            "release_root": "/release_area",
+                            "alias": "stage",
+                            "overwrite": False,
+                            "manifest": str(manifest),
+                            "link_result": {
+                                "mode": "symlink", "summary": {"planned_files": 12},
+                                "created_links": [{"relative_path": "LEF/top.lef", "status": "WOULD_REPLACE",
+                                                   "previous_target": "/raw/old/top.lef", "target_path": "/raw/new/top.lef"}],
+                                "failed_links": [{"relative_path": "GDS/missing.gds", "status": "FAILED", "error": "source missing"}],
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            status = _job_status(root, None)
+
+            self.assertEqual(status["release_plan"]["status"], "DRY_RUN")
+            self.assertEqual(status["release_plan"]["alias"], "stage")
+            self.assertEqual(status["release_plan"]["link_mode"], "symlink")
+            self.assertEqual(status["release_plan"]["planned_files"], 12)
+            self.assertEqual(status["release_plan"]["link_rows"][0]["previous_target"], "/raw/old/top.lef")
+            self.assertEqual(status["release_plan"]["link_rows"][1]["error"], "source missing")
+            self.assertEqual(status["release_plan"]["formal_release_target"]["library_id"], "ip/formal_ucie")
+            self.assertTrue(any(item["id"] == "release_manifest" for item in status["artifacts"]))
 
     def test_compare_without_rescan_does_not_reuse_scan_progress(self) -> None:
         from lib_guard.web.app import create_app
@@ -990,6 +1690,169 @@ class WebAppTest(unittest.TestCase):
             self.assertIn("--new", request["args"])
             self.assertIn("--force-large", request["args"])
 
+    def test_file_diff_route_accepts_explicit_files_inside_allowed_roots(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "workspace"
+            raw_root = Path(td) / "raw"
+            old = raw_root / "manual" / "old.lef"
+            new = raw_root / "manual" / "new.lef"
+            old.parent.mkdir(parents=True)
+            old.write_text("VERSION 5.8 ;\nMACRO A\nEND A\n", encoding="utf-8")
+            new.write_text("VERSION 5.8 ;\nMACRO B\nEND B\n", encoding="utf-8")
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {raw_root}",
+                        f"catalog: {SMOKE_CONFIG.parent / 'catalog' / 'catalog.json'}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True, "job_root": str(workspace / "jobs")})
+            response = app.test_client().post(
+                f"/api/libraries/{LIBRARY}/versions/20260627_asap7/file-diff",
+                json={"old_file": str(old), "new_file": str(new), "type": "lef"},
+            )
+
+            self.assertEqual(response.status_code, 202)
+            request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
+            start = request["args"].index("fd")
+            self.assertEqual(request["args"][start : start + 2], ["fd", "--old"])
+            self.assertEqual(request["args"][request["args"].index("--old") + 1], str(old.resolve()))
+            self.assertEqual(request["args"][request["args"].index("--new") + 1], str(new.resolve()))
+            self.assertEqual(request["args"][request["args"].index("--type") + 1], "lef")
+
+    def test_completed_file_diff_run_exposes_html_artifact_link(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "workspace"
+            raw_root = root / "raw"
+            job_root = workspace / "jobs"
+            artifact_dir = workspace / "file_diff" / "manual" / "lef_old_to_new"
+            artifact_dir.mkdir(parents=True)
+            raw_root.mkdir(parents=True)
+            html = artifact_dir / "index.html"
+            markdown = artifact_dir / "pairwise_summary.md"
+            pairwise = artifact_dir / "pairwise_result.json"
+            raw_text_diff = artifact_dir / "raw_text_diff.html"
+            export_zip = artifact_dir / "file_diff_export.zip"
+            html.write_text("<html><body>单文件深度对比报告</body></html>", encoding="utf-8")
+            markdown.write_text("# 单文件深度对比摘要\n", encoding="utf-8")
+            pairwise.write_text("{}", encoding="utf-8")
+            raw_text_diff.write_text("<html><body>双栏文本对比</body></html>", encoding="utf-8")
+            export_zip.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+            config_path = workspace / "lib_guard.yml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {raw_root}",
+                        f"catalog: {SMOKE_CONFIG.parent / 'catalog' / 'catalog.json'}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            run = job_root / "file-diff_demo"
+            run.mkdir(parents=True)
+            (run / "status.json").write_text(json.dumps({"job_id": run.name, "status": "COMPLETED", "return_code": 0}), encoding="utf-8")
+            (run / "stdout.log").write_text(
+                json.dumps(
+                    {
+                        "status": "DIFF",
+                        "out_dir": str(artifact_dir),
+                        "html": str(html),
+                        "markdown": str(markdown),
+                        "export": str(export_zip),
+                        "pairwise_result": str(pairwise),
+                        "summary": {"file_type": "lef", "changed": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run / "result.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "web_job_result.v1",
+                        "result": "ok",
+                        "exit_code": 0,
+                        "cli_result": {
+                            "status": "DIFF",
+                            "out_dir": str(artifact_dir),
+                            "html": str(html),
+                            "markdown": str(markdown),
+                            "export": str(export_zip),
+                            "pairwise_result": str(pairwise),
+                            "summary": {"file_type": "lef", "changed": True},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True, "job_root": str(job_root)})
+            client = app.test_client()
+            status = client.get(f"/api/runs/{run.name}")
+
+            self.assertEqual(status.status_code, 200)
+            payload = status.get_json()
+            artifacts = {item["id"]: item for item in payload["artifacts"]}
+            self.assertEqual(payload["artifacts"][0]["id"], "raw_text_diff")
+            self.assertEqual(artifacts["raw_text_diff"]["label"], "双栏文本对比")
+            self.assertEqual(artifacts["html"]["url"], f"/api/runs/{run.name}/artifact/html")
+            self.assertEqual(artifacts["markdown"]["url"], f"/api/runs/{run.name}/artifact/markdown")
+            self.assertEqual(artifacts["export"]["url"], f"/api/runs/{run.name}/artifact/export")
+            report = client.get(artifacts["html"]["url"])
+            self.assertEqual(report.status_code, 200)
+            self.assertIn("单文件深度对比报告", report.get_data(as_text=True))
+            report.close()
+            inline_export = client.get(f"/api/runs/{run.name}/artifact/file_diff_export.zip")
+            self.assertEqual(inline_export.status_code, 200)
+            self.assertEqual(inline_export.get_data()[:2], b"PK")
+            inline_export.close()
+
+    def test_file_diff_route_rejects_explicit_files_outside_allowed_roots(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / "workspace"
+            raw_root = Path(td) / "raw"
+            raw_root.mkdir(parents=True)
+            outside = Path(td) / "outside.lef"
+            inside = raw_root / "new.lef"
+            outside.write_text("VERSION 5.8 ;\nMACRO A\nEND A\n", encoding="utf-8")
+            inside.write_text("VERSION 5.8 ;\nMACRO B\nEND B\n", encoding="utf-8")
+            config_path = workspace / "lib_guard.yml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {raw_root}",
+                        f"catalog: {SMOKE_CONFIG.parent / 'catalog' / 'catalog.json'}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(config_path=config_path, cwd=ROOT, test_config={"TESTING": True, "job_root": str(workspace / "jobs")})
+            response = app.test_client().post(
+                f"/api/libraries/{LIBRARY}/versions/20260627_asap7/file-diff",
+                json={"old_file": str(outside), "new_file": str(inside), "type": "lef"},
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("不在当前允许范围内", response.get_json()["error"])
+            self.assertFalse((workspace / "jobs").exists())
+
     def test_linked_file_diff_request_does_not_overwrite_scan_or_version_diff(self) -> None:
         from lib_guard.web.app import create_app
         from lib_guard.web.read_model import load_web_state
@@ -1127,6 +1990,11 @@ class WebAppTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 202, endpoint)
                 request = json.loads(Path(response.get_json()["request"]).read_text(encoding="utf-8"))
                 self.assertIn(expected, request["args"])
+                if endpoint == "/api/library/apply":
+                    self.assertIn("--refresh-catalog", request["args"])
+                if endpoint == "/api/library/accept":
+                    self.assertIn("--apply", request["args"])
+                    self.assertIn("--refresh-catalog", request["args"])
                 self.assertNotIn("shell", request)
 
     def test_library_add_rejects_root_outside_configured_browse_scope(self) -> None:

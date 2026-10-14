@@ -73,6 +73,8 @@ run_library_discover = _lazy_command("lib_guard.cli_commands.library", "run_libr
 run_library_apply = _lazy_command("lib_guard.cli_commands.library", "run_library_apply")
 run_library_accept = _lazy_command("lib_guard.cli_commands.library", "run_library_accept")
 run_library_add = _lazy_command("lib_guard.cli_commands.library", "run_library_add")
+run_release_library_refresh = _lazy_command("lib_guard.cli_commands.release_library", "run_release_library_refresh")
+run_release_library_list = _lazy_command("lib_guard.cli_commands.release_library", "run_release_library_list")
 run_diff_adjacent = _lazy_command("lib_guard.cli_commands.diff", "run_diff_adjacent")
 run_diff_cumulative = _lazy_command("lib_guard.cli_commands.diff", "run_diff_cumulative")
 run_diff_render = _lazy_command("lib_guard.cli_commands.diff", "run_diff_render")
@@ -454,6 +456,26 @@ def add_library_parser(subparsers: Any) -> None:
     p.set_defaults(func=run_library_apply)
 
 
+def add_release_library_parser(subparsers: Any) -> None:
+    """Read published release manifests without mixing them into RAW catalog data."""
+
+    root = subparsers.add_parser("release-library", help="读取和查询正式发布库；不会扫描 RAW 或执行发布")
+    sp = root.add_subparsers(dest="release_library_cmd", required=True)
+
+    p = sp.add_parser("refresh", help="从正式发布目录读取 release_manifest.json 并生成索引快照")
+    p.add_argument("--root", required=True, help="正式发布根目录")
+    p.add_argument("--out", required=True, help="正式发布库索引 JSON 输出")
+    p.add_argument("--max-depth", type=int, default=8, help="发布目录最大读取深度")
+    p.add_argument("--max-manifests", type=int, default=2000, help="最多读取的发布清单数")
+    p.set_defaults(func=run_release_library_refresh)
+
+    p = sp.add_parser("list", help="查询已生成的正式发布库索引")
+    p.add_argument("--input", required=True, help="release-library refresh 生成的索引 JSON")
+    p.add_argument("--library", help="仅显示一个正式库，例如 ip/ucie")
+    p.add_argument("--plain", action="store_true", help="每行输出一个正式库名")
+    p.set_defaults(func=run_release_library_list)
+
+
 def add_effective_parser(subparsers: Any) -> None:
     p = subparsers.add_parser("effective", help="Effective/recommendation manifest operations")
     p.add_argument("effective_args", nargs=REMAINDER)
@@ -675,6 +697,8 @@ def add_workflow_parsers(subparsers: Any) -> None:
     p.set_defaults(func=run_catalog_compare_batch)
 
     p = subparsers.add_parser("release-batch", help="Run catalog-driven release link workflow for many scanned versions")
+    p.add_argument("--publish-name", help="正式发布目录名，例如 lib_NL7；启用默认覆盖和每日链接备份")
+    p.add_argument("--latest-name", default="latest", help="最新指针名，默认 latest")
     p.add_argument("--catalog", required=True)
     p.add_argument("--library")
     p.add_argument("--version", action="append", default=[], help="Version id or version_key. Repeat to select multiple versions.")
@@ -741,6 +765,7 @@ def build_parser() -> ArgumentParser:
     add_diff_parser(subparsers)
     add_file_diff_parser(subparsers)
     add_library_parser(subparsers)
+    add_release_library_parser(subparsers)
     add_effective_parser(subparsers)
     add_window_parser(subparsers)
     add_catalog_parser(subparsers)

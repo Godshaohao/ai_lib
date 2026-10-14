@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 import json
 import os
 import secrets
+import shlex
 import subprocess
 import sys
 import threading
@@ -26,19 +26,38 @@ from .read_model import (
     list_file_tree_rows,
     list_library_candidate_rows,
     list_library_rows,
+    list_release_library_rows,
+    release_stage_detail,
     list_version_rows,
     load_web_state,
 )
+from .release_actions import build_release_web_args
 from lib_guard.atomic import atomic_write_json
+from lib_guard.effective.release_set import (
+    build_release_set_manifest,
+    compare_release_sets,
+    write_release_set_manifest,
+)
 from lib_guard.library_registry import LIST_COLUMNS, write_library_rows
 from lib_guard.project_config import (
     HASH_POLICIES,
     MAX_PARSE_JOBS,
     MIN_PARSE_JOBS,
+    WEB_ACTION_SPECS,
+    WEB_COMPARE_DEFAULTS,
+    WEB_COMPARE_MODES,
+    WEB_MARK_TYPES,
+    WEB_MUTATING_ACTIONS,
+    WEB_PACKAGE_TYPES,
+    WEB_STAGES,
+    default_discovery_strategy,
+    default_scan_strategy,
     file_diff_allowed,
     file_diff_requires_force_large,
+    web_action_catalog,
 )
-from lib_guard.short_cli_config import find_config, load_config, update_config_file
+from lib_guard.review.update_notes import load_update_note, review_notes_root, save_update_note
+from lib_guard.short_cli_config import find_config, load_config, update_config_file, write_default_config
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -50,6 +69,22 @@ def _safe_component(value: str) -> str:
     if not value or value in {".", ".."} or "/" in value or "\\" in value:
         raise ValueError("invalid path component")
     return value
+
+
+def _safe_library_token(value: str) -> str:
+    """Validate a catalog library identifier without treating it as a path.
+
+    Typed library IDs (for example ``ip/vendor.ucie``) are stable Catalog
+    tokens and are valid CLI arguments.  They must not be passed to helpers
+    that create filesystem paths, but catalog lookups still require every
+    component to be non-empty and non-traversing.
+    """
+
+    text = str(value or "").strip()
+    parts = text.split("/")
+    if not text or "\\" in text or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("invalid library token")
+    return text
 
 
 def _safe_relative_path(value: Any, *, label: str = "相对路径") -> str:
@@ -72,42 +107,6 @@ def _bounded_int(value: Any, *, label: str, minimum: int, maximum: int, default:
     return number
 
 
-_COMPARE_MODES = {"adjacent", "cumulative"}
-_MARK_TYPES = {"FULL", "FIX", "HOTFIX", "UNKNOWN"}
-_PACKAGE_TYPES = {"FULL_PACKAGE", "PARTIAL_UPDATE", "HOTFIX", "DOC_UPDATE", "UNKNOWN_PACKAGE"}
-_COMPARE_DEFAULTS = {"previous_effective", "full_baseline", "none"}
-_STAGES = {"initial", "stable", "final", "ad-hoc", "dated", "unknown"}
-
-
-@dataclass(frozen=True)
-class WebActionSpec:
-    scope: str
-    cli_action: str
-
-
-WEB_ACTION_SPECS = {
-    "catalog-refresh": WebActionSpec("library", "cat"),
-    "worklist": WebActionSpec("workspace", "worklist"),
-    "library-discover": WebActionSpec("workspace", "library"),
-    "library-accept": WebActionSpec("workspace", "library"),
-    "library-apply": WebActionSpec("workspace", "library"),
-    "library-add": WebActionSpec("workspace", "library"),
-    "scan": WebActionSpec("version", "scan"),
-    "cmp": WebActionSpec("version", "cmp"),
-    "rel": WebActionSpec("version", "rel"),
-    "next": WebActionSpec("library", "next"),
-    "intake": WebActionSpec("library", "intake"),
-    "window": WebActionSpec("library", "window"),
-    "accept-window": WebActionSpec("library", "accept-window"),
-    "mark": WebActionSpec("version", "mark"),
-    "override": WebActionSpec("version", "override"),
-    "file-diff": WebActionSpec("version", "fd"),
-    "review-gate": WebActionSpec("version", "rv"),
-    "review-packet": WebActionSpec("version", "review"),
-    "action-file": WebActionSpec("library", "action"),
-    "effective-rollback": WebActionSpec("library", "effective"),
-}
-WEB_MUTATING_ACTIONS = frozenset(WEB_ACTION_SPECS)
 _JOB_STATUSES = {"QUEUED", "RUNNING", "COMPLETED", "FAILED"}
 _MAX_BROWSE_CHILDREN = 500
 _MAX_MACHINE_RESULT_BYTES = 8 * 1024 * 1024
@@ -167,6 +166,36 @@ def _path_is_within(path: Path, roots: list[Path]) -> bool:
     return any(path == root or root in path.parents for root in roots)
 
 
+def _safe_existing_json_path(path_text: Any, roots: list[Path], *, label: str) -> Path:
+    text = _bounded_text(path_text, label=label, limit=1000)
+    if not text:
+        raise ValueError(f"{label}不能为空")
+    path = Path(text).expanduser().resolve()
+    if not _path_is_within(path, roots):
+        raise ValueError(f"{label}不在当前工作区允许范围内")
+    if not path.is_file():
+        raise FileNotFoundError(f"{label}不存在：{path}")
+    if path.suffix.lower() != ".json":
+        raise ValueError(f"{label}必须是 JSON 文件")
+    return path
+
+
+def _safe_existing_file_path(path_text: Any, roots: list[Path], *, label: str) -> Path:
+    text = _bounded_text(path_text, label=label, limit=1000)
+    if not text:
+        raise ValueError(f"{label}不能为空")
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"{label}必须使用绝对路径")
+    resolved = path.resolve()
+    if not _path_is_within(resolved, roots):
+        allowed = "；".join(str(root) for root in roots) or "未配置"
+        raise ValueError(f"{label}不在当前允许范围内。当前允许范围：{allowed}")
+    if not resolved.is_file():
+        raise FileNotFoundError(f"{label}不存在或不是文件：{resolved}")
+    return resolved
+
+
 def _browse_directory(path_text: str | None, roots: list[Path]) -> dict[str, Any]:
     if not roots:
         raise OSError("没有可浏览的配置目录")
@@ -207,6 +236,47 @@ def _browse_directory(path_text: str | None, roots: list[Path]) -> dict[str, Any
         "roots": [str(root) for root in roots],
         "children": children,
         "truncated": len(children) >= _MAX_BROWSE_CHILDREN,
+    }
+
+
+def _workspace_setup_payload(cwd: str | Path | None, error: Exception) -> dict[str, Any]:
+    cwd_path = Path(cwd or Path.cwd()).expanduser().resolve()
+    scan_defaults = default_scan_strategy()
+    discovery_defaults = default_discovery_strategy()
+    return {
+        "status": "NEEDS_INIT",
+        "setup_required": True,
+        "catalog_state": "CONFIG_MISSING",
+        "catalog_source": "not_initialized",
+        "message": "未能连接工作区配置。已有库和扫描记录无需重做：请连接原工作区目录，或启动时用 --config 指定原 lib_guard.yml；仅新工作区需要初始化。",
+        "error": str(error),
+        "paths": {
+            "workspace": "",
+            "raw_root": "",
+            "catalog": "",
+            "catalog_html": "",
+            "reports": "",
+            "diff": "",
+            "cwd": str(cwd_path),
+        },
+        "scan_strategy": {
+            "hash_policy": scan_defaults["hash_policy"],
+            "parse_jobs": scan_defaults["parse_jobs"],
+            "force_hash_file_types": scan_defaults["force_hash_file_types"],
+            "skip_hash_file_types": scan_defaults["skip_hash_file_types"],
+            "parse_file_types": scan_defaults["parse_file_types"],
+            "parse_exclude_file_types": scan_defaults["parse_exclude_file_types"],
+            "render_detail": scan_defaults["render_detail"].lower() == "true",
+        },
+        "discovery_strategy": {
+            "max_depth": discovery_defaults["max_depth"],
+            "min_versions": discovery_defaults["min_versions"],
+            "max_dirs": discovery_defaults["max_dirs"],
+            "max_candidates": discovery_defaults["max_candidates"],
+        },
+        "runtime_state": {},
+        "write_policy": "web_actions_are_allowlisted",
+        "web_actions": web_action_catalog(),
     }
 
 
@@ -310,6 +380,11 @@ def _job_failure_summary(output: str) -> str:
         for key, label in (("scan_error", "扫描失败"), ("error", "任务失败"), ("message", "任务结果")):
             value = loaded.get(key)
             if value:
+                if isinstance(value, Mapping):
+                    message = str(value.get("message") or value.get("type") or "未知错误")
+                    if value.get("type") == "PermissionError":
+                        return f"{label}：无权读取文件或目录；请联系目录负责人授予读取权限。具体路径：{message}"[:500]
+                    return f"{label}：{message}"[:240]
                 return f"{label}：{str(value).strip()}"[:240]
 
     for line in reversed(text.splitlines()):
@@ -326,6 +401,55 @@ def _list_setting(value: Any, *, label: str) -> str:
     if text and any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.,- " for char in text):
         raise ValueError(f"{label} 只允许文件类型名称、逗号、空格和连字符")
     return text
+
+
+_UPDATE_NOTE_TEXT_LIMITS = {
+    "summary": ("备注摘要", 1200),
+    "updated_by": ("更新人", 80),
+}
+_UPDATE_NOTE_LIST_LIMITS = {
+    "impact_areas": ("影响场景", 24, 120),
+    "key_changes": ("关键变化", 24, 300),
+    "risks": ("风险提醒", 24, 300),
+    "must_check": ("必须确认", 24, 300),
+    "evidence_refs": ("证据引用", 24, 240),
+}
+
+
+def _validate_update_note_payload(payload: Mapping[str, Any]) -> None:
+    """Reject invalid note input before it can overwrite useful human notes."""
+
+    for key, (label, limit) in _UPDATE_NOTE_TEXT_LIMITS.items():
+        _bounded_text(payload.get(key), label=label, limit=limit)
+    suggestion = _bounded_text(payload.get("use_suggestion") or "待确认", label="使用建议", limit=40)
+    if suggestion not in {"推荐使用", "条件使用", "暂缓使用", "待确认"}:
+        raise ValueError("使用建议只能是：推荐使用、条件使用、暂缓使用、待确认")
+    for key, (label, max_items, item_limit) in _UPDATE_NOTE_LIST_LIMITS.items():
+        value = payload.get(key)
+        if value is None or value == "":
+            continue
+        items = value if isinstance(value, list) else str(value).replace("；", "\n").replace(";", "\n").splitlines()
+        if not isinstance(items, list):
+            raise ValueError(f"{label}必须是列表或文本")
+        if len(items) > max_items:
+            raise ValueError(f"{label}最多 {max_items} 条")
+        for index, item in enumerate(items, start=1):
+            text = item.get("text") if isinstance(item, Mapping) else item
+            _bounded_text(text, label=f"{label}第 {index} 条", limit=item_limit)
+
+
+def _append_effective_selection(args: list[str], payload: Mapping[str, Any]) -> None:
+    base = payload.get("base_full")
+    includes = payload.get("includes", [])
+    if not isinstance(includes, list) or any(not isinstance(vid, str) for vid in includes):
+        raise ValueError("增量包选择必须是有序版本列表")
+    if includes and not base:
+        raise ValueError("请先选择完整包基线")
+    if base is not None:
+        args.extend(["--base-full", _safe_component(_bounded_text(base, label="完整包基线", limit=180))])
+        args.append("--json")
+    for vid in includes:
+        args.extend(["--include", _safe_component(_bounded_text(vid, label="叠加版本", limit=180))])
 
 
 def _append_scan_settings(args: list[str], payload: Mapping[str, Any], *, include_no_render: bool = True) -> None:
@@ -403,16 +527,161 @@ def _record_machine_result(job_dir: Path, return_code: int) -> dict[str, Any] | 
     return result
 
 
-def _job_result_summary(job_dir: Path) -> str:
-    """Return one bounded operator-facing sentence from the structured result."""
-
+def _load_cli_result(job_dir: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads((job_dir / "result.json").read_text(encoding="utf-8"))
     except (OSError, TypeError, ValueError):
-        return ""
+        return None
     result = payload.get("cli_result") if isinstance(payload, Mapping) else None
-    if not isinstance(result, Mapping):
+    return dict(result) if isinstance(result, Mapping) else None
+
+
+def _job_artifact_map(job_dir: Path) -> dict[str, dict[str, str]]:
+    """Return human-facing files produced by a completed job.
+
+    The CLI is still the source of truth.  The web layer only projects known
+    result fields into bounded links, and the serving route validates the final
+    path against configured workspace roots.
+    """
+
+    result = _load_cli_result(job_dir)
+    if not result:
+        return {}
+    candidates: list[tuple[str, str, Any, str]] = []
+    out_dir = result.get("out_dir")
+    if out_dir:
+        out_root = Path(str(out_dir)).expanduser()
+        candidates.append(("raw_text_diff", "双栏文本对比", out_root / "raw_text_diff.html", "html"))
+    candidates.extend([
+        ("html", "HTML 对比报告", result.get("html"), "html"),
+        ("markdown", "Markdown 摘要", result.get("markdown"), "markdown"),
+        ("export", "导出对比结果", result.get("export"), "zip"),
+        ("pairwise_result", "结构化结果 JSON", result.get("pairwise_result"), "json"),
+        ("release_manifest", "发布计划清单", result.get("manifest"), "json"),
+    ])
+    if result.get("manifest"):
+        manifest_path = Path(str(result["manifest"])).expanduser()
+        candidates.extend([
+            ("release_result", "发布结果", manifest_path.parent / "release_result.json", "json"),
+            ("release_link_result", "发布链接清单", manifest_path.parent / "release_link_result.json", "json"),
+        ])
+    if out_dir:
+        candidates.extend(
+            [
+                ("semantic_diff", "语义差异 JSON", out_root / "semantic_diff.json", "json"),
+            ]
+        )
+    artifacts: dict[str, dict[str, str]] = {}
+    for artifact_id, label, value, kind in candidates:
+        if not value:
+            continue
+        path = Path(str(value)).expanduser().resolve()
+        if not path.is_file():
+            continue
+        artifacts[artifact_id] = {
+            "id": artifact_id,
+            "label": label,
+            "kind": kind,
+            "path": str(path),
+            "url": f"/api/runs/{job_dir.name}/artifact/{artifact_id}",
+        }
+    return artifacts
+
+
+def _release_plan_projection(result: Mapping[str, Any], request_data: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Project CLI preview or publication facts without implementing release logic."""
+
+    if not bool(result.get("dry_run")) and request_data.get("action") not in {"release-apply", "release-force", "release-set-apply"}:
+        return None
+    link_result = result.get("link_result") if isinstance(result.get("link_result"), Mapping) else {}
+    if not link_result and not result.get("manifest"):
+        return None
+    summary = link_result.get("summary") if isinstance(link_result.get("summary"), Mapping) else {}
+    link_status = str(result.get("link_status") or link_result.get("status") or "UNKNOWN").upper()
+    args = request_data.get("args") if isinstance(request_data.get("args"), list) else []
+    rel_index = next((index for index, item in enumerate(args) if item == "rel"), -1)
+    final_args = [str(item) for item in args[rel_index:] if rel_index >= 0 and item != "--no-render"]
+    if final_args and "--apply" not in final_args:
+        final_args.append("--apply")
+    formal_release_target = request_data.get("formal_release_target")
+    target = (
+        {
+            "library_id": str(formal_release_target.get("library_id") or ""),
+            "release_id": str(formal_release_target.get("release_id") or ""),
+            "version_id": str(formal_release_target.get("version_id") or ""),
+            "source": str(formal_release_target.get("source") or ""),
+        }
+        if isinstance(formal_release_target, Mapping)
+        else None
+    )
+    return {
+        "status": link_status,
+        "scope": "release_set" if request_data.get("action") in {"release-set-plan", "release-set-apply"} else "version",
+        "dry_run": bool(result.get("dry_run")),
+        "verify_status": str(result.get("verify_status") or "未执行"),
+        "library": str(request_data.get("library") or ""),
+        "version": str(request_data.get("version") or ""),
+        "release_root": str(result.get("release_root") or link_result.get("release_root") or ""),
+        "alias": str(result.get("alias") or link_result.get("alias") or "current"),
+        "link_mode": str(link_result.get("mode") or "symlink"),
+        "overwrite": bool(result.get("overwrite") or link_result.get("overwrite")),
+        "planned_files": int(summary["planned_files"]) if summary.get("planned_files") is not None else None,
+        "failed_files": int(summary["failed_files"]) if summary.get("failed_files") is not None else None,
+        "skipped_files": int(summary.get("skipped_files") or 0),
+        "excluded_files": int(summary.get("excluded_files") or 0),
+        "excluded_rows": [
+            {key: str(row.get(key) or "") for key in ("source_path", "reason")}
+            for row in link_result.get("excluded_files", []) if isinstance(row, Mapping)
+        ],
+        "created_files": int(summary.get("created_files") or 0),
+        "manifest": str(result.get("manifest") or link_result.get("manifest_path") or ""),
+        "target_alias": str(link_result.get("target_alias") or ""),
+        "release_dir": str(link_result.get("release_dir") or ""),
+        "daily_backup": str(link_result.get("daily_backup") or ""),
+        "publish_name": str(link_result.get("publish_name") or ""),
+        "latest_name": str(link_result.get("latest_name") or ""),
+        "link_rows": [
+            {key: str(row.get(key) or "") for key in (
+                "relative_path", "file_type", "status", "link_action", "link_path", "target_path", "previous_target", "warning", "error", "library_name", "version_id"
+            )}
+            for row in [*(link_result.get("created_links") or []), *(link_result.get("failed_links") or []), *(link_result.get("skipped_links") or [])]
+            if isinstance(row, Mapping)
+        ],
+        "final_cli_command": "lg " + shlex.join(final_args) if final_args else "",
+        "formal_release_target": target,
+        "issues": list({
+            (str(issue.get("message") or issue.get("error") or ""), str(issue.get("file") or issue.get("relative_path") or "")): {
+                "message": str(issue.get("message") or issue.get("error") or ""),
+                "file": str(issue.get("file") or issue.get("relative_path") or ""),
+            }
+            for issue in [*(result.get("verify_issues") or []), *((link_result.get("verify") or {}).get("issues") or []), *(link_result.get("failed_links") or []), *(link_result.get("skipped_links") or [])]
+            if isinstance(issue, Mapping) and (issue.get("message") or issue.get("error"))
+        }.values()),
+    }
+
+
+def _job_result_summary(job_dir: Path) -> str:
+    """Return one bounded operator-facing sentence from the structured result."""
+
+    result = _load_cli_result(job_dir)
+    if not result:
         return ""
+
+    link = result.get("link_result")
+    if isinstance(link, Mapping):
+        link_status = str(link.get("status") or result.get("link_status") or "").upper()
+        verification = str(result.get("verify_status") or (link.get("verify") or {}).get("status") or "")
+        count = (link.get("summary") or {}).get("planned_files")
+        count_text = f" · {count} 个文件" if count is not None else ""
+        if link_status in {"PARTIAL_DRY_RUN", "PARTIAL_APPLIED"}:
+            skipped = (link.get("summary") or {}).get("skipped_files", 0)
+            created = (link.get("summary") or {}).get("created_files", 0)
+            return f"{'预演完成，尚未发布' if result.get('dry_run') else '部分发布完成'} · {'拟交付' if result.get('dry_run') else '已交付'} {created} 个文件 · 同名冲突跳过 {skipped} 个文件"
+        if bool(result.get("dry_run")):
+            return ("预演完成，尚未发布" if link_status in {"DRY_RUN", "FORCE_DRY_RUN"} else "预演未通过，未发布") + count_text
+        if link_status in {"APPLIED", "FORCED_APPLIED"}:
+            return "已执行发布" + count_text + (" · 链接校验通过" if verification in {"PASS", "PASS_WITH_WARNING"} else " · 链接校验未完成或未通过")
+        return "发布未完成 · 请核对异常及原发布入口"
 
     release_status = str(result.get("release_check_status") or "").upper()
     release_labels = {
@@ -433,10 +702,16 @@ def _job_result_summary(job_dir: Path) -> str:
         return summary[:240]
 
     status = str(result.get("status") or "").upper()
+    if status in {"FAILED", "ERROR", "UNSUPPORTED", "EMPTY"}:
+        operation = "扫描" if result.get("scan_dir") else "版本对比" if result.get("old_version") else "深度核对" if result.get("pairwise_result") else "任务"
+        outcome = "失败" if status in {"FAILED", "ERROR"} else "未完成"
+        reason = result.get("scan_error") or result.get("message") or "请查看运行日志中的具体原因"
+        return f"{operation}{outcome} · {reason}"[:240]
     pairwise = result.get("summary")
     if result.get("pairwise_result") and isinstance(pairwise, Mapping):
         file_type = str(pairwise.get("file_type") or "文件").upper()
-        changed = "内容有变化" if pairwise.get("changed") else "内容相同"
+        comparison = str(pairwise.get("status") or status).upper()
+        changed = "内容相同" if comparison == "SAME" else "内容有变化" if pairwise.get("changed") is True else "未确认内容一致"
         return f"深度核对完成 · {file_type} · {changed}"[:240]
     if result.get("old_version") and result.get("new_version"):
         return f"版本对比完成 · {result['old_version']} → {result['new_version']}"[:240]
@@ -444,7 +719,9 @@ def _job_result_summary(job_dir: Path) -> str:
         return f"扫描完成 · {result.get('library') or result.get('library_name') or ''} / {result['version']}"[:240]
     candidate = result.get("candidate_effective")
     if isinstance(candidate, Mapping) and candidate.get("effective_id"):
-        return f"处理计划已生成 · 可确认版本 {candidate['effective_id']}"[:240]
+        updates = " → ".join(candidate.get("overlays", []) or []) or "无叠加更新"
+        state_label = "候选已生成，待核对" if result.get("plan_state") == "DONE" else "组合预览"
+        return f"{state_label} · 完整包 {candidate.get('base_full') or '未选择'} · 叠加 {updates} · 需补扫 {len(result.get('scan_versions', []) or [])} 个版本"[:400]
     if result.get("current_effective"):
         return "已设为当前可用版本"
     message = str(result.get("message") or "").strip()
@@ -513,6 +790,27 @@ def _job_status(job_dir: Path, process: subprocess.Popen[str] | None) -> dict[st
     result_summary = _job_result_summary(job_dir)
     if result_summary:
         status["result_summary"] = result_summary
+    artifacts = list(_job_artifact_map(job_dir).values())
+    if artifacts:
+        status["artifacts"] = artifacts
+    cli_result = _load_cli_result(job_dir)
+    request_data: Mapping[str, Any] = {}
+    try:
+        loaded_request = json.loads((job_dir / "request.json").read_text(encoding="utf-8"))
+        if isinstance(loaded_request, Mapping):
+            request_data = loaded_request
+    except (OSError, TypeError, ValueError):
+        pass
+    if cli_result is not None:
+        if request_data.get('action') == 'file-diff':
+            status['file_diff_review'] = {
+                'library': request_data.get('library'), 'version': request_data.get('version'),
+                'file_type': (cli_result.get('summary') or {}).get('file_type'),
+                'eligible': status.get('return_code') == 0 and cli_result.get('status') in {'SAME', 'DIFF'},
+            }
+        release_plan = _release_plan_projection(cli_result, request_data)
+        if release_plan is not None:
+            status["release_plan"] = release_plan
     status.update(_job_observation(job_dir, status))
     return status
 
@@ -537,10 +835,30 @@ def create_app(
     jobs_lock = threading.Lock()
     app.extensions["lib_guard_jobs"] = jobs
     app.extensions["lib_guard_jobs_lock"] = jobs_lock
+    workspace_pointer = Path(app.config["LIB_GUARD_CWD"]).resolve() / "work" / "web_workspace.json"
+
+    def workspace_config_path() -> str | None:
+        configured = app.config.get("LIB_GUARD_CONFIG")
+        if configured or os.environ.get("LIB_GUARD_CONFIG"):
+            return configured
+        try:
+            return str(find_config(app.config["LIB_GUARD_CWD"]).resolve())
+        except FileNotFoundError:
+            if not workspace_pointer.exists():
+                return None
+            try:
+                saved = json.loads(workspace_pointer.read_text(encoding="utf-8"))
+                path = saved["config"]
+                if not isinstance(path, str) or not Path(path).is_absolute():
+                    raise ValueError("配置路径必须是绝对路径")
+            except (ValueError, KeyError, TypeError) as exc:
+                raise OSError(f"上次工作区记录无法读取：{workspace_pointer}；请用 --config 指定已有配置。") from exc
+            app.config["LIB_GUARD_CONFIG"] = path
+            return path
 
     def state() -> dict[str, Any]:
         return load_web_state(
-            config_path=app.config.get("LIB_GUARD_CONFIG"),
+            config_path=workspace_config_path(),
             cwd=app.config.get("LIB_GUARD_CWD"),
             allow_missing_catalog=True,
         )
@@ -553,7 +871,7 @@ def create_app(
         configured = app.config.get("JOB_ROOT") or app.config.get("job_root")
         if configured:
             return Path(configured).expanduser().resolve()
-        cfg = load_config(app.config.get("LIB_GUARD_CWD") or Path.cwd(), app.config.get("LIB_GUARD_CONFIG"))
+        cfg = load_config(app.config.get("LIB_GUARD_CWD") or Path.cwd(), workspace_config_path())
         return Path(cfg["workspace"]).expanduser().resolve() / "web_jobs"
 
     def request_payload() -> Mapping[str, Any]:
@@ -578,9 +896,38 @@ def create_app(
         """Find a raw catalog library without calculating every library summary."""
 
         for item in web_state.get("catalog", {}).get("libraries", []) or []:
-            if isinstance(item, Mapping) and str(item.get("library_name")) == library:
+            if isinstance(item, Mapping) and library in {
+                str(item.get("library_name") or ""),
+                str(item.get("library_id") or ""),
+                str(item.get("typed_library_id") or ""),
+            }:
                 return item
         return None
+
+    def resolve_catalog_library_id(web_state: Mapping[str, Any], library: str) -> str:
+        """Resolve a web-facing library token to the catalog library_id.
+
+        The browser usually works with ``library_name`` because it is readable,
+        while effective pointers are stored under the stable ``library_id``
+        such as ``ip/vendor.foo``.  Release-set manifests must use the stable
+        id so the current effective pointer can be found reliably.
+        """
+
+        target = str(library or "").strip()
+        for item in web_state.get("catalog", {}).get("libraries", []) or []:
+            if not isinstance(item, Mapping):
+                continue
+            candidates = {
+                str(item.get("library_id") or "").strip(),
+                str(item.get("library_name") or "").strip(),
+                str(item.get("display_name") or "").strip(),
+            }
+            typed = str(item.get("typed_library_name") or "").strip()
+            if typed:
+                candidates.add(typed)
+            if target in {value for value in candidates if value}:
+                return str(item.get("library_id") or item.get("library_name") or target)
+        return target
 
     def find_catalog_version(web_state: Mapping[str, Any], library: str, version: str) -> Mapping[str, Any] | None:
         library_item = find_catalog_library(web_state, library)
@@ -616,7 +963,7 @@ def create_app(
         """Reject impossible compare jobs before creating a job directory."""
 
         mode = str(payload.get("mode") or "adjacent")
-        if mode not in _COMPARE_MODES:
+        if mode not in WEB_COMPARE_MODES:
             raise ValueError("对比模式只能是 adjacent 或 cumulative")
         scan_if_missing = _payload_bool(payload, "scan_if_missing")
         rescan = _payload_bool(payload, "rescan")
@@ -700,7 +1047,7 @@ def create_app(
         if action_spec.scope == "version" and version is None:
             raise ValueError(f"{action} 需要版本")
         if library is not None:
-            _safe_component(library)
+            _safe_library_token(library)
         if version is not None:
             _safe_component(version)
         job_id = f"{action}_{secrets.token_hex(6)}"
@@ -713,7 +1060,29 @@ def create_app(
         if config_value:
             args.extend(["--config", str(config_value)])
         cli_action = action_spec.cli_action
-        if action == "catalog-refresh":
+        multi_release_request = None
+        if action in {'release-set-plan', 'release-set-apply'}:
+            from lib_guard.release.bundle import validate_release_name
+            if action == 'release-set-apply' and not _payload_bool(payload, 'acknowledged'):
+                raise ValueError('实际发布必须确认阶段目录、所选库及覆盖设置')
+            if any(key in payload for key in ('force', 'no_verify', 'release_root')):
+                raise ValueError('多库发布根使用工作区配置，不允许跳过校验或隐式强制')
+            selected = payload.get('libraries')
+            if not isinstance(selected, list) or not 1 <= len(selected) <= 500:
+                raise ValueError('请勾选 1 到 500 个已登记库')
+            libraries = list(dict.fromkeys(resolve_catalog_library_id(web_state, str(item)) for item in selected))
+            publish_name = validate_release_name(payload.get('publish_name'))
+            latest_name = validate_release_name(payload.get('latest_name') or 'latest')
+            if publish_name == latest_name:
+                raise ValueError('阶段目录与最新指针名不能相同')
+            multi_release_request = {
+                'catalog_html': str(web_state['catalog_html']), 'libraries': libraries,
+                'release_root': str(web_state['paths']['release_root']),
+                'publish_name': publish_name, 'latest_name': latest_name,
+                'out_dir': str(root / 'delivery'), 'apply': action == 'release-set-apply',
+            }
+            args = [sys.executable, '-m', 'lib_guard.release.set_publish', '--request', str(root / 'delivery_request.json')]
+        elif action == "catalog-refresh":
             if library is None:
                 raise ValueError("目录刷新需要库")
             args.extend(["cat", library])
@@ -722,9 +1091,9 @@ def create_app(
         elif action == "library-discover":
             args.extend(["library", "discover"])
         elif action == "library-accept":
-            args.extend(["library", "accept"])
+            args.extend(["library", "accept", "--apply", "--refresh-catalog"])
         elif action == "library-apply":
-            args.extend(["library", "apply"])
+            args.extend(["library", "apply", "--refresh-catalog"])
         elif action == "library-add":
             args.extend(["library", "add"])
         elif action == "file-diff":
@@ -784,11 +1153,12 @@ def create_app(
                     raise ValueError(f"发现起点不在允许范围内。当前允许范围：{allowed}")
                 args.extend(["--root", str(discover_root)])
             discovery = web_state.get("discovery_strategy") if isinstance(web_state.get("discovery_strategy"), Mapping) else {}
+            discovery_defaults = default_discovery_strategy()
             options = (
-                ("max_depth", "--max-depth", "发现深度", 1, 8, int(str(discovery.get("max_depth") or 4))),
-                ("min_versions", "--min-versions", "最少版本数", 1, 100, int(str(discovery.get("min_versions") or 1))),
-                ("max_dirs", "--max-dirs", "最大目录数", 1, 100000, int(str(discovery.get("max_dirs") or 5000))),
-                ("max_candidates", "--max-candidates", "最大候选数", 1, 10000, int(str(discovery.get("max_candidates") or 200))),
+                ("max_depth", "--max-depth", "发现深度", 1, 8, int(str(discovery.get("max_depth") or discovery_defaults["max_depth"]))),
+                ("min_versions", "--min-versions", "最少版本数", 1, 100, int(str(discovery.get("min_versions") or discovery_defaults["min_versions"]))),
+                ("max_dirs", "--max-dirs", "最大目录数", 1, 100000, int(str(discovery.get("max_dirs") or discovery_defaults["max_dirs"]))),
+                ("max_candidates", "--max-candidates", "最大候选数", 1, 10000, int(str(discovery.get("max_candidates") or discovery_defaults["max_candidates"]))),
             )
             for key, flag, label, minimum, maximum, default in options:
                 args.extend([flag, str(_bounded_int(payload.get(key), label=label, minimum=minimum, maximum=maximum, default=default))])
@@ -866,26 +1236,43 @@ def create_app(
             if _payload_bool(payload, "refresh_catalog"):
                 args.append("--refresh-catalog")
         elif action == "file-diff":
-            base = _safe_component(_bounded_text(payload.get("base"), label="对比基准", limit=180))
-            relpath = _safe_relative_path(payload.get("relpath"), label="文件相对路径")
+            explicit_old = _bounded_text(payload.get("old_file"), label="旧文件", limit=1000)
+            explicit_new = _bounded_text(payload.get("new_file"), label="新文件", limit=1000)
             file_type = _bounded_text(payload.get("type"), label="文件类型", limit=80).lower()
-            if not base or not file_type:
-                raise ValueError("文件对比需要填写基准版本和文件类型")
+            if not file_type:
+                raise ValueError("文件对比需要填写文件类型")
             if not file_diff_allowed(file_type):
                 raise ValueError(f"不支持的文件类型：{file_type}。请使用已登记的视图类型。")
             force_large = _payload_bool(payload, "force_large")
-            old_relpath = _bounded_text(payload.get("old_relpath"), label="旧文件相对路径", limit=500)
-            if old_relpath:
-                old_relpath = _safe_relative_path(old_relpath, label="旧文件相对路径")
-                if base == version:
-                    raise ValueError("旧文件基准版本不能与当前版本相同")
-                old_file = resolve_catalog_file(web_state, library, base, old_relpath, label="旧文件")
-                new_file = resolve_catalog_file(web_state, library, version, relpath, label="新文件")
+            if explicit_old or explicit_new:
+                if not explicit_old or not explicit_new:
+                    raise ValueError("任意两文件对比需要同时填写旧文件和新文件")
+                if payload.get("base") or payload.get("relpath") or payload.get("old_relpath"):
+                    raise ValueError("任意两文件对比不能混用版本相对路径参数")
+                roots = _browse_roots(web_state)
+                old_file = _safe_existing_file_path(explicit_old, roots, label="旧文件")
+                new_file = _safe_existing_file_path(explicit_new, roots, label="新文件")
                 if file_diff_requires_force_large(file_type) and not force_large:
                     raise ValueError(f"{file_type} 属于轻量证据类型；深度文件对比需要显式勾选 force-large。")
                 args.extend(["fd", "--old", str(old_file), "--new", str(new_file), "--type", file_type])
             else:
-                args.extend(["fd", library, version, relpath, "--base", base, "--type", file_type])
+                base = _bounded_text(payload.get("base"), label="对比基准", limit=180)
+                relpath = _safe_relative_path(payload.get("relpath"), label="文件相对路径")
+                if not base:
+                    raise ValueError("文件对比需要填写基准版本")
+                base = _safe_component(base)
+                old_relpath = _bounded_text(payload.get("old_relpath"), label="旧文件相对路径", limit=500)
+                if old_relpath:
+                    old_relpath = _safe_relative_path(old_relpath, label="旧文件相对路径")
+                    if base == version:
+                        raise ValueError("旧文件基准版本不能与当前版本相同")
+                    old_file = resolve_catalog_file(web_state, library, base, old_relpath, label="旧文件")
+                    new_file = resolve_catalog_file(web_state, library, version, relpath, label="新文件")
+                    if file_diff_requires_force_large(file_type) and not force_large:
+                        raise ValueError(f"{file_type} 属于轻量证据类型；深度文件对比需要显式勾选 force-large。")
+                    args.extend(["fd", "--old", str(old_file), "--new", str(new_file), "--type", file_type])
+                else:
+                    args.extend(["fd", library, version, relpath, "--base", base, "--type", file_type])
             if force_large:
                 args.append("--force-large")
         elif action == "review-gate":
@@ -940,7 +1327,7 @@ def create_app(
             if base:
                 args.extend(["--base", _safe_component(base)])
             mode = _bounded_text(payload.get("mode") or "adjacent", label="对比模式")
-            if mode not in _COMPARE_MODES:
+            if mode not in WEB_COMPARE_MODES:
                 raise ValueError("对比模式只能是 adjacent 或 cumulative")
             args.extend(["--mode", mode])
             scan_if_missing = _payload_bool(payload, "scan_if_missing")
@@ -955,7 +1342,10 @@ def create_app(
             _append_scan_settings(args, payload)
         elif action == "rel":
             args.append("--check-only")
+        elif action in {"release-plan", "release-overwrite-preview", "release-force", "release-apply"}:
+            args.extend(build_release_web_args(action, payload))
         elif action == "next":
+            _append_effective_selection(args, payload)
             actions = [name for name in ("apply", "accept", "fix") if _payload_bool(payload, name)]
             plan_only = _payload_bool(payload, "plan_only")
             if len(actions) > 1:
@@ -978,6 +1368,7 @@ def create_app(
                 if note:
                     args.extend(["--note", note])
         elif action == "intake":
+            _append_effective_selection(args, payload)
             if _payload_bool(payload, "plan_only", default=True):
                 args.append("--plan-only")
             if _payload_bool(payload, "rebuild"):
@@ -988,6 +1379,8 @@ def create_app(
         elif action == "window":
             args.append("--json")
         elif action == "accept-window":
+            if payload.get("expected_effective_id"):
+                args.extend(["--expected-effective-id", _safe_component(_bounded_text(payload["expected_effective_id"], label="已核对候选", limit=240))])
             accepted_by = _bounded_text(payload.get("accepted_by"), label="接受人", limit=80)
             if not accepted_by:
                 raise ValueError("设为当前可用版本必须填写确认人")
@@ -997,7 +1390,7 @@ def create_app(
                 args.extend(["--note", note])
         elif action == "mark":
             package_type = _bounded_text(payload.get("type"), label="版本类型")
-            if package_type not in _MARK_TYPES:
+            if package_type not in WEB_MARK_TYPES:
                 raise ValueError("版本类型只能是 FULL、FIX、HOTFIX 或 UNKNOWN")
             args.extend(["--type", package_type])
             note = _bounded_text(payload.get("note"), label="修正说明")
@@ -1005,9 +1398,9 @@ def create_app(
                 args.extend(["--note", note])
         elif action == "override":
             values = (
-                ("stage", _STAGES, "阶段"),
-                ("package_type", _PACKAGE_TYPES, "包类型"),
-                ("compare_default", _COMPARE_DEFAULTS, "默认对比"),
+                ("stage", WEB_STAGES, "阶段"),
+                ("package_type", WEB_PACKAGE_TYPES, "包类型"),
+                ("compare_default", WEB_COMPARE_DEFAULTS, "默认对比"),
             )
             for key, allowed, label in values:
                 value = _bounded_text(payload.get(key), label=label)
@@ -1045,12 +1438,22 @@ def create_app(
         }
         if candidate_selection is not None:
             request_payload["candidate_selection"] = candidate_selection
+        formal_release_target = payload.get("formal_release_target")
+        if isinstance(formal_release_target, Mapping):
+            request_payload["formal_release_target"] = {
+                "library_id": str(formal_release_target.get("library_id") or ""),
+                "release_id": str(formal_release_target.get("release_id") or ""),
+                "version_id": str(formal_release_target.get("version_id") or ""),
+                "source": str(formal_release_target.get("source") or ""),
+            }
         with jobs_lock:
             if not app.config.get("TESTING"):
                 if any(process.poll() is None and job_targets.get(existing) == library for existing, process in jobs.items()):
                     raise RuntimeError(f"库正在执行其他动作，请等待当前任务结束：{library}")
             created_epoch = time.time()
             root.mkdir(parents=True, exist_ok=False)
+            if multi_release_request is not None:
+                _write_json(root / 'delivery_request.json', multi_release_request)
             if selected_candidate_input is not None:
                 write_library_rows(
                     selected_candidate_input,
@@ -1082,23 +1485,74 @@ def create_app(
 
     @app.get("/api/health")
     def health() -> Any:
-        return jsonify({"status": "PASS", "service": "lib_guard_web"})
+        return jsonify({"status": "PASS", "service": "lib_guard_web", "pid": os.getpid()})
 
     @app.get("/api/workspace")
     def workspace() -> Any:
         try:
             web_state = state()
         except (FileNotFoundError, OSError) as exc:
-            return jsonify({"status": "ERROR", "error": str(exc)}), 503
+            return jsonify(_workspace_setup_payload(app.config.get("LIB_GUARD_CWD"), exc))
+        catalog_index = Path(web_state["catalog_html"]) / "index.html"
+        report_available = catalog_index.is_file()
         return jsonify({
             "status": "PASS",
+            "setup_required": False,
             "paths": web_state["paths"],
+            "catalog_report": {
+                "available": report_available,
+                "path": str(catalog_index),
+                "url": "/artifacts/index.html" if report_available else None,
+            },
             "scan_strategy": web_state["scan_strategy"],
             "discovery_strategy": web_state["discovery_strategy"],
             "runtime_state": web_state["runtime_state"],
+            "release_settings": {
+                "publish_name": web_state["config"].get("release_publish_name", ""),
+                "latest_name": web_state["config"].get("release_latest_name", "latest"),
+            },
             "catalog_state": web_state["catalog_state"],
             "catalog_source": "existing_catalog" if web_state["catalog_state"] == "READY" else "not_initialized",
             "write_policy": "web_actions_are_allowlisted",
+            "web_actions": web_action_catalog(),
+        })
+
+    @app.post("/api/workspace/init")
+    def workspace_init() -> Any:
+        try:
+            payload = request_payload()
+            workspace_text = _bounded_text(payload.get("workspace"), label="工作区目录", limit=1000)
+            raw_root_text = _bounded_text(payload.get("raw_root"), label="原始库根", limit=1000)
+            library_type = _bounded_text(payload.get("library_type") or "ip", label="库类型", limit=40)
+            if not workspace_text:
+                raise ValueError("工作区目录不能为空")
+            if not raw_root_text:
+                raise ValueError("原始库根不能为空")
+            raw_root = Path(raw_root_text).expanduser().resolve()
+            if not raw_root.exists() or not raw_root.is_dir():
+                raise ValueError(f"原始库根不存在或不是目录：{raw_root}")
+            if not library_type.replace("_", "").replace("-", "").isalnum():
+                raise ValueError("库类型只能包含字母、数字、下划线或短横线")
+            config_file = Path(workspace_text).expanduser().resolve() / "lib_guard.yml"
+            reconnect = config_file.is_file()
+            if reconnect:
+                load_config(app.config["LIB_GUARD_CWD"], config_file)
+            else:
+                config_file = write_default_config(workspace_text, raw_root=raw_root, library_type=library_type)
+            app.config["LIB_GUARD_CONFIG"] = str(config_file)
+            web_state = state()
+            _write_json(workspace_pointer, {"config": str(config_file.resolve())})
+        except (ValueError, OSError) as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 400
+        return jsonify({
+            "status": "PASS",
+            "config": str(config_file),
+            "paths": web_state["paths"],
+            "scan_strategy": web_state["scan_strategy"],
+            "discovery_strategy": web_state["discovery_strategy"],
+            "catalog_state": web_state["catalog_state"],
+            "web_actions": web_action_catalog(),
+            "message": "已连接原工作区，配置和已有记录保持不变，无需重新登记或扫描。" if reconnect else "工作区已初始化。下一步可以登记库根，或发现候选库。",
         })
 
     @app.post("/api/workspace/config")
@@ -1108,6 +1562,9 @@ def create_app(
             config_file = find_config(app.config.get("LIB_GUARD_CWD") or Path.cwd(), app.config.get("LIB_GUARD_CONFIG"))
             allowed_keys = (
                 "raw_root",
+                "release_root",
+                "release_publish_name",
+                "release_latest_name",
                 "library_type",
                 "parse_jobs",
                 "hash_policy",
@@ -1136,6 +1593,10 @@ def create_app(
             "paths": web_state["paths"],
             "scan_strategy": web_state["scan_strategy"],
             "discovery_strategy": web_state["discovery_strategy"],
+            "release_settings": {
+                "publish_name": web_state["config"].get("release_publish_name", ""),
+                "latest_name": web_state["config"].get("release_latest_name", "latest"),
+            },
         })
 
     @app.get("/api/path-children")
@@ -1168,6 +1629,103 @@ def create_app(
             return jsonify(list_library_candidate_rows(web_state))
         except (FileNotFoundError, OSError) as exc:
             return jsonify({"status": "ERROR", "error": f"工作区暂不可用：{exc}"}), 503
+
+    @app.get('/api/formal-directory')
+    def formal_directory() -> Any:
+        try:
+            path = Path(state()['workspace']) / 'config/formal_directory_inventory.json'
+            snapshot = json.loads(path.read_text()) if path.is_file() else {'status':'MISSING','libraries':[],'files':[]}
+            rows = snapshot.get('files', [])
+            library, version, view, check = (request.args.get(key, '') for key in ('library','version','type','check'))
+            versions = sorted({row['version'] for row in rows if row['version'] and (not library or row['library']==library)})
+            query = request.args.get('query','').lower()
+            rows = [row for row in rows if (not library or (row['library'] == library if library != '__unknown__' else not row['library']))
+                    and (not view or row['file_type']==view)
+                    and (not version or row['version']==version)
+                    and (check != 'unknown' or not row['library']) and (check != 'broken' or row['link_status']=='链接失效')
+                    and (not query or query in (row['path']+' '+row['source_path']).lower())]
+            offset = _bounded_int(request.args.get('offset'), label='页偏移', minimum=0, maximum=1_000_000, default=0)
+            return jsonify({**snapshot,'files':rows[offset:offset+100],'matched_count':len(rows),'offset':offset,'versions':versions})
+        except (OSError, ValueError) as exc:
+            return jsonify({'status':'ERROR','error':str(exc)}), 400
+
+    @app.post('/api/formal-directory/refresh')
+    def formal_directory_refresh() -> Any:
+        try:
+            from lib_guard.release.inventory import inventory_directory
+            from lib_guard.atomic import atomic_write_text
+            web_state = state()
+            root = _bounded_text(request_payload().get('root'), label='正式目录', limit=1000)
+            if not root or not Path(root).is_absolute():
+                raise ValueError('请选择正式目录的绝对路径；与临时发布输出目录独立。')
+            snapshot = inventory_directory(root, web_state['catalog'])
+            output = Path(web_state['workspace']) / 'config/formal_directory_inventory.json'
+            atomic_write_text(output, json.dumps(snapshot, ensure_ascii=False, indent=2), lock=True)
+            return jsonify({key:value for key,value in snapshot.items() if key!='files'})
+        except (OSError, ValueError) as exc:
+            return jsonify({'status':'ERROR','error':str(exc)}), 400
+
+    @app.get("/api/release-libraries")
+    def release_libraries() -> Any:
+        """List a persisted formal-release projection, never RAW candidates."""
+
+        try:
+            return jsonify(list_release_library_rows(state()))
+        except (FileNotFoundError, OSError) as exc:
+            return jsonify({"status": "ERROR", "error": f"工作区暂不可用：{exc}"}), 503
+
+    @app.get('/api/release-stages/<name>/files')
+    def release_stage_files(name: str) -> Any:
+        try:
+            return jsonify(release_stage_detail(state(), name,
+                query=request.args.get('query', ''), library=request.args.get('library', ''),
+                view=request.args.get('view', ''), link_status=request.args.get('link_status', ''),
+                offset=int(request.args.get('offset', 0)), limit=int(request.args.get('limit', 100))))
+        except ValueError as exc:
+            return jsonify({'status': 'ERROR', 'error': str(exc)}), 400
+        except OSError as exc:
+            return jsonify({'status': 'ERROR', 'error': f'交付清单无法读取：{exc}；请刷新发布目录'}), 503
+
+    @app.post("/api/release-libraries/refresh")
+    def release_libraries_refresh() -> Any:
+        """Refresh the bounded release-manifest index; this is not a release action."""
+
+        try:
+            from lib_guard.release.library_index import build_release_library_index, write_release_library_index
+
+            web_state = state()
+            payload = request_payload()
+            paths = web_state.get("paths") if isinstance(web_state.get("paths"), Mapping) else {}
+            configured_root = Path(str(paths.get("release_root") or "")).expanduser().resolve()
+            requested_root = _bounded_text(payload.get("root"), label="正式发布根目录", limit=1000)
+            release_root = Path(requested_root).expanduser().resolve() if requested_root else configured_root
+            if not configured_root.is_dir():
+                raise FileNotFoundError(f"配置的正式发布根目录不存在：{configured_root}")
+            if not _path_is_within(release_root, [configured_root]):
+                raise ValueError("正式发布根目录必须位于当前配置的 release_root 内")
+            if not release_root.is_dir():
+                raise FileNotFoundError(f"正式发布根目录不存在或不是目录：{release_root}")
+            output = Path(str(paths.get("release_library_index") or "")).expanduser().resolve()
+            workspace_root = Path(str(web_state["workspace"])).expanduser().resolve()
+            if not _path_is_within(output, [workspace_root]):
+                raise ValueError("正式发布库索引必须写入当前工作区")
+            max_depth = _bounded_int(payload.get("max_depth"), label="发布目录深度", minimum=0, maximum=16, default=8)
+            max_manifests = _bounded_int(payload.get("max_manifests"), label="发布清单上限", minimum=1, maximum=10_000, default=2000)
+            index = build_release_library_index(release_root, max_depth=max_depth, max_manifests=max_manifests)
+            write_release_library_index(output, index)
+            return jsonify(
+                {
+                    "status": "PASS",
+                    "message": "正式发布库目录已更新；未扫描 RAW，也未执行发布。",
+                    "index": str(output),
+                    "release_root": str(release_root),
+                    "summary": index["summary"],
+                    "warnings": index["warnings"],
+                    "truncated": index["truncated"],
+                }
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 400
 
     @app.get("/api/libraries/<library>/versions")
     def versions(library: str) -> Any:
@@ -1251,6 +1809,171 @@ def create_app(
             return jsonify(result), 404
         return jsonify(result)
 
+    @app.get("/api/libraries/<library>/versions/<version>/update-note")
+    def version_update_note(library: str, version: str) -> Any:
+        try:
+            web_state = state()
+        except (FileNotFoundError, OSError) as exc:
+            return jsonify({"status": "ERROR", "error": f"工作区暂不可用：{exc}"}), 503
+        if find_catalog_version(web_state, library, version) is None:
+            return jsonify({"status": "NOT_FOUND", "error": f"版本不存在: {library}/{version}"}), 404
+        root = review_notes_root(workdir=web_state["workspace"])
+        return jsonify({"status": "PASS", "library": library, "version": version, "note": load_update_note(root, library, version)})
+
+    @app.route('/api/libraries/<library>/versions/<version>/representative-files', methods=['GET', 'POST'])
+    def representative_files(library: str, version: str) -> Any:
+        from lib_guard.review.representative_files import load_representative_files, save_representative_file
+
+        try:
+            web_state = state()
+            if find_catalog_version(web_state, library, version) is None:
+                return jsonify({'status': 'NOT_FOUND', 'error': '库或版本不存在'}), 404
+            notes_root = review_notes_root(catalog_html_out=web_state['catalog_html'])
+            if request.method == 'GET':
+                return jsonify({'status': 'PASS', 'rows': load_representative_files(notes_root, library, version)})
+            payload = request_payload()
+            job_id = _safe_component(_bounded_text(payload.get('job_id'), label='文件对比任务', limit=100))
+            root = job_root(web_state) / job_id
+            recorded = json.loads((root / 'request.json').read_text(encoding='utf-8'))
+            if recorded.get('action') != 'file-diff' or recorded.get('library') != library or recorded.get('version') != version:
+                raise ValueError('只能加入属于当前库和版本的深度文件对比任务')
+            result_record = json.loads((root / 'result.json').read_text(encoding='utf-8'))
+            if result_record.get('exit_code') != 0 or result_record.get('result') != 'ok':
+                raise ValueError('文件对比尚未成功完成，请先查看任务结果')
+            result = result_record['cli_result']
+            if not result.get('generated_at'):
+                raise ValueError('旧任务未记录产物身份，请重新运行这组文件对比后加入详情页。')
+            out = Path(str(result.get('out_dir') or '')).resolve()
+            if not _path_is_within(out, [Path(web_state['workspace']).resolve()]):
+                raise ValueError('对比产物不在当前工作区内')
+            pair = json.loads((out / 'pairwise_result.json').read_text(encoding='utf-8'))
+            if pair.get('generated_at') != result['generated_at']:
+                raise ValueError('这次任务的对比产物已被后续任务替换，请重新对比后加入详情页。')
+            target = find_catalog_version(web_state, library, version) or {}
+            target_root = target.get('raw_path')
+            old_roots = [Path(row['raw_path']).resolve() for lib in web_state['catalog'].get('libraries', [])
+                         if target in lib.get('versions', [])
+                         for row in lib.get('versions', []) if row.get('raw_path')]
+            if not target_root or not _path_is_within(Path(str(pair.get('new_file') or '')).resolve(), [Path(target_root).resolve()]):
+                raise ValueError('新侧文件不属于当前版本；任意文件对比仍可查看，但不能加入这个版本详情。')
+            if not _path_is_within(Path(str(pair.get('old_file') or '')).resolve(), old_roots):
+                raise ValueError('旧侧文件不属于当前库，请选择同库基准文件后加入详情。')
+            save_representative_file(
+                notes_root, library, version, out,
+                note=_bounded_text(payload.get('note'), label='核查备注', limit=1000),
+                updated_by=_bounded_text(payload.get('updated_by') or 'web', label='核查人', limit=80),
+                expected_generation=result['generated_at'],
+            )
+            try:
+                from lib_guard.render.version_detail_fast import render_version_detail_only
+
+                rendered = render_version_detail_only(catalog_path=web_state['catalog_path'], out_dir=web_state['catalog_html'], library=library, version=version, export_markdown=True)
+            except Exception as exc:
+                rendered = {'status': 'FAILED', 'error': str(exc)}
+            return jsonify({'status': 'PASS', 'rows': load_representative_files(notes_root, library, version), 'render': rendered})
+        except (ValueError, TypeError, KeyError) as exc:
+            return jsonify({'status': 'ERROR', 'error': str(exc)}), 400
+        except OSError as exc:
+            return jsonify({'status': 'ERROR', 'error': f'记录或产物不可读：{exc}'}), 503
+
+    @app.post("/api/libraries/<library>/versions/<version>/update-note")
+    def save_version_update_note(library: str, version: str) -> Any:
+        try:
+            web_state = state()
+            if find_catalog_version(web_state, library, version) is None:
+                return jsonify({"status": "NOT_FOUND", "error": f"版本不存在: {library}/{version}"}), 404
+            payload = request_payload()
+            _validate_update_note_payload(payload)
+            updated_by = _bounded_text(payload.get("updated_by") or payload.get("author") or "web", label="更新人", limit=80)
+            status = str(payload.get("status") or "").lower()
+            publish = status == "published" or _payload_bool(payload, "publish", default=False)
+            note = save_update_note(
+                review_notes_root(workdir=web_state["workspace"]),
+                library,
+                version,
+                payload,
+                updated_by=updated_by,
+                publish=publish,
+            )
+            render_result: dict[str, Any]
+            try:
+                from lib_guard.render.version_detail_fast import render_version_detail_only
+
+                render_result = render_version_detail_only(
+                    catalog_path=web_state["catalog_path"],
+                    out_dir=web_state["catalog_html"],
+                    library=library,
+                    version=version,
+                )
+            except Exception as exc:  # pragma: no cover - depends on external evidence state
+                render_result = {
+                    "status": "FAILED",
+                    "error": str(exc),
+                    "reason": "备注已保存，但当前详情页刷新失败；请稍后重新读取或手动刷新目录。",
+                }
+        except (FileNotFoundError, OSError) as exc:
+            return jsonify({"status": "ERROR", "error": f"工作区暂不可用：{exc}"}), 503
+        except (ValueError, TypeError) as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 400
+        return jsonify({"status": "PASS", "library": library, "version": version, "note": note, "render": render_result})
+
+    @app.post("/api/release-set/build")
+    def release_set_build() -> Any:
+        try:
+            web_state = state()
+            payload = request_payload()
+            raw_libraries = payload.get("libraries")
+            if raw_libraries is None:
+                raw_libraries = [row.get("library_name") for row in list_library_rows(web_state)]
+            if not isinstance(raw_libraries, list):
+                raise ValueError("多库组合必须提交库名列表")
+            libraries = [_bounded_text(item, label="库名", limit=180) for item in raw_libraries]
+            libraries = [resolve_catalog_library_id(web_state, item) for item in libraries if item]
+            if not 1 <= len(libraries) <= 500:
+                raise ValueError("多库组合的库数量必须在 1 到 500 之间")
+            set_id = _bounded_text(payload.get("set_id"), label="组合名称", limit=120)
+            note = _bounded_text(payload.get("note"), label="组合说明", limit=500)
+            manifest = build_release_set_manifest(web_state["catalog_html"], libraries, set_id=set_id or None, note=note)
+            out_dir = Path(web_state["catalog_html"]) / "release_sets" / _safe_component(str(manifest["set_id"]))
+            manifest_path = write_release_set_manifest(out_dir / "release_set_manifest.json", manifest)
+        except (FileNotFoundError, OSError) as exc:
+            return jsonify({"status": "ERROR", "error": f"工作区暂不可用：{exc}"}), 503
+        except (ValueError, TypeError) as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 400
+        return jsonify({"status": "PASS", "manifest": manifest, "manifest_path": str(manifest_path)})
+
+    @app.post('/api/release-set/plan')
+    @app.post('/api/release-set/apply')
+    def release_set_publish() -> Any:
+        try:
+            action = 'release-set-apply' if request.path.endswith('/apply') else 'release-set-plan'
+            return jsonify(create_job(action, None, None, request_payload(), state())), 202
+        except RuntimeError as exc:
+            return jsonify({'status': 'BLOCKED', 'error': str(exc)}), 409
+        except (OSError, ValueError, TypeError) as exc:
+            return jsonify({'status': 'ERROR', 'error': str(exc)}), 400
+
+    @app.post("/api/release-set/compare")
+    def release_set_compare() -> Any:
+        try:
+            web_state = state()
+            payload = request_payload()
+            roots = [Path(web_state["workspace"]).resolve(), Path(web_state["catalog_html"]).resolve()]
+            old_path = _safe_existing_json_path(payload.get("old_manifest"), roots, label="旧组合清单")
+            new_path = _safe_existing_json_path(payload.get("new_manifest"), roots, label="新组合清单")
+            old = json.loads(old_path.read_text(encoding="utf-8"))
+            new = json.loads(new_path.read_text(encoding="utf-8"))
+            if not isinstance(old, Mapping) or not isinstance(new, Mapping):
+                raise ValueError("组合清单必须是 JSON 对象")
+            compare = compare_release_sets(old, new)
+            out_dir = Path(web_state["catalog_html"]) / "release_sets" / "compare" / _safe_component(str(compare["compare_id"]))
+            compare_path = _write_json(out_dir / "release_set_compare.json", compare) or out_dir / "release_set_compare.json"
+        except (FileNotFoundError, OSError) as exc:
+            return jsonify({"status": "ERROR", "error": f"组合清单无法读取：{exc}"}), 404
+        except (ValueError, TypeError) as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 400
+        return jsonify({"status": "PASS", "compare": compare, "compare_path": str(compare_path)})
+
     @app.get("/api/runs/<job_id>")
     def run_status(job_id: str) -> Any:
         try:
@@ -1274,6 +1997,31 @@ def create_app(
             return jsonify({"status": "NOT_FOUND", "error": "运行日志尚未生成"}), 404
         return send_from_directory(root, "stdout.log", mimetype="text/plain")
 
+    @app.get("/api/runs/<job_id>/artifact/<artifact_id>")
+    def run_artifact(job_id: str, artifact_id: str) -> Any:
+        try:
+            root = job_root_without_catalog() / _safe_component(job_id)
+            artifact_key = _safe_component(artifact_id)
+            web_state = state()
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            return jsonify({"status": "ERROR", "error": f"运行产物暂不可用：{exc}"}), 503
+        artifacts = _job_artifact_map(root)
+        artifact_info = artifacts.get(artifact_key)
+        if not artifact_info:
+            result = _load_cli_result(root) or {}
+            out_dir = result.get("out_dir")
+            if out_dir:
+                inline_candidate = (Path(str(out_dir)).expanduser() / artifact_key).resolve()
+                if inline_candidate.is_file():
+                    artifact_info = {"path": str(inline_candidate)}
+        if not artifact_info:
+            return jsonify({"status": "NOT_FOUND", "error": "运行产物不存在或尚未生成"}), 404
+        candidate = Path(artifact_info["path"]).resolve()
+        allowed_roots = _browse_roots(web_state)
+        if not _path_is_within(candidate, allowed_roots):
+            return jsonify({"status": "ERROR", "error": "运行产物不在当前工作区允许范围内"}), 400
+        return send_from_directory(candidate.parent, candidate.name)
+
     def action_route(action: str, library: str, version: str) -> Any:
         try:
             web_state = state()
@@ -1287,17 +2035,20 @@ def create_app(
                 payload["base"] = validate_compare_request(web_state, library, version, payload, version_row)
             if action == "file-diff":
                 payload = dict(payload)
-                base = _bounded_text(payload.get("base"), label="对比基准", limit=180)
-                versions = list_version_rows(web_state, library)
-                version_ids = {str(row.get("version_id")) for row in versions}
-                if not base:
-                    raise RuntimeError("文件对比缺少基准版本")
-                if base not in version_ids:
-                    raise RuntimeError(f"文件对比基准不属于当前库：{base}")
-                if base == version:
-                    raise RuntimeError("文件对比基准不能与当前版本相同")
-                payload["base"] = base
-            if action == "rel" and not (readiness.get("release-check") or {}).get("enabled"):
+                explicit_old = _bounded_text(payload.get("old_file"), label="旧文件", limit=1000)
+                explicit_new = _bounded_text(payload.get("new_file"), label="新文件", limit=1000)
+                if not (explicit_old or explicit_new):
+                    base = _bounded_text(payload.get("base"), label="对比基准", limit=180)
+                    versions = list_version_rows(web_state, library)
+                    version_ids = {str(row.get("version_id")) for row in versions}
+                    if not base:
+                        raise RuntimeError("文件对比缺少基准版本")
+                    if base not in version_ids:
+                        raise RuntimeError(f"文件对比基准不属于当前库：{base}")
+                    if base == version:
+                        raise RuntimeError("文件对比基准不能与当前版本相同")
+                    payload["base"] = base
+            if action in {"rel", "release-plan", "release-overwrite-preview", "release-force", "release-apply"} and not (readiness.get("release-check") or {}).get("enabled"):
                 return jsonify({"status": "BLOCKED", "error": "请先完成扫描，再进行发布检查。"}), 409
             return jsonify(create_job(action, library, version, payload, web_state)), 202
         except RuntimeError as exc:
@@ -1388,6 +2139,77 @@ def create_app(
     def release_check(library: str, version: str) -> Any:
         return action_route("rel", library, version)
 
+    @app.post("/api/libraries/<library>/versions/<version>/release-plan")
+    def release_plan(library: str, version: str) -> Any:
+        return action_route("release-plan", library, version)
+
+    @app.post("/api/libraries/<library>/versions/<version>/release-apply")
+    def release_apply(library: str, version: str) -> Any:
+        return action_route("release-apply", library, version)
+
+    def formal_release_action_route(action: str, formal_library: str, version: str) -> Any:
+        """Map one indexed formal release target to a tightly scoped release action."""
+
+        try:
+            web_state = state()
+            payload = dict(request_payload())
+            if action == "release-overwrite-preview":
+                forbidden = [key for key in ("apply", "force", "force_reason", "force_by", "acknowledged", "no_verify") if key in payload]
+                if forbidden:
+                    raise ValueError(f"正式库覆盖预演不允许提交：{'、'.join(forbidden)}")
+            elif action == "release-force":
+                forbidden = [key for key in ("apply", "force", "overwrite", "no_verify") if key in payload]
+                if forbidden:
+                    raise ValueError(f"受控强制发布不允许提交：{'、'.join(forbidden)}；这些参数由服务端固定控制")
+            else:  # pragma: no cover - callers below are fixed routes
+                raise ValueError(f"不支持的正式发布动作: {action}")
+            snapshot = list_release_library_rows(web_state)
+            if str(snapshot.get("status") or "").upper() != "READY":
+                raise RuntimeError("尚未生成正式发布库索引；请先刷新正式发布库目录")
+            formal_row = next(
+                (
+                    row for row in snapshot.get("libraries", [])
+                    if isinstance(row, Mapping) and str(row.get("library_id") or "") == formal_library
+                ),
+                None,
+            )
+            if formal_row is None:
+                return jsonify({"status": "NOT_FOUND", "error": f"正式发布库不存在: {formal_library}"}), 404
+            library = str(formal_row.get("raw_catalog_match") or "")
+            if not library:
+                return jsonify({"status": "BLOCKED", "error": "正式发布库尚未精确关联 Catalog 库，不能执行覆盖操作。"}), 409
+            version_row = find_version(web_state, library, version)
+            if version_row is None:
+                return jsonify({"status": "NOT_FOUND", "error": f"候选版本不存在: {library}/{version}"}), 404
+            readiness = version_row.get("action_readiness") or {}
+            if not (readiness.get("release-check") or {}).get("enabled"):
+                return jsonify({"status": "BLOCKED", "error": "请先完成扫描，再进行正式库覆盖操作。"}), 409
+            payload["formal_release_target"] = {
+                "library_id": formal_library,
+                "release_id": str(formal_row.get("current_release") or ""),
+                "version_id": str(formal_row.get("current_version") or ""),
+                "source": str(formal_row.get("current_source") or formal_row.get("source") or ""),
+            }
+            return jsonify(create_job(action, library, version, payload, web_state)), 202
+        except (FileNotFoundError, OSError) as exc:
+            return jsonify({"status": "ERROR", "error": f"工作区暂不可用：{exc}"}), 503
+        except RuntimeError as exc:
+            return jsonify({"status": "BLOCKED", "error": str(exc)}), 409
+        except (ValueError, TypeError) as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 400
+
+    @app.post("/api/release-libraries/<path:formal_library>/versions/<version>/preview-overwrite")
+    def formal_release_overwrite_preview(formal_library: str, version: str) -> Any:
+        """Prepare an overwrite preview without creating a formal delivery."""
+
+        return formal_release_action_route("release-overwrite-preview", formal_library, version)
+
+    @app.post("/api/release-libraries/<path:formal_library>/versions/<version>/force-overwrite")
+    def formal_release_force_overwrite(formal_library: str, version: str) -> Any:
+        """Execute a confirmed formal overwrite through the normal release checker."""
+
+        return formal_release_action_route("release-force", formal_library, version)
+
     @app.post("/api/libraries/<library>/next")
     def next_step(library: str) -> Any:
         return library_action_route("next", library)
@@ -1449,6 +2271,58 @@ def create_app(
     return app
 
 
+def start_background_server(config: str | Path | None, host: str, port: int) -> dict[str, Any]:
+    import socket
+    from urllib.request import urlopen
+    from lib_guard.atomic import atomic_write_json
+
+    if host not in {'127.0.0.1','localhost'}:
+        raise ValueError('后台模式只支持本机地址 127.0.0.1 或 localhost。')
+    if not 1 <= port <= 65535:
+        raise ValueError('端口必须在 1 到 65535 之间。')
+    config_path=Path(config).expanduser().resolve() if config else None
+    if config_path and not config_path.is_file():
+        raise ValueError(f'配置不存在：{config_path}；请指定已有 lib_guard.yml。')
+    try:
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            probe.bind((host,port))
+    except OSError as exc:
+        raise ValueError(f'端口 {port} 无法监听，可能已占用或权限不足：{exc}；不会自动换端口。') from exc
+    directory=config_path.parent if config_path else Path.cwd()/'work'
+    directory.mkdir(parents=True,exist_ok=True)
+    log=directory/f'web_server_{port}.log'
+    state_file=directory/f'web_server_{port}.json'
+    command=[sys.executable,'-m','lib_guard.web.app','--host',host,'--port',str(port)]
+    if config_path:
+        command.extend(['--config',str(config_path)])
+    with log.open('a',encoding='utf-8') as stream:
+        process=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=stream,stderr=subprocess.STDOUT,
+                                 start_new_session=True,env={**os.environ,'PYTHONUNBUFFERED':'1'})
+    url=f'http://{host}:{port}/'
+    deadline=time.monotonic()+10
+    while time.monotonic()<deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f'工作台启动失败，返回码 {process.returncode}；请查看日志：{log}')
+        try:
+            with urlopen(url+'api/health',timeout=0.5) as response:
+                health=json.load(response)
+            if health.get('status')=='PASS' and health.get('service')=='lib_guard_web' and health.get('pid')==process.pid:
+                result={'status':'READY','url':url,'pid':process.pid,'config':str(config_path or ''),'log':str(log),'state':str(state_file)}
+                atomic_write_json(state_file,result)
+                return result
+        except (OSError,ValueError):
+            pass
+        time.sleep(0.1)
+    process.terminate()
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    raise RuntimeError(f'工作台启动超过 10 秒仍未就绪，已停止本次子进程；日志：{log}')
+
+
 def main() -> int:
     import argparse
 
@@ -1456,7 +2330,19 @@ def main() -> int:
     parser.add_argument("--config", help="lib_guard.yml 路径")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument('--background',action='store_true',help='后台启动并验证服务就绪，关闭启动终端不会结束服务')
     args = parser.parse_args()
+    if args.config and not Path(args.config).expanduser().is_file():
+        parser.error(f'配置不存在：{args.config}；请指定已有 lib_guard.yml。')
+    if args.background:
+        try:
+            result=start_background_server(args.config,args.host,args.port)
+        except (OSError,ValueError,RuntimeError) as exc:
+            print(f'启动失败：{exc}',file=sys.stderr)
+            return 1
+        print('工作台已就绪（后台运行）。请使用包含端口的完整地址：')
+        print(json.dumps(result,ensure_ascii=False,indent=2))
+        return 0
     app = create_app(config_path=args.config)
     app.run(host=args.host, port=args.port, debug=False)
     return 0

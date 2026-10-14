@@ -371,7 +371,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             self.assertEqual(dry["status"], "DRY_RUN")
             self.assertFalse((release_root / "current").exists())
             self.assertFalse((release_root / "ucie").exists())
-            self.assertTrue(any(item["relative_path"] == "RTL/top.v" for item in dry["planned_files"]))
+            self.assertTrue(any(item["relative_path"] == "VERILOG/top.v" for item in dry["planned_files"]))
             self.assertTrue((run_dir / "release_link_result.json").exists())
             self.assertTrue((run_dir / "release_result.json").exists())
             dry_result = json.loads((run_dir / "release_result.json").read_text(encoding="utf-8"))
@@ -382,9 +382,11 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             self.assertEqual(applied["status"], "APPLIED")
             applied_result = json.loads((run_dir / "release_result.json").read_text(encoding="utf-8"))
             self.assertEqual(applied_result["status"], "APPLIED")
+            self.assertEqual(applied_result["verify_status"], "PASS")
             immutable_release = release_root / "releases" / "PD_LIB_CURRENT_20260618"
-            self.assertTrue((immutable_release / "RTL" / "top.v").exists())
-            self.assertTrue((immutable_release / "DOC" / "README.md").exists())
+            self.assertTrue((immutable_release / "VERILOG" / "top.v").exists())
+            self.assertFalse((immutable_release / "DOC" / "README.md").exists())
+            self.assertEqual(applied["summary"]["excluded_files"], 1)
             self.assertTrue((immutable_release / "LEF" / "block.lef").exists())
             self.assertTrue((release_root / "current").is_symlink())
             self.assertEqual((release_root / "current").resolve(), immutable_release.resolve())
@@ -395,14 +397,14 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             verified = verify_release_manifest(manifest_path, render=True)
             self.assertEqual(verified["status"], "PASS")
             self.assertEqual(verified["summary"]["expected_libraries"], 2)
-            self.assertEqual(verified["summary"]["expected_files"], 3)
-            self.assertEqual(verified["summary"]["linked_files"], 3)
+            self.assertEqual(verified["summary"]["expected_files"], 2)
+            self.assertEqual(verified["summary"]["linked_files"], 2)
             self.assertEqual(verified["summary"]["missing_files"], 0)
             self.assertEqual(verified["summary"]["extra_files"], 0)
             self.assertEqual(verified["summary"]["target_mismatch"], 0)
             ucie_row = next(item for item in verified["libraries"] if item["library_name"] == "ucie")
             self.assertEqual(ucie_row["file_type_counts"]["verilog"], 1)
-            self.assertEqual(ucie_row["file_type_counts"]["doc"], 1)
+            self.assertNotIn("doc", ucie_row["file_type_counts"])
             self.assertTrue((run_dir / "release_postcheck.json").exists())
             self.assertTrue((run_dir / "index.html").exists())
             html = (run_dir / "index.html").read_text(encoding="utf-8")
@@ -425,8 +427,8 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             (ucie / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
             (ddr / "block.lef").write_text("VERSION 5.8 ;\nMACRO D\nEND D\n", encoding="utf-8")
             self._write_manifest(manifest_path, release_root, ucie, ddr)
-            (release_root / "RTL").mkdir(parents=True)
-            (release_root / "RTL" / "top.v").write_text("stale file\n", encoding="utf-8")
+            (release_root / "VERILOG").mkdir(parents=True)
+            (release_root / "VERILOG" / "top.v").write_text("stale file\n", encoding="utf-8")
             (release_root / "LEF").mkdir(parents=True)
             (release_root / "LEF" / "extra.lef").write_text("extra\n", encoding="utf-8")
             (run_dir / "release_link_result.json").write_text(
@@ -435,8 +437,8 @@ class ReleaseManifestFlowTest(unittest.TestCase):
                         "created_links": [
                             {
                                 "library_name": "ucie",
-                                "relative_path": "RTL/top.v",
-                                "link_path": str(release_root / "RTL" / "top.v"),
+                                "relative_path": "VERILOG/top.v",
+                                "link_path": str(release_root / "VERILOG" / "top.v"),
                                 "target_path": str(base / "wrong_source"),
                                 "status": "COPIED",
                             }
@@ -477,9 +479,9 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             (ucie / "rtl" / "new_top.v").write_text("module new_top; endmodule\n", encoding="utf-8")
             (ddr / "ddr.v").write_text("module ddr; endmodule\n", encoding="utf-8")
             old_release = release_root / "releases" / "old_release"
-            (old_release / "RTL").mkdir(parents=True)
-            (old_release / "RTL" / "new_top.v").write_text("old target\n", encoding="utf-8")
-            (old_release / "RTL" / "old_top.v").write_text("keep me\n", encoding="utf-8")
+            (old_release / "VERILOG").mkdir(parents=True)
+            (old_release / "VERILOG" / "new_top.v").write_text("old target\n", encoding="utf-8")
+            (old_release / "VERILOG" / "old_top.v").write_text("keep me\n", encoding="utf-8")
             release_root.mkdir(parents=True, exist_ok=True)
             (release_root / "current").symlink_to(old_release)
             self._write_manifest(manifest_path, release_root, ucie, ddr)
@@ -490,13 +492,41 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             self.assertEqual(result["status"], "APPLIED")
             self.assertTrue(Path(result["release_lock"]).exists())
             immutable_release = release_root / "releases" / "PD_LIB_CURRENT_20260618"
-            self.assertEqual((immutable_release / "RTL" / "new_top.v").read_text(encoding="utf-8"), "module new_top; endmodule\n")
-            self.assertTrue((immutable_release / "RTL" / "ddr.v").exists())
-            self.assertFalse((immutable_release / "RTL" / "old_top.v").exists())
-            self.assertEqual((old_release / "RTL" / "new_top.v").read_text(encoding="utf-8"), "old target\n")
-            self.assertTrue((old_release / "RTL" / "old_top.v").exists())
+            self.assertEqual((immutable_release / "VERILOG" / "new_top.v").read_text(encoding="utf-8"), "module new_top; endmodule\n")
+            self.assertTrue((immutable_release / "VERILOG" / "ddr.v").exists())
+            self.assertFalse((immutable_release / "VERILOG" / "old_top.v").exists())
+            self.assertEqual((old_release / "VERILOG" / "new_top.v").read_text(encoding="utf-8"), "old target\n")
+            self.assertTrue((old_release / "VERILOG" / "old_top.v").exists())
             self.assertEqual((release_root / "current").resolve(), immutable_release.resolve())
             self.assertEqual(result["summary"]["removed_files"], 0)
+
+    def test_link_preview_compares_active_targets_without_hashing_or_publishing(self) -> None:
+        from lib_guard.release.linker import link_release_from_manifest
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ucie = root / "raw/ucie/v1"
+            ddr = root / "raw/ddr/v1"
+            ucie.mkdir(parents=True)
+            ddr.mkdir(parents=True)
+            (ucie / "top.v").write_text("module top; endmodule\n")
+            (ddr / "ddr.lef").write_text("MACRO DDR\nEND DDR\n")
+            release = root / "release"
+            path = root / "run/release_manifest.json"
+            self._write_manifest(path, release, ucie, ddr)
+            applied = link_release_from_manifest(path, apply=True)
+            current = (release / "current").resolve()
+            target = current / "VERILOG/top.v"
+            target.unlink()
+            target.symlink_to(ddr / "ddr.lef")
+            preview = link_release_from_manifest(path, overwrite=True)
+            rows = {row["relative_path"]: row for row in preview["created_links"]}
+            self.assertEqual(rows["VERILOG/top.v"]["status"], "WOULD_REPLACE")
+            self.assertEqual(rows["LEF/ddr.lef"]["status"], "WOULD_KEEP")
+            self.assertEqual(rows["VERILOG/top.v"]["previous_target"], str(ddr / "ddr.lef"))
+            self.assertEqual(rows["VERILOG/top.v"]["link_path"], str(current / "VERILOG/top.v"))
+            self.assertEqual((release / "current").resolve(), current)
+            self.assertEqual(target.resolve(), ddr / "ddr.lef")
 
     def test_manifest_release_failure_keeps_current_alias_and_immutable_release(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -511,8 +541,8 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             (ucie / "rtl" / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
             (ddr / "ddr.v").write_text("module ddr; endmodule\n", encoding="utf-8")
             old_release = release_root / "releases" / "old_release"
-            (old_release / "RTL").mkdir(parents=True)
-            (old_release / "RTL" / "top.v").write_text("old release\n", encoding="utf-8")
+            (old_release / "VERILOG").mkdir(parents=True)
+            (old_release / "VERILOG" / "top.v").write_text("old release\n", encoding="utf-8")
             release_root.mkdir(parents=True, exist_ok=True)
             (release_root / "current").symlink_to(old_release)
             current_before = (release_root / "current").resolve()
@@ -537,10 +567,10 @@ class ReleaseManifestFlowTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "FAILED")
             self.assertEqual(current_before, (release_root / "current").resolve())
-            self.assertEqual((old_release / "RTL" / "top.v").read_text(encoding="utf-8"), "old release\n")
+            self.assertEqual((old_release / "VERILOG" / "top.v").read_text(encoding="utf-8"), "old release\n")
             self.assertFalse((release_root / "releases" / "broken").exists())
             self.assertFalse((release_root / ".staging" / "broken").exists())
-            self.assertFalse((release_root / "RTL").exists())
+            self.assertFalse((release_root / "VERILOG").exists())
 
     def test_manifest_legacy_view_failure_keeps_previous_alias_and_release(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -550,13 +580,13 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             source.write_text("module new; endmodule\n", encoding="utf-8")
             release_root = base / "release_area"
             old_release = release_root / "releases" / "old_release"
-            (old_release / "RTL").mkdir(parents=True)
-            (old_release / "RTL" / "old.v").write_text("old release\n", encoding="utf-8")
+            (old_release / "VERILOG").mkdir(parents=True)
+            (old_release / "VERILOG" / "old.v").write_text("old release\n", encoding="utf-8")
             release_root.mkdir(parents=True, exist_ok=True)
             alias = release_root / "current"
             alias.symlink_to(old_release)
-            legacy_view = release_root / "RTL"
-            legacy_view.symlink_to(alias / "RTL", target_is_directory=True)
+            legacy_view = release_root / "VERILOG"
+            legacy_view.symlink_to(alias / "VERILOG", target_is_directory=True)
             old_alias_target = alias.resolve()
             old_legacy_target = legacy_view.readlink()
             manifest_path = base / "release_runs" / "new_release" / "release_manifest.json"
@@ -572,7 +602,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
                                 "library_name": "ucie",
                                 "version_id": "v2",
                                 "source_path": str(source),
-                                "target_relpath": "RTL/new.v",
+                                "target_relpath": "VERILOG/new.v",
                                 "file_type": "verilog",
                             }
                         ],
@@ -589,7 +619,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             self.assertEqual(result["status"], "FAILED")
             self.assertEqual(alias.resolve(), old_alias_target)
             self.assertEqual(legacy_view.readlink(), old_legacy_target)
-            self.assertEqual((old_release / "RTL" / "old.v").read_text(encoding="utf-8"), "old release\n")
+            self.assertEqual((old_release / "VERILOG" / "old.v").read_text(encoding="utf-8"), "old release\n")
             self.assertFalse((release_root / "releases" / "new_release").exists())
             self.assertFalse((release_root / ".staging" / "new_release").exists())
 
@@ -619,7 +649,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
                                 "library_name": "ucie",
                                 "version_id": "v2",
                                 "source_path": str(source),
-                                "target_relpath": "RTL/new.v",
+                                "target_relpath": "VERILOG/new.v",
                                 "file_type": "verilog",
                             }
                         ],
@@ -711,7 +741,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
                                 "library_name": "ucie",
                                 "version_id": "v1",
                                 "source_path": str(source),
-                                "target_relpath": "RTL/top.v",
+                                "target_relpath": "VERILOG/top.v",
                                 "file_type": "verilog",
                             }
                         ],
@@ -726,7 +756,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "APPLIED")
             immutable_release = release_root / "releases" / "stale_release"
-            self.assertTrue((immutable_release / "RTL" / "top.v").exists())
+            self.assertTrue((immutable_release / "VERILOG" / "top.v").exists())
             self.assertFalse((immutable_release / "stale.txt").exists())
             self.assertFalse(staging.exists())
 
@@ -753,7 +783,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
                                 "library_name": "ucie",
                                 "version_id": "v1",
                                 "source_path": str(source),
-                                "target_relpath": "RTL/top.v",
+                                "target_relpath": "VERILOG/top.v",
                                 "file_type": "verilog",
                             }
                         ],
@@ -802,8 +832,8 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             (ucie / "rtl" / "new_top.v").write_text("module new_top; endmodule\n", encoding="utf-8")
             (ddr / "ddr.v").write_text("module ddr; endmodule\n", encoding="utf-8")
             old_release = release_root / "releases" / "old_release"
-            (old_release / "RTL").mkdir(parents=True)
-            (old_release / "RTL" / "old_top.v").write_text("remove me\n", encoding="utf-8")
+            (old_release / "VERILOG").mkdir(parents=True)
+            (old_release / "VERILOG" / "old_top.v").write_text("remove me\n", encoding="utf-8")
             release_root.mkdir(parents=True, exist_ok=True)
             (release_root / "current").symlink_to(old_release)
             manifest = self._write_manifest(manifest_path, release_root, ucie, ddr)
@@ -815,10 +845,10 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             result = link_release_from_manifest(manifest_path, apply=True, mode="copy", overwrite=True)
             self.assertEqual(result["status"], "APPLIED")
             immutable_release = release_root / "releases" / "PD_LIB_CURRENT_20260618"
-            self.assertTrue((immutable_release / "RTL" / "new_top.v").exists())
-            self.assertTrue((immutable_release / "RTL" / "ddr.v").exists())
-            self.assertFalse((immutable_release / "RTL" / "old_top.v").exists())
-            self.assertTrue((old_release / "RTL" / "old_top.v").exists())
+            self.assertTrue((immutable_release / "VERILOG" / "new_top.v").exists())
+            self.assertTrue((immutable_release / "VERILOG" / "ddr.v").exists())
+            self.assertFalse((immutable_release / "VERILOG" / "old_top.v").exists())
+            self.assertTrue((old_release / "VERILOG" / "old_top.v").exists())
             self.assertEqual(result["summary"]["removed_files"], 0)
 
     def test_release_relative_path_strips_package_prefix_and_uses_uppercase_view_dir(self) -> None:
@@ -834,12 +864,16 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             from lib_guard.release.bundle import release_relative_path
 
             self.assertEqual(release_relative_path(root, lef).as_posix(), "LEF/tech.lef")
-            self.assertEqual(release_relative_path(root, verilog).as_posix(), "RTL/upstream_ae9a8ed9/yoSys/cells.v")
+            self.assertEqual(release_relative_path(root, verilog).as_posix(), "VERILOG/cells.v")
 
     def test_release_relpath_normalizes_common_view_aliases(self) -> None:
         from lib_guard.release.bundle import normalize_release_relpath
 
         cases = [
+            ("source_package/lef/2kb/memory_2kb.lef", "lef", "LEF/memory_2kb.lef"),
+            ("source_package/4kb/lib/ss/memory_4kb.lib", "liberty", "LIB/memory_4kb.lib"),
+            ("source_package/6kb/layout/memory_6kb.gds", "gds", "GDS/memory_6kb.gds"),
+            ("source_package/8kb/model/memory_8kb.v", "verilog", "VERILOG/memory_8kb.v"),
             ("source_package/lib/slow.lib", "liberty", "LIB/slow.lib"),
             ("source_package/spef/top.spef", "spef", "SPEF/top.spef"),
             ("source_package/db/top.db", "db", "DB/top.db"),
@@ -847,7 +881,7 @@ class ReleaseManifestFlowTest(unittest.TestCase):
             ("source_package/oas/top.oas", "oas", "OAS/top.oas"),
             ("source_package/tech/rules.lydrc", "tech_config", "TECH/rules.lydrc"),
             ("source_package/docs/release_note.md", "doc", "DOC/release_note.md"),
-            ("misc/top.sv", "systemverilog", "RTL/misc/top.sv"),
+            ("misc/top.sv", "systemverilog", "VERILOG/top.sv"),
         ]
         for relpath, file_type, expected in cases:
             with self.subTest(relpath=relpath, file_type=file_type):

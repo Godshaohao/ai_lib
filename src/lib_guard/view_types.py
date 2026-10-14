@@ -87,9 +87,9 @@ USAGE_AREAS = {
 }
 
 RELEASE_VIEW_DIR_ALIASES = {
-    "rtl": "RTL",
-    "verilog": "RTL",
-    "systemverilog": "RTL",
+    "rtl": "VERILOG",
+    "verilog": "VERILOG",
+    "systemverilog": "VERILOG",
     "lef": "LEF",
     "lib": "LIB",
     "liberty": "LIB",
@@ -97,8 +97,12 @@ RELEASE_VIEW_DIR_ALIASES = {
     "gds": "GDS",
     "oas": "OAS",
     "cdl": "CDL",
-    "spice": "CDL",
-    "sp": "CDL",
+    "spice": "SPICE",
+    "sp": "SPICE",
+    "ndm": "NDM",
+    "ndm_wo_lib": "NDM_wo_lib",
+    "dft": "DFT",
+    "pgv": "PGV",
     "sdc": "SDC",
     "upf": "UPF",
     "cpf": "CPF",

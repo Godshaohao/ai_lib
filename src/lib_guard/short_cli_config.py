@@ -44,6 +44,8 @@ _CONFIG_KEYS = frozenset(
         "render_detail",
         "catalog_policy",
         "release_policy",
+        "release_publish_name",
+        "release_latest_name",
         "scan_out",
         "versions",
         *SCAN_STRATEGY_CONFIG_KEYS,
@@ -55,7 +57,10 @@ _CONFIG_KEYS = frozenset(
 EDITABLE_WORKSPACE_CONFIG_KEYS = frozenset(
     {
         "raw_root",
+        "release_root",
         "library_type",
+        "release_publish_name",
+        "release_latest_name",
         "parse_jobs",
         "hash_policy",
         "force_hash_file_types",
@@ -121,6 +126,12 @@ def _validate_config(data: dict[str, str], *, path: Path) -> None:
     unknown = sorted(set(data) - _CONFIG_KEYS)
     if unknown:
         raise ValueError(f"未知配置项 {', '.join(unknown)}: {path}")
+    from lib_guard.release.bundle import validate_release_name
+    for key in ("release_publish_name", "release_latest_name"):
+        if data.get(key):
+            data[key] = validate_release_name(data[key])
+    if data.get("release_publish_name") and data["release_publish_name"] == (data.get("release_latest_name") or "latest"):
+        raise ValueError("正式目录名与最新指针名不能相同")
 
     mode = str(data.get("mode") or DEFAULT_SCAN_MODE).lower()
     if mode in _LEGACY_SCAN_MODES:
@@ -180,6 +191,7 @@ def write_default_config(
     root.mkdir(parents=True, exist_ok=True)
     raw = Path(raw_root).expanduser().resolve() if raw_root is not None else None
     cfg = workspace_defaults(root, raw_root=raw, library_type=library_type)
+    Path(cfg["release_root"]).mkdir(parents=True, exist_ok=True)
     ordered_keys = [
         "config_version",
         "workspace",
@@ -190,6 +202,7 @@ def write_default_config(
         "diff",
         "file_diff",
         "release_root",
+        "release_library_index",
         "versions",
         "actions_dir",
         "library_type",
@@ -324,6 +337,7 @@ def load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[str
         "diff",
         "file_diff",
         "release_root",
+        "release_library_index",
         "versions",
         "actions_dir",
         "config_dir",
@@ -380,6 +394,13 @@ def update_config_file(path: str | Path, updates: Mapping[str, Any]) -> dict[str
     if not raw_root.is_dir():
         raise ValueError(f"原始库根不存在或不是目录: {raw_root}")
     candidate["raw_root"] = str(raw_root.resolve())
+    if "release_root" in normalized_updates:
+        release_root = Path(candidate.get("release_root") or "").expanduser()
+        if not release_root.is_absolute():
+            release_root = (config_path.parent / release_root).resolve()
+        if not release_root.is_dir():
+            raise ValueError(f"正式发布根目录不存在或不是目录: {release_root}")
+        candidate["release_root"] = str(release_root.resolve())
 
     original_lines = config_path.read_text(encoding="utf-8").splitlines()
     seen: set[str] = set()
@@ -399,6 +420,9 @@ def update_config_file(path: str | Path, updates: Mapping[str, Any]) -> dict[str
     append_order = [
         "config_version",
         "raw_root",
+        "release_root",
+        "release_publish_name",
+        "release_latest_name",
         "library_type",
         "parse_jobs",
         "hash_policy",

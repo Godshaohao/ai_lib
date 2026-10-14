@@ -77,6 +77,12 @@ def build_scan_review_markdown(data: Mapping[str, Any]) -> str:
                 ]
             ) + " |"
         )
+    pairing = data.get('lib_db_correspondence') or {}
+    if pairing.get('rows'):
+        lines.extend(['','## Liberty / DB 配套清单','',f"Liberty {pairing['liberty_count']} 个 / DB {pairing['db_count']} 个。",'',pairing['basis'],'',
+                      '| 文件名主体 | 对应情况 | Liberty 绝对路径 | DB 绝对路径 |','| --- | --- | --- | --- |'])
+        for row in pairing['rows']:
+            lines.append('| '+' | '.join(_md_cell(value) for value in [row['name'],row['relation'],'；'.join(row['liberty_files']) or '—','；'.join(row['db_files']) or '—'])+' |')
     lines.extend(["", "## 需要确认", ""])
     if missing:
         lines.append("- 必需视图缺失：" + ", ".join(f"`{_md_cell(item)}`" for item in missing))
@@ -320,8 +326,11 @@ def build_scan_review_evidence(bundle: Any, context: Any) -> dict[str, Any]:
         for row in view_coverage
         if row["required"] == "yes"
     ]
+    from .artifacts import build_lib_db_correspondence
+    pairing = (getattr(bundle, 'integrity', None) or {}).get('lib_db_correspondence') or build_lib_db_correspondence(files, getattr(context,'root_path',''))
     return {
         "scan_review": scan_review,
+        "lib_db_correspondence": pairing,
         "view_coverage": view_coverage,
         "files_by_view": sorted(files_by_view, key=lambda row: (view_sort_key(row["view_type"]), row["file_type"], row["path"])),
         "unknown_files": unknown_files,

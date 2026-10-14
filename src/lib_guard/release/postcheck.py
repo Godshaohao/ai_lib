@@ -63,7 +63,7 @@ def _file_type_counts(path: Path, limit: int = 200000) -> dict[str, int]:
 
 def _is_internal_release_artifact(path: Path) -> bool:
     name = path.name
-    return name == ".lib_guard_release.lock" or (name.startswith(".") and name.endswith(".tmp"))
+    return name in {".lib_guard_release.lock", "release_manifest.json", ".release_manifest.json.lock"} or (name.startswith(".") and name.endswith(".tmp"))
 
 
 def _link_result_by_library(link_result: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -176,6 +176,9 @@ def verify_release_manifest(
 
     for rel_path in sorted(set(actual_files) - set(expected)):
         issues.append(_issue("warning", "extra_file", None, f"release directory contains extra file: {rel_path}"))
+
+    for skipped in manifest.get("skipped_files", []) or []:
+        issues.append({**_issue("warning", "skipped_collision", skipped.get("library_name"), str(skipped.get("error") or "同名发布冲突，文件未交付")), "file": skipped.get("relative_path")})
 
     counts = Counter(issue["category"] for issue in issues)
     severities = Counter(str(issue.get("severity") or "info") for issue in issues)

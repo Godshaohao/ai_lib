@@ -263,6 +263,16 @@ def _unique_logical_index(
     return {logical: paths[0] for logical, paths in logical_to_paths.items() if len(paths) == 1}
 
 
+def _inventory_coverage(meta: Mapping[str, Any] | None, count: int) -> dict[str, Any]:
+    meta = meta or {}
+    fingerprint = meta.get('input_fingerprint') or {}
+    complete = (meta.get('status') in {'PASS', 'PASS_WITH_WARNING'} and fingerprint.get('mode') == 'scan_inventory'
+                and fingerprint.get('truncated') is False and fingerprint.get('entry_count') == count
+                and (meta.get('inventory_walk') or {}).get('complete', True))
+    return {'complete': complete, 'file_count': count,
+            'reason': 'successful_untruncated_inventory' if complete else 'inventory_scope_not_confirmed'}
+
+
 def _inventory_index(scan: Path) -> dict[str, dict[str, Any]]:
     inventory = _read_json(scan / "file_inventory.json", {"files": []}) or {}
     parser_signatures = _parser_result_signatures(scan)
@@ -473,6 +483,8 @@ def _file_diff(
     new_files = _inventory_index(new_scan)
     physical_old_files = dict(old_files)
     physical_new_files = dict(new_files)
+    inventory_coverage = {'old': _inventory_coverage(old_meta, len(old_files)),
+                          'new': _inventory_coverage(new_meta, len(new_files))}
     raw_added = set(new_files) - set(old_files)
     raw_removed = set(old_files) - set(new_files)
     changed, unchanged, unverified = _classify_common_files(old_files, new_files)
@@ -608,15 +620,38 @@ def _file_diff(
         raw_removed=raw_removed,
     )
     package_root_migration_matched_files = sum(int(item.get("matched_logical_paths") or 0) for item in package_root_migrations)
+    unmatched_added_under_package_root: list[str] = []
+    unmatched_removed_under_package_root: list[str] = []
+    if package_root_migrations:
+        new_roots = {str(item.get("new_root") or "") for item in package_root_migrations if item.get("new_root")}
+        old_roots = {str(item.get("old_root") or "") for item in package_root_migrations if item.get("old_root")}
+        unmatched_added_under_package_root = sorted(path for path in added if _path_root(path) in new_roots)
+        unmatched_removed_under_package_root = sorted(path for path in removed if _path_root(path) in old_roots)
+        if all(side['complete'] for side in inventory_coverage.values()):
+            # Absence from a complete inventory is a file-list addition/removal,
+            # not a request to match every file by hand. Retain real candidates.
+            old_keys = {_logical_file_key(path, strip_root=old_package_root) for path in physical_old_files}
+            new_keys = {_logical_file_key(path, strip_root=new_package_root) for path in physical_new_files}
+            old_names = {(Path(path).name, item.get('file_type')) for path, item in physical_old_files.items()}
+            new_names = {(Path(path).name, item.get('file_type')) for path, item in physical_new_files.items()}
+            unmatched_added_under_package_root = [path for path in unmatched_added_under_package_root
+                if _logical_file_key(path, strip_root=new_package_root) in old_keys
+                or (Path(path).name, physical_new_files[path].get('file_type')) in old_names]
+            unmatched_removed_under_package_root = [path for path in unmatched_removed_under_package_root
+                if _logical_file_key(path, strip_root=old_package_root) in new_keys
+                or (Path(path).name, physical_old_files[path].get('file_type')) in new_names]
     return {
         "schema_version": "1.0",
         "added": added,
+        "inventory_coverage": inventory_coverage,
         "removed": removed,
         "changed": changed,
         "renamed_or_moved": moved,
         "metadata_match_candidates": metadata_candidates,
         "logical_path_changes": logical_path_changes,
         "package_root_migrations": package_root_migrations,
+        "unmatched_added_under_package_root": unmatched_added_under_package_root,
+        "unmatched_removed_under_package_root": unmatched_removed_under_package_root,
         "unchanged": unchanged,
         "unverified": unverified,
         "comparison_semantics": (
@@ -641,6 +676,8 @@ def _file_diff(
             "logical_path_changed": len(logical_path_changes),
             "package_root_migrations": len(package_root_migrations),
             "package_root_migration_matched_files": package_root_migration_matched_files,
+            "unmatched_added_under_package_root": len(unmatched_added_under_package_root),
+            "unmatched_removed_under_package_root": len(unmatched_removed_under_package_root),
             "unchanged": len(unchanged),
             "unverified": len(unverified),
             "omitted_from_overlay": len(omitted_from_overlay),
@@ -1388,7 +1425,7 @@ def diff_scan_outputs(
         identity = build_diff_identity(
             old_snapshot_digest,
             new_snapshot_digest,
-            f"scan_diff.v1|old:{old_identity_source}|new:{new_identity_source}",
+            f"scan_diff.v2.inventory_coverage|old:{old_identity_source}|new:{new_identity_source}",
         )
         diff_id = identity["digest"].split(":", 1)[1][:16]
     relation = {

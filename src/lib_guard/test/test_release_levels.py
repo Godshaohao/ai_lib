@@ -206,7 +206,7 @@ class ReleaseLevelTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "DONE")
             immutable = release_root / "releases" / "v1"
-            self.assertTrue((immutable / "RTL" / "top.v").exists())
+            self.assertTrue((immutable / "VERILOG" / "top.v").exists())
             self.assertTrue((release_root / "current").is_symlink())
             self.assertEqual((release_root / "current").resolve(), immutable.resolve())
             self.assertFalse((release_root / ".staging" / "v1").exists())

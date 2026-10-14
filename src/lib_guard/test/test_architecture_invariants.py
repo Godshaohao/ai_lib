@@ -64,6 +64,12 @@ class ArchitectureInvariantTest(unittest.TestCase):
                     "scan",
                     "cmp",
                     "rel",
+                    "release-plan",
+                    "release-apply",
+                    "release-set-plan",
+                    "release-set-apply",
+                    "release-overwrite-preview",
+                    "release-force",
                     "next",
                     "intake",
                     "window",
@@ -82,11 +88,13 @@ class ArchitectureInvariantTest(unittest.TestCase):
         self.assertEqual(WEB_ACTION_SPECS["scan"].scope, "version")
         self.assertEqual(WEB_ACTION_SPECS["cmp"].cli_action, "cmp")
         self.assertEqual(WEB_ACTION_SPECS["rel"].cli_action, "rel")
+        self.assertEqual(WEB_ACTION_SPECS["release-overwrite-preview"].cli_action, "rel")
         self.assertEqual(WEB_ACTION_SPECS["worklist"].scope, "workspace")
         self.assertEqual(
             post_routes,
             {
                 "/api/worklist",
+                "/api/workspace/init",
                 "/api/workspace/config",
                 "/api/library/discover",
                 "/api/library/accept",
@@ -96,17 +104,31 @@ class ArchitectureInvariantTest(unittest.TestCase):
                 "/api/libraries/<library>/versions/<version>/scan",
                 "/api/libraries/<library>/versions/<version>/compare",
                 "/api/libraries/<library>/versions/<version>/release-check",
+                "/api/libraries/<library>/versions/<version>/release-plan",
+                "/api/libraries/<library>/versions/<version>/release-apply",
+                "/api/release-libraries/refresh",
+                "/api/formal-directory/refresh",
+                "/api/release-libraries/<path:formal_library>/versions/<version>/preview-overwrite",
+                "/api/release-libraries/<path:formal_library>/versions/<version>/force-overwrite",
                 "/api/libraries/<library>/next",
                 "/api/libraries/<library>/intake",
                 "/api/libraries/<library>/window",
                 "/api/libraries/<library>/accept-window",
                 "/api/libraries/<library>/versions/<version>/mark",
                 "/api/libraries/<library>/versions/<version>/override",
+                # Human-authored note write.  It is intentionally not a
+                # background action and must not be added to WEB_MUTATING_ACTIONS.
+                "/api/libraries/<library>/versions/<version>/update-note",
+                "/api/libraries/<library>/versions/<version>/representative-files",
                 "/api/libraries/<library>/versions/<version>/file-diff",
                 "/api/libraries/<library>/versions/<version>/review-gate",
                 "/api/libraries/<library>/versions/<version>/review-packet",
                 "/api/libraries/<library>/action",
                 "/api/libraries/<library>/effective-rollback",
+                "/api/release-set/build",
+                "/api/release-set/plan",
+                "/api/release-set/apply",
+                "/api/release-set/compare",
             },
         )
 
@@ -372,6 +394,20 @@ class ArchitectureInvariantTest(unittest.TestCase):
         self.assertIn("当前有效版", rebuilt_text)
         self.assertEqual(first_text, rebuilt_text)
         self.assertEqual(before, after)
+
+    def test_catalog_render_text_write_keeps_previous_page_until_replace_succeeds(self) -> None:
+        from lib_guard.render.catalog_render_common import write_text
+
+        with tempfile.TemporaryDirectory() as td:
+            page = Path(td) / "catalog" / "html" / "libraries" / "demo" / "versions" / "v2" / "index.html"
+            page.parent.mkdir(parents=True)
+            page.write_text("old complete page", encoding="utf-8")
+
+            with patch("lib_guard.atomic.os.replace", side_effect=RuntimeError("replace failed")):
+                with self.assertRaises(RuntimeError):
+                    write_text(page, "new complete page")
+
+            self.assertEqual(page.read_text(encoding="utf-8"), "old complete page")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ class ArchitectureBoundariesTest(unittest.TestCase):
         self.assertEqual(canonical_view_type("lydrc"), "tech_flow_config")
         self.assertEqual(canonical_view_type("md"), "doc_evidence")
         self.assertEqual(release_view_dir("lef"), "LEF")
-        self.assertEqual(release_view_dir("systemverilog"), "RTL")
+        self.assertEqual(release_view_dir("systemverilog"), "VERILOG")
         self.assertEqual(release_view_dir("liberty"), "LIB")
 
     def test_package_classifier_uses_same_type_mapping(self) -> None:

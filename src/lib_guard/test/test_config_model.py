@@ -12,8 +12,17 @@ from lib_guard.project_config import (
     MIN_PARSE_JOBS,
     SUMMARY_ONLY_TYPES,
     VIEW_TYPE_SPECS,
+    WEB_ACTION_SPECS,
+    WEB_COMPARE_DEFAULTS,
+    WEB_COMPARE_MODES,
+    WEB_MARK_TYPES,
+    WEB_MUTATING_ACTIONS,
+    WEB_PACKAGE_TYPES,
+    WEB_STAGES,
     WORKSPACE_CONFIG_SCHEMA_VERSION,
     canonical_view_type,
+    default_discovery_strategy,
+    default_scan_strategy,
     file_diff_allowed,
     file_diff_requires_force_large,
 )
@@ -32,6 +41,23 @@ class ConfigModelTest(unittest.TestCase):
     def test_execution_limits_are_shared_configuration_constants(self) -> None:
         self.assertEqual(HASH_POLICIES, frozenset({"none", "smart", "full"}))
         self.assertEqual((MIN_PARSE_JOBS, MAX_PARSE_JOBS), (1, 32))
+
+    def test_web_command_surface_is_defined_in_shared_project_config(self) -> None:
+        from lib_guard import project_config
+        from lib_guard.web import app as web_app
+
+        self.assertIs(web_app.WEB_ACTION_SPECS, project_config.WEB_ACTION_SPECS)
+        self.assertIs(web_app.WEB_MUTATING_ACTIONS, project_config.WEB_MUTATING_ACTIONS)
+        self.assertEqual(WEB_MUTATING_ACTIONS, frozenset(WEB_ACTION_SPECS))
+        self.assertEqual(WEB_ACTION_SPECS["scan"].scope, "version")
+        self.assertEqual(WEB_ACTION_SPECS["cmp"].cli_action, "cmp")
+        self.assertEqual(WEB_ACTION_SPECS["file-diff"].cli_action, "fd")
+        self.assertEqual(WEB_ACTION_SPECS["release-force"].cli_action, "rel")
+        self.assertEqual(WEB_COMPARE_MODES, frozenset({"adjacent", "cumulative"}))
+        self.assertIn("FULL", WEB_MARK_TYPES)
+        self.assertIn("FULL_PACKAGE", WEB_PACKAGE_TYPES)
+        self.assertIn("previous_effective", WEB_COMPARE_DEFAULTS)
+        self.assertIn("final", WEB_STAGES)
 
     def test_default_config_exposes_effective_scan_strategy(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -53,6 +79,29 @@ class ConfigModelTest(unittest.TestCase):
             self.assertEqual(loaded["hash_policy"], "smart")
             self.assertEqual(loaded["render_detail"], "true")
             self.assertEqual(loaded["discover_min_versions"], "1")
+
+    def test_default_config_creates_empty_formal_release_root(self) -> None:
+        """A freshly initialized workspace must not block read-only release indexing."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config = write_default_config(root, raw_root=root / "raw")
+
+            loaded = load_config(root, config)
+
+            self.assertEqual(Path(loaded["release_root"]), root / "release_area")
+            self.assertTrue((root / "release_area").is_dir())
+
+    def test_web_default_strategy_payloads_come_from_shared_config(self) -> None:
+        scan = default_scan_strategy()
+        discovery = default_discovery_strategy()
+
+        self.assertEqual(scan["hash_policy"], "smart")
+        self.assertEqual(scan["parse_jobs"], "8")
+        self.assertEqual(scan["render_detail"], "true")
+        self.assertEqual(discovery["max_depth"], "4")
+        self.assertEqual(discovery["min_versions"], "1")
+        self.assertEqual(discovery["max_dirs"], "5000")
+        self.assertEqual(discovery["max_candidates"], "200")
 
     def test_config_update_is_allowlisted_validated_and_backed_up(self) -> None:
         with tempfile.TemporaryDirectory() as td:

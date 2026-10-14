@@ -34,6 +34,46 @@ class MultiVersionHardeningTest(unittest.TestCase):
         self.assertEqual(state["runtime_state"]["source"], "catalog_runtime.json")
         self.assertEqual(state["runtime_state"]["entry_count"], 1)
 
+    def test_catalog_runtime_merges_versions_without_explicit_version_key(self) -> None:
+        from lib_guard.catalog.runtime import load_catalog_view, write_catalog_runtime
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalog = root / "catalog.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "libraries": [
+                            {
+                                "library_name": "Vendor_A.ucie_ip",
+                                "library_id": "ip/Vendor_A.ucie_ip",
+                                "library_type": "IP",
+                                "versions": [
+                                    {
+                                        "version_id": "20260750_lib0_v50",
+                                        "scan": {"status": "NOT_SCANNED"},
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_catalog_runtime(
+                catalog,
+                {
+                    "ip/Vendor_A.ucie_ip/20260750_lib0_v50": {
+                        "scan": {"status": "SCANNED", "scan_dir": str(root / "scan")}
+                    }
+                },
+            )
+
+            view = load_catalog_view(catalog)
+
+        version = view["libraries"][0]["versions"][0]
+        self.assertEqual(version["scan"]["status"], "SCANNED")
+
     def test_web_state_reports_missing_runtime_sidecar_without_hiding_it(self) -> None:
         from lib_guard.web.read_model import load_web_state
 
@@ -122,22 +162,72 @@ class MultiVersionHardeningTest(unittest.TestCase):
 
         self.assertEqual(ready.call_count, 1)
 
+    def test_compare_readiness_requires_base_scan_evidence(self) -> None:
+        from lib_guard.web.read_model import list_version_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            current_scan = Path(td) / "current-scan"
+            raw_v1 = Path(td) / "raw" / "demo" / "v1"
+            raw_v2 = Path(td) / "raw" / "demo" / "v2"
+            current_scan.mkdir()
+            raw_v2.mkdir(parents=True)
+            (current_scan / "file_inventory.json").write_text(
+                json.dumps({"files": [], "root_path": str(raw_v2), "scan_id": "scan-current"}),
+                encoding="utf-8",
+            )
+            (current_scan / "scan_meta.json").write_text(
+                json.dumps({"scan_id": "scan-current", "status": "PASS", "root_path": str(raw_v2)}),
+                encoding="utf-8",
+            )
+            state = {
+                "catalog_html": td,
+                "catalog": {
+                    "libraries": [
+                        {
+                            "library_name": "demo",
+                            "versions": [
+                                {
+                                    "version_id": "v1",
+                                    "raw_path": str(raw_v1),
+                                    "scan": {"status": "NOT_SCANNED"},
+                                },
+                                {
+                                    "version_id": "v2",
+                                    "raw_path": str(raw_v2),
+                                    "scan": {"status": "SCANNED", "scan_dir": str(current_scan), "scan_id": "scan-current"},
+                                    "diff": {"adjacent_old_version": "v1", "adjacent_status": "PENDING"},
+                                },
+                            ],
+                        }
+                    ]
+                },
+            }
+
+            rows = list_version_rows(state, "demo")
+
+        row = next(item for item in rows if item["version_id"] == "v2")
+        self.assertFalse(row["action_readiness"]["compare"]["enabled"])
+        self.assertIn("基准", row["action_readiness"]["compare"]["reason"])
+        self.assertEqual(row["workflow_status"]["label"], "基准待扫描")
+
     def test_scan_readiness_uses_scan_metadata_without_parsing_inventory(self) -> None:
         from lib_guard.web.read_model import scan_evidence_ready
 
         with tempfile.TemporaryDirectory() as td:
             scan_dir = Path(td) / "scan"
+            raw_dir = Path(td) / "raw" / "demo" / "v1"
             scan_dir.mkdir()
+            raw_dir.mkdir(parents=True)
             (scan_dir / "file_inventory.json").write_text("not-json", encoding="utf-8")
             (scan_dir / "scan_meta.json").write_text(
-                json.dumps({"scan_id": "scan-1", "status": "PASS", "root_path": "/raw/demo/v1"}),
+                json.dumps({"scan_id": "scan-1", "status": "PASS", "root_path": str(raw_dir)}),
                 encoding="utf-8",
             )
 
             self.assertTrue(
                 scan_evidence_ready(
                     {
-                        "raw_path": "/raw/demo/v1",
+                        "raw_path": str(raw_dir),
                         "scan": {"status": "SCANNED", "scan_dir": str(scan_dir), "scan_id": "scan-1"},
                     }
                 )

@@ -77,6 +77,8 @@ def release_result_from_link(
         "planned_files": summary.get("planned_files", 0),
         "created_links": summary.get("created_files", 0),
         "failed_links": summary.get("failed_files", 0),
+        "skipped_links": summary.get("skipped_files", 0),
+        "excluded_files": summary.get("excluded_files", 0),
         "missing": verify_summary.get("missing_files", 0),
         "extra": verify_summary.get("extra_files", 0),
         "target_mismatch": verify_summary.get("target_mismatch", 0),

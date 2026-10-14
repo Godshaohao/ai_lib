@@ -58,6 +58,7 @@ raw delivery
 | --- | --- | --- | --- |
 | 小白/日常短命令 | `src/lib_guard/short_cli.py` | 把 `lg next/scan/cmp/cat/rel` 展开成底层 CLI 命令 | 只做参数解析和命令编排，不写业务事实 |
 | 短命令配置 | `src/lib_guard/short_cli_config.py` | 读取 `lib_guard.yml`、规范化 workspace 路径、生成默认配置 | 所有短命令配置路径逻辑集中在这里 |
+| 全局配置中心 | `src/lib_guard/project_config.py` | scan/hash/discover/view type/Web 动作 allowlist 的默认策略 | 新策略先进入这里，再被 CLI/Web/render 引用 |
 | 底层自动化 CLI | `src/lib_guard/cli.py` | `python -m lib_guard.cli ...` 的正式工程入口 | 提供稳定机器接口，不承载 UI 体验 |
 | 底层命令 handler | `src/lib_guard/cli_commands/` | catalog、scan、diff、review、release 等命令实现 | 每个文件只处理一类命令，不互相偷写状态 |
 
@@ -164,6 +165,14 @@ Web 控制台只是现有 CLI 和静态投影的薄控制层。它不能成为�
 `catalog_runtime.json`、`run_manifest.json` 和已有 HTML，动作只允许调用固定的 scan、cmp、
 release-check 路径。长任务通过 workspace 下的 `web_jobs/<job_id>` 记录请求、状态和日志，
 不引入数据库、调度器或任意 shell 执行接口。
+
+Web 可写动作、扫描默认策略、发现默认策略和文件类型能力不应在 `web/app.py`、前端 JS
+和短命令里各维护一份。默认值和 allowlist 统一放在 `project_config.py`，Web/CLI 只负责读取、
+校验用户本次覆盖值并调用已有短命令。
+
+浏览器端通过 `/api/workspace` 读取 `web_actions`，用于动作名称、短命令映射和确认策略。
+前端可以保留少量显示兜底，但不能再维护完整的动作字典；新增动作必须先进入
+`project_config.py::WEB_ACTION_SPECS`，再由后端暴露给页面。
 
 Version Detail 是唯一审查投影。`window`、`effective`、`compare` 只是它的证据来源
 和上下文，不应新增平行主审查页面。默认页面按以下顺序回答：

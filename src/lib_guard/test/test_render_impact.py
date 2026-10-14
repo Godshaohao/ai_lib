@@ -54,6 +54,26 @@ class RenderImpactTest(unittest.TestCase):
                 "affected_versions": [{"library": "ucie", "version": "v1"}],
             },
         )
+        self.assertEqual(
+            output["impacted_pages"],
+            [
+                {"kind": "version_detail", "library": "ucie", "version": "v1", "reason": "scan_updated"},
+                {"kind": "library_page", "library": "ucie", "version": None, "reason": "scan_updated"},
+                {"kind": "catalog_index", "library": None, "version": None, "reason": "scan_updated"},
+            ],
+        )
+        self.assertEqual(
+            output["rendered_pages"],
+            [
+                {
+                    "kind": "version_detail",
+                    "library": "ucie",
+                    "version": "v1",
+                    "html": "/tmp/work/catalog/html/libraries/ip_ucie/versions/v1/index.html",
+                },
+                {"kind": "catalog_index", "html": "/tmp/work/catalog/html/index.html"},
+            ],
+        )
 
     def test_attach_render_output_reports_deferred_navigation_pages(self) -> None:
         from lib_guard.cli_commands.catalog import _attach_render_output
@@ -81,6 +101,8 @@ class RenderImpactTest(unittest.TestCase):
 
         self.assertEqual(output["render_summary"]["message"], "版本详情已刷新 1 个版本；Catalog 导航页延迟刷新")
         self.assertEqual(output["render_summary"]["deferred_file"], "/tmp/work/catalog/html/render_deferred.json")
+        self.assertEqual(output["impacted_pages"][1]["kind"], "library_page")
+        self.assertEqual(output["rendered_pages"], [])
 
     def test_attach_render_output_reports_failed_version_detail_render(self) -> None:
         from lib_guard.cli_commands.catalog import _attach_render_output
@@ -122,6 +144,8 @@ class RenderImpactTest(unittest.TestCase):
 
         self.assertEqual(output["render_summary"]["message"], "版本详情未刷新：no_catalog_render")
         self.assertEqual(output["render_summary"]["skipped_reason"], "no_catalog_render")
+        self.assertEqual(output["impacted_pages"][0]["kind"], "version_detail")
+        self.assertEqual(output["rendered_pages"], [])
 
     def test_impacts_for_versions_dedups_versions_and_adds_parent_pages(self) -> None:
         from lib_guard.render.impact import impacts_for_versions, serialize_impacts

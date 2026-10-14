@@ -126,16 +126,16 @@ def _timeline_rows(out: Path, timeline: list[dict[str, Any]], latest_effective_r
     return rows
 
 
-def _version_primary_action(version: Mapping[str, Any]) -> tuple[str, str, str, bool]:
+def _version_primary_action(version: Mapping[str, Any], *, href_base: Path | None = None) -> tuple[str, str, str, bool]:
     links = common.version_links(version)
     relation = common.relation_status(version)
-    version_review = _href(links.get("version_review_html"))
+    version_review = common.rel_href(href_base, links.get("version_review_html")) if href_base else _href(links.get("version_review_html"))
     if relation == "NEED_BINDING":
         return "绑定", version_review, "primary", not bool(version_review)
     if links.get("diff_html"):
-        return "差异", _href(links.get("diff_html")), "primary", False
+        return "差异", common.rel_href(href_base, links.get("diff_html")) if href_base else _href(links.get("diff_html")), "primary", False
     if links.get("scan_html"):
-        return "扫描", _href(links.get("scan_html")), "secondary", False
+        return "扫描", common.rel_href(href_base, links.get("scan_html")) if href_base else _href(links.get("scan_html")), "secondary", False
     if version_review:
         return "详情", version_review, "secondary", False
     return "待处理", "", "secondary", True
@@ -200,11 +200,12 @@ def _display_badge(status: Any, label: Any) -> str:
     return f"<span class='badge {ui.status_class(status)}' title='{text}'>{text}</span>"
 
 
-def _version_detail_href(version: Mapping[str, Any] | None) -> str:
+def _version_detail_href(version: Mapping[str, Any] | None, *, href_base: Path | None = None) -> str:
     if not isinstance(version, Mapping):
         return ""
     links = common.version_links(version)
-    return _href(links.get("version_review_html") or links.get("scan_html") or links.get("diff_html"))
+    path = links.get("version_review_html") or links.get("scan_html") or links.get("diff_html")
+    return common.rel_href(href_base, path) if href_base else _href(path)
 
 
 def _candidate_action_text(candidate: Mapping[str, Any] | None, current_ref: str) -> str:
@@ -216,6 +217,7 @@ def _library_entry_summary(
     effective_items: list[dict[str, Any]],
     timeline: list[dict[str, Any]],
     latest_effective_ref: str,
+    *, href_base: Path | None = None,
 ) -> dict[str, Any]:
     model = workspace_model.build_library_workspace_model(
         lib,
@@ -244,10 +246,10 @@ def _library_entry_summary(
         "timeline_count": model["timeline_count"],
         "version_count": model["version_count"],
         "effective_ref": model["effective_evidence_ref"],
-        "effective_manifest": _href(model["effective_evidence_manifest"]),
-        "current_effective_html": _href(model["effective_evidence_html"]),
-        "release_preview_html": _href(model["effective_evidence_release_preview"]),
-        "candidate_detail_href": _version_detail_href(model["latest_candidate_version"]),
+        "effective_manifest": common.rel_href(href_base, model["effective_evidence_manifest"]) if href_base else _href(model["effective_evidence_manifest"]),
+        "current_effective_html": common.rel_href(href_base, model["effective_evidence_html"]) if href_base else _href(model["effective_evidence_html"]),
+        "release_preview_html": common.rel_href(href_base, model["effective_evidence_release_preview"]) if href_base else _href(model["effective_evidence_release_preview"]),
+        "candidate_detail_href": _version_detail_href(model["latest_candidate_version"], href_base=href_base),
     }
 
 
@@ -263,7 +265,7 @@ def _focus_card(label: str, value: Any, hint: str, status: str, href: str = "", 
     )
 
 
-def _library_focus_panel(summary: Mapping[str, Any]) -> str:
+def _library_focus_panel(summary: Mapping[str, Any], *, href_base: Path | None = None) -> str:
     candidate = summary.get("candidate") if isinstance(summary.get("candidate"), Mapping) else {}
     current_hint = {
         "effective_manifest": "来自当前有效版 manifest",
@@ -279,7 +281,7 @@ def _library_focus_panel(summary: Mapping[str, Any]) -> str:
         current_hint = f"{current_hint}；已发现有效版证据 {effective_ref}"
     body = (
         "<div class='library-focus-grid'>"
-        + _focus_card("当前有效版", summary.get("current_ref"), current_hint, "ok" if summary.get("current_confirmed") else "warn", summary.get("current_effective_html") or _version_detail_href(summary.get("current_version") if isinstance(summary.get("current_version"), Mapping) else None))
+        + _focus_card("当前有效版", summary.get("current_ref"), current_hint, "ok" if summary.get("current_confirmed") else "warn", summary.get("current_effective_html") or _version_detail_href(summary.get("current_version") if isinstance(summary.get("current_version"), Mapping) else None, href_base=href_base))
         + _focus_card("最新待审版", summary.get("candidate_ref"), summary.get("candidate_hint") or _candidate_action_text(candidate, str(summary.get("current_ref") or "")), "warn" if summary.get("needs_review") else "ok", str(summary.get("candidate_detail_href") or ""))
         + _focus_card("正式发布", ui.status_label(summary.get("release_status")) or summary.get("release_status"), "正式放行状态只作入口提示，不覆盖 IP 接入判断", "neutral", summary.get("release_preview_html"), "查看发布")
         + "</div>"
@@ -316,7 +318,7 @@ def _review_now_panel(summary: Mapping[str, Any]) -> str:
     )
 
 
-def _history_version_rows(lib: Mapping[str, Any], versions: list[Mapping[str, Any]]) -> list[str]:
+def _history_version_rows(lib: Mapping[str, Any], versions: list[Mapping[str, Any]], *, href_base: Path | None = None) -> list[str]:
     rows = []
     latest = lib.get("latest_version") or (_version_id(versions[-1]) if versions else "")
     for version in reversed(versions):
@@ -325,7 +327,8 @@ def _history_version_rows(lib: Mapping[str, Any], versions: list[Mapping[str, An
         scan_status, scan_text = catalog._scan_label(version)
         diff_status, diff_text = _diff_label(version)
         relation = common.relation_label(common.relation_status(version))
-        action = ui.button("详情", _version_detail_href(version), "secondary", disabled=not bool(_version_detail_href(version)), target="_blank")
+        detail_href = _version_detail_href(version, href_base=href_base)
+        action = ui.button("详情", detail_href, "secondary", disabled=not bool(detail_href), target="_blank")
         rows.append(
             "<tr>"
             f"<td><b title='{ui.esc(version_id)}'>{ui.esc(common.short_name(version_id))}</b>{' ' + _display_badge('INFO', '最新') if version_id == str(latest) else ''}</td>"
@@ -339,8 +342,8 @@ def _history_version_rows(lib: Mapping[str, Any], versions: list[Mapping[str, An
     return rows
 
 
-def _library_version_ledger_panel(lib: Mapping[str, Any], versions: list[Mapping[str, Any]]) -> str:
-    rows = _history_version_rows(lib, versions)
+def _library_version_ledger_panel(lib: Mapping[str, Any], versions: list[Mapping[str, Any]], *, href_base: Path | None = None) -> str:
+    rows = _history_version_rows(lib, versions, href_base=href_base)
     row_html = "".join(rows) if rows else "<tr><td class='empty' colspan='6'>暂无版本</td></tr>"
     body = (
         "<div class='library-version-ledger table-wrap'>"
@@ -361,14 +364,14 @@ def _render_library_home(out: Path, lib: Mapping[str, Any], effective_items: lis
     html_path = out / "libraries" / safe / "index.html"
     versions = list(lib.get("versions", []) or [])
     timeline, latest_effective_ref = catalog._library_timeline(lib, effective_items)
-    summary = _library_entry_summary(lib, effective_items, timeline, latest_effective_ref)
+    summary = _library_entry_summary(lib, effective_items, timeline, latest_effective_ref, href_base=html_path.parent)
     del compare_items
     body = (
         _catalog_browser_styles()
         + _library_focus_styles()
-        + _library_focus_panel(summary)
+        + _library_focus_panel(summary, href_base=html_path.parent)
         + _review_now_panel(summary)
-        + _library_version_ledger_panel(lib, versions)
+        + _library_version_ledger_panel(lib, versions, href_base=html_path.parent)
     )
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / 库工作台",
@@ -402,7 +405,7 @@ def _latest_effective_version(lib: Mapping[str, Any], versions: list[Mapping[str
     return current_ref
 
 
-def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any) -> str:
+def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any, *, href_base: Path | None = None) -> str:
     version_id = str(version.get("version_id") or version.get("version") or "-")
     is_latest = "1" if str(version_id) == str(latest) else "0"
     tags = ",".join(sorted(catalog._version_tags(version)))
@@ -412,7 +415,7 @@ def _version_row(lib: Mapping[str, Any], version: Mapping[str, Any], latest: Any
     file_status = common.file_review_status(version)
     base_full = common.base_full_version(version)
     prev_eff = common.previous_effective_version(version)
-    label, href, kind, disabled = _version_primary_action(version)
+    label, href, kind, disabled = _version_primary_action(version, href_base=href_base)
     release_html = f"<span class='release-mini'>{ui.badge(version.get('release_status'), '发布')}</span>" if catalog._release_is_visible(version, lib) else ""
     review_hint = ui.badge(file_status, common.file_review_text(version)) if file_status != "PAIRWISE_EMPTY" else ""
     stage_html = "" if stage.lower() in {"", "-", "unknown"} else ui.badge(stage)
@@ -458,14 +461,14 @@ def _library_card(out: Path, lib: Mapping[str, Any], effective_items: list[dict[
     home_path = str(lib.get("library_home_html") or "")
     latest_effective_item = catalog._latest_effective_item(effective_items)
     changed = sum(1 for v in versions if "changed" in catalog._version_tags(v))
-    version_rows = "".join(_version_row(lib, v, latest) for v in reversed(versions))
+    version_rows = "".join(_version_row(lib, v, latest, href_base=out) for v in reversed(versions))
     user_library_id = lib.get("formal_library_id") or lib.get("library_name") or lib.get("library_id")
     library_label = lib.get("display_name") or user_library_id
     empty_versions = "<div class='catalog-empty'>暂无 version</div>"
     version_list_html = version_rows or empty_versions
     actions = ui.action_strip([
-        ui.button("进入库工作台", _href(home_path), "primary", disabled=not bool(home_path), target="_blank"),
-        ui.button("有效版", _href((latest_effective_item or {}).get("html")), "secondary", disabled=not bool((latest_effective_item or {}).get("html")), target="_blank"),
+        ui.button("进入库工作台", common.rel_href(out, home_path), "primary", disabled=not bool(home_path), target="_blank"),
+        ui.button("有效版", common.rel_href(out, (latest_effective_item or {}).get("html")), "secondary", disabled=not bool((latest_effective_item or {}).get("html")), target="_blank"),
     ])
     effective_label = str((latest_effective_item or {}).get("effective_id") or latest_effective)
     status_for_display = "REVIEW" if versions and not current_confirmed and common.status_key(status) == "UNKNOWN" else status
@@ -534,7 +537,7 @@ def _catalog_filter_panel(state: Mapping[str, Any]) -> str:
         "<div class='filter-group-title'>状态</div>" + f"<div class='catalog-chips'>{chip_html}</div>"
         "<div class='filter-group-title'>操作</div>"
         + ui.action_strip(["<button class='btn secondary' type='button' onclick=\"catalogExpand('review')\">展开关注</button>", "<button class='btn secondary' type='button' onclick=\"catalogExpand('collapse')\">折叠</button>", "<button class='btn secondary' type='button' onclick='resetCatalogFilters()'>重置</button>"])
-        + "<div id='catalog-visible-count' class='browser-count' style='margin-top:12px'>-</div><script>setTimeout(filterCatalogBrowser,0)</script>"
+        + "<div id='catalog-visible-count' class='browser-count' style='margin-top:12px'>-</div>"
     )
     return ui.panel("筛选", "按库、版本、供应方、阶段、状态快速定位。", body)
 
@@ -575,13 +578,13 @@ def _library_focus_styles() -> str:
     return """
 <style>
 .library-focus-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-.library-focus-card{border:1px solid var(--line);border-radius:14px;background:#fff;padding:15px;display:flex;flex-direction:column;gap:8px;min-height:178px}
-.library-focus-card.ok{border-left:4px solid var(--green);background:linear-gradient(180deg,#fff,#fbfffc)}
-.library-focus-card.warn{border-left:4px solid var(--amber);background:linear-gradient(180deg,#fff,#fffaf1)}
-.library-focus-card.neutral{border-left:4px solid var(--line-strong);background:linear-gradient(180deg,#fff,#fbfcff)}
-.focus-label{font-size:12px;color:#667085;font-weight:800;letter-spacing:.02em}
-.focus-value{font-size:19px;line-height:1.25;font-weight:850;color:#172033}
-.library-focus-card p{font-size:12px;color:#667085;min-height:38px}
+.library-focus-card{border:1px solid var(--line);border-radius:6px;background:#fff;padding:12px;display:flex;flex-direction:column;gap:6px;min-height:132px}
+.library-focus-card.ok{border-left:3px solid var(--green)}
+.library-focus-card.warn{border-left:3px solid var(--amber)}
+.library-focus-card.neutral{border-left:3px solid var(--line-strong)}
+.focus-label{font-size:12px;color:#667085;font-weight:800;letter-spacing:0}
+.focus-value{font-size:16px;line-height:1.35;font-weight:700;color:#172033}
+.library-focus-card p{font-size:12px;color:#667085;min-height:0}
 .focus-action{margin-top:auto}
 .library-review-now{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
 .review-actions{display:flex;justify-content:flex-start}
@@ -597,6 +600,7 @@ def _library_focus_styles() -> str:
 def _catalog_browser_styles() -> str:
     return """
 <style>
+.hero{padding:16px 24px}.hero h1{font-size:22px;margin:3px 0 4px}.hero p{font-size:12px}.workspace{padding:16px 24px 32px;margin:0 auto}.panel{border-radius:6px;box-shadow:none}.panel-head{padding:12px 14px;background:#fff}.panel-body{padding:12px 14px}.library-card{border-radius:6px;box-shadow:none}
 .library-main{grid-template-columns:minmax(140px,.8fr) minmax(128px,.7fr) minmax(128px,.7fr);align-items:start}
 .library-main>div{min-width:0}.library-main b[title]{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.library-name-row,.library-path-row,.library-status{grid-column:1/-1}.library-name-row{padding-bottom:2px}.library-title{font-size:18px;line-height:1.28}.library-path-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;align-items:start;border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:7px 9px}.library-path-row span{font-size:12px;font-weight:800}.library-path-row code{display:block;color:#344054;white-space:normal;overflow-wrap:anywhere;word-break:break-word}.library-status{min-width:0;justify-content:flex-start;padding-top:10px;margin-top:2px;border-top:1px dashed var(--line);overflow:visible}.library-status .action-strip{max-width:100%;min-width:0;overflow:visible;white-space:normal;flex-wrap:wrap;padding-bottom:0}.long-token{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}.library-title.long-token{display:block}.version-name.long-token{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.version-list{gap:7px}.version-row{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(210px,1fr) minmax(220px,.95fr) minmax(76px,auto);gap:12px;align-items:center;border:1px solid var(--line);background:#fff;border-radius:11px;padding:10px 12px}.version-id-cell{min-width:0}.version-name{font-weight:800;font-size:14px;line-height:1.25}.version-path{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.version-badges{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}.version-badges .badge{max-width:132px}.version-relation{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px;min-width:0}.version-relation span{border:1px solid var(--line);border-radius:8px;background:#f8fafc;padding:5px 7px;min-width:0}.version-relation b{display:block;color:#667085;font-size:11px;line-height:1.2}.version-relation em{display:block;font-style:normal;font-size:12px;color:#344054;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.version-action{text-align:right;min-width:0}.version-action .btn{max-width:100%}.table-wrap td code{white-space:normal;overflow-wrap:anywhere;word-break:break-word}.absolute-path-box{margin:0 0 18px;border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px 12px}.absolute-path-box b{display:block;font-size:12px;color:#667085;margin-bottom:4px}.absolute-path-box code{display:block;color:#344054;white-space:normal;overflow-wrap:anywhere;word-break:break-word}.version-scroll-table{max-width:100%;overflow:auto;scrollbar-gutter:stable;border:1px solid var(--line);border-radius:10px;background:#fff;margin-top:12px}.version-scroll-table table{min-width:720px}.version-scroll-table.change-scroll table{min-width:1800px}.version-scroll-table.metric-scroll{max-height:300px}.version-scroll-table.change-scroll{height:420px;max-height:420px;overflow:scroll}.version-scroll-table th{position:sticky;top:0;z-index:1}.version-scroll-table td code{white-space:nowrap;overflow-wrap:normal;word-break:normal}.version-scroll-table.change-scroll td:nth-child(3) code{display:inline-block;min-width:1080px}.trace-link-row{min-width:0}.trace-link-row>div{min-width:0}.release-mini{display:inline-flex}.command-example-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.catalog-note{border:1px solid var(--line);border-radius:12px;background:#f8fafc;padding:12px;color:#667085;font-size:13px}@media(max-width:1180px){.library-main{grid-template-columns:1fr}.library-path-row{grid-template-columns:1fr}.version-row{grid-template-columns:1fr}.version-action{text-align:left}.version-relation{grid-template-columns:1fr}}
 .effective-summary{display:flex;flex-direction:column;gap:12px}.effective-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.effective-head h3{margin:3px 0 0;font-size:18px;max-width:680px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.effective-stack{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}.effective-chip{flex:0 0 220px;border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:9px}.effective-chip.base{background:#eff6ff;border-color:#bfdbfe}.effective-chip.update{background:#f5f3ff;border-color:#ddd6fe}.effective-chip b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.effective-chip em{display:block;font-size:12px;color:#667085;font-style:normal;margin-top:3px}.effective-tags{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.effective-tags>b{font-size:12px;color:#667085;min-width:44px}.effective-mini{display:flex;gap:8px;align-items:center;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px;background:#f8fafc;padding:10px}.tiny-tag{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px 7px;background:#fff;font-size:12px;color:#344054}
@@ -637,6 +641,6 @@ def render_catalog_index_page(
         "库版本变化导航入口。库目录是地图，不是命令控制台。",
         body,
         decision="REVIEW" if tasks.get("tasks") else "PASS",
-        nav="<a class='active' href='#'>库目录</a><a href='#'>库工作台</a><a href='#'>扫描证据</a><a href='#'>发布证据</a>",
+        nav="",
         meta=ui.compact_meta([("库", len(state.get("libraries", []) or [])), ("版本", sum(len(lib.get("versions", []) or []) for lib in state.get("libraries", []) or []))]),
     )

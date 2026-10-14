@@ -295,6 +295,8 @@ class RepositoryCleanupTest(unittest.TestCase):
             "version_detail_checklist.md",
             "version_detail_evaluation.md",
             "web_console_checklist.md",
+            "web_workspace_checklist.md",
+            "release_result_checklist.md",
         }
         actual = {path.name for path in (ROOT / "docs").glob("*.md")}
         self.assertEqual(expected, actual)

@@ -72,6 +72,21 @@ def _library_match_names(lib: dict[str, Any]) -> set[str]:
     return {name for name in names if name}
 
 
+def _catalog_version_key(item: Mapping[str, Any]) -> str:
+    version_key = str(item.get("version_key") or item.get("version_uid") or "")
+    if version_key:
+        return version_key
+    typed_library_id = str(item.get("typed_library_id") or item.get("library_id") or "")
+    library_name = str(item.get("library_name") or item.get("formal_library_id") or "")
+    version_id = str(item.get("version_id") or "")
+    if typed_library_id and "/" in typed_library_id and version_id:
+        return f"{typed_library_id}/{version_id}"
+    if not library_name or not version_id:
+        raise KeyError("version_key")
+    library_type = str(item.get("library_type") or "ip").lower()
+    return f"{library_type}/{library_name}/{version_id}"
+
+
 def _latest_version_for_library(catalog_path: str | Path, library: str) -> str:
     data = _read_catalog(catalog_path)
     for lib in data.get("libraries", []) or []:
@@ -295,12 +310,33 @@ def run_catalog_render(args: Namespace) -> int:
 
 def _attach_render_output(output: dict[str, Any], render_impact: dict[str, Any]) -> None:
     output["render_impact"] = render_impact
-    output["rendered_pages"] = render_impact.get("affected_pages", [])
+    output["impacted_pages"] = render_impact.get("affected_pages", [])
     output["catalog_html_out"] = render_impact.get("catalog_html_out")
     render_result = render_impact.get("render_result")
     if render_result:
         output["catalog_html"] = render_result
+    output["rendered_pages"] = _actual_rendered_pages(render_result if isinstance(render_result, Mapping) else {})
     output["render_summary"] = _render_summary(render_impact)
+
+
+def _actual_rendered_pages(render_result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    status = str(render_result.get("status") or "").upper()
+    if status == "SKIPPED":
+        return []
+    pages: list[dict[str, Any]] = []
+    for item in render_result.get("version_detail_pages", []) or []:
+        if isinstance(item, Mapping) and item.get("version_detail_html"):
+            pages.append(
+                {
+                    "kind": "version_detail",
+                    "library": item.get("library"),
+                    "version": item.get("version"),
+                    "html": item.get("version_detail_html"),
+                }
+            )
+    if render_result.get("index_html"):
+        pages.append({"kind": "catalog_index", "html": render_result.get("index_html")})
+    return pages
 
 
 def _render_summary(render_impact: Mapping[str, Any]) -> dict[str, Any]:
@@ -472,7 +508,7 @@ def run_catalog_workflow(args: Namespace) -> int:
     started = start_phase()
     update_catalog_scan_status(
         args.catalog,
-        version_key=item["version_key"],
+        version_key=_catalog_version_key(item),
         scan_dir=scan_result.out_dir,
         scan_id=scan_result.scan_id,
         status=scan_result.status,
@@ -662,7 +698,7 @@ def run_catalog_compare(args: Namespace) -> int:
     html_result = render_diff_html(diff_dir, html_out)
     update_catalog_diff_status(
         args.catalog,
-        version_key=new["version_key"],
+        version_key=_catalog_version_key(new),
         mode=relation_mode,
         old_version=old["version_id"],
         diff_dir=diff_dir,
@@ -1021,6 +1057,7 @@ def run_catalog_release_check(args: Namespace) -> int:
         alias=getattr(args, "alias", None),
         review_gate_path=review_gate_path,
         review_gate=review_gate if not review_gate_path else None,
+        catalog_path=args.catalog,
     )
     if getattr(args, "explain", False):
         print_json(explain_release_check(result))
@@ -1028,7 +1065,8 @@ def run_catalog_release_check(args: Namespace) -> int:
     result_path = Path(scan_dir) / "release" / "release_check.json"
     release_result_path = Path(scan_dir) / "release" / "release_result.json"
     write_release_result(release_result_path, release_result_from_check(result))
-    update_catalog_release_status(args.catalog, version_key=item["version_key"], action="check", status=result.get("release_check_status", "UNKNOWN"), result_path=result_path)
+    version_key = _catalog_version_key(item)
+    update_catalog_release_status(args.catalog, version_key=version_key, action="check", status=result.get("release_check_status", "UNKNOWN"), result_path=result_path)
     print_json(result)
     return 0 if str(result.get("release_check_status") or "") in RELEASE_CHECK_PASS_STATUSES else 2
 
@@ -1049,7 +1087,7 @@ def run_catalog_release_link(args: Namespace) -> int:
         manifest_path,
         release_root=args.release_root,
         alias=args.alias,
-        versions=[item["version_key"]],
+        versions=[_catalog_version_key(item)],
     )
     result = link_release_from_manifest(
         manifest_path,
@@ -1065,7 +1103,7 @@ def run_catalog_release_link(args: Namespace) -> int:
     write_release_result(release_result_path, release_result_from_link(result))
     update_catalog_release_status(
         args.catalog,
-        version_key=item["version_key"],
+        version_key=_catalog_version_key(item),
         action="link",
         status=result.get("status", "UNKNOWN"),
         result_path=result_path,
@@ -1157,7 +1195,7 @@ def run_catalog_release_batch(args: Namespace) -> int:
             output = {"status": "FAILED", "selected": 0, "message": "no scanned catalog versions selected for release"}
             print_json(output)
             return 2
-        selected_keys = [str(item["version_key"]) for item in selected]
+        selected_keys = [_catalog_version_key(item) for item in selected]
         manifest = create_manifest_template_from_catalog(
             args.catalog,
             manifest_path,
@@ -1167,6 +1205,13 @@ def run_catalog_release_batch(args: Namespace) -> int:
             library=args.library,
             versions=selected_keys,
         )
+    if getattr(args, "publish_name", None):
+        from lib_guard.release.bundle import validate_release_name, write_json
+        manifest["publish_name"] = validate_release_name(args.publish_name)
+        manifest["latest_name"] = validate_release_name(getattr(args, "latest_name", None) or "latest")
+        if manifest["publish_name"] == manifest["latest_name"]:
+            raise ValueError("正式目录名与最新指针名不能相同")
+        write_json(manifest_path, manifest)
     link_result = link_release_from_manifest(
         manifest_path,
         apply=bool(args.apply),
@@ -1204,10 +1249,10 @@ def run_catalog_release_batch(args: Namespace) -> int:
     write_release_result(release_result_path, release_result)
     link_status = str(link_result.get("status") or "UNKNOWN")
     verify_status = str((verify_result or {}).get("status") or "")
-    final_status = verify_status or link_status
-    success_statuses = {"PASS", "PASS_WITH_WARNING", "APPLIED", "FORCED_APPLIED", "DRY_RUN", "FORCE_DRY_RUN"}
+    final_status = link_status if link_status.startswith("PARTIAL_") else verify_status or link_status
+    success_statuses = {"PASS", "PASS_WITH_WARNING", "APPLIED", "FORCED_APPLIED", "DRY_RUN", "FORCE_DRY_RUN", "PARTIAL_APPLIED", "PARTIAL_DRY_RUN"}
     release_failed = final_status not in success_statuses
-    failures = list(link_result.get("failed_links", []) or [])
+    failures = [*(link_result.get("failed_links", []) or []), *(link_result.get("skipped_links", []) or [])]
     verify_issues = list((verify_result or {}).get("issues", []) or [])
     if verify_result and release_failed and not failures:
         failures = verify_issues
@@ -1216,9 +1261,9 @@ def run_catalog_release_batch(args: Namespace) -> int:
         html_path = Path((verify_result.get("html") or {}).get("index_html")) if verify_result and verify_result.get("html") else None
         update_catalog_release_status(
             args.catalog,
-            version_key=item["version_key"],
-            action="verify" if verify_result else "link",
-            status=(verify_result or link_result).get("status", "UNKNOWN"),
+            version_key=_catalog_version_key(item),
+            action="link" if link_status.startswith("PARTIAL_") else "verify" if verify_result else "link",
+            status=link_status if link_status.startswith("PARTIAL_") else (verify_result or link_result).get("status", "UNKNOWN"),
             result_path=postcheck_path or (run_dir / "release_link_result.json"),
             release_dir=link_result.get("release_dir"),
             alias=args.alias,
@@ -1228,7 +1273,7 @@ def run_catalog_release_batch(args: Namespace) -> int:
         )
     catalog_html = refresh_catalog_html(args)
     output = {
-        "status": "PASS" if not release_failed else "FAILED",
+        "status": link_status if link_status.startswith("PARTIAL_") else "PASS" if not release_failed else "FAILED",
         "phase": "postcheck" if verify_result and release_failed else "link",
         "link_status": link_status,
         "verify_status": verify_status or None,

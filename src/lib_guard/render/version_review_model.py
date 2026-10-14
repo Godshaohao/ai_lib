@@ -253,7 +253,20 @@ def build_ip_change_projection(
     delete_semantics = str(model.get("delete_semantics") or "real_delete")
     visible_changes: list[dict[str, Any]] = []
     baseline_only_changes: list[dict[str, Any]] = []
-    counts = {"added": 0, "removed": 0, "changed": 0}
+    counts = {"added": 0, "removed": 0, "changed": 0, "unmatched_new": 0, "unmatched_base": 0}
+    path_restructure = _as_mapping(model.get("path_restructure"))
+    package_root_unmatched = _as_mapping(model.get("package_root_unmatched"))
+    unmatched_new_budget = _as_int(package_root_unmatched.get("new"))
+    unmatched_base_budget = _as_int(package_root_unmatched.get("base"))
+    new_root = str(path_restructure.get("new_root") or "").strip("/")
+    old_root = str(path_restructure.get("old_root") or "").strip("/")
+    raw_diff = _as_mapping(model.get('file_diff'))
+    explicit_new = raw_diff.get('unmatched_added_under_package_root')
+    explicit_base = raw_diff.get('unmatched_removed_under_package_root')
+
+    def under_root(path: Any, root: str) -> bool:
+        text = str(path or "").strip("/")
+        return bool(root) and text.startswith(root + "/")
 
     for source in file_changes:
         item = dict(source)
@@ -263,12 +276,24 @@ def build_ip_change_projection(
             baseline_only_changes.append(item)
             continue
         if kind == "ADDED":
-            counts["added"] += 1
+            if (item.get('path') in explicit_new if isinstance(explicit_new, list) else unmatched_new_budget and under_root(item.get("path"), new_root)):
+                item["display_change"] = "UNMATCHED_NEW"
+                item["review_label"] = "未匹配新侧文件"
+                item["review_meaning"] = "处于新包根下，但当前基准证据没有唯一旧侧匹配；不能直接当作真实新增。"
+                counts["unmatched_new"] += 1
+            else:
+                counts["added"] += 1
         elif kind == "REMOVED":
-            counts["removed"] += 1
+            if (item.get('path') in explicit_base if isinstance(explicit_base, list) else unmatched_base_budget and under_root(item.get("path"), old_root)):
+                item["display_change"] = "UNMATCHED_BASE"
+                item["review_label"] = "未匹配基准侧文件"
+                item["review_meaning"] = "处于旧包根下，但当前目标证据没有唯一新侧匹配；不能直接当作真实删除。"
+                counts["unmatched_base"] += 1
+            else:
+                counts["removed"] += 1
         elif kind in {"CHANGED", "MODIFIED"}:
             counts["changed"] += 1
-        item["display_change"] = kind or "UNKNOWN"
+        item.setdefault("display_change", kind or "UNKNOWN")
         visible_changes.append(item)
 
     path_changes_same_content = [
@@ -293,11 +318,19 @@ def build_ip_change_projection(
 
 
 def _change_counts_by_view(file_changes: list[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
-    out: dict[str, dict[str, int]] = defaultdict(lambda: {"added": 0, "removed": 0, "changed": 0})
+    out: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"added": 0, "removed": 0, "changed": 0, "unmatched_new": 0, "unmatched_base": 0}
+    )
     for item in file_changes:
         raw_type = _norm_type(item.get("file_type"))
         view_type = _canonical_view_type(raw_type)
         change = str(item.get("change") or "").lower()
+        display_change = str(item.get("display_change") or "").lower()
+        if display_change in {"unmatched_new", "unmatched_base"}:
+            out[view_type][display_change] += 1
+            raw_counts = out[view_type].setdefault("raw_delta_counts", {})
+            raw_counts[raw_type] = raw_counts.get(raw_type, 0) + 1
+            continue
         if change in {"added", "removed", "changed"}:
             out[view_type][change] += 1
             raw_counts = out[view_type].setdefault("raw_delta_counts", {})
@@ -323,6 +356,10 @@ def _path_changes_by_view(path_changes: list[Mapping[str, Any]]) -> dict[str, di
 
 def _cn_change_kind(value: Any) -> str:
     text = str(value or "").lower()
+    if text == "unmatched_new":
+        return "未匹配新侧"
+    if text == "unmatched_base":
+        return "未匹配基准侧"
     if text == "added":
         return "新增"
     if text == "removed":
@@ -357,7 +394,7 @@ def _changed_file_examples_by_view(file_changes: list[Mapping[str, Any]], *, lim
         path = str(item.get("path") or "").strip()
         if not path:
             continue
-        label = f"{_cn_change_kind(item.get('change'))}: {path}"
+        label = f"{_cn_change_kind(item.get('display_change') or item.get('change'))}: {path}"
         if len(grouped[view_type]) < limit:
             grouped[view_type].append(label)
     return grouped
@@ -449,6 +486,8 @@ def _build_view_delta_rows(
     baseline_only_changes = [item for item in projection.get("baseline_only_changes", []) or [] if isinstance(item, Mapping)]
     raw_current_counts = _current_type_counts(model)
     current_counts = _aggregate_counts_by_view(raw_current_counts)
+    base_types = _as_mapping(_as_mapping(model.get('file_diff')).get('by_type')).get('old')
+    base_counts = _aggregate_counts_by_view(_as_mapping(base_types))
     candidate_inventory = _as_mapping(model.get("candidate_effective_inventory"))
     candidate_counts = _aggregate_counts_by_view(_as_mapping(candidate_inventory.get("file_type_counts")))
     candidate_available = bool(candidate_inventory.get("manifest"))
@@ -472,7 +511,9 @@ def _build_view_delta_rows(
     for view_type in sorted(keys, key=_view_sort_key):
         counts = delta.get(view_type, {"added": 0, "removed": 0, "changed": 0, "raw_delta_counts": {}})
         baseline_only_count = _as_int(baseline_only.get(view_type, {}).get("removed"))
-        delta_total = counts["added"] + counts["removed"] + counts["changed"]
+        unmatched_new_count = _as_int(counts.get("unmatched_new"))
+        unmatched_base_count = _as_int(counts.get("unmatched_base"))
+        delta_total = counts["added"] + counts["removed"] + counts["changed"] + unmatched_new_count + unmatched_base_count
         path_changed_same_content = _as_int(path_delta.get(view_type, {}).get("count"))
         evidence_levels = _evidence_levels_for_view(visible_changes, view_type)
         evidence_counts = _evidence_counts_for_view(visible_changes, view_type)
@@ -489,7 +530,10 @@ def _build_view_delta_rows(
         changed_row_examples = _short_examples(changed_examples.get(view_type, []), limit=8)
         baseline_row_examples = _short_examples(baseline_only_examples.get(view_type, []), limit=8)
         sample_count = len(set(current_row_examples + changed_row_examples + baseline_row_examples))
-        if delta_total:
+        if unmatched_new_count or unmatched_base_count:
+            status = "WARNING"
+            status_label = "需确认匹配"
+        elif delta_total:
             status = "INFO"
             status_label = "有更新"
         elif path_changed_same_content:
@@ -515,10 +559,13 @@ def _build_view_delta_rows(
                 "usage_area": _usage_area_for_type(view_type),
                 "current_count": current_total,
                 "delivery_count": current_total,
+                "base_count": _as_int(base_counts.get(view_type)) if isinstance(base_types, Mapping) and not first_version else None,
                 "candidate_effective_count": candidate_total,
                 "added": counts["added"],
                 "removed": counts["removed"],
                 "changed": counts["changed"],
+                "unmatched_new": unmatched_new_count,
+                "unmatched_base": unmatched_base_count,
                 "path_changed_same_content": path_changed_same_content,
                 "delta_total": delta_total,
                 "baseline_only_count": baseline_only_count,
@@ -1040,10 +1087,15 @@ def _report_count(value: Any) -> int:
 
 
 def _report_change_counts(items: list[Mapping[str, Any]]) -> dict[str, int]:
-    counts = {"added": 0, "removed": 0, "changed": 0}
+    counts = {"added": 0, "removed": 0, "changed": 0, "unmatched_new": 0, "unmatched_base": 0}
     for item in items:
         change = str(item.get("change") or item.get("status") or "").upper()
-        if change == "ADDED":
+        display_change = str(item.get("display_change") or "").upper()
+        if display_change == "UNMATCHED_NEW":
+            counts["unmatched_new"] += 1
+        elif display_change == "UNMATCHED_BASE":
+            counts["unmatched_base"] += 1
+        elif change == "ADDED":
             counts["added"] += 1
         elif change == "REMOVED":
             counts["removed"] += 1
@@ -1128,7 +1180,7 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
     declared_path_change_count = _report_count(declared_counts_raw.get("renamed_or_moved"))
     has_declared_counts = any(key in declared_counts_raw for key in ("added", "removed", "changed"))
     view_rows = [dict(row) for row in ip_view.get("view_rows", []) or [] if isinstance(row, Mapping)]
-    row_totals = {"added": 0, "removed": 0, "changed": 0}
+    row_totals = {"added": 0, "removed": 0, "changed": 0, "unmatched_new": 0, "unmatched_base": 0}
     if any(_report_count(row.get("path_changed_same_content")) for row in view_rows):
         row_totals["path_changed_same_content"] = 0
     for row in view_rows:
@@ -1152,11 +1204,12 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
     focus_paths = {str(item.get("path") or "") for item in focus_items if str(item.get("path") or "")}
     content_row_totals = {
         key: _report_count(row_totals.get(key))
-        for key in ("added", "removed", "changed")
+        for key in ("added", "removed", "changed", "unmatched_new", "unmatched_base")
     }
     reconciliation_checks = {
         "file_diff_items_match_view_matrix": visible_file_counts == content_row_totals,
-        "declared_file_diff_matches_items": not has_declared_counts or declared_counts == raw_file_counts,
+        "declared_file_diff_matches_items": not has_declared_counts
+        or declared_counts == {key: _report_count(raw_file_counts.get(key)) for key in ("added", "removed", "changed")},
         "path_changes_match_view_matrix": (
             len(path_change_items) == _report_count(row_totals.get("path_changed_same_content"))
             and (
@@ -1165,7 +1218,7 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
             )
         ),
         "focus_files_are_file_diff_subset": focus_paths.issubset(file_paths),
-        "file_tree_status_matches_file_diff": raw_file_counts == _report_change_counts(file_changes),
+        "file_tree_status_matches_file_diff": visible_file_counts == content_row_totals,
     }
     has_file_diff_evidence = bool(file_changes) or bool(file_diff) or bool(model.get("diff_summary"))
     if first_version or status in {"DIFF_NOT_RUN", "NO_DIFF_SUMMARY", "NEEDS_BASE_CONFIRM"} or not has_file_diff_evidence:
@@ -1200,16 +1253,18 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
         "visible_file_diff_items": visible_file_counts,
         "view_matrix": row_totals,
         "focus_files": _report_change_counts(focus_items),
-        "file_tree_changes": raw_file_counts,
+        "file_tree_changes": visible_file_counts,
         "checks": reconciliation_checks,
     }
     view_delta_analysis["evidence_reconciliation"] = evidence_reconciliation
+    visible_by_path = {str(item.get('path') or ''): item for item in visible_file_changes}
     focus_file_analysis = {
         "count": len(focus_items),
         "shown_count": min(len(focus_items), 120),
         "truncated": len(focus_items) > 120,
         "items": [
-            {key: item.get(key) for key in ("change", "file_type", "path", "review_lane", "match_status", "evidence_mode") if item.get(key) is not None}
+            {**{key: item.get(key) for key in ("change", "file_type", "path", "review_lane", "match_status", "evidence_mode") if item.get(key) is not None},
+             'display_change': visible_by_path.get(str(item.get('path') or ''), item).get('display_change') or item.get('change')}
             for item in focus_items[:120]
         ],
     }

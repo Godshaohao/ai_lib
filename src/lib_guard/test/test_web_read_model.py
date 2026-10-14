@@ -12,6 +12,151 @@ LIBRARY = "vendor_A.openroad_platform.openroad_asap7"
 
 
 class WebReadModelTest(unittest.TestCase):
+    def test_no_baseline_is_not_presented_as_completed_compare(self):
+        from lib_guard.web.read_model import _action_readiness
+        from unittest.mock import patch
+        with patch('lib_guard.web.read_model._diff_status', return_value='NO_DIFF'):
+            compare = _action_readiness({'version_id': 'first'}, scan_ready=False)['compare']
+        self.assertFalse(compare['enabled'])
+        self.assertEqual(compare['label'], '无可比基准')
+        self.assertNotEqual(compare['button_label'], '按需重跑')
+
+    def test_source_library_rows_preserve_typed_identity_for_release_navigation(self):
+        from lib_guard.web.read_model import list_library_rows
+        state = {'config': {}, 'catalog': {'libraries': [
+            {'library_id': 'ip/A', 'library_name': 'A', 'library_type': 'ip', 'versions': []},
+            {'library_id': 'stdcell/A', 'library_name': 'A', 'library_type': 'stdcell', 'versions': []},
+        ]}}
+        with tempfile.TemporaryDirectory() as td:
+            state['catalog_html'] = td
+            rows = list_library_rows(state)
+        self.assertEqual({row['library_id'] for row in rows}, {'ip/A', 'stdcell/A'})
+
+    def test_formal_release_libraries_are_a_separate_read_projection(self) -> None:
+        from lib_guard.web.read_model import list_release_library_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            index_path = Path(td) / "release_libraries" / "latest.json"
+            index_path.parent.mkdir(parents=True)
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "release_library_index.v1",
+                        "release_root": "/formal/release",
+                        "refreshed_at": "2026-09-21T00:00:00Z",
+                        "summary": {"library_count": 1, "release_count": 2},
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "source_type": "正式发布库",
+                                "release_count": 2,
+                                "current": {
+                                    "release_id": "R2",
+                                    "version_id": "v2",
+                                    "alias": "current",
+                                    "link_mode": "symlink",
+                                    "published_at": "2026-09-21T00:00:00Z",
+                                    "source": "alias_link",
+                                },
+                                "releases": [{"release_id": "R2"}, {"release_id": "R1"}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = {"config": {"release_library_index": str(index_path)}, "catalog": {"libraries": []}}
+
+            result = list_release_library_rows(state)
+
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["libraries"][0]["library_id"], "ip/ucie")
+        self.assertEqual(result["libraries"][0]["raw_catalog_match"], "")
+        self.assertEqual(result["libraries"][0]["current_alias"], "current")
+        self.assertEqual(result["libraries"][0]["current_link_mode"], "symlink")
+        self.assertEqual(result["libraries"][0]["current_published_at"], "2026-09-21T00:00:00Z")
+
+    def test_formal_release_library_requires_exact_catalog_library_id(self) -> None:
+        """A same-name library in another type must never become an overwrite target."""
+        from lib_guard.web.read_model import list_release_library_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            index_path = Path(td) / "release_libraries" / "latest.json"
+            index_path.parent.mkdir(parents=True)
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "release_library_index.v1",
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "release_count": 1,
+                                "current": {"release_id": "R1", "version_id": "v1"},
+                                "releases": [{"release_id": "R1"}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = {
+                "config": {"release_library_index": str(index_path)},
+                "catalog": {
+                    "libraries": [
+                        {"library_id": "stdcell/ucie", "library_name": "ucie", "versions": []}
+                    ]
+                },
+            }
+
+            result = list_release_library_rows(state)
+
+        self.assertEqual(result["libraries"][0]["raw_catalog_match"], "")
+
+    def test_formal_release_library_returns_typed_catalog_token_for_actions(self) -> None:
+        from lib_guard.web.read_model import list_release_library_rows, list_version_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            index_path = Path(td) / "release_libraries" / "latest.json"
+            index_path.parent.mkdir(parents=True)
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "release_library_index.v1",
+                        "libraries": [
+                            {
+                                "library_id": "ip/ucie",
+                                "release_count": 1,
+                                "current": {"release_id": "R1", "version_id": "v1"},
+                                "releases": [{"release_id": "R1"}],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = {
+                "config": {"release_library_index": str(index_path)},
+                "catalog_html": Path(td) / "html",
+                "catalog": {
+                    "libraries": [
+                        {"library_id": "stdcell/ucie", "library_name": "ucie", "versions": []},
+                        {
+                            "library_id": "ip/ucie",
+                            "library_name": "ucie",
+                            "versions": [{"version_id": "v2", "scan": {"status": "NOT_SCANNED"}}],
+                        },
+                    ]
+                },
+            }
+
+            release_row = list_release_library_rows(state)["libraries"][0]
+            versions = list_version_rows(state, release_row["raw_catalog_match"])
+
+        self.assertEqual(release_row["raw_catalog_match"], "ip/ucie")
+        self.assertEqual(release_row["raw_catalog_name"], "ucie")
+        self.assertEqual([row["version_id"] for row in versions], ["v2"])
+
     def test_load_web_state_reads_existing_catalog_without_discovering_raw(self) -> None:
         from lib_guard.web.read_model import load_web_state
 
@@ -36,7 +181,9 @@ class WebReadModelTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             scan_dir = Path(td) / "scan"
+            raw_dir = Path(td) / "raw"
             scan_dir.mkdir()
+            raw_dir.mkdir()
             (scan_dir / "file_inventory.json").write_text(json.dumps({"files": []}), encoding="utf-8")
             state = {
                 "catalog_html": Path(td),
@@ -48,6 +195,7 @@ class WebReadModelTest(unittest.TestCase):
                             "versions": [
                                 {
                                     "version_id": "v1",
+                                    "raw_path": str(raw_dir),
                                     "scan": {"status": "SCANNED", "scan_dir": str(scan_dir)},
                                     "diff": {"adjacent_status": "NOT_APPLICABLE"},
                                     "release": {"check_status": "UNKNOWN"},
@@ -66,6 +214,60 @@ class WebReadModelTest(unittest.TestCase):
             row = list_library_rows(state)[0]
 
         self.assertEqual(row["workflow_pending_count"], 1)
+
+    def test_library_pending_count_only_tracks_focus_versions_not_all_history(self) -> None:
+        from lib_guard.web.read_model import list_library_rows, list_version_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ready_scan = root / "scan_ready"
+            raw_root = root / "raw"
+            ready_scan.mkdir()
+            raw_root.mkdir()
+            (ready_scan / "file_inventory.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+            versions = []
+            for idx in range(1, 51):
+                version_id = f"202607{idx:02d}_demo"
+                versions.append(
+                    {
+                        "version_id": version_id,
+                        "raw_path": str(raw_root),
+                        "scan": {"status": "NOT_SCANNED"},
+                        "diff": {"adjacent_old_version": f"202607{idx - 1:02d}_demo" if idx > 1 else ""},
+                    }
+                )
+            versions[38]["scan"] = {"status": "SCANNED", "scan_dir": str(ready_scan)}
+            versions[39]["scan"] = {"status": "SCANNED", "scan_dir": str(ready_scan)}
+            versions[39]["current_effective"] = True
+            versions[48]["scan"] = {"status": "SCANNED", "scan_dir": str(ready_scan)}
+            state = {
+                "catalog_html": root,
+                "catalog": {
+                    "libraries": [
+                        {
+                            "library_name": "demo.lib",
+                            "summary": {"version_count": 50, "latest_version": "20260750_demo"},
+                            "versions": versions,
+                        }
+                    ]
+                },
+            }
+
+            library_row = list_library_rows(state)[0]
+            version_rows = list_version_rows(state, "demo.lib")
+
+        self.assertEqual(library_row["version_count"], 50)
+        self.assertEqual(library_row["focus_version_count"], 3)
+        self.assertEqual(library_row["workflow_pending_count"], 1)
+        self.assertEqual(library_row["new_candidate_pending_count"], 1)
+        self.assertEqual(library_row["base_scan_pending_count"], 0)
+        self.assertEqual(library_row["effective_hygiene_count"], 0)
+        focus_ids = {row["version_id"] for row in version_rows if row["focus_scope"]}
+        self.assertEqual(
+            focus_ids,
+            {"20260740_demo", "20260749_demo", "20260750_demo"},
+        )
+        self.assertFalse(next(row for row in version_rows if row["version_id"] == "20260701_demo")["focus_scope"])
 
     def test_library_rows_expose_asset_facets_for_web_navigation(self) -> None:
         from lib_guard.web.read_model import list_library_rows
@@ -102,16 +304,119 @@ class WebReadModelTest(unittest.TestCase):
         self.assertEqual(row["release_blocked_count"], 1)
         self.assertEqual(row["has_current_effective"], False)
 
+    def test_library_rows_show_raw_source_root_without_claiming_it_is_registered(self) -> None:
+        """Older catalogs may lack a library-level root while versions retain RAW paths."""
+        from lib_guard.web.read_model import list_library_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            library_root = Path(td) / "raw" / "Vendor_A" / "ucie"
+            first = library_root / "20260601"
+            second = library_root / "20260608"
+            state = {
+                "catalog_html": Path(td) / "html",
+                "catalog": {
+                    "libraries": [
+                        {
+                            "library_name": "Vendor_A.ucie",
+                            "versions": [
+                                {"version_id": "20260601", "raw_path": str(first)},
+                                {"version_id": "20260608", "raw_path": str(second)},
+                            ],
+                        }
+                    ]
+                },
+            }
+
+            row = list_library_rows(state)[0]
+
+        self.assertEqual(row["root_abs"], "")
+        self.assertEqual(row["root_display"], str(library_root))
+        self.assertEqual(row["root_source"], "version_raw_path")
+
+    def test_library_rows_expose_current_effective_stack_and_source(self) -> None:
+        from lib_guard.effective.manifest import build_effective_manifest
+        from lib_guard.effective.pointer import write_current_pointer
+        from lib_guard.web.read_model import list_library_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            effective_dir = root / "libraries" / "ip_demo" / "effective" / "E_fix1"
+            effective_dir.mkdir(parents=True)
+            catalog = {
+                "libraries": [
+                    {
+                        "library_id": "ip/demo",
+                        "library_name": "demo",
+                        "versions": [
+                            {"version_id": "full", "scan": {"snapshot_identity": {"digest": "sha256:full", "strength": "full"}}},
+                            {"version_id": "fix1", "scan": {"snapshot_identity": {"digest": "sha256:fix1", "strength": "full"}}, "update_scope": ["lef"]},
+                        ],
+                    }
+                ]
+            }
+            manifest = build_effective_manifest(catalog, "demo", "full", [("fix1", ["lef"])], effective_id="E_fix1")
+            manifest_path = effective_dir / "effective_manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            write_current_pointer(manifest_path, accepted_by="owner", note="reviewed")
+            state = {"catalog_html": root, "catalog": catalog}
+
+            row = list_library_rows(state)[0]
+
+        self.assertEqual(row["current_effective_stack"]["source"], "current_effective_pointer")
+        self.assertEqual(row["current_effective_stack"]["base_full_version"], "full")
+        self.assertEqual(row["current_effective_stack"]["accepted_updates"], ["fix1"])
+        self.assertEqual(row["current_effective_stack"]["source_label"], "当前有效指针")
+        self.assertIn("effective_digest", row["current_effective_stack"])
+
+    def test_pending_window_exposes_only_existing_compare_and_saved_combinations(self) -> None:
+        from lib_guard.web.read_model import _pending_window
+        from lib_guard.window.resolver import default_window_path
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "html"
+            library = {"library_id": "ip/demo", "library_name": "demo"}
+            path = default_window_path(root, library, "demo")
+            path.parent.mkdir(parents=True)
+            compare = path.parent.parent / "compare" / "update" / "index.html"
+            snapshot = path.parent.parent / "effective" / "E_old" / "effective_manifest.json"
+            snapshot.parent.mkdir(parents=True)
+            snapshot.write_text("not read by navigation", encoding="utf-8")
+            path.write_text(json.dumps({"state": "PENDING", "compare": {"html": str(compare)}}))
+            state = {"catalog_html": root}
+            missing = _pending_window(state, library)
+            self.assertEqual(missing["compare_url"], "")
+            self.assertEqual(missing["saved_combinations"], [{"effective_id": "E_old"}])
+            compare.parent.mkdir(parents=True)
+            compare.write_text("report")
+            candidate_html = snapshot.parent/'index.html'
+            candidate_html.write_text('composition and conflicts')
+            path.write_text(json.dumps({'state': 'PENDING', 'compare': {'html': str(compare)}, 'candidate_effective': {'html': str(candidate_html), 'rule': 'manual_selection'}}))
+            ready = _pending_window(state, library)
+            self.assertEqual(ready['candidate_html_url'], '/artifacts/' + candidate_html.relative_to(root).as_posix())
+            self.assertEqual(ready['candidate_effective_stack']['source_label'], '人工选择')
+            self.assertEqual(ready["compare_url"], "/artifacts/" + compare.relative_to(root).as_posix())
+            outside = root.parent / "outside.html"
+            outside.write_text("outside report")
+            path.write_text(json.dumps({"compare": {"html": str(outside)}}))
+            self.assertEqual(_pending_window(state, library)["compare_url"], "")
+            path.unlink()
+            without_window = _pending_window(state, library)
+            self.assertEqual(without_window["state"], "MISSING")
+            self.assertEqual(without_window["saved_combinations"], [{"effective_id": "E_old"}])
+
     def test_initial_baseline_has_own_review_label_without_comparison(self) -> None:
         from lib_guard.web.read_model import _workflow_status
 
         with tempfile.TemporaryDirectory() as td:
             scan_dir = Path(td) / "scan"
+            raw_dir = Path(td) / "raw"
             scan_dir.mkdir()
+            raw_dir.mkdir()
             (scan_dir / "file_inventory.json").write_text(json.dumps({"files": []}), encoding="utf-8")
 
             result = _workflow_status(
                 {
+                    "raw_path": str(raw_dir),
                     "scan": {"status": "SCANNED", "scan_dir": str(scan_dir)},
                     "diff": {"adjacent_status": "NOT_APPLICABLE"},
                     "release": {"check_status": "UNKNOWN"},
@@ -171,7 +476,8 @@ class WebReadModelTest(unittest.TestCase):
         readiness = _action_readiness(version)
 
         self.assertFalse(scan_evidence_ready(version))
-        self.assertEqual(readiness["scan"]["label"], "补扫")
+        self.assertEqual(readiness["scan"]["label"], "需补扫")
+        self.assertEqual(readiness["scan"]["button_label"], "补扫")
         self.assertIn("证据文件不可用", readiness["scan"]["reason"])
         self.assertEqual(readiness["compare"]["enabled"], False)
         self.assertEqual(readiness["release-check"]["enabled"], False)
@@ -206,7 +512,10 @@ class WebReadModelTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(readiness["compare"]["label"], "重新对比")
+        self.assertEqual(readiness["scan"]["label"], "已有扫描")
+        self.assertIn("无需重复扫描", readiness["scan"]["reason"])
+        self.assertEqual(readiness["compare"]["label"], "已有对比")
+        self.assertIn("默认沿用已有扫描证据", readiness["compare"]["reason"])
         self.assertEqual(readiness["release-check"]["label"], "重新检查")
 
         version = {
@@ -353,10 +662,66 @@ class WebReadModelTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             scan_dir = Path(td) / "scan"
+            raw_dir = Path(td) / "raw"
             scan_dir.mkdir()
+            raw_dir.mkdir()
             self.assertFalse(scan_evidence_ready({"scan": {"status": "SCANNED", "scan_dir": str(scan_dir)}}))
             (scan_dir / "file_inventory.json").write_text(json.dumps({"files": []}), encoding="utf-8")
-            self.assertTrue(scan_evidence_ready({"scan": {"status": "SCANNED", "scan_dir": str(scan_dir)}}))
+            self.assertTrue(scan_evidence_ready({"raw_path": str(raw_dir), "scan": {"status": "SCANNED", "scan_dir": str(scan_dir)}}))
+
+    def test_scan_evidence_rejects_missing_raw_path_even_when_old_scan_exists(self) -> None:
+        from lib_guard.web.read_model import scan_evidence_ready
+
+        with tempfile.TemporaryDirectory() as td:
+            scan_dir = Path(td) / "scan"
+            scan_dir.mkdir()
+            missing_raw = Path(td) / "missing-raw"
+            (scan_dir / "scan_meta.json").write_text(
+                json.dumps({"scan_id": "old", "root_path": str(missing_raw), "status": "PASS"}),
+                encoding="utf-8",
+            )
+            (scan_dir / "file_inventory.json").write_text(json.dumps({"files": [{"path": "LEF/a.lef"}]}), encoding="utf-8")
+
+            self.assertFalse(
+                scan_evidence_ready(
+                    {"raw_path": str(missing_raw), "scan": {"status": "SCANNED", "scan_dir": str(scan_dir), "scan_id": "old"}}
+                )
+            )
+
+    def test_file_tree_reports_stale_scan_when_raw_root_moved(self) -> None:
+        from lib_guard.web.read_model import list_file_tree_rows
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scan_dir = root / "scan"
+            scan_dir.mkdir()
+            missing_raw = root / "missing-raw"
+            (scan_dir / "scan_meta.json").write_text(
+                json.dumps({"scan_id": "old", "root_path": str(missing_raw), "status": "PASS"}),
+                encoding="utf-8",
+            )
+            (scan_dir / "file_inventory.json").write_text(json.dumps({"files": [{"path": "LEF/a.lef"}]}), encoding="utf-8")
+            state = {
+                "catalog": {
+                    "libraries": [
+                        {
+                            "library_name": "demo",
+                            "versions": [
+                                {
+                                    "version_id": "v1",
+                                    "raw_path": str(missing_raw),
+                                    "scan": {"status": "SCANNED", "scan_dir": str(scan_dir), "scan_id": "old"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+
+            result = list_file_tree_rows(state, "demo", "v1")
+
+        self.assertEqual(result["status"], "STALE")
+        self.assertEqual(result["file_count"], 0)
 
     def test_scan_evidence_rejects_mismatched_scan_identity(self) -> None:
         from lib_guard.web.read_model import scan_evidence_ready
@@ -406,7 +771,9 @@ class WebReadModelTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             scan_dir = root / "scan"
+            raw_dir = root / "raw"
             scan_dir.mkdir()
+            raw_dir.mkdir()
             (scan_dir / "file_inventory.json").write_text(
                 json.dumps(
                     {
@@ -424,7 +791,7 @@ class WebReadModelTest(unittest.TestCase):
                     "libraries": [
                         {
                             "library_name": "demo",
-                            "versions": [{"version_id": "v1", "raw_path": str(root / "raw"), "scan": {"scan_dir": str(scan_dir)}}],
+                            "versions": [{"version_id": "v1", "raw_path": str(raw_dir), "scan": {"status": "SCANNED", "scan_dir": str(scan_dir)}}],
                         }
                     ]
                 }
@@ -443,7 +810,9 @@ class WebReadModelTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             scan_dir = root / "scan"
+            raw_dir = root / "raw"
             scan_dir.mkdir()
+            raw_dir.mkdir()
             (scan_dir / "file_inventory.json").write_text(
                 json.dumps(
                     {
@@ -461,7 +830,7 @@ class WebReadModelTest(unittest.TestCase):
                     "libraries": [
                         {
                             "library_name": "demo",
-                            "versions": [{"version_id": "v1", "raw_path": str(root / "raw"), "scan": {"scan_dir": str(scan_dir)}}],
+                            "versions": [{"version_id": "v1", "raw_path": str(raw_dir), "scan": {"status": "SCANNED", "scan_dir": str(scan_dir)}}],
                         }
                     ]
                 }

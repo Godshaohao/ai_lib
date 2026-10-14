@@ -3,12 +3,100 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class LibraryRegistryTest(unittest.TestCase):
+    def test_registry_replacement_preserves_existing_permissions(self):
+        from lib_guard.library_registry import write_library_rows
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library_registry.tsv'
+            for mode in (0o664, 0o640, 0o600):
+                path.write_text('previous')
+                path.chmod(mode)
+                write_library_rows(path, [])
+                self.assertEqual(path.stat().st_mode & 0o777, mode)
+
+    def test_denied_registry_replace_keeps_original_data(self):
+        from lib_guard.library_registry import write_library_rows
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library_registry.tsv'
+            path.write_text('previous')
+            path.chmod(0o664)
+            with patch('lib_guard.library_registry.os.replace', side_effect=PermissionError(13, 'Permission denied', str(path))):
+                with self.assertRaises(PermissionError):
+                    write_library_rows(path, [])
+            self.assertEqual(path.read_text(), 'previous')
+            self.assertEqual(list(Path(td).iterdir()), [path])
+
+    def test_discover_does_not_read_delivery_file_contents(self):
+        from lib_guard.library_registry import discover_library_candidates
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / 'raw'
+            view = raw / 'Vendor_A' / 'ip' / 'shipment' / 'LEF'
+            view.mkdir(parents=True)
+            (view / 'macro.lef').write_text('MACRO X\n')
+            with patch.object(Path, 'open', side_effect=AssertionError('discovery must not read file contents')):
+                candidates = discover_library_candidates(raw)
+            self.assertEqual(len(candidates), 1)
+
+    def test_discover_unknown_version_names_uses_files_not_name_rules(self) -> None:
+        from lib_guard.library_registry import discover_library_candidates
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            root = raw / "Vendor_A" / "custom_ip"
+            for name in ("shipment_blue", "customer_delivery"):
+                view = root / name / "payload" / "LEF"
+                view.mkdir(parents=True)
+                (view / "macro.lef").write_text("MACRO X\n", encoding="utf-8")
+            candidates = discover_library_candidates(raw)
+            self.assertEqual([item.root_abs for item in candidates], [str(root.resolve())])
+            self.assertEqual(candidates[0].version_count, 2)
+
+    def test_discover_does_not_turn_library_container_into_single_version_library(self) -> None:
+        from lib_guard.library_registry import discover_library_candidates
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            roots = [raw / "Vendor_A" / "platform" / name for name in ("ip_alpha", "ip_beta")]
+            for root in roots:
+                view = root / "20261001_full" / "LEF"
+                view.mkdir(parents=True)
+                (view / "macro.lef").write_text("MACRO X\n", encoding="utf-8")
+            candidates = discover_library_candidates(raw)
+            self.assertEqual({item.root_abs for item in candidates}, {str(root.resolve()) for root in roots})
+
+    def test_discovery_html_explains_evidence_without_confidence_score(self) -> None:
+        from lib_guard.library_registry import discover_library_candidates, render_discovery_html
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            view = raw / "Vendor_A" / "ip" / "20261001_full" / "LEF"
+            view.mkdir(parents=True)
+            (view / "macro.lef").write_text("MACRO X\n", encoding="utf-8")
+            page = Path(td) / "candidates.html"
+            render_discovery_html(page, discover_library_candidates(raw))
+            text = page.read_text(encoding="utf-8")
+            self.assertNotIn("置信度", text)
+            self.assertNotIn("cohort_core_views=", text)
+            self.assertIn("LEF", text)
+
+    def test_web_candidate_snapshot_preserves_all_versions_and_file_types(self) -> None:
+        from lib_guard.library_registry import discover_to_files
+        from lib_guard.web.read_model import list_library_candidate_rows
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            for index in range(12):
+                view = raw / "Vendor_A" / "ip" / f"shipment_{index}" / "LEF"
+                view.mkdir(parents=True)
+                (view / "macro.lef").write_text("MACRO X\n", encoding="utf-8")
+            output = Path(td) / "candidates.tsv"
+            discover_to_files(raw, list_out=output, json_out=output.with_suffix('.json'))
+            row = list_library_candidate_rows({'config': {'library_candidates': str(output), 'library_registry': str(Path(td) / 'registry.tsv')}})['candidates'][0]
+            self.assertEqual(row['view_types'], ['LEF'])
+            self.assertEqual(len(row['version_names']), 12)
+
     def test_discover_uses_sibling_cohorts_and_suppresses_parent_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             raw = Path(td) / "raw"
@@ -33,9 +121,9 @@ class LibraryRegistryTest(unittest.TestCase):
             self.assertEqual(
                 active_ids,
                 [
-                    "vendor_A_openroad_asap7",
-                    "vendor_A_openroad_gf180",
-                    "vendor_C_openroad_sky130ram",
+                    "vendor_A.openroad_platform.openroad_asap7",
+                    "vendor_A.openroad_platform.openroad_gf180",
+                    "vendor_C.openroad_platform.openroad_sky130ram",
                 ],
             )
             self.assertEqual({item.status for item in candidates if item.library_id in active_ids}, {"REVIEW"})
@@ -56,7 +144,7 @@ class LibraryRegistryTest(unittest.TestCase):
 
             candidates = discover_library_candidates(raw, default_status="OK")
 
-            self.assertEqual([item.library_id for item in candidates], ["Vendor_A_ucie"])
+            self.assertEqual([item.library_id for item in candidates], ["Vendor_A.ucie"])
             self.assertEqual([item.status for item in candidates], ["OK"])
 
     def test_discover_start_root_preserves_identity_relative_to_raw_root(self) -> None:
@@ -72,7 +160,7 @@ class LibraryRegistryTest(unittest.TestCase):
 
             candidates = discover_library_candidates(raw, start_root=raw / "Vendor_A")
 
-            self.assertEqual([item.library_id for item in candidates], ["Vendor_A_ucie"])
+            self.assertEqual([item.library_id for item in candidates], ["Vendor_A.ucie"])
             self.assertEqual(candidates[0].vendor, "Vendor_A")
 
     def test_discover_includes_single_version_libraries_by_default_but_marks_for_confirmation(self) -> None:
@@ -87,7 +175,7 @@ class LibraryRegistryTest(unittest.TestCase):
 
             candidates = discover_library_candidates(raw)
 
-            self.assertEqual([item.library_id for item in candidates], ["Vendor_A_single_drop"])
+            self.assertEqual([item.library_id for item in candidates], ["Vendor_A.single_drop"])
             self.assertEqual(candidates[0].version_count, 1)
             self.assertEqual(candidates[0].status, "REVIEW")
             self.assertIn("single_version_needs_confirmation", candidates[0].reason)
@@ -162,7 +250,7 @@ class LibraryRegistryTest(unittest.TestCase):
             candidates = discover_library_candidates(raw)
             active = [item for item in candidates if item.status == "REVIEW"]
 
-            self.assertEqual([item.library_id for item in active], ["vendor_X_custom_ip"])
+            self.assertEqual([item.library_id for item in active], ["vendor_X.custom_ip"])
             self.assertEqual(active[0].version_count, 4)
             self.assertIn("cohort_core_views", active[0].reason)
             self.assertIn("R1P0", active[0].example_versions)
@@ -182,7 +270,7 @@ class LibraryRegistryTest(unittest.TestCase):
             candidates = discover_library_candidates(raw)
             active_ids = [item.library_id for item in candidates if item.status == "REVIEW"]
 
-            self.assertEqual(active_ids, ["vendor_Y_macro"])
+            self.assertEqual(active_ids, ["vendor_Y.macro"])
             self.assertFalse(any(part in item for item in active_ids for part in ["source_package", "_lef", "_lib"]))
 
     def test_discover_stops_at_version_dirs_and_does_not_promote_deep_views(self) -> None:
@@ -225,7 +313,7 @@ class LibraryRegistryTest(unittest.TestCase):
             data_text = "\n".join(data_lines)
 
             self.assertEqual(result["status"], "PASS")
-            self.assertIn("Vendor_A_Analog_IP", data_text)
+            self.assertIn("Vendor_A.Analog_IP", data_text)
             self.assertNotIn("phys_ver", data_text)
             self.assertNotIn("\tdft\t", data_text)
             self.assertLess(result["visited_dirs"], 20)
@@ -360,6 +448,39 @@ class LibraryRegistryTest(unittest.TestCase):
             self.assertEqual(apply_result["selected"], 1)
             self.assertEqual([ref.library_id for ref in refs], ["vendor_A.openroad_platform.openroad_asap7"])
 
+    def test_library_add_replaces_existing_root_for_same_library_id(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            old_root = raw / "vendor_A" / "ucie_old"
+            new_root = raw / "vendor_A" / "ucie_new"
+            old_root.mkdir(parents=True)
+            new_root.mkdir(parents=True)
+            registry = Path(td) / "config" / "library_registry.tsv"
+
+            from lib_guard.library_registry import add_library_to_registry, read_library_list
+
+            add_library_to_registry(
+                raw,
+                registry_path=registry,
+                library_id="Vendor_A.ucie",
+                root_abs=old_root,
+                display_name="ucie_old",
+            )
+            result = add_library_to_registry(
+                raw,
+                registry_path=registry,
+                library_id="Vendor_A.ucie",
+                root_abs=new_root,
+                display_name="ucie_new",
+            )
+            rows = read_library_list(registry)
+
+            self.assertEqual(result["count"], 1)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["library_id"], "Vendor_A.ucie")
+            self.assertEqual(Path(rows[0]["root_abs"]).resolve(), new_root.resolve())
+            self.assertEqual(rows[0]["display_name"], "ucie_new")
+
     def test_library_apply_blocks_accidental_catalog_shrink(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             raw = Path(td) / "raw"
@@ -452,7 +573,7 @@ class LibraryRegistryTest(unittest.TestCase):
             discover_to_files(raw, list_out=candidates)
 
             self.assertTrue(candidates.exists())
-            self.assertIn("vendor_X_custom_ip", candidates.read_text(encoding="utf-8"))
+            self.assertIn("vendor_X.custom_ip", candidates.read_text(encoding="utf-8"))
             self.assertIn("vendor_old.ip", registry.read_text(encoding="utf-8"))
 
     def test_discover_limits_large_raw_tree_and_reports_truncation(self) -> None:

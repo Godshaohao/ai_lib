@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 
+from lib_guard.atomic import file_lock
 from .io import utc_now
 
 
@@ -66,20 +67,22 @@ def write_review_override(
         raise ValueError("review override by is required")
 
     p = Path(path)
-    data = read_review_overrides(p)
-    data["library"] = library
-    data["version"] = version
-    data["updated_at"] = utc_now()
-    items = data.setdefault("items", {})
-    items[str(item_id)] = {
-        "decision": decision,
-        "by": by,
-        "reason": reason,
-        "gate": gate,
-        "created_at": utc_now(),
-    }
-    _atomic_write_json(p, data)
-    return data
+    lock_path = p.with_name(f".{p.name}.lock")
+    with file_lock(lock_path):
+        data = read_review_overrides(p)
+        data["library"] = library
+        data["version"] = version
+        data["updated_at"] = utc_now()
+        items = data.setdefault("items", {})
+        items[str(item_id)] = {
+            "decision": decision,
+            "by": by,
+            "reason": reason,
+            "gate": gate,
+            "created_at": utc_now(),
+        }
+        _atomic_write_json(p, data)
+        return data
 
 
 def apply_overrides_to_gate(gate: Mapping[str, Any], overrides: Mapping[str, Any] | None) -> dict[str, Any]:

@@ -8,13 +8,15 @@ This layer is intentionally separate from scan/diff/release:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
+from collections import deque
 from html import escape as html_escape
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 import json
 import os
 import re
+import stat
 import tempfile
 
 LIST_COLUMNS = ["status", "library_id", "root_abs", "display_name", "vendor", "middle_path"]
@@ -95,14 +97,23 @@ class LibraryCandidate:
     example_versions: list[str]
     confidence: float
     reason: str
+    view_types: list[str] = field(default_factory=list)
+    version_names: list[str] = field(default_factory=list)
 
 
 def _atomic_write_text(path: str | Path, text: str) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing_mode = stat.S_IMODE(p.stat().st_mode)
+    except FileNotFoundError:
+        existing_mode = None
     fd, tmp_name = tempfile.mkstemp(prefix=p.name, suffix=".tmp", dir=str(p.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            # Atomic replacement must not turn a shared registry into a private file.
+            if existing_mode is not None:
+                os.fchmod(fh.fileno(), existing_mode)
             fh.write(text)
         os.replace(tmp_name, p)
     finally:
@@ -176,14 +187,20 @@ def _is_top_level_vendor_dir(raw_root: Path, path: Path) -> bool:
     return rel.parts[0].lower().startswith("vendor")
 
 
-def _direct_dirs(path: Path) -> list[Path]:
+def _discovery_warning(warnings: list[str] | None, message: str) -> None:
+    if warnings is not None and message not in warnings and len(warnings) < 20:
+        warnings.append(message)
+
+
+def _direct_dirs(path: Path, warnings: list[str] | None = None) -> list[Path]:
     try:
         return sorted([p for p in path.iterdir() if p.is_dir() and not _is_negative_candidate_dir_name(p.name)], key=lambda p: p.name.lower())
-    except OSError:
+    except OSError as error:
+        _discovery_warning(warnings, f"目录无法读取，候选识别可能不完整：{path}；{error}")
         return []
 
 
-def _bounded_hint_scan(path: Path, *, max_depth: int = 4, max_entries: int = 400) -> set[str]:
+def _bounded_hint_scan(path: Path, *, max_depth: int = 4, max_entries: int = 400, warnings: list[str] | None = None) -> set[str]:
     """Return key view suffix hints without reading file contents.
 
     Candidate roles reject view/source-package directory names, but the hint
@@ -192,10 +209,10 @@ def _bounded_hint_scan(path: Path, *, max_depth: int = 4, max_entries: int = 400
     """
 
     hints: set[str] = set()
-    queue: list[tuple[Path, int]] = [(path, 0)]
+    queue = deque([(path, 0)])
     checked = 0
     while queue and checked < max_entries:
-        current, depth = queue.pop(0)
+        current, depth = queue.popleft()
         try:
             with os.scandir(current) as entries:
                 for entry in entries:
@@ -210,26 +227,32 @@ def _bounded_hint_scan(path: Path, *, max_depth: int = 4, max_entries: int = 400
                                 queue.append((Path(entry.path), depth + 1))
                             continue
                         if entry.is_file(follow_symlinks=False):
-                            suffix = Path(lower).suffix
+                            suffix = Path(lower[:-3] if lower.endswith(".gz") else lower).suffix
                             if suffix in KEY_VIEW_SUFFIXES:
                                 hints.add(suffix)
-                    except OSError:
+                    except OSError as error:
+                        _discovery_warning(warnings, f"文件无法检查，候选识别可能不完整：{entry.path}；{error}")
                         continue
-        except OSError:
+        except OSError as error:
+            _discovery_warning(warnings, f"目录无法读取，候选识别可能不完整：{current}；{error}")
             continue
+    if queue or checked > max_entries:
+        _discovery_warning(warnings, f"候选文件检查达到数量上限 {max_entries}：{path}；可缩小发现路径后重试。")
     return hints
 
 
-def _delivery_instance_from_child(child: Path) -> tuple[bool, set[str], str]:
+def _delivery_instance_from_child(child: Path, warnings: list[str] | None = None) -> tuple[bool, set[str], str]:
     if _is_negative_candidate_dir_name(child.name):
         return False, set(), "negative_name"
     name_signal = _weak_name_signal(child.name)
-    if not name_signal:
-        return False, set(), "no_version_name_hint"
-    hints = _bounded_hint_scan(child)
+    # A directory containing named releases is a library/container, not one
+    # delivery. Unknown delivery names remain eligible based on file evidence.
+    if not name_signal and any(_is_version_like_dir_name(item.name) for item in _direct_dirs(child, warnings)):
+        return False, set(), "contains_versions"
+    hints = _bounded_hint_scan(child, warnings=warnings)
     if not hints:
         return False, set(), "no_view_hint"
-    reason = f"has_view_hint+name_hint={name_signal}"
+    reason = "has_view_hint"
     return True, hints, reason
 
 
@@ -265,11 +288,11 @@ def _iter_dirs(root: Path, max_depth: int) -> Iterable[Path]:
             stack.append((child, depth + 1))
 
 
-def _version_children_with_hints(path: Path) -> list[tuple[Path, set[str]]]:
-    children = _direct_dirs(path)
+def _version_children_with_hints(path: Path, warnings: list[str] | None = None) -> list[tuple[Path, set[str]]]:
+    children = _direct_dirs(path, warnings)
     instances: list[tuple[Path, set[str]]] = []
     for child in children:
-        ok, hints, _reason = _delivery_instance_from_child(child)
+        ok, hints, _reason = _delivery_instance_from_child(child, warnings)
         if ok:
             instances.append((child, hints))
     return instances
@@ -289,14 +312,14 @@ def _key_file_hint(path: Path, sample_versions: list[tuple[Path, set[str]]]) -> 
     return len(hits), hits
 
 
-def _candidate_from_path(raw_root: Path, path: Path, *, min_versions: int, status: str = "REVIEW") -> LibraryCandidate | None:
+def _candidate_from_path(raw_root: Path, path: Path, *, min_versions: int, status: str = "REVIEW", warnings: list[str] | None = None) -> LibraryCandidate | None:
     if _is_negative_candidate_dir_name(path.name):
         return None
     if _is_top_level_vendor_dir(raw_root, path):
         return None
     if _has_version_like_ancestor(raw_root, path):
         return None
-    versions = _version_children_with_hints(path)
+    versions = _version_children_with_hints(path, warnings)
     coherent, cohort_reason = _cohort_reason([hints for _version, hints in versions], min_versions)
     if not coherent:
         return None
@@ -306,13 +329,20 @@ def _candidate_from_path(raw_root: Path, path: Path, *, min_versions: int, statu
     vendor = parts[0] if len(parts) >= 1 else "unknown"
     display_name = parts[-1] if parts else path.name
     middle_path = "/".join(parts[1:-1]) if len(parts) > 2 else ""
-    library_id = library_id_from_root(raw_root, path)
+    raw_library_id = library_id_from_root(raw_root, path)
+    library_id = suggest_formal_library_id(
+        {
+            "library_id": raw_library_id,
+            "display_name": display_name,
+            "vendor": vendor,
+            "middle_path": middle_path,
+        }
+    )
     reason_parts = [f"delivery_instances={len(versions)}", cohort_reason]
     if len(versions) == 1:
         reason_parts.append("single_version_needs_confirmation")
     if key_count:
         reason_parts.append("key_files_hint")
-    confidence = 0.55 + min(0.25, len(versions) * 0.02) + (0.15 if key_count else 0.0)
     return LibraryCandidate(
         status=status,
         library_id=library_id,
@@ -322,8 +352,10 @@ def _candidate_from_path(raw_root: Path, path: Path, *, min_versions: int, statu
         middle_path=middle_path,
         version_count=len(versions),
         example_versions=[p.name for p, _hints in versions[:5]],
-        confidence=round(min(confidence, 0.98), 2),
+        confidence=0.0,  # Retained for old snapshot readers; not a probability.
         reason="+".join(reason_parts),
+        view_types=sorted(suffix.lstrip(".").upper() for suffix in set().union(*(hints for _, hints in versions))),
+        version_names=[p.name for p, _hints in versions],
     )
 
 
@@ -340,7 +372,7 @@ def _suppress_ancestor_candidates(candidates: list[LibraryCandidate]) -> list[Li
     for item in candidates:
         path = Path(item.root_abs).resolve()
         existing = by_path.get(path)
-        if existing is None or item.confidence > existing.confidence:
+        if existing is None:
             by_path[path] = item
     unique_candidates = list(by_path.values())
     kept: list[LibraryCandidate] = []
@@ -422,18 +454,26 @@ def _discover_library_candidates_with_stats(
                 path.resolve().relative_to(raw)
             except (OSError, ValueError):
                 continue
-            item = _candidate_from_path(raw, path, min_versions=min_versions, status=status)
+            try:
+                item = _candidate_from_path(raw, path, min_versions=min_versions, status=status, warnings=warnings)
+            except OSError as error:
+                _discovery_warning(warnings, f"候选目录无法检查：{path}；{error}")
+                continue
             if item:
                 candidates.append(item)
                 if len(candidates) >= max_candidates:
                     truncated = True
                     warnings.append(f"max_candidates reached: {max_candidates}; discovery truncated")
                     break
+                # The candidate's children are deliveries; do not discover
+                # additional libraries inside their payload directories.
+                continue
         if depth >= max_depth:
             continue
         try:
             children = sorted([p for p in path.iterdir() if p.is_dir()], key=lambda p: p.name.lower(), reverse=True)
-        except OSError:
+        except OSError as error:
+            _discovery_warning(warnings, f"目录无法读取，候选识别可能不完整：{path}；{error}")
             continue
         for child in children:
             if child.name.lower() in DEFAULT_IGNORE_DIRS:
@@ -484,7 +524,7 @@ def render_discovery_html(path: str | Path, candidates: list[LibraryCandidate]) 
     for item in candidates:
         rows.append(
             "<tr>"
-            f"<td>{html_escape(item.status)}</td>"
+            f"<td>{'待确认' if item.status == 'REVIEW' else '可登记'}</td>"
             f"<td><code>{html_escape(item.library_id)}</code></td>"
             f"<td>{html_escape(item.vendor)}</td>"
             f"<td>{html_escape(item.middle_path)}</td>"
@@ -492,8 +532,7 @@ def render_discovery_html(path: str | Path, candidates: list[LibraryCandidate]) 
             f"<td><code>{html_escape(item.root_abs)}</code></td>"
             f"<td>{item.version_count}</td>"
             f"<td>{html_escape(', '.join(item.example_versions))}</td>"
-            f"<td>{item.confidence:.2f}</td>"
-            f"<td>{html_escape(item.reason)}</td>"
+            f"<td>{html_escape('、'.join(item.view_types) or '文件类型依据未提供')}</td>"
             "</tr>"
         )
     text = """<!doctype html>
@@ -503,7 +542,7 @@ body{font-family:Arial,sans-serif;margin:24px;background:#f6f7fb;color:#151923}t
 </style></head><body>
 <h1>库候选发现</h1>
 <div class='hint'><span class='tag'>候选快照</span> 这里不是正式 registry。把真实库根标为 <code>OK</code> 后运行 <code>lg.csh library accept</code>；已知库根直接用 <code>lg.csh library add &lt;正式库名&gt; --root &lt;库根目录&gt;</code>。</div>
-<table><thead><tr><th>状态</th><th>正式库名</th><th>Vendor</th><th>中间路径</th><th>显示名</th><th>库根目录</th><th>版本数</th><th>版本示例</th><th>置信度</th><th>判定原因</th></tr></thead><tbody>
+<table><thead><tr><th>状态</th><th>正式库名</th><th>厂商</th><th>中间路径</th><th>显示名</th><th>库根目录</th><th>版本数</th><th>版本示例</th><th>发现的文件类型</th></tr></thead><tbody>
 """ + "\n".join(rows) + "\n</tbody></table></body></html>\n"
     _atomic_write_text(path, text)
 
@@ -532,8 +571,7 @@ def read_library_list(path: str | Path) -> list[dict[str, str]]:
 
 
 def _upsert_registry_rows(existing: list[dict[str, str]], incoming: list[dict[str, str]]) -> list[dict[str, str]]:
-    by_root: dict[str, dict[str, str]] = {str(Path(row.get("root_abs", "")).resolve()): dict(row) for row in existing if row.get("root_abs")}
-    ordered_roots = [str(Path(row.get("root_abs", "")).resolve()) for row in existing if row.get("root_abs")]
+    rows = [dict(row) for row in existing if row.get("root_abs")]
     for row in incoming:
         root_text = str(row.get("root_abs") or "").strip()
         if not root_text:
@@ -542,10 +580,25 @@ def _upsert_registry_rows(existing: list[dict[str, str]], incoming: list[dict[st
         clean = {column: str(row.get(column, "") or "") for column in LIST_COLUMNS}
         clean["status"] = "OK"
         clean["root_abs"] = root_key
-        by_root[root_key] = clean
-        if root_key not in ordered_roots:
-            ordered_roots.append(root_key)
-    return [by_root[root] for root in ordered_roots if root in by_root]
+        library_id = clean.get("library_id", "")
+        replace_index: int | None = None
+        kept: list[dict[str, str]] = []
+        for existing_row in rows:
+            existing_root = str(Path(existing_row.get("root_abs", "")).resolve()) if existing_row.get("root_abs") else ""
+            existing_id = str(existing_row.get("library_id") or "")
+            same_root = existing_root == root_key
+            same_library = bool(library_id) and existing_id == library_id
+            if same_root or same_library:
+                if replace_index is None:
+                    replace_index = len(kept)
+                continue
+            kept.append(existing_row)
+        if replace_index is None:
+            kept.append(clean)
+        else:
+            kept.insert(replace_index, clean)
+        rows = kept
+    return rows
 
 
 def add_library_to_registry(
