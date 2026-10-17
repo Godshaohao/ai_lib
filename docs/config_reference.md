@@ -203,10 +203,15 @@ result = load_review_snapshot("work/semantic_review")
 }
 ```
 
-扫描会把三类要求统一写入 `summary/release_readiness.json`。版本详情页的“交付分析”
-会展示必需项、已发现项和缺失项；配置为空时明确显示“未配置口径”，不会自动推断为通过。
-已配置但缺失时，IP 主判断为“不可接入”。Corner 目前使用文件名/目录中的明确线索，
-不会声称完成内容级 PVT 验证。
+扫描会把三类要求统一写入 `summary/release_readiness.json`。`parsed_required` 的 View
+必须逐一关联清单文件、成功 Parser Task 和实际解析结果文件；缺任务、跳过、失败、空结果、仅元数据或结果文件缺失均不能判为解析通过。`metadata_required` 只表示文件已登记，不代表内容或语义解析通过。版本详情页会显示解析覆盖数及未完成文件。
+
+Mode/Corner 的路径和文件名提取值只是候选提示，不等于已确认的交付覆盖。只有显式写入
+`scan_meta.json` 的 `delivery_modes` / `required_modes_observed` 和
+`delivery_corners` / `required_corners_observed` 才参与已确认匹配；报告会分别呈现确认值、
+路径提示和证据来源。当前命令行没有独立的人工确认写入命令，因此若策略配置了必需 Mode/Corner，
+但扫描输入未提供显式确认值，结果会保持未满足并指出可用提示，不能仅凭文件名通过。
+配置为空时明确显示“未配置口径”，不会自动推断为全面通过。
 
 `lg init` 会在 workspace 下写出 `lib_guard.yml`。常用字段如下：
 

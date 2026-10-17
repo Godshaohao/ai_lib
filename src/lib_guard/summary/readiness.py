@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 import json
+
+from lib_guard.project_config import canonical_view_type
 
 
 DEFAULT_REQUIRED_VIEWS = {
@@ -148,7 +150,7 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
     required_modes = _requirement_list((policy.get("required_modes") or {}).get(library_type, []))
     required_corners = _requirement_list((policy.get("required_corners") or {}).get(library_type, []))
     validation_levels = dict(policy.get("validation_levels") or DEFAULT_VALIDATION_LEVELS)
-    parser_by_type = _parser_status_by_type(parser_manifest)
+    parser_by_file = _parser_tasks_by_file(parser_manifest)
     quality_by_type = _quality_by_type(parser_quality)
 
     blocking_items: list[dict[str, Any]] = []
@@ -157,7 +159,7 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
     required_view_results: dict[str, dict[str, Any]] = {}
 
     for view in required_views:
-        result = _validate_view(view, required=True, file_types=file_types, parser_by_type=parser_by_type, validation_levels=validation_levels)
+        result = _validate_view(view, required=True, files=files, parser_by_file=parser_by_file, scan_dir=scan, validation_levels=validation_levels)
         required_view_results[view] = result
         if result["status"] == "BLOCK":
             item = _item("blocker", "required_view", f"必需视图阻塞：{view}", result["message"], view)
@@ -190,7 +192,7 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
 
     optional_view_results: dict[str, dict[str, Any]] = {}
     for view in optional_views:
-        optional_view_results[view] = _validate_view(view, required=False, file_types=file_types, parser_by_type=parser_by_type, validation_levels=validation_levels)
+        optional_view_results[view] = _validate_view(view, required=False, files=files, parser_by_file=parser_by_file, scan_dir=scan, validation_levels=validation_levels)
 
     for file_type in sorted(file_types):
         level = validation_levels.get(file_type, "pass_through_allowed")
@@ -295,12 +297,6 @@ def _observed_delivery_modes(files: list[Mapping[str, Any]], scan_meta: Mapping[
     values: set[str] = set()
     for key in ("delivery_modes", "required_modes_observed"):
         values.update(_requirement_list(scan_meta.get(key)))
-    for item in files:
-        for key in ("delivery_mode", "operating_mode", "mode"):
-            value = str(item.get(key) or "").strip()
-            if value:
-                values.add(value)
-                break
     return sorted(values)
 
 
@@ -308,37 +304,58 @@ def _observed_delivery_corners(files: list[Mapping[str, Any]], scan_meta: Mappin
     values: set[str] = set()
     for key in ("delivery_corners", "required_corners_observed"):
         values.update(_normalise_corner(item) for item in _requirement_list(scan_meta.get(key)))
+    return sorted(value for value in values if value)
+
+
+def _candidate_delivery_hints(files: list[Mapping[str, Any]], *, kind: str) -> list[str]:
+    values: set[str] = set()
     for item in files:
-        corner = item.get("corner")
-        value = _normalise_corner(corner)
+        if kind == "corner":
+            value = _normalise_corner(item.get("corner"))
+        else:
+            value = str(item.get("delivery_mode") or item.get("operating_mode") or item.get("mode") or "").strip().lower()
         if value:
             values.add(value)
     return sorted(values)
 
 
-def _requirement_result(required: list[str], observed: list[str], *, kind: str, normalizer=None) -> dict[str, Any]:
+def _requirement_result(required: list[str], observed: list[str], *, kind: str, normalizer=None, candidate_hints: list[str] | None = None) -> dict[str, Any]:
+    candidate_hints = candidate_hints or []
     if not required:
         return {
             "status": "NOT_CONFIGURED",
             "required": [],
             "observed": observed,
+            "candidate_hints": candidate_hints,
+            "evidence_source": "explicit_scan_metadata" if observed else "filename_or_path_hint" if candidate_hints else "none",
             "matched": [],
             "missing": [],
             "message": f"未配置必需{('模式' if kind == 'mode' else '工艺角')}口径。",
         }
     observed_set = {str(item).strip().lower() for item in observed}
+    candidate_set = {normalizer(item) if normalizer else str(item).strip().lower() for item in candidate_hints}
     matched: list[str] = []
     missing: list[str] = []
+    hinted: list[str] = []
     for item in required:
         key = normalizer(item) if normalizer else str(item).strip().lower()
-        (matched if key in observed_set else missing).append(item)
+        if key in observed_set:
+            matched.append(item)
+        else:
+            missing.append(item)
+            if key in candidate_set:
+                hinted.append(item)
+    hint_message = f"；文件名/目录仅提示可能包含 {', '.join(hinted)}，尚未确认" if hinted else ""
     return {
         "status": "BLOCK" if missing else "PASS",
         "required": required,
         "observed": observed,
+        "candidate_hints": candidate_hints,
+        "hinted_required": hinted,
+        "evidence_source": "explicit_scan_metadata" if observed else "filename_or_path_hint" if candidate_hints else "none",
         "matched": matched,
         "missing": missing,
-        "message": "全部必需项已发现。" if not missing else f"缺少 {len(missing)} 项必需交付{('模式' if kind == 'mode' else '工艺角')}。",
+        "message": "全部必需项已确认。" if not missing else f"缺少 {len(missing)} 项已确认的必需交付{('模式' if kind == 'mode' else '工艺角')}{hint_message}。",
     }
 
 
@@ -353,8 +370,10 @@ def _build_delivery_requirements(
 ) -> dict[str, Any]:
     observed_modes = _observed_delivery_modes(files, scan_meta)
     observed_corners = _observed_delivery_corners(files, scan_meta)
-    mode_result = _requirement_result(required_modes, observed_modes, kind="mode")
-    corner_result = _requirement_result(required_corners, observed_corners, kind="corner", normalizer=_normalise_corner)
+    candidate_modes = _candidate_delivery_hints(files, kind="mode")
+    candidate_corners = _candidate_delivery_hints(files, kind="corner")
+    mode_result = _requirement_result(required_modes, observed_modes, kind="mode", candidate_hints=candidate_modes)
+    corner_result = _requirement_result(required_corners, observed_corners, kind="corner", normalizer=_normalise_corner, candidate_hints=candidate_corners)
     view_missing = [view for view in required_views if str((required_view_results.get(view) or {}).get("status")) not in {"PASS", "FOUND"}]
     view_result = {
         "status": "BLOCK" if view_missing else "PASS" if required_views else "NOT_CONFIGURED",
@@ -375,15 +394,36 @@ def _build_delivery_requirements(
     }
 
 
-def _parser_status_by_type(parser_manifest: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    out: dict[str, list[dict[str, Any]]] = {}
+def _parser_tasks_by_file(parser_manifest: Mapping[str, Any]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    out: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for file_entry in parser_manifest.get("files", []) or []:
-        file_type = str(file_entry.get("file_type", "unknown"))
+        file_type = canonical_view_type(str(file_entry.get("file_type", "unknown")))
+        file_path = _normalize_evidence_path(file_entry.get("file"))
+        if not file_path:
+            continue
         for task in file_entry.get("parser_tasks", []) or []:
-            if not task.get("parser_name"):
-                continue
-            out.setdefault(file_type, []).append({**task, "file": file_entry.get("file")})
+            out.setdefault((file_type, file_path), []).append({**task, "file": file_entry.get("file")})
     return out
+
+
+def _normalize_evidence_path(value: Any) -> str:
+    raw = str(value or "").replace("\\", "/").strip()
+    if not raw:
+        return ""
+    normalized = str(PurePosixPath(raw))
+    return normalized[2:] if normalized.startswith("./") else normalized
+
+
+def _parser_result_exists(scan_dir: Path, result_path: Any) -> bool:
+    if not result_path:
+        return False
+    scan_root = scan_dir.resolve()
+    result = (scan_dir / str(result_path)).resolve()
+    try:
+        result.relative_to(scan_root)
+    except ValueError:
+        return False
+    return result.is_file()
 
 
 def _quality_by_type(parser_quality: Mapping[str, Any]) -> dict[str, Any]:
@@ -400,30 +440,71 @@ def _validate_view(
     view: str,
     *,
     required: bool,
-    file_types: Counter,
-    parser_by_type: dict[str, list[dict[str, Any]]],
+    files: list[Mapping[str, Any]],
+    parser_by_file: dict[tuple[str, str], list[dict[str, Any]]],
+    scan_dir: Path,
     validation_levels: dict[str, str],
 ) -> dict[str, Any]:
+    view = canonical_view_type(view)
     level = validation_levels.get(view, "pass_through_allowed")
-    found = file_types.get(view, 0) > 0
-    tasks = parser_by_type.get(view, [])
-    parser_statuses = [str(t.get("result_status", t.get("status", "UNKNOWN"))).upper() for t in tasks]
-    worst_status = _worst_parser_status(parser_statuses)
-    files = [str(t.get("file")) for t in tasks if t.get("file")]
+    candidates = [item for item in files if canonical_view_type(str(item.get("file_type", "unknown"))) == view]
+    unique_files: dict[str, Mapping[str, Any]] = {}
+    for index, item in enumerate(candidates):
+        path_key = _normalize_evidence_path(item.get("path")) or f"<missing-path:{index}>"
+        unique_files.setdefault(path_key, item)
+    view_files = [unique_files[key] for key in sorted(unique_files)]
+    found = bool(view_files)
+    file_names = [str(item.get("path") or "") for item in view_files if item.get("path")]
 
     if not found:
-        return {"view": view, "found": False, "validation_level": level, "parser_status": None, "status": "BLOCK" if required else "INFO", "message": "必需视图缺失。" if required else "可选视图未发现。", "files": []}
+        return {"view": view, "found": False, "validation_level": level, "parser_status": None, "status": "BLOCK" if required else "INFO", "message": "必需视图缺失。" if required else "可选视图未发现。", "files": [], "evidence_counts": {"total": 0, "satisfied": 0, "incomplete": 0}, "incomplete_files": []}
     if level == "metadata_required":
-        return {"view": view, "found": True, "validation_level": level, "parser_status": "METADATA_ONLY", "status": "PASS", "message": "已记录元数据；该视图不要求深度解析。", "files": files}
+        return {"view": view, "found": True, "validation_level": level, "parser_status": "METADATA_ONLY", "status": "PASS", "message": "已记录文件元数据；不代表完成内容或语义解析。", "files": file_names, "evidence_counts": {"total": len(view_files), "satisfied": len(view_files), "incomplete": 0}, "incomplete_files": []}
     if level == "doc_review_required":
-        return {"view": view, "found": True, "validation_level": level, "parser_status": "DOC_REVIEW", "status": "WARNING" if required else "INFO", "message": "文档需要人工审查。", "files": files}
+        return {"view": view, "found": True, "validation_level": level, "parser_status": "DOC_REVIEW", "status": "WARNING" if required else "INFO", "message": "文档需要人工审查。", "files": file_names, "evidence_counts": {"total": len(view_files), "satisfied": 0, "incomplete": len(view_files)}, "incomplete_files": file_names}
     if level == "manual_review":
-        return {"view": view, "found": True, "validation_level": level, "parser_status": "MANUAL_REVIEW", "status": "WARNING", "message": "工艺或流程配置需要人工审查。", "files": files}
+        return {"view": view, "found": True, "validation_level": level, "parser_status": "MANUAL_REVIEW", "status": "WARNING", "message": "工艺或流程配置需要人工审查。", "files": file_names, "evidence_counts": {"total": len(view_files), "satisfied": 0, "incomplete": len(view_files)}, "incomplete_files": file_names}
     if level == "pass_through_allowed":
-        return {"view": view, "found": True, "validation_level": level, "parser_status": "PASS_THROUGH", "status": "WARNING", "message": "未纳入自动校验的文件需要人工确认。", "files": files}
-    if worst_status in {"FAILED", "PASS_EMPTY"}:
-        return {"view": view, "found": True, "validation_level": level, "parser_status": worst_status, "status": "BLOCK" if required and level == "parsed_required" else "WARNING", "message": f"解析器状态为 {worst_status}。", "files": files}
-    return {"view": view, "found": True, "validation_level": level, "parser_status": worst_status or "PASS", "status": "PASS", "message": "视图已完成校验。", "files": files}
+        return {"view": view, "found": True, "validation_level": level, "parser_status": "PASS_THROUGH", "status": "WARNING", "message": "未纳入自动校验的文件需要人工确认。", "files": file_names, "evidence_counts": {"total": len(view_files), "satisfied": 0, "incomplete": len(view_files)}, "incomplete_files": file_names}
+
+    evidence_rows: list[dict[str, Any]] = []
+    for inventory_file in view_files:
+        path = str(inventory_file.get("path") or "")
+        tasks = parser_by_file.get((view, _normalize_evidence_path(path)), [])
+        statuses = [str(task.get("result_status", task.get("status", "UNKNOWN"))).upper() for task in tasks]
+        missing_task = not any(task.get("parser_name") for task in tasks)
+        missing_result = [
+            str(task.get("parser_name") or "unknown")
+            for task in tasks
+            if task.get("parser_name") and (
+                not task.get("result_path")
+                or not _parser_result_exists(scan_dir, task.get("result_path"))
+            )
+        ]
+        failed_statuses = [status for status in statuses if status != "PASS"]
+        if missing_task:
+            reason = "无解析任务" if not tasks else "解析任务被跳过或未声明解析器"
+            if statuses:
+                reason += "（状态=" + ",".join(sorted(set(statuses))) + "）"
+        elif failed_statuses:
+            reason = "解析状态=" + ",".join(sorted(set(failed_statuses)))
+        elif missing_result:
+            reason = "缺少解析结果文件(" + ",".join(sorted(set(missing_result))) + ")"
+        else:
+            reason = ""
+        evidence_rows.append({"file": path, "status": statuses, "reason": reason})
+
+    incomplete_files = [row["file"] for row in evidence_rows if row["reason"]]
+    satisfied_count = len(evidence_rows) - len(incomplete_files)
+    counts = {"total": len(evidence_rows), "satisfied": satisfied_count, "incomplete": len(incomplete_files)}
+    parser_statuses = [status for row in evidence_rows for status in row["status"]]
+    worst_status = _worst_parser_status(parser_statuses)
+    if incomplete_files:
+        status = "BLOCK" if required and level == "parsed_required" else "WARNING"
+        reasons = [f"{row['file']}：{row['reason']}" for row in evidence_rows if row["reason"]]
+        message = f"解析证据不完整（{satisfied_count}/{len(evidence_rows)} 个文件通过）：" + "；".join(reasons)
+        return {"view": view, "found": True, "validation_level": level, "parser_status": worst_status or "UNVERIFIED", "status": status, "message": message, "files": file_names, "evidence_counts": counts, "incomplete_files": incomplete_files}
+    return {"view": view, "found": True, "validation_level": level, "parser_status": "PASS", "status": "PASS", "message": f"全部 {len(evidence_rows)} 个文件均有成功解析结果。", "files": file_names, "evidence_counts": counts, "incomplete_files": []}
 
 
 def _worst_parser_status(statuses: list[str]) -> str | None:

@@ -488,6 +488,50 @@ def _report_value(value: Any, fallback: str = "-") -> str:
     }.get(text, text)
 
 
+def _required_view_evidence_table(items: list[Mapping[str, Any]]) -> str:
+    items = [item for item in (items or []) if isinstance(item, Mapping)]
+    rows = []
+    level_labels = {
+        "parsed_required": "必须解析",
+        "parsed_preferred": "优先解析",
+        "metadata_required": "仅登记元数据",
+        "doc_review_required": "人工审阅文档",
+        "manual_review": "人工审查",
+        "pass_through_allowed": "未纳入自动校验",
+    }
+    status_labels = {"PASS": "满足", "BLOCK": "未满足", "WARNING": "待人工确认", "INFO": "提示"}
+    for item in items:
+        paths = [str(path) for path in item.get("incomplete_files", []) or []]
+        remaining = max(0, int(item.get("incomplete_file_count") or 0) - len(paths))
+        path_text = "、".join(paths) or "无"
+        if remaining:
+            path_text += f" 等 {remaining} 个文件"
+        total = int(item.get("total") or 0)
+        satisfied = int(item.get("satisfied") or 0)
+        rows.append(
+            "<tr>"
+            f"<td>{ui.esc(view_label(item.get('view')))}</td>"
+            f"<td>{ui.esc(level_labels.get(str(item.get('validation_level')), str(item.get('validation_level') or '-')))}</td>"
+            f"<td>{ui.esc(status_labels.get(str(item.get('status')), str(item.get('status') or '-')))}</td>"
+            f"<td>{satisfied} / {total}</td>"
+            f"<td>{ui.esc(path_text)}</td>"
+            "</tr>"
+        )
+    return ui.table(
+        ["必需视图", "校验方式", "结果", "满足文件 / 总数", "未完成文件（最多列出 20 个）"],
+        rows,
+        "当前策略没有必需视图。",
+    )
+
+
+def _delivery_source_label(value: Any) -> str:
+    return {
+        "explicit_scan_metadata": "显式扫描元数据",
+        "filename_or_path_hint": "文件名/目录提示（尚未确认）",
+        "none": "未提供",
+    }.get(str(value or "none"), "来源待确认")
+
+
 def _report_kv_rows(items: list[tuple[str, Any]]) -> list[str]:
     return [
         f"<tr><th>{ui.esc(label)}</th><td>{ui.esc(_report_value(value))}</td></tr>"
@@ -537,17 +581,17 @@ def render_review_report(report: Mapping[str, Any]) -> str:
         ("状态", base.get("status")), ("基准来源", base.get("base_ref")), ("基准版本", base.get("base_version")),
         ("目标版本", base.get("target_version")), ("对比语义", base.get("comparison_semantics")), ("说明", base.get("reason")),
     ]))))
-    report_parts.append(ui.panel("交付分析", "只汇总交付覆盖，不替代原始扫描证据。", ui.table(["字段", "值"], _report_kv_rows([
+    report_parts.append(ui.panel("交付分析", "逐项显示策略要求和对应证据；元数据登记不代表内容解析通过。", ui.table(["字段", "值"], _report_kv_rows([
         ("状态", delivery.get("status")), ("包类型", delivery.get("package_type")), ("交付文件", delivery.get("file_count")),
         ("必需视图", f"{delivery.get('required_present') or 0} / {delivery.get('required_total') or 0}"),
         ("缺失视图", delivery.get("missing_views")),
         ("必需模式", delivery.get("required_modes") or "未配置"),
-        ("模式覆盖", f"已发现：{delivery.get('observed_modes') or '无'}；缺失：{delivery.get('missing_modes') or '无'}"),
+        ("模式覆盖", f"已确认：{delivery.get('observed_modes') or '无'}；路径提示待确认：{delivery.get('hinted_required_modes') or '无'}；缺失：{delivery.get('missing_modes') or '无'}；来源：{_delivery_source_label(delivery.get('mode_evidence_source'))}"),
         ("必需工艺角", delivery.get("required_corners") or "未配置"),
-        ("工艺角覆盖", f"已发现：{delivery.get('observed_corners') or '无'}；缺失：{delivery.get('missing_corners') or '无'}"),
+        ("工艺角覆盖", f"已确认：{delivery.get('observed_corners') or '无'}；路径提示待确认：{delivery.get('hinted_required_corners') or '无'}；缺失：{delivery.get('missing_corners') or '无'}；来源：{_delivery_source_label(delivery.get('corner_evidence_source'))}"),
         ("交付要求状态", delivery.get("requirement_status")),
         ("组合", delivery.get("package_composition")),
-    ]))))
+    ])) + "<h4>必需视图逐文件证据</h4>" + _required_view_evidence_table(delivery.get("view_evidence", []))))
     report_parts.append("</div><div class='review-report-grid'>")
     totals = _as_mapping(delta.get("totals"))
     reconciliation_checks = _as_mapping(reconciliation.get("checks"))

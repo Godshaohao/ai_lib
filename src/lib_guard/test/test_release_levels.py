@@ -129,7 +129,7 @@ class ReleaseLevelTest(unittest.TestCase):
             (root / "README.md").write_text("demo readme\n", encoding="utf-8")
             (root / "release_note.txt").write_text("release note for v1\n", encoding="utf-8")
 
-            _scan(root, scan, mode="signature", parse_file_types=["verilog"])
+            _scan(root, scan, mode="release", parse_file_types=["verilog"])
             from lib_guard.summary.readiness import DEFAULT_VALIDATION_LEVELS, build_release_readiness
 
             strict_policy = {

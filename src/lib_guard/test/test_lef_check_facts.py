@@ -232,6 +232,27 @@ class LefCheckFactsTest(unittest.TestCase):
         self.assertEqual(next(r for r in rows if r['attribute'] == 'size_um')['status'], 'UNCHANGED')
         self.assertIn('A', str(next(r for r in rows if r['attribute'] == 'interface')['details']))
 
+    def test_macro_size_change_reports_old_and_new_dimensions(self):
+        from lib_guard.semantic.lef_checks import LefCheckFacts, compare_lef
+        session = LefCheckFacts()
+        old = lef_index(session, ref='old', digest='old')
+        new = lef_index(session, LEF.replace('SIZE 10 BY 20', 'SIZE 11 BY 20 ;'))
+        row = next(row for row in compare_lef(old, new, session) if row['attribute'] == 'size_um')
+        self.assertEqual(row['status'], 'CHANGED')
+        self.assertEqual((row['details']['old'], row['details']['new']), ([10.0, 20.0], [11.0, 20.0]))
+        self.assertTrue(row['old_evidence'] and row['new_evidence'])
+
+    def test_pin_layer_change_is_reported_as_geometry_change(self):
+        from lib_guard.semantic.lef_checks import LefCheckFacts, compare_lef
+        session = LefCheckFacts()
+        old = lef_index(session, ref='old', digest='old')
+        text = LEF.replace('LAYER M1 ;\nRECT 0 0 1 1 ;', 'LAYER M3 ;\nRECT 0 0 1 1 ;')
+        new = lef_index(session, text)
+        row = next(row for row in compare_lef(old, new, session) if row['attribute'] == 'pin_geometry')
+        self.assertEqual(row['status'], 'CHANGED')
+        self.assertEqual(row['details']['changed_pins'], ['A'])
+        self.assertTrue(row['old_evidence'] and row['new_evidence'])
+
     def test_port_group_change_is_not_hidden_by_same_flat_rectangles(self):
         from lib_guard.semantic.lef_checks import LefCheckFacts, compare_lef
         session = LefCheckFacts()

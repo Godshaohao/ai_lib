@@ -663,6 +663,7 @@ def _delivery_completeness(model: Mapping[str, Any]) -> dict[str, Any]:
 
     required: dict[str, Mapping[str, Any]] = {}
     optional: dict[str, Mapping[str, Any]] = {}
+    required_view_evidence: dict[str, dict[str, Any]] = {}
     for component in readiness.get("components", []) or []:
         if not isinstance(component, Mapping):
             continue
@@ -675,7 +676,23 @@ def _delivery_completeness(model: Mapping[str, Any]) -> dict[str, Any]:
             key = canonical_view_type(view)
             optional.setdefault(key, _as_mapping(optional_results.get(view)))
         for view, result in required_results.items():
-            required[canonical_view_type(view)] = _as_mapping(result)
+            key = canonical_view_type(view)
+            result_map = _as_mapping(result)
+            required[key] = result_map
+            counts = _as_mapping(result_map.get("evidence_counts"))
+            incomplete = [str(item) for item in result_map.get("incomplete_files", []) or [] if str(item).strip()]
+            required_view_evidence[key] = {
+                "view": key,
+                "status": str(result_map.get("status") or "UNKNOWN"),
+                "validation_level": str(result_map.get("validation_level") or "unknown"),
+                "parser_status": str(result_map.get("parser_status") or "UNKNOWN"),
+                "total": counts.get("total", 0),
+                "satisfied": counts.get("satisfied", 0),
+                "incomplete": counts.get("incomplete", 0),
+                "incomplete_file_count": len(incomplete),
+                "incomplete_files": incomplete[:20],
+                "message": str(result_map.get("message") or ""),
+            }
         for view, result in optional_results.items():
             optional.setdefault(canonical_view_type(view), _as_mapping(result))
 
@@ -712,6 +729,7 @@ def _delivery_completeness(model: Mapping[str, Any]) -> dict[str, Any]:
         "required_total": len(required),
         "required_present": required_present,
         "required_views": [view_label(key) for key in required],
+        "required_view_evidence": [required_view_evidence[key] for key in sorted(required_view_evidence)],
         "present": [view_label(key) for key, result in required.items() if is_present(result)],
         "missing": [view_label(key) for key in missing_keys],
         "optional_present": optional_present,
@@ -1178,10 +1196,17 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
         "requirement_status": str(delivery.get("delivery_requirement_status") or delivery_requirements.get("status") or "NOT_CONFIGURED"),
         "required_modes": [str(item) for item in mode_requirements.get("required", []) or []],
         "observed_modes": [str(item) for item in mode_requirements.get("observed", []) or []],
+        "candidate_modes": [str(item) for item in mode_requirements.get("candidate_hints", []) or []],
+        "hinted_required_modes": [str(item) for item in mode_requirements.get("hinted_required", []) or []],
+        "mode_evidence_source": str(mode_requirements.get("evidence_source") or "none"),
         "missing_modes": [str(item) for item in mode_requirements.get("missing", []) or []],
         "required_corners": [str(item) for item in corner_requirements.get("required", []) or []],
         "observed_corners": [str(item) for item in corner_requirements.get("observed", []) or []],
+        "candidate_corners": [str(item) for item in corner_requirements.get("candidate_hints", []) or []],
+        "hinted_required_corners": [str(item) for item in corner_requirements.get("hinted_required", []) or []],
+        "corner_evidence_source": str(corner_requirements.get("evidence_source") or "none"),
         "missing_corners": [str(item) for item in corner_requirements.get("missing", []) or []],
+        "view_evidence": [dict(item) for item in delivery.get("required_view_evidence", []) or [] if isinstance(item, Mapping)],
         "package_composition": [
             str(item) for item in model.get("package_composition", []) or [] if str(item).strip()
         ],
