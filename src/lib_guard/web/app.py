@@ -12,6 +12,8 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     from flask import Flask, jsonify, render_template, request, send_from_directory
@@ -33,6 +35,7 @@ from .read_model import (
 )
 from .release_actions import build_release_web_args
 from .semantic_actions import prepare_semantic_job, semantic_review_options
+from .job_scheduler import JobAdmission, actions_conflict, acquire_catalog_writer_lock, acquire_global_slot
 from lib_guard.atomic import atomic_write_json, atomic_write_text
 from lib_guard.effective.release_set import (
     build_release_set_manifest,
@@ -109,6 +112,9 @@ def _bounded_int(value: Any, *, label: str, minimum: int, maximum: int, default:
 
 
 _JOB_STATUSES = {"QUEUED", "RUNNING", "COMPLETED", "FAILED"}
+_WEB_JOB_THREADS = 4
+_WEB_JOB_WORKERS = 2
+_WEB_JOB_PENDING = 8
 _MAX_BROWSE_CHILDREN = 500
 _MAX_MACHINE_RESULT_BYTES = 8 * 1024 * 1024
 
@@ -304,13 +310,26 @@ def _progress_files(roots: Any) -> list[Path]:
     return files
 
 
-def _load_progress(request_data: Mapping[str, Any]) -> dict[str, Any]:
+def _load_progress(request_data: Mapping[str, Any], status: Mapping[str, Any]) -> dict[str, Any]:
     observability = request_data.get("observability")
     roots = None
     if isinstance(observability, Mapping):
         # progress_paths keeps older Web job records observable after an upgrade.
         roots = observability.get("progress_roots") or observability.get("progress_paths")
-    candidates = _progress_files(roots)
+    if str(status.get("status") or "").upper() == "QUEUED":
+        candidates = []
+    else:
+        candidates = _progress_files(roots)
+        started = status.get("started_epoch")
+        if isinstance(started, (int, float)):
+            fresh_candidates = []
+            for path in candidates:
+                try:
+                    if path.stat().st_mtime >= started:
+                        fresh_candidates.append(path)
+                except OSError:
+                    continue
+            candidates = fresh_candidates
     newest = max(candidates, key=lambda path: path.stat().st_mtime, default=None)
     if newest is not None:
         try:
@@ -354,7 +373,7 @@ def _job_observation(job_dir: Path, status: Mapping[str, Any]) -> dict[str, Any]
         "elapsed_seconds": elapsed,
         "log_tail": _read_tail(log_path, max_bytes=8_000, max_lines=80),
         "log_bytes": log_path.stat().st_size if log_path.is_file() else 0,
-        "progress": _load_progress(request_data),
+        "progress": _load_progress(request_data, status),
     }
 
 
@@ -820,7 +839,7 @@ def _semantic_quality_projection(result: Mapping[str, Any]) -> dict[str, Any] | 
     }
 
 
-def _job_status(job_dir: Path, process: subprocess.Popen[str] | None) -> dict[str, Any]:
+def _job_status(job_dir: Path, process: subprocess.Popen[str] | None, *, managed: bool = False) -> dict[str, Any]:
     status_path = job_dir / "status.json"
     status_file_valid = False
     try:
@@ -854,12 +873,24 @@ def _job_status(job_dir: Path, process: subprocess.Popen[str] | None) -> dict[st
                     failure_source = json.dumps(machine_result, ensure_ascii=False) if machine_result is not None else text
                     status["error"] = _job_failure_summary(failure_source)
             _write_json(status_path, status)
+    elif managed:
+        status.setdefault("status", "QUEUED")
     else:
         current_status = str(status.get("status") or "").upper()
-        if current_status in {"QUEUED", "RUNNING"}:
+        pid = status.get("pid")
+        process_alive = False
+        if current_status == "RUNNING" and isinstance(pid, int) and pid > 0:
+            try:
+                os.kill(pid, 0)
+                process_alive = True
+            except OSError:
+                process_alive = False
+        if current_status == "RUNNING" and process_alive:
+            pass
+        elif current_status in {"QUEUED", "RUNNING"}:
             status.update({
                 "status": "FAILED",
-                "message": "服务重启后未接管此任务，执行结果无法确认。",
+                "message": "任务执行进程已退出，但服务未记录最终返回码；请核对日志和产物。",
             })
         elif not status_file_valid or not current_status:
             status = {
@@ -922,9 +953,16 @@ def create_app(
     if test_config:
         app.config.update(test_config)
     jobs: dict[str, subprocess.Popen[str]] = {}
+    job_futures = {}
     job_targets: dict[str, str] = {}
+    job_actions: dict[str, str] = {}
+    job_dirs: dict[str, Path] = {}
     jobs_lock = threading.Lock()
+    job_executor = ThreadPoolExecutor(max_workers=_WEB_JOB_THREADS, thread_name_prefix="lib-guard-job")
+    job_admission = JobAdmission(max_workers=_WEB_JOB_THREADS, max_pending=_WEB_JOB_PENDING)
     app.extensions["lib_guard_jobs"] = jobs
+    app.extensions["lib_guard_job_futures"] = job_futures
+    app.extensions["lib_guard_job_executor"] = job_executor
     app.extensions["lib_guard_jobs_lock"] = jobs_lock
     workspace_pointer = Path(app.config["LIB_GUARD_CWD"]).resolve() / "work" / "web_workspace.json"
 
@@ -1128,6 +1166,40 @@ def create_app(
                 seen.add(value)
                 unique.append(value)
         return unique
+
+    def run_cli_job(job_id: str, root: Path, args: list[str],
+                    action: str, cwd: str, env: Mapping[str, str]) -> None:
+        lock_root = root.parent / ".scheduler_locks"
+        try:
+            with ExitStack() as resources:
+                lock_fds: list[int] = []
+                if action != "semantic-review":
+                    lock_fds.append(resources.enter_context(acquire_catalog_writer_lock(lock_root)))
+                slot_fd = resources.enter_context(acquire_global_slot(lock_root, _WEB_JOB_WORKERS))
+                lock_fds.append(slot_fd)
+                started_epoch = time.time()
+                with (root / "stdout.log").open("w", encoding="utf-8") as log:
+                    process = subprocess.Popen(
+                        args, cwd=cwd, env=dict(env), stdout=log, stderr=subprocess.STDOUT,
+                        text=True, pass_fds=tuple(lock_fds),
+                    )
+                    with jobs_lock:
+                        jobs[job_id] = process
+                    _write_json(root / "status.json", {
+                        "job_id": job_id, "status": "RUNNING", "pid": process.pid,
+                        "action": action, "started_epoch": started_epoch,
+                    })
+                    return_code = process.wait()
+                _write_json(root / "status.json", {
+                    "job_id": job_id, "status": "COMPLETED" if return_code == 0 else "FAILED",
+                    "pid": process.pid, "return_code": return_code, "action": action,
+                    "started_epoch": started_epoch, "finished_epoch": time.time(),
+                })
+        except Exception as exc:
+            _write_json(root / "status.json", {
+                "job_id": job_id, "status": "FAILED", "action": action,
+                "error": str(exc), "finished_epoch": time.time(),
+            })
 
     def create_job(action: str, library: str, version: str | None, payload: Mapping[str, Any], web_state: Mapping[str, Any]) -> dict[str, Any]:
         action_spec = WEB_ACTION_SPECS.get(action)
@@ -1540,10 +1612,19 @@ def create_app(
                 "version_id": str(formal_release_target.get("version_id") or ""),
                 "source": str(formal_release_target.get("source") or ""),
             }
+        library_row = find_catalog_library(web_state, library) if library else None
+        library_key = str((library_row or {}).get("library_id") or library or "") or None
         with jobs_lock:
             if not app.config.get("TESTING"):
-                if any(process.poll() is None and job_targets.get(existing) == library for existing, process in jobs.items()):
-                    raise RuntimeError(f"库正在执行其他动作，请等待当前任务结束：{library}")
+                for existing, target in job_targets.items():
+                    if target != library_key or not actions_conflict(job_actions.get(existing, ""), action):
+                        continue
+                    try:
+                        existing_status = json.loads((job_dirs[existing] / "status.json").read_text(encoding="utf-8"))
+                    except (OSError, ValueError, TypeError):
+                        existing_status = {}
+                    if str(existing_status.get("status") or "").upper() in {"QUEUED", "RUNNING"}:
+                        raise RuntimeError(f"该库已有写入任务正在运行或排队：{library}；请等它结束后再提交其他写入动作。")
             created_epoch = time.time()
             root.mkdir(parents=True, exist_ok=False)
             if semantic_documents is not None:
@@ -1558,7 +1639,18 @@ def create_app(
                     header_note="网页勾选的候选库；仅用于本次登记任务，原始候选快照未改写。",
                 )
             _write_json(root / "request.json", request_payload)
-            _write_json(root / "status.json", {"job_id": job_id, "status": "QUEUED", "action": action, "created_epoch": created_epoch})
+            queue_reason = (
+                "等待可用的技术检查执行位。"
+                if action == "semantic-review"
+                else "等待目录写入位；同一工作区的目录更新会依次执行，避免并发覆盖状态。"
+            )
+            _write_json(root / "status.json", {
+                "job_id": job_id, "status": "QUEUED", "action": action,
+                "created_epoch": created_epoch, "queue_reason": queue_reason,
+            })
+            job_targets[job_id] = library_key or ""
+            job_actions[job_id] = action
+            job_dirs[job_id] = root
 
             if not app.config.get("TESTING"):
                 env = os.environ.copy()
@@ -1566,15 +1658,15 @@ def create_app(
                 env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
                 env["PYTHONUNBUFFERED"] = "1"
                 try:
-                    with (root / "stdout.log").open("w", encoding="utf-8") as log:
-                        process = subprocess.Popen(args, cwd=app.config["LIB_GUARD_CWD"], env=env, stdout=log, stderr=subprocess.STDOUT, text=True)
-                except OSError as exc:
+                    future = job_admission.submit(
+                        job_executor,
+                        lambda: run_cli_job(job_id, root, args, action, app.config["LIB_GUARD_CWD"], env),
+                    )
+                    job_futures[job_id] = future
+                except RuntimeError as exc:
                     _write_json(root / "status.json", {"job_id": job_id, "status": "FAILED", "action": action, "error": str(exc)})
                     raise
-                jobs[job_id] = process
-                job_targets[job_id] = library
-                _write_json(root / "status.json", {"job_id": job_id, "status": "RUNNING", "pid": process.pid, "action": action, "created_epoch": created_epoch, "started_epoch": time.time()})
-        return {"job_id": job_id, "status": "QUEUED" if app.config.get("TESTING") else "RUNNING", "request": str(root / "request.json")}
+        return {"job_id": job_id, "status": "QUEUED", "request": str(root / "request.json")}
 
     @app.get("/")
     def index() -> str:
@@ -2071,6 +2163,56 @@ def create_app(
             return jsonify({"status": "ERROR", "error": str(exc)}), 400
         return jsonify({"status": "PASS", "compare": compare, "compare_path": str(compare_path)})
 
+    @app.get("/api/runs")
+    def recent_runs() -> Any:
+        try:
+            root = job_root_without_catalog()
+            directories = sorted(
+                (path for path in root.iterdir() if path.is_dir() and (path / "request.json").is_file()),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )[:20] if root.is_dir() else []
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 503
+        rows = []
+        for directory in directories:
+            job_id = directory.name
+            try:
+                _safe_component(job_id)
+                request_data = json.loads((directory / "request.json").read_text(encoding="utf-8"))
+                if not isinstance(request_data, Mapping):
+                    continue
+            except (OSError, ValueError, TypeError):
+                continue
+            with jobs_lock:
+                process = jobs.get(job_id)
+                future = job_futures.get(job_id)
+            managed = future is not None and not future.done()
+            status = _job_status(directory, process, managed=managed)
+            rows.append({
+                "job_id": job_id,
+                "action": str(request_data.get("action") or status.get("action") or ""),
+                "library": str(request_data.get("library") or ""),
+                "version": str(request_data.get("version") or ""),
+                "status": status.get("status", "UNKNOWN"),
+                "return_code": status.get("return_code"),
+                "created_epoch": status.get("created_epoch"),
+                "started_epoch": status.get("started_epoch"),
+                "finished_epoch": status.get("finished_epoch"),
+                "result_summary": status.get("result_summary", ""),
+                "message": status.get("message", ""),
+                "queue_reason": status.get("queue_reason", ""),
+                "error": status.get("error", ""),
+                "progress": status.get("progress", {}),
+                "elapsed_seconds": status.get("elapsed_seconds"),
+                "log_tail": status.get("log_tail", ""),
+                "log_bytes": status.get("log_bytes", 0),
+                "quality_summary": status.get("quality_summary"),
+                "artifacts": status.get("artifacts", []),
+                "log_url": f"/api/runs/{job_id}/log",
+            })
+        return jsonify({"status": "PASS", "jobs": rows})
+
     @app.get("/api/runs/<job_id>")
     def run_status(job_id: str) -> Any:
         try:
@@ -2081,7 +2223,9 @@ def create_app(
             return jsonify({"status": "NOT_FOUND", "error": f"运行记录不存在: {job_id}"}), 404
         with jobs_lock:
             process = jobs.get(job_id)
-        return jsonify(_job_status(root, process) | {"job_id": job_id, "request": str(root / "request.json"), "log_url": f"/api/runs/{job_id}/log"})
+            future = job_futures.get(job_id)
+        managed = future is not None and not future.done()
+        return jsonify(_job_status(root, process, managed=managed) | {"job_id": job_id, "request": str(root / "request.json"), "log_url": f"/api/runs/{job_id}/log"})
 
     @app.get("/api/runs/<job_id>/log")
     def run_log(job_id: str) -> Any:

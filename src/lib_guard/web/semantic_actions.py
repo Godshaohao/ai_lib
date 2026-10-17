@@ -122,8 +122,12 @@ def prepare_semantic_job(state, library, payload, job_dir):
     profile['config']['mapping'] = None
     config = {'schema_version': 'semantic_review_config.v1', 'profiles': {name: profile['config']},
               'facts_cache': {'reuse': settings['reuse'], 'directory': str(settings['directory']) if settings['directory'] else None}}
-    documents = {'review_config.json': json.dumps(config, ensure_ascii=False, indent=2)}
-    args = [sys.executable, '-m', 'lib_guard.semantic.cli', '--catalog', str(state['catalog_path']),
+    catalog_snapshot = json.dumps(state['catalog'], ensure_ascii=False, indent=2)
+    documents = {
+        'review_config.json': json.dumps(config, ensure_ascii=False, indent=2),
+        'catalog_snapshot.json': catalog_snapshot,
+    }
+    args = [sys.executable, '-m', 'lib_guard.semantic.cli', '--catalog', str(Path(job_dir) / 'catalog_snapshot.json'),
             '--config', str(job_dir / 'review_config.json'), '--profile', name, '--out', str(job_dir / 'semantic_review'),
             '--artifact-store', str(Path(state['workspace']) / 'semantic_artifacts')]
     if mapping is not None:

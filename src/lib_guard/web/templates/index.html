@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lib Guard 库运行台</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css', v='20261017.5') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css', v='20261017.7') }}">
 </head>
 <body>
   <noscript><p role="alert">工作台未连接：请通过已启动服务的 http 地址打开。此文件是服务端模板，直接打开不能读取发布库或执行操作。</p></noscript>
@@ -150,7 +150,7 @@
           <details id="advanced-version-filters" class="advanced-version-filters"><summary>高级筛选</summary><div id="version-advanced-facets" class="version-status-facets" aria-label="高级版本状态筛选"></div></details>
           <div class="pinned-version-board-head">
             <div>
-              <strong>当前库版本状态</strong>
+              <strong id="version-list-heading">待处理版本</strong>
             </div>
             <div class="table-tools">
               <label class="table-search"><span class="sr-only">搜索版本</span><span aria-hidden="true">⌕</span><input id="version-filter" type="search" placeholder="搜索版本" autocomplete="off"></label>
@@ -709,7 +709,7 @@
               <summary>发布设置</summary>
               <div class="release-plan-fields">
                 <label class="compact-field wide-field">发布目录<input id="release-root-display" type="text" readonly></label>
-                <label class="compact-field">正式目录名<input id="release-publish-name" type="text" placeholder="例如 lib_NL7"></label>
+              <label class="compact-field">发布阶段目录名<input id="release-publish-name" type="text" placeholder="例如 lib_NL2.1.0"></label>
                 <label class="compact-field">最新指针名<input id="release-latest-name" type="text" value="latest"></label>
                 <label class="compact-field">发布门禁级别<select id="release-alias"><option value="current">标准发布</option><option value="stage">阶段交付</option><option value="approved">批准发布</option></select></label>
                 <label class="compact-field">交付方式<select id="release-link-mode"><option value="symlink">符号链接</option><option value="copy">复制文件</option></select></label>
@@ -746,7 +746,7 @@
               <span id="formal-release-library-status" class="status-chip status-neutral">尚未读取</span>
             </div>
             <div class="formal-release-library-toolbar">
-              <label class="compact-field wide-field">发布根目录<input id="formal-release-root" type="text" placeholder="保存后从此目录读取发布清单"></label>
+              <label class="compact-field wide-field">发布根目录<input id="formal-release-root" type="text" placeholder="例如 /proj/.../release_area"></label>
               <label class="compact-field">筛选正式库<input id="formal-release-library-filter" type="search" placeholder="库名或版本" autocomplete="off"></label>
               <button id="refresh-formal-release-libraries" class="button button-secondary button-small" type="button">刷新发布库</button>
             </div>
@@ -795,7 +795,7 @@
                 <div class="release-set-table-wrap">
                   <table class="release-set-table">
                     <caption class="sr-only">多库组合选择表</caption>
-                    <thead><tr><th scope="col"><span class="sr-only">选择</span></th><th scope="col">正式库名</th><th scope="col">当前有效组合</th><th scope="col">来源</th></tr></thead>
+                    <thead><tr><th scope="col"><span class="sr-only">选择</span></th><th scope="col">来源库</th><th scope="col">当前有效组合</th><th scope="col">组合状态</th></tr></thead>
                     <tbody id="release-set-library-body"><tr><td colspan="4" class="muted">正在读取已登记库。</td></tr></tbody>
                   </table>
                 </div>
@@ -839,7 +839,7 @@
               <div class="settings-form-grid settings-form-grid-advanced">
                 <label class="compact-field wide-field">默认原始库根<input id="config-raw-root" type="text" placeholder="例如 /proj/mxc700/library/N7/IP"><small class="field-help">发现候选、浏览目录和库登记的默认范围；必须是已存在目录。</small></label>
                 <label class="compact-field wide-field">正式发布根目录<input id="config-release-root" type="text" placeholder="例如 /proj/release/IP"><small class="field-help">用于发布链接和查询交付；不作为 RAW 扫描输入，只有确认发布才写入。</small></label>
-                <label class="compact-field">默认正式目录名<input id="config-release-publish-name" type="text" placeholder="例如 lib_NL7"></label>
+                <label class="compact-field">默认发布阶段目录名<input id="config-release-publish-name" type="text" placeholder="例如 lib_NL2.1.0"></label>
                 <label class="compact-field">默认最新指针名<input id="config-release-latest-name" type="text" value="latest"></label>
               </div>
               <button id="save-settings" class="button button-primary button-small" type="button">保存目录</button>
@@ -919,6 +919,7 @@
       </section>
       <details id="run-workspace" class="runtime-dock runtime-strip" aria-label="运行反馈">
         <summary id="runtime-dock-summary" class="runtime-strip-head"><span class="zone-kicker">运行状态</span><span id="job-status" class="status-chip status-neutral">暂无任务</span><p id="job-summary" class="runtime-summary" aria-live="polite">执行动作后显示任务状态。</p><a id="job-log-link" class="text-link hidden" href="#" target="_blank" rel="noreferrer">打开完整运行日志 ↗</a></summary>
+        <div id="job-task-list" class="job-task-list" aria-label="后台任务" aria-live="polite"></div>
         <div id="job-observation" class="job-observation runtime-observation hidden" aria-live="polite">
           <div class="job-observation-meta"><span id="job-stage">阶段：等待</span><span id="job-percent">进度：未提供</span><span id="job-elapsed">用时：-</span></div>
           <div class="progress-track" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="job-progress-bar" class="progress-bar"></div></div>
@@ -930,6 +931,6 @@
       </details>
     </main>
   </div>
-  <script src="{{ url_for('static', filename='app.js', v='20261017.5') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20261017.7') }}"></script>
 </body>
 </html>

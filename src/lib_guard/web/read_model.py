@@ -936,7 +936,7 @@ def _source_label(source: str) -> str:
         "latest_full_fallback": "自动回退：最新完整包",
         "first_catalog_version": "自动回退：首个版本",
         "uninitialized": "未建立当前有效版",
-        "missing_current_effective": "未找到当前有效指针",
+        "missing_current_effective": "当前有效版本未设置",
         "manual": "人工确认",
         "manual_selection": "人工选择",
         "fallback": "自动回退",
@@ -1091,7 +1091,7 @@ def _workflow_status(
         if scan_status_ready(scan_status):
             return {
                 "label": "需补扫",
-                "reason": "目录里有扫描记录，但扫描证据文件不可用；请重新扫描补齐证据。",
+                "reason": "扫描记录存在，但证据文件缺失或不可读取；完成补扫前不能可靠对比或进行发布检查。",
                 "next_action": "补扫",
                 "source": "catalog_runtime",
             }

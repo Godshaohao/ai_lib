@@ -180,6 +180,44 @@ assert.equal($('version-result-base').textContent, '无对比基准');
         self.assertRegex(styles, r'\.console-shell\s*\{[^}]*grid-template-columns:\s*272px minmax\(0, 1fr\)')
         self.assertRegex(styles, r'\.runtime-dock\s*\{[^}]*position:\s*fixed')
 
+    def test_run_console_exposes_independent_background_tasks(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        self.assertIn('id="job-task-list"', template)
+        self.assertIn('jobTasks: new Map()', script)
+        self.assertIn('jobTimers: new Map()', script)
+        self.assertIn('function renderJobTaskList(', script)
+        self.assertIn('data-job-select', script)
+        self.assertIn('async function restoreRecentJobs(', script)
+        self.assertIn("getJson('/api/runs')", script)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for background task selection tests')
+    def test_background_task_tabs_switch_independent_job_context(self):
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        start = script.index('  function renderJobTaskList(')
+        end = script.index('  function renderSelectedJob(', start)
+        harness = r'''
+const assert = require('node:assert/strict');
+const state={jobTaskListBound:false,jobTasks:new Map(),jobTimers:new Map(),selectedJobId:'job-a'};
+let clickHandler, selected=null, polls=0;
+const container={innerHTML:'',addEventListener:(name,callback)=>{clickHandler=callback;}};
+const $=id=>id==='job-task-list'?container:{open:false};
+const escapeHtml=value=>String(value), statusLabel=value=>value, statusClass=value=>value;
+const renderSelectedJob=task=>{selected=task.id;},pollJob=async()=>{polls++;};
+global.setInterval=()=>123;
+''' + script[start:end] + r'''
+const now=Date.now();
+state.jobTasks.set('job-a',{id:'job-a',label:'scan',library:'A',version:'v1',status:'RUNNING',startedAt:now,terminal:false});
+state.jobTasks.set('job-b',{id:'job-b',label:'semantic review',library:'B',version:'v2',status:'QUEUED',startedAt:now,terminal:false});
+renderJobTaskList();
+assert.match(container.innerHTML,/job-a/);assert.match(container.innerHTML,/job-b/);
+clickHandler({target:{closest:()=>({dataset:{jobSelect:'job-b'}})}});
+assert.equal(state.selectedJobId,'job-b');assert.equal(selected,'job-b');assert.equal(polls,1);
+assert.equal(state.jobTimers.get('job-b'),123);
+'''
+        result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     @unittest.skipUnless(shutil.which('node'), 'Node required')
     def test_global_workbench_commands_select_the_expected_workspace(self):
         script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
@@ -753,11 +791,11 @@ const getJson = async url => {reads.push(url); if(fail) throw new Error('无法�
         end = script.index("  document.querySelector('.skip-link')", start)
         harness = r'''
 const assert = require('node:assert/strict');
-const state={}; const $=()=>({classList:{remove(){}},textContent:''});
+const state={jobTasks:new Map(),jobTimers:new Map(),jobPolling:new Set(),selectedJobId:''}; const $=()=>({classList:{remove(){}},textContent:''});
 const JOB_TIMEOUT_MS=1800000;
 const statusLabel = x => x, statusClass = x => x;
 const renderJobObservation=()=>{},renderJobQualitySummary=()=>{},renderJobArtifacts=()=>{},renderReleasePlanResult=()=>{};
-const invalidateReleasePreview=()=>{};
+const invalidateReleasePreview=()=>{},renderJobTaskList=()=>{},renderSelectedJob=()=>{};
 const clearActionBusy=()=>{},loadLibraries=async()=>{},showError=()=>{};
 let refreshes=0, returnCode=0;
 const getJson=async()=>({status:returnCode ? 'FAILED':'COMPLETED',return_code:returnCode});
@@ -766,12 +804,13 @@ const refreshFormalReleaseLibraries=async()=>{refreshes++;};
         checks = r'''
 (async()=>{
  for(const action of ['release-apply','release-force','release-set-apply','release-plan','release-set-plan']) {
-  state.activeJob={commandAction:action}; state.pollTimer=setInterval(()=>{},10000);
-  await pollJob('test');
+  const task={id:action,commandAction:action,library:'L',version:'V',startedAt:Date.now(),terminal:false,completedHandled:false,result:{status:'RUNNING'}};
+  state.jobTasks.set(action,task); await pollJob(action);
  }
  assert.equal(refreshes,3);
- returnCode=2; state.activeJob={commandAction:'release-apply'}; state.pollTimer=setInterval(()=>{},10000);
- await pollJob('test'); assert.equal(refreshes,3);
+ returnCode=2;
+ const failed={id:'failed',commandAction:'release-apply',library:'L',version:'V',startedAt:Date.now(),terminal:false,completedHandled:false,result:{status:'RUNNING'}};
+ state.jobTasks.set('failed',failed); await pollJob('failed'); assert.equal(refreshes,3);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
         result = subprocess.run(['node', '-e', harness + script[start:end] + checks], capture_output=True, text=True)
@@ -975,7 +1014,7 @@ renderReleaseSetWorkbench();
 assert.equal(state.selectedReleaseSetLibraries.size, 0);
 assert.equal($('release-set-build').disabled, true);
 state.libraries[1].current_effective_stack.available = false;
-state.libraries[1].current_effective = 'stale-id';
+state.libraries[1].current_effective = 'stale';
 state.selectedReleaseSetLibraries.add('B');
 renderReleaseSetWorkbench();
 assert.match($('release-set-selection-summary').textContent, /已选 0（筛选外 0）/);
@@ -989,6 +1028,10 @@ state.activeAction='release-set-compare';
 renderReleaseSetWorkbench();
 assert.match($('release-set-library-body').innerHTML, /data-release-set-library="A" type="checkbox"\s+disabled/);
 assert.equal($('release-set-compare').disabled,true);
+const staleRow = $('release-set-library-body').innerHTML;
+assert.match(staleRow, /有效组合未确认/);
+assert.match(staleRow, /目录记录版本：stale/);
+assert.doesNotMatch(staleRow, /<code title="stale">stale<\/code>/);
 '''
         result = subprocess.run(["node", "-e", harness + script[start:end] + assertions], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1388,7 +1431,7 @@ assert.equal($('release-set-compare').disabled,true);
             self.assertIn(selector, styles)
         self.assertIn("scanFactLabel", script)
         self.assertIn("compareFactLabel", script)
-        self.assertIn("扫描记录缺证据", script)
+        self.assertIn("扫描证据不可用", script)
         self.assertIn("对比记录待验证", script)
         self.assertIn("需补扫", script)
         self.assertIn("const hasSuggestion", script)
@@ -1446,6 +1489,15 @@ assert.equal($('release-set-compare').disabled,true);
             ".library-meta-line",
         ):
             self.assertIn(selector, styles)
+
+    def test_version_status_copy_is_actionable_and_table_heading_tracks_filter(self) -> None:
+        template = (ROOT / "src/lib_guard/web/templates/index.html").read_text(encoding="utf-8")
+        script = (ROOT / "src/lib_guard/web/static/app.js").read_text(encoding="utf-8")
+        self.assertIn('id="version-list-heading"', template)
+        self.assertIn("扫描证据不可用", script)
+        self.assertIn("完成补扫前不能可靠对比或进行发布检查", script)
+        self.assertIn("$('version-list-heading').textContent = filterName", script)
+        self.assertNotIn("扫描记录缺证据", script)
 
     def test_library_management_is_presented_as_path_to_intake_flow(self) -> None:
         template = (ROOT / "src" / "lib_guard" / "web" / "templates" / "index.html").read_text(encoding="utf-8")

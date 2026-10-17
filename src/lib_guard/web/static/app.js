@@ -36,18 +36,18 @@
     versionHasMore: false,
     versionsLoadingMore: false,
     versionRenderLimit: 25,
-    pollTimer: null,
     activeAction: null,
     libraryRequestId: 0,
     librariesLoading: false,
     libraryLoadError: '',
     versionsLoading: false,
     versionLoadError: '',
-    activeJob: null,
-    jobWaiter: null,
+    jobTasks: new Map(),
+    jobTimers: new Map(),
+    jobPolling: new Set(),
+    selectedJobId: '',
+    jobTaskListBound: false,
     libraryLoadRequestId: 0,
-    pollStartedAt: 0,
-    pollInFlight: false,
     fileChanges: [],
     fileChangesLoading: false,
     fileChangesError: '',
@@ -1291,8 +1291,6 @@
 
   function renderLibraryFacetSummary(visibleRows, allRows) {
     const counts = libraryScopeCounts(allRows);
-    const newPendingLibraries = allRows.filter((item) => Number(item.new_candidate_pending_count ?? item.workflow_pending_count ?? 0) > 0).length;
-    const basePendingLibraries = allRows.filter((item) => Number(item.base_scan_pending_count || 0) > 0).length;
     const scopeName = {
       all: '全部库',
       pending: '需处理库',
@@ -1300,7 +1298,7 @@
       no_effective: '无当前有效',
       candidate: '候选待登记',
     }[state.libraryScope] || '全部库';
-    $('library-facet-summary').textContent = `${scopeName} ${visibleRows.length} / ${counts.all} · 有新版本 ${newPendingLibraries} 库 · 基准待扫 ${basePendingLibraries} 库 · 发布待确认 ${counts.blocked} 库`;
+    $('library-facet-summary').textContent = `${scopeName} ${visibleRows.length} / ${counts.all} 个库`;
   }
 
   function libraryItemSignals(item) {
@@ -1752,12 +1750,18 @@
         const stack = currentEffectiveStack(item);
         const enabled = releaseSetLibraryAvailable(item);
         const checked = state.selectedReleaseSetLibraries.has(item.library_name) && enabled;
-        const effective = stack.current_effective_id || item.current_effective || item.current_effective_id || '未设置';
+        const directoryVersion = item.current_effective || item.current_effective_id || '';
+        const effective = stack.available ? stack.current_effective_id : '有效组合未确认';
+        const effectiveDetails = stack.available
+          ? `完整包基线：${stack.base_full_version || '未设置'}；增量包：${(stack.accepted_updates || []).join(' + ') || '无'}`
+          : directoryVersion
+            ? `目录记录版本：${directoryVersion}；${item.effective_pointer_state === 'INVALID' ? '当前有效指针异常' : '当前有效指针未设置'}`
+            : '当前有效组合未设置';
         return `<tr class="${item.library_name === state.selectedLibrary ? 'is-selected' : ''}">
           <td><input data-release-set-library="${escapeHtml(item.library_name)}" type="checkbox" ${checked ? 'checked' : ''} ${enabled && !state.activeAction ? '' : 'disabled'} aria-label="选择 ${escapeHtml(item.library_name)}"></td>
           <td><code title="${escapeHtml(item.library_name)}">${escapeHtml(item.library_name)}</code><small>${escapeHtml(libraryMetaLine(item))}</small></td>
-          <td><code title="${escapeHtml(effective)}">${escapeHtml(effective)}</code><small>Base FULL：${escapeHtml(stack.base_full_version || '未设置')}；叠加：${escapeHtml((stack.accepted_updates || []).join(' + ') || '无')}</small></td>
-          <td><span class="mini-chip ${enabled ? 'is-ready' : 'is-neutral'}">${escapeHtml(stack.source_label || '未找到当前有效指针')}</span>${!enabled ? `<button class="button button-quiet button-small" data-release-set-setup="${escapeHtml(item.library_name)}" type="button" ${state.activeAction ? 'disabled' : ''}>查看库版本</button>` : ''}</td>
+          <td><code title="${escapeHtml(effective)}">${escapeHtml(effective)}</code><small>${escapeHtml(effectiveDetails)}</small></td>
+          <td><span class="mini-chip ${enabled ? 'is-ready' : 'is-neutral'}">${escapeHtml(stack.source_label || '当前有效版本未设置')}</span>${!enabled ? `<button class="button button-quiet button-small" data-release-set-setup="${escapeHtml(item.library_name)}" type="button" ${state.activeAction ? 'disabled' : ''}>设置有效版本</button>` : ''}</td>
         </tr>`;
       }).join('') || '<tr><td colspan="4" class="muted">没有符合筛选条件的库。</td></tr>';
     }
@@ -1791,7 +1795,7 @@
     } else if (!state.releaseSetLastManifest) {
       result.textContent = selectedCount
         ? `已选择 ${selectedCount} 个库；生成后会得到 release_set_manifest.json。`
-        : '请选择至少一个已有当前有效组合的库。';
+        : '请先为库设置已确认的当前有效版本，再加入多库发布。';
     }
   }
 
@@ -1832,7 +1836,8 @@
   }
 
   function isCurrentEffectiveVersion(item) {
-    return Boolean(item?.current_effective);
+    const pointerState = String(item?.effective_pointer_state || '').toUpperCase();
+    return Boolean(item?.current_effective) && !['CATALOG', 'INVALID'].includes(pointerState);
   }
 
   function isLatestVersion(item) {
@@ -1851,7 +1856,7 @@
 
   function versionFilterName(value) {
     return {
-      focus: '当前关注',
+      focus: '待处理版本',
       all: '全部历史',
       scan: '新版本待扫',
       new_scan: '新版本待扫',
@@ -1862,7 +1867,7 @@
       effective: '当前有效',
       blocked: '发布待确认',
       error: '异常',
-    }[value] || '当前关注';
+    }[value] || '待处理版本';
   }
 
   function versionDateKey(item) {
@@ -1874,7 +1879,7 @@
   function versionMatchesFilter(item, filter) {
     const inFocus = Boolean(item.focus_scope);
     if (filter === 'focus') return inFocus;
-    if (filter === 'effective') return item.current_effective;
+    if (filter === 'effective') return isCurrentEffectiveVersion(item);
     if (filter === 'scan' || filter === 'new_scan') return isFocusScanAttention(item) && !isCurrentEffectiveVersion(item) && !isBaseForLatestVersion(item);
     if (filter === 'base_scan') return isFocusScanAttention(item) && isBaseForLatestVersion(item);
     if (filter === 'effective_hygiene') return isCurrentEffectiveVersion(item) && isScanAttention(item);
@@ -1890,7 +1895,7 @@
   }
 
   function versionAttentionScore(item) {
-    if (!item.focus_scope && !item.current_effective) return 8;
+    if (!item.focus_scope && !isCurrentEffectiveVersion(item)) return 8;
     if (versionMatchesFilter(item, 'error')) return 0;
     if (versionMatchesFilter(item, 'new_scan')) return 1;
     if (versionMatchesFilter(item, 'base_scan')) return 2;
@@ -1898,7 +1903,7 @@
     if (versionMatchesFilter(item, 'review')) return 4;
     if (versionMatchesFilter(item, 'effective_hygiene')) return 5;
     if (versionMatchesFilter(item, 'blocked')) return 6;
-    if (item.current_effective) return 7;
+    if (isCurrentEffectiveVersion(item)) return 7;
     return 8;
   }
 
@@ -1908,7 +1913,7 @@
     if (state.versionSort === 'date_asc') return sorted.sort((left, right) => versionDateKey(left) - versionDateKey(right) || String(left.version_id || '').localeCompare(String(right.version_id || '')));
     if (state.versionSort === 'date_desc') return sorted.sort(byDateDesc);
     if (state.versionSort === 'effective') {
-      return sorted.sort((left, right) => Number(Boolean(right.current_effective)) - Number(Boolean(left.current_effective)) || versionAttentionScore(left) - versionAttentionScore(right) || byDateDesc(left, right));
+      return sorted.sort((left, right) => Number(isCurrentEffectiveVersion(right)) - Number(isCurrentEffectiveVersion(left)) || versionAttentionScore(left) - versionAttentionScore(right) || byDateDesc(left, right));
     }
     return sorted.sort((left, right) => versionAttentionScore(left) - versionAttentionScore(right) || byDateDesc(left, right));
   }
@@ -1946,13 +1951,25 @@
 
   function versionRoleLabel(item) {
     if (!item) return '未选择';
-    if (item.current_effective) return '当前有效';
+    if (item.current_effective && String(item.effective_pointer_state || '').toUpperCase() === 'CATALOG') return '目录标记当前，尚未确认';
+    if (item.current_effective && String(item.effective_pointer_state || '').toUpperCase() === 'INVALID') return '有效指针异常';
+    if (isCurrentEffectiveVersion(item)) return '当前有效';
     const selected = item.version_id === state.selectedVersion?.version_id;
     if (selected) return '当前对象';
     if (item.focus_scope) return '当前关注';
     const base = state.selectedVersion?.adjacent_base_version || state.selectedVersion?.base_version || '';
     if (base && item.version_id === base) return '建议基准';
     return '历史版本';
+  }
+
+  function currentEffectiveDisplay(library) {
+    if (!library) return '未设置';
+    const stack = currentEffectiveStack(library);
+    if (stack.available) return stack.current_effective_id || '已设置';
+    const pointerState = String(library.effective_pointer_state || '').toUpperCase();
+    if (pointerState === 'INVALID') return '有效指针异常';
+    const catalogVersion = library.current_effective || library.current_effective_id || '';
+    return catalogVersion ? `未确认（目录记录：${catalogVersion}）` : '未设置';
   }
 
   function versionEvidenceChips(item) {
@@ -1976,7 +1993,7 @@
     const changeSummary = String(item?.change_summary || '');
     const diffReady = Boolean(item?.diff_evidence_ready) || /已生成对比|对比完成|无变化/.test(changeSummary) || ['PASS', 'DIFFED', 'COMPARED', 'DONE'].includes(String(item?.diff_status || '').toUpperCase());
     if (!scanReady && ['PASS', 'PASSED', 'SCANNED', 'DONE'].includes(scanStatus)) {
-      return { state: '需补扫', action: '补扫', kind: 'review', base, note: '目录里有扫描记录，但扫描证据文件不可用；请重新扫描补齐证据。' };
+      return { state: '需补扫', action: '补扫', kind: 'review', base, note: '扫描记录存在，但证据文件缺失或不可读取；完成补扫前不能可靠对比或进行发布检查。' };
     }
     if (!scanReady) return { state: '待扫描', action: '扫描', kind: 'review', base, note: '先生成当前版本的扫描事实。' };
     if (!base) return { state: '首版事实已就绪', action: '查看扫描结果', kind: 'open', base: '', note: '没有可比基准，当前版本只需查看扫描事实。' };
@@ -2015,7 +2032,7 @@
   function scanFactLabel(item) {
     if (item?.scan_evidence_ready) return '扫描已就绪';
     const status = String(item?.scan_status || 'NOT_SCANNED').toUpperCase();
-    if (['PASS', 'PASSED', 'SCANNED', 'DONE'].includes(status)) return '扫描记录缺证据';
+    if (['PASS', 'PASSED', 'SCANNED', 'DONE'].includes(status)) return '扫描证据不可用';
     return statusLabel(status);
   }
 
@@ -2090,6 +2107,7 @@
     const rows = visibleVersions(allRows);
     renderVersionFacets();
     const filterName = versionFilterName(state.versionFilter);
+    $('version-list-heading').textContent = filterName;
     const loadedText = state.versionTotal > state.versions.length ? `已读取 ${state.versions.length} / ${state.versionTotal}` : `${state.versionTotal || state.versions.length}`;
     const query = state.versionQuery.trim();
     $('version-count').textContent = state.versionsLoading
@@ -2478,7 +2496,7 @@
       $('current-processing-state').className = 'status-chip status-neutral';
       $('version-focus-target').textContent = '未选择版本';
       $('version-focus-base').textContent = '未选择版本';
-      $('version-focus-effective').textContent = library?.current_effective || '未设置';
+      $('version-focus-effective').textContent = currentEffectiveDisplay(library);
       $('version-focus-facts').textContent = '等待选择';
       renderVersionResultSummary(null);
       renderActionDeckReadiness(null);
@@ -2502,8 +2520,8 @@
     $('flow-object-value').textContent = item.version_id || '未选择版本';
     $('flow-facts-value').textContent = `扫描 ${scanFactLabel(item)} · 对比 ${compareFactLabel(item)}`;
     $('flow-release-value').textContent = releaseLabel(item.release_status);
-    $('version-role').textContent = item.current_effective ? '当前有效' : stageLabel(item.stage);
-    $('version-role').className = `status-chip ${item.current_effective ? 'status-good' : 'status-neutral'}`;
+    $('version-role').textContent = versionRoleLabel(item);
+    $('version-role').className = `status-chip ${isCurrentEffectiveVersion(item) ? 'status-good' : 'status-neutral'}`;
     $('selected-version-id').textContent = item.version_id;
     $('version-decision').textContent = reviewDecision.label;
     $('version-decision-note').textContent = reviewDecision.reason;
@@ -2514,12 +2532,12 @@
     $('current-processing-state').className = `status-chip ${task.state === '审查事实已就绪' ? 'status-good' : task.state === '需补扫' ? 'status-warn' : task.state === '待扫描' || task.state === '待对比' ? 'status-neutral' : 'status-neutral'}`;
     $('version-focus-target').textContent = item.version_id || '未选择版本';
     $('version-focus-base').textContent = task.base || '无可比基准';
-    $('version-focus-effective').textContent = library?.current_effective || '未设置';
+    $('version-focus-effective').textContent = currentEffectiveDisplay(library);
     $('version-focus-facts').textContent = `扫描 ${scanFactLabel(item)} · 对比 ${compareFactLabel(item)} · ${releaseLabel(item.release_status)}`;
     renderVersionResultSummary(item);
     const detail = item.version_detail_url ? `<a class="text-link" href="${item.version_detail_url}" target="_blank" rel="noreferrer">打开版本详情页 ↗</a>` : '<span class="muted">版本详情尚未生成</span>';
     $('version-facts').innerHTML = [
-      ['包类型', packageLabel(item.package_type)], ['版本角色', item.current_effective ? '当前有效' : stageLabel(item.stage)], ['对比基准', item.base_version || '未设置'],
+      ['包类型', packageLabel(item.package_type)], ['版本角色', versionRoleLabel(item)], ['对比基准', item.base_version || '未设置'],
     ].map(([label, value]) => `<div class="fact-row"><span>${label}</span><strong title="${escapeHtml(value)}">${escapeHtml(value)}</strong></div>`).join('') + `<div class="fact-link">${detail}</div>`;
     $('base-version').value = item.adjacent_base_version || item.base_version || '';
     $('base-version').dataset.manual = 'false';
@@ -3959,6 +3977,7 @@
     const hasPercent = Number.isFinite(percent) && percent >= 0 && percent <= 100;
     const terminal = result.return_code != null || ['COMPLETED', 'FAILED'].includes(String(result.status || '').toUpperCase());
     const failed = String(result.status || '').toUpperCase() === 'FAILED' || (result.return_code != null && Number(result.return_code) !== 0);
+    const queued = String(result.status || '').toUpperCase() === 'QUEUED';
     const elapsedSeconds = Number.isFinite(Number(result.elapsed_seconds))
       ? Number(result.elapsed_seconds)
       : elapsedMs / 1000;
@@ -3966,13 +3985,15 @@
     const logDetails = document.querySelector('.job-log-details');
     $('run-workspace')?.classList.add('has-live-job');
     $('job-observation').classList.remove('hidden');
-    $('job-stage').textContent = `阶段：${terminal ? (failed ? '已失败' : '已结束') : jobStageLabel(progress.stage)}`;
-    $('job-percent').textContent = terminal ? (failed ? '进度：任务失败' : '进度：已完成') : hasPercent ? `进度：${percent}%` : '进度：处理中';
+    $('job-stage').textContent = `阶段：${terminal ? (failed ? '已失败' : '已结束') : queued ? '等待执行资源' : jobStageLabel(progress.stage)}`;
+    $('job-percent').textContent = terminal ? (failed ? '进度：任务失败' : '进度：已完成') : queued ? '进度：排队中' : hasPercent ? `进度：${percent}%` : '进度：处理中';
     $('job-elapsed').textContent = `用时：${Math.max(0, elapsedSeconds).toFixed(1)} 秒`;
-    $('job-progress-bar').style.width = terminal ? '0%' : hasPercent ? `${percent}%` : '34%';
-    track.classList.toggle('is-indeterminate', !terminal && !hasPercent);
+    $('job-progress-bar').style.width = terminal || queued ? '0%' : hasPercent ? `${percent}%` : '34%';
+    track.classList.toggle('is-indeterminate', !terminal && !queued && !hasPercent);
     track.setAttribute('aria-valuenow', terminal ? '0' : hasPercent ? String(percent) : '0');
-    $('job-progress-note').textContent = terminal
+    $('job-progress-note').textContent = queued
+      ? (result.queue_reason || '任务已登记，正在等待可用执行资源。')
+      : terminal
       ? (failed
         ? (result.error ? `失败原因：${result.error}` : '任务已失败，请打开运行日志查看完整输出。')
         : '任务已完成。')
@@ -4028,32 +4049,106 @@
     container.classList.remove('hidden');
   }
 
-  async function startJob(result, label, workflowAction = null, commandAction = null, context = {}) {
-    state.activeJob = { label, workflowAction, commandAction, ...context };
-    state.pollStartedAt = Date.now();
-    state.pollInFlight = false;
-    $('job-status').textContent = statusLabel(result.status);
-    $('job-status').className = `status-chip ${statusClass(result.status)}`;
-    $('job-summary').textContent = `${label}已提交，任务 ${result.job_id} 正在等待运行结果。`;
-    $('run-workspace')?.classList.add('has-live-job');
-    if ($('run-workspace')) $('run-workspace').open = true;
+  function renderJobTaskList() {
+    const container = $('job-task-list');
+    if (!container) return;
+    if (!state.jobTaskListBound) {
+      container.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-job-select]');
+        if (!button) return;
+        const task = state.jobTasks.get(button.dataset.jobSelect);
+        if (!task) return;
+        state.selectedJobId = task.id;
+        $('run-workspace').open = true;
+        renderJobTaskList();
+        renderSelectedJob(task);
+        if (!task.terminal && !state.jobTimers.has(task.id)) {
+          task.timedOut = false;
+          state.jobTimers.set(task.id, setInterval(() => pollJob(task.id), 1000));
+          pollJob(task.id);
+        }
+      });
+      state.jobTaskListBound = true;
+    }
+    const tasks = [...state.jobTasks.values()].slice(-12).reverse();
+    container.innerHTML = tasks.map((task) => {
+      const location = [task.library, task.version].filter(Boolean).join(' / ') || '工作区任务';
+      const status = task.result?.status || task.status || 'QUEUED';
+      return `<button class="job-task-tab" type="button" data-job-select="${escapeHtml(task.id)}" aria-current="${task.id === state.selectedJobId}"><strong>${escapeHtml(task.label)}</strong><span>${escapeHtml(location)}</span><span class="status-chip ${statusClass(status)}">${escapeHtml(statusLabel(status))}</span></button>`;
+    }).join('');
+  }
+
+  function renderSelectedJob(task) {
+    if (!task) return;
+    const result = task.result || {status: task.status, log_url: `/api/runs/${encodeURIComponent(task.id)}/log`};
+    const elapsed = Date.now() - task.startedAt;
+    $('job-status').textContent = statusLabel(result.status || task.status);
+    $('job-status').className = `status-chip ${statusClass(result.status || task.status)}`;
     $('job-observation').classList.remove('hidden');
-    $('job-stage').textContent = '阶段：等待子任务输出';
-    $('job-percent').textContent = '进度：未提供';
-    $('job-elapsed').textContent = '用时：0 秒';
-    $('job-progress-bar').style.width = '0%';
-    $('job-progress-bar').parentElement.classList.add('is-indeterminate');
-    $('job-progress-note').textContent = '任务已提交，正在等待底层输出阶段信息。';
-    $('job-log-tail').textContent = '等待终端输出…';
-    $('job-log-size').textContent = '原文 0 B，已显示 0 B';
+    $('job-summary').textContent = task.terminal
+      ? (result.result_summary || (result.return_code == null ? `任务 ${task.id} 的结果无法确认。${result.message || ''}` : `任务 ${task.id} 已结束，返回码 ${result.return_code}。`))
+      : task.timedOut
+        ? `${task.label}已运行超过 30 分钟；为避免持续占用页面，自动轮询已暂停。选择此任务可继续查看。`
+        : String(result.status || task.status).toUpperCase() === 'QUEUED'
+          ? `${task.label}已登记，正在排队。${result.queue_reason || ''}`
+          : `${task.label} · ${[task.library, task.version].filter(Boolean).join(' / ') || '工作区任务'} · 已用时 ${Math.max(1, Math.round(elapsed / 1000))} 秒。`;
+    $('job-stage').textContent = result.stage ? `阶段：${result.stage}` : `阶段：${task.terminal ? '已结束' : '等待子任务输出'}`;
+    $('job-percent').textContent = result.progress_percent == null ? '进度：未提供' : `进度：${result.progress_percent}%`;
+    $('job-elapsed').textContent = `用时：${Math.max(1, Math.round(elapsed / 1000))} 秒`;
     $('job-log-link').classList.add('hidden');
     $('job-log-link').removeAttribute('href');
-    renderJobQualitySummary(null);
-    renderJobArtifacts([]);
-    if (state.pollTimer) clearInterval(state.pollTimer);
-    const completion = new Promise((resolve, reject) => { state.jobWaiter = { resolve, reject }; });
-    state.pollTimer = setInterval(() => pollJob(result.job_id), 1000);
-    await pollJob(result.job_id);
+    if (result.log_url) { $('job-log-link').href = result.log_url; $('job-log-link').classList.remove('hidden'); }
+    if (result.last_error) $('job-progress-note').textContent = `状态暂时读取失败：${result.last_error}`;
+    else $('job-progress-note').textContent = result.progress_note || (task.terminal ? '任务已完成；检查结论请看任务摘要和产物。' : '运行中；终端输出会随任务进展更新。');
+    renderJobObservation(result, elapsed);
+    renderJobQualitySummary(result.quality_summary || null);
+    renderJobArtifacts(result.artifacts || []);
+  }
+
+  async function restoreRecentJobs() {
+    const response = await getJson('/api/runs');
+    const rows = Array.isArray(response.jobs) ? response.jobs.slice(0, 12) : [];
+    rows.reverse().forEach((row) => {
+      const status = String(row.status || 'UNKNOWN').toUpperCase();
+      const terminal = ['COMPLETED', 'FAILED'].includes(status) || row.return_code != null;
+      const task = {
+        id: row.job_id, label: row.action === 'semantic-review' ? '技术检查' : commandLabel(row.action),
+        commandAction: row.action, workflowAction: null, library: row.library || '', version: row.version || '',
+        startedAt: Number(row.started_epoch || row.created_epoch || Date.now() / 1000) * 1000,
+        status, terminal, timedOut: !terminal && Date.now() - Number(row.started_epoch || row.created_epoch || Date.now() / 1000) * 1000 >= JOB_TIMEOUT_MS,
+        completedHandled: terminal, result: {...row, log_url: row.log_url || `/api/runs/${encodeURIComponent(row.job_id)}/log`},
+        registeredLibrary: '', resolve: null, reject: null,
+      };
+      state.jobTasks.set(task.id, task);
+      if (!terminal && !task.timedOut) state.jobTimers.set(task.id, setInterval(() => pollJob(task.id), 1000));
+    });
+    const restored = [...state.jobTasks.values()];
+    const latest = restored[restored.length - 1];
+    if (!latest) return;
+    state.selectedJobId = latest.id;
+    $('run-workspace')?.classList.add('has-live-job');
+    renderJobTaskList();
+    renderSelectedJob(latest);
+    if (!latest.terminal && !latest.timedOut) pollJob(latest.id);
+  }
+
+  async function startJob(result, label, workflowAction = null, commandAction = null, context = {}) {
+    const task = {
+      id: result.job_id, label, workflowAction, commandAction, ...context,
+      library: state.selectedLibrary || '', version: state.selectedVersion?.version_id || '',
+      startedAt: Date.now(), status: result.status || 'QUEUED', result, terminal: false, timedOut: false,
+      completedHandled: false, resolve: null, reject: null,
+    };
+    const completion = new Promise((resolve, reject) => { task.resolve = resolve; task.reject = reject; });
+    state.jobTasks.set(task.id, task);
+    state.selectedJobId = task.id;
+    $('run-workspace')?.classList.add('has-live-job');
+    if ($('run-workspace')) $('run-workspace').open = true;
+    renderJobTaskList();
+    renderSelectedJob(task);
+    clearActionBusy();
+    state.jobTimers.set(task.id, setInterval(() => pollJob(task.id), 1000));
+    await pollJob(task.id);
     return completion;
   }
 
@@ -4185,75 +4280,66 @@
   }
 
   async function pollJob(jobId) {
-    if (state.pollInFlight) return;
-    state.pollInFlight = true;
+    const task = state.jobTasks.get(jobId);
+    if (!task || state.jobPolling.has(jobId) || task.terminal) return;
+    state.jobPolling.add(jobId);
     try {
       const result = await getJson(`/api/runs/${encodeURIComponent(jobId)}`);
-      $('job-status').textContent = statusLabel(result.status);
-      $('job-status').className = `status-chip ${statusClass(result.status)}`;
+      task.result = result;
+      task.status = result.status || task.status;
+      task.lastError = '';
       const terminal = result.return_code != null || ['COMPLETED', 'FAILED'].includes(String(result.status || '').toUpperCase());
-      const elapsed = state.pollStartedAt ? Date.now() - state.pollStartedAt : 0;
-      const elapsedLabel = `${Math.max(1, Math.round(elapsed / 1000))} 秒`;
-      renderJobObservation(result, elapsed);
-      renderJobQualitySummary(result.quality_summary || null);
-      renderJobArtifacts(result.artifacts || []);
-      $('job-summary').textContent = terminal
-        ? (result.result_summary
-          ? result.result_summary
-          : result.return_code == null
-            ? `任务 ${jobId} 的结果无法确认。${result.message || ''}`
-            : `任务 ${jobId} 已结束，返回码 ${result.return_code}。`)
-        : elapsed >= JOB_TIMEOUT_MS
-          ? `任务 ${jobId} 已运行超过 30 分钟，页面已停止自动轮询；请查看日志确认底层任务是否仍在运行。`
-          : `任务 ${jobId} 正在运行，已用时 ${elapsedLabel}。`;
-      if (result.log_url) { $('job-log-link').href = result.log_url; $('job-log-link').classList.remove('hidden'); }
-      if ((terminal || elapsed >= JOB_TIMEOUT_MS) && state.pollTimer) {
-        clearInterval(state.pollTimer);
-        state.pollTimer = null;
-        const completedJob = state.activeJob;
-        if (completedJob?.commandAction === 'file-diff') {
+      const elapsed = Date.now() - task.startedAt;
+      task.terminal = terminal;
+      task.timedOut = !terminal && elapsed >= JOB_TIMEOUT_MS;
+      if (terminal || task.timedOut) {
+        const timer = state.jobTimers.get(jobId);
+        if (timer) clearInterval(timer);
+        state.jobTimers.delete(jobId);
+      }
+      renderJobTaskList();
+      if (state.selectedJobId === jobId) renderSelectedJob(task);
+
+      if (terminal && !task.completedHandled) {
+        task.completedHandled = true;
+        const completedJob = task;
+        if (task.commandAction === 'file-diff' && task.library === state.selectedLibrary && task.version === state.selectedVersion?.version_id) {
           representativeCandidate = {...(result.file_diff_review || {}), job_id:jobId};
           $('representative-feedback').textContent = representativeCandidate.eligible ? `${fileTypeLabel(representativeCandidate.file_type)} 对比已完成；保存后替换该类型的当前核查结果。` : '此任务未产生可保存的对比结果，请先核对日志。';
           updateRepresentativeButton();
         }
-        state.activeJob = null;
-        if (['release-plan', 'release-overwrite-preview', 'release-force', 'release-apply', 'release-set-plan', 'release-set-apply'].includes(completedJob?.commandAction)) {
+        const taskIsFocused = task.library === state.selectedLibrary && task.version === state.selectedVersion?.version_id;
+        if (taskIsFocused && ['release-plan', 'release-overwrite-preview', 'release-force', 'release-apply', 'release-set-plan', 'release-set-apply'].includes(task.commandAction)) {
           state.releasePlan = result.release_plan || null;
-          state.releasePreviewKey = completedJob.previewKey || '';
+          state.releasePreviewKey = task.previewKey || '';
           renderReleasePlanResult();
           invalidateReleasePreview();
         }
-        if (completedJob?.workflowAction) {
-          setWorkflowStatus(elapsed >= JOB_TIMEOUT_MS && !terminal ? 'RUNNING' : result.status, statusClass(result.status));
+        if (task.workflowAction && task.library === state.selectedLibrary) {
+          setWorkflowStatus(result.status, statusClass(result.status));
           $('workflow-summary').textContent = result.return_code === 0
-            ? workflowSuccessMessage(completedJob.workflowAction)
-            : elapsed >= JOB_TIMEOUT_MS && !terminal
-              ? `${completedJob.label}运行时间过长，已停止页面轮询，请查看日志。`
-              : `${completedJob.label}未成功完成，请查看最近运行中的日志和返回码。`;
+            ? workflowSuccessMessage(task.workflowAction)
+            : `${task.label}未成功完成，请查看该任务日志和返回码。`;
         }
-        clearActionBusy();
-        if (terminal) {
-          await loadLibraries(result.return_code === 0 ? completedJob?.registeredLibrary : '');
-          if (['release-apply', 'release-force', 'release-set-apply'].includes(completedJob?.commandAction) && result.return_code === 0) await refreshFormalReleaseLibraries();
-          if (['library-discover', 'library-accept', 'library-apply', 'library-add'].includes(completedJob?.commandAction)) {
-            if (completedJob.commandAction === 'library-accept' && result.return_code === 0) state.selectedCandidateIds = new Set();
-            await loadLibraryCandidates();
-          }
+        if (['release-apply', 'release-force', 'release-set-apply'].includes(task.commandAction) && result.return_code === 0) await refreshFormalReleaseLibraries();
+        if (['library-discover', 'library-accept', 'library-apply', 'library-add'].includes(task.commandAction)) {
+          if (task.commandAction === 'library-accept' && result.return_code === 0) state.selectedCandidateIds = new Set();
+          await loadLibraryCandidates();
         }
-        const waiter = state.jobWaiter;
-        state.jobWaiter = null;
-        if (waiter) waiter.resolve(result);
+        const canFocusRegisteredLibrary = !state.selectedLibrary || state.selectedLibrary === completedJob?.library;
+        await loadLibraries(result.return_code === 0 && canFocusRegisteredLibrary ? completedJob?.registeredLibrary || '' : '');
+        task.resolve?.(result);
+        task.resolve = null;
+        task.reject = null;
+      } else if (task.timedOut && state.selectedJobId === jobId) {
+        renderSelectedJob(task);
       }
     } catch (error) {
-      if (state.pollTimer) clearInterval(state.pollTimer);
-      state.pollTimer = null;
-      const waiter = state.jobWaiter;
-      state.jobWaiter = null;
-      clearActionBusy();
-      if (waiter) waiter.reject(error);
-      showError(`读取运行状态失败：${error.message}`, { action: true });
+      task.lastError = error.message;
+      if (state.selectedJobId === jobId) renderSelectedJob(task);
+      renderJobTaskList();
     } finally {
-      state.pollInFlight = false;
+      state.jobPolling.delete(jobId);
     }
   }
 
@@ -4640,7 +4726,7 @@
   loadWorkspace()
     .then(() => {
       if (state.workspace?.setup_required) return null;
-      return Promise.all([loadLibraries(), loadLibraryCandidates(), loadFormalReleaseLibraries()]);
+      return Promise.all([loadLibraries(), loadLibraryCandidates(), loadFormalReleaseLibraries(), restoreRecentJobs()]);
     })
     .catch((error) => showError(error.message));
 })();

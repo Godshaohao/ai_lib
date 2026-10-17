@@ -1,9 +1,12 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import shutil
+import threading
 import tempfile
+import time
 import unittest
 
 from lib_guard.effective.manifest import build_effective_manifest
@@ -172,12 +175,20 @@ class WebSemanticReviewTest(unittest.TestCase):
             request = json.loads(Path(response.get_json()['request']).read_text())
             args = request['args']
             self.assertEqual(args[args.index('-m') + 1], 'lib_guard.semantic.cli')
+            catalog_snapshot = Path(args[args.index('--catalog') + 1])
+            self.assertEqual(catalog_snapshot, Path(response.get_json()['request']).parent / 'catalog_snapshot.json')
+            from lib_guard.web.read_model import load_web_state
+            expected_catalog = load_web_state(config_path=config, cwd=ROOT)['catalog']
+            self.assertEqual(json.loads(catalog_snapshot.read_text()), expected_catalog)
             target = Path(args[args.index('--effective-manifest') + 1])
             self.assertNotEqual(target, manifests['E2'])
             self.assertEqual(target.read_bytes(), before[manifests['E2']])
             config_path = Path(args[args.index('--config') + 1])
             frozen = json.loads(config_path.read_text())
             self.assertEqual(frozen['profiles']['lef_basic']['checks'], ['LEF_INTERFACE_DELTA'])
+            live_catalog = json.loads((root / 'catalog/catalog.json').read_text())
+            live_catalog['libraries'] = []
+            write_json(root / 'catalog/catalog.json', live_catalog)
             result = subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             job_dir = Path(response.get_json()['request']).parent
@@ -226,6 +237,7 @@ class WebSemanticReviewTest(unittest.TestCase):
             response = client.post('/api/libraries/demo/semantic-review', json={'target': 'E2', 'base': '', 'profile': 'lef_basic'})
             self.assertEqual(response.status_code, 202, response.get_json())
             job_id = response.get_json()['job_id']
+            app.extensions['lib_guard_job_futures'][job_id].result(timeout=30)
             process = app.extensions['lib_guard_jobs'][job_id]
             try:
                 process.wait(timeout=30)
@@ -235,6 +247,8 @@ class WebSemanticReviewTest(unittest.TestCase):
                     process.wait()
             status = client.get(f'/api/runs/{job_id}').get_json()
             self.assertEqual(status['return_code'], 0, status)
+            recent = client.get('/api/runs').get_json()['jobs']
+            self.assertTrue(any(row['job_id'] == job_id for row in recent))
             self.assertNotIn('usage_decision', status)
             self.assertNotIn('delta', status)
             self.assertNotIn('checks', status)
@@ -247,6 +261,73 @@ class WebSemanticReviewTest(unittest.TestCase):
                 detail = download.get_json()
             self.assertTrue(all(row['status'] == 'INCOMPLETE' for row in detail['delta']))
             self.assertEqual(before, {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in before})
+
+    def test_web_runs_other_library_scan_while_semantic_review_is_queued(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config, _ = make_workspace(root)
+            catalog_path = root / 'catalog/catalog.json'
+            catalog = json.loads(catalog_path.read_text())
+            other = json.loads(json.dumps(catalog['libraries'][0]))
+            other.update(library_id='ip/other', library_name='other')
+            catalog['libraries'].append(other)
+            write_json(catalog_path, catalog)
+
+            release = threading.Event()
+            two_started = threading.Event()
+            started = []
+            started_lock = threading.Lock()
+
+            class FakeProcess:
+                def __init__(self, *args, **kwargs):
+                    self.pid = os.getpid()
+                    self.return_code = None
+                    with started_lock:
+                        started.append(list(args[0]))
+                        if len(started) >= 2:
+                            two_started.set()
+
+                def poll(self):
+                    return self.return_code
+
+                def wait(self, timeout=None):
+                    if not release.wait(timeout or 5):
+                        raise TimeoutError('fake CLI wait timed out')
+                    self.return_code = 0
+                    return self.return_code
+
+            app = self.app(root, config, testing=False)
+            client = app.test_client()
+            try:
+                with patch('lib_guard.web.app.subprocess.Popen', FakeProcess):
+                    scan_a = client.post('/api/libraries/demo/versions/fix/scan', json={})
+                    self.assertEqual(scan_a.status_code, 202, scan_a.get_json())
+                    time.sleep(0.05)
+                    duplicate = client.post('/api/libraries/demo/versions/fix/scan', json={})
+                    self.assertEqual(duplicate.status_code, 409, duplicate.get_json())
+                    scan_b = client.post('/api/libraries/other/versions/fix/scan', json={})
+                    self.assertEqual(scan_b.status_code, 202, scan_b.get_json())
+                    queued = client.get(f"/api/runs/{scan_b.get_json()['job_id']}").get_json()
+                    self.assertEqual(queued['status'], 'QUEUED')
+                    self.assertIn('避免并发覆盖', queued['queue_reason'])
+                    semantic = client.post('/api/libraries/demo/semantic-review', json={'target': 'E2', 'profile': 'lef_basic'})
+                    self.assertEqual(semantic.status_code, 202, semantic.get_json())
+                    self.assertTrue(two_started.wait(2), 'a semantic check should run alongside the active scan')
+                    with started_lock:
+                        started_actions = list(started)
+                    self.assertTrue(any('lib_guard.semantic.cli' in args for args in started_actions))
+                    release.set()
+                    job_ids = [scan_a.get_json()['job_id'], scan_b.get_json()['job_id'], semantic.get_json()['job_id']]
+                    for job_id in job_ids:
+                        app.extensions['lib_guard_job_futures'][job_id].result(timeout=10)
+                    self.assertEqual(len(started), 3)
+                    recent = client.get('/api/runs').get_json()['jobs']
+                    self.assertEqual({row['job_id'] for row in recent} & set(job_ids), set(job_ids))
+            finally:
+                release.set()
+                app.extensions['lib_guard_job_executor'].shutdown(wait=True)
 
     def test_ui_has_execution_controls_but_no_report_content_panel(self):
         template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()

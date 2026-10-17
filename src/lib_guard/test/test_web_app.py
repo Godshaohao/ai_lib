@@ -1451,7 +1451,7 @@ class WebAppTest(unittest.TestCase):
             status = _job_status(root, None)
 
             self.assertEqual(status["status"], "FAILED")
-            self.assertIn("未接管", status["message"])
+            self.assertIn("未记录最终返回码", status["message"])
 
     def test_unmanaged_job_with_missing_or_invalid_status_is_terminal_failed(self) -> None:
         from lib_guard.web.app import _job_status
@@ -1508,6 +1508,58 @@ class WebAppTest(unittest.TestCase):
             status = _job_status(root, None)
             self.assertEqual(status["status"], "FAILED")
             self.assertIn("状态文件", status["message"])
+
+    def test_queued_job_does_not_report_progress_left_by_an_earlier_scan(self) -> None:
+        from lib_guard.web.app import _job_status
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "job"
+            progress = Path(td) / "scan" / "logs" / "scan_progress_latest.json"
+            root.mkdir()
+            progress.parent.mkdir(parents=True)
+            progress.write_text(
+                json.dumps({"stage": "finish", "message": "previous scan finished", "percent": 100}),
+                encoding="utf-8",
+            )
+            (root / "status.json").write_text(
+                json.dumps({"status": "QUEUED", "created_epoch": 1_700_000_000.0}),
+                encoding="utf-8",
+            )
+            (root / "request.json").write_text(
+                json.dumps({"observability": {"progress_roots": [str(progress)]}}),
+                encoding="utf-8",
+            )
+
+            status = _job_status(root, None, managed=True)
+
+            self.assertEqual(status["progress"]["event"], "waiting")
+            self.assertNotIn("previous scan finished", status["progress"].get("message", ""))
+
+    def test_running_job_ignores_progress_file_older_than_its_start_time(self) -> None:
+        from lib_guard.web.app import _job_status
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "job"
+            progress = Path(td) / "scan" / "logs" / "scan_progress_latest.json"
+            root.mkdir()
+            progress.parent.mkdir(parents=True)
+            progress.write_text(
+                json.dumps({"stage": "finish", "message": "stale progress", "percent": 100}),
+                encoding="utf-8",
+            )
+            (root / "status.json").write_text(
+                json.dumps({"status": "RUNNING", "started_epoch": 4_000_000_000.0}),
+                encoding="utf-8",
+            )
+            (root / "request.json").write_text(
+                json.dumps({"observability": {"progress_roots": [str(progress)]}}),
+                encoding="utf-8",
+            )
+
+            status = _job_status(root, None, managed=True)
+
+            self.assertEqual(status["progress"]["event"], "waiting")
+            self.assertNotIn("stale progress", status["progress"].get("message", ""))
 
     def test_failed_release_job_exposes_a_short_failure_summary(self) -> None:
         from lib_guard.web.app import _job_status
