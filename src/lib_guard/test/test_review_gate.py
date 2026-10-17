@@ -145,8 +145,13 @@ class ReviewGateTest(unittest.TestCase):
             (scan / "file_inventory.json").write_text(json.dumps({"files": [{"file_type": "verilog", "path": "rtl/top.v"}]}), encoding="utf-8")
             (scan / "parser_manifest.json").write_text(json.dumps({"files": []}), encoding="utf-8")
             (scan / "scan_issues.json").write_text(json.dumps({"issues": []}), encoding="utf-8")
+            (scan / "summary" / "parser_quality.json").write_text(json.dumps({"parsers": []}), encoding="utf-8")
+            from lib_guard.release.config import ReleasePolicy
+            from lib_guard.summary.readiness import build_release_readiness
+
+            policy = ReleasePolicy()
             (scan / "summary" / "release_readiness.json").write_text(
-                json.dumps({"bundle_status": "PASS", "release_level_candidate": "L1", "diff_level": "P0", "manual_review_items": []}),
+                json.dumps(build_release_readiness(scan, policy.to_dict())),
                 encoding="utf-8",
             )
             (diff / "diff_summary.json").write_text(json.dumps({"status": "SAME", "diff_level": "P0", "deep_diff_completed": False}), encoding="utf-8")

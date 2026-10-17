@@ -60,6 +60,143 @@ def _write_diff(out: Path, *, diff_level: str, status: str = "SAME", issues: lis
 
 
 class ReleaseLevelTest(unittest.TestCase):
+    def test_legacy_readiness_cache_is_rebuilt_with_current_parser_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "raw"
+            scan = base / "scan"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a, output y); assign y = a; endmodule\n", encoding="utf-8")
+            _scan(root, scan, mode="signature", parse_file_types=[])
+
+            readiness_path = scan / "summary" / "release_readiness.json"
+            readiness_path.write_text(
+                json.dumps({"schema_version": "1.0", "bundle_status": "PASS", "release_level_candidate": "L1"}),
+                encoding="utf-8",
+            )
+
+            from lib_guard.release.checker import ReleaseChecker
+            from lib_guard.release.config import ReleasePolicy
+
+            policy = ReleasePolicy.from_dict(
+                {
+                    "required_views": {"ip": ["verilog"]},
+                    "validation_levels": {"verilog": "parsed_required"},
+                }
+            )
+            result = ReleaseChecker(policy).check(scan, alias="stage")
+
+            self.assertEqual(result["release_readiness"]["bundle_status"], "BLOCK")
+            self.assertEqual(result["release_readiness"]["validation_levels"]["verilog"], "parsed_required")
+            self.assertTrue(result["release_readiness"].get("readiness_fingerprint"))
+            current = json.loads(readiness_path.read_text(encoding="utf-8"))
+            self.assertEqual(current["bundle_status"], "BLOCK")
+            history = list((scan / "summary" / "readiness_history").glob("*.json"))
+            self.assertEqual(len(history), 1)
+            self.assertEqual(json.loads(history[0].read_text(encoding="utf-8"))["bundle_status"], "PASS")
+
+    def test_current_readiness_is_reused_after_a_stale_summary_is_refreshed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "raw"
+            scan = base / "scan"
+            root.mkdir()
+            (root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            _scan(root, scan, mode="signature")
+            readiness_path = scan / "summary" / "release_readiness.json"
+            readiness_path.write_text(json.dumps({"bundle_status": "PASS", "components": []}), encoding="utf-8")
+
+            from lib_guard.release import checker as checker_module
+            from lib_guard.release.config import ReleasePolicy
+
+            checker = checker_module.ReleaseChecker(ReleasePolicy())
+            real_builder = checker_module.build_release_readiness
+            with patch.object(checker_module, "build_release_readiness", wraps=real_builder) as build:
+                checker.check(scan, alias="stage")
+                checker.check(scan, alias="stage")
+
+            self.assertEqual(build.call_count, 1)
+            self.assertTrue(json.loads(readiness_path.read_text(encoding="utf-8")).get("readiness_fingerprint"))
+            self.assertEqual(len(list((scan / "summary" / "readiness_history").glob("*.json"))), 1)
+
+    def test_release_policy_roundtrips_mode_corner_and_validation_rules_into_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "raw"
+            scan = base / "scan"
+            root.mkdir()
+            (root / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            _scan(root, scan, mode="signature")
+
+            from lib_guard.release.checker import ReleaseChecker
+            from lib_guard.release.config import ReleasePolicy
+
+            policy = ReleasePolicy.from_dict(
+                {
+                    "required_views": {"ip": ["verilog"]},
+                    "required_modes": {"ip": ["functional"]},
+                    "required_corners": {"ip": ["tt_0p8v_25c"]},
+                    "validation_levels": {"verilog": "parsed_required"},
+                }
+            )
+            serialized = policy.to_dict()
+            self.assertEqual(serialized["required_modes"]["ip"], ["functional"])
+            self.assertEqual(serialized["required_corners"]["ip"], ["tt_0p8v_25c"])
+            self.assertEqual(serialized["validation_levels"]["verilog"], "parsed_required")
+
+            result = ReleaseChecker(policy).check(scan, alias="stage")
+            component = result["release_readiness"]["components"][0]
+            self.assertEqual(component["required_modes"], ["functional"])
+            self.assertEqual(component["required_corners"], ["tt_0p8v_25c"])
+            self.assertEqual(result["release_readiness"]["delivery_requirements"]["modes"]["status"], "BLOCK")
+            self.assertEqual(result["release_readiness"]["delivery_requirements"]["corners"]["status"], "BLOCK")
+            self.assertEqual(result["release_readiness"]["validation_levels"]["verilog"], "parsed_required")
+
+    def test_readiness_is_rebuilt_when_parser_result_artifact_disappears(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "raw"
+            scan = base / "scan"
+            root.mkdir()
+            (root / "top.v").write_text("module top(input a, output y); assign y = a; endmodule\n", encoding="utf-8")
+            _scan(root, scan, mode="release", parse_file_types=["verilog"])
+
+            from lib_guard.release.checker import ReleaseChecker
+            from lib_guard.release.config import ReleasePolicy
+            from lib_guard.summary.readiness import build_release_readiness
+
+            policy = ReleasePolicy.from_dict(
+                {
+                    "required_views": {"ip": ["verilog"]},
+                    "validation_levels": {"verilog": "parsed_required"},
+                }
+            )
+            readiness = build_release_readiness(scan, policy.to_dict())
+            self.assertEqual(readiness["bundle_status"], "PASS")
+            (scan / "summary" / "release_readiness.json").write_text(json.dumps(readiness), encoding="utf-8")
+
+            manifest = json.loads((scan / "parser_manifest.json").read_text(encoding="utf-8"))
+            task = next(
+                task
+                for file_entry in manifest["files"]
+                for task in file_entry.get("parser_tasks", [])
+                if task.get("result_path")
+            )
+            result_path = scan / task["result_path"]
+            self.assertTrue(result_path.is_file())
+            result_path.unlink()
+
+            checked = ReleaseChecker(policy).check(scan, alias="stage")
+            self.assertEqual(checked["release_readiness"]["bundle_status"], "BLOCK")
+            self.assertEqual(checked["release_readiness"]["components"][0]["required_view_results"]["verilog"]["status"], "BLOCK")
+            self.assertEqual(
+                json.loads((scan / "summary" / "release_readiness.json").read_text(encoding="utf-8"))["bundle_status"],
+                "BLOCK",
+            )
+            history = list((scan / "summary" / "readiness_history").glob("*.json"))
+            self.assertEqual(len(history), 1)
+            self.assertEqual(json.loads(history[0].read_text(encoding="utf-8"))["bundle_status"], "PASS")
+
     def test_inventory_scan_is_l0_and_only_stage_alias_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -142,9 +279,12 @@ class ReleaseLevelTest(unittest.TestCase):
             )
             _write_diff(diff, diff_level="P2")
 
-            from lib_guard.release.checker import check_release_scan
+            from lib_guard.release.checker import ReleaseChecker
+            from lib_guard.release.config import ReleasePolicy
 
-            approved = check_release_scan(scan, diff_dir=diff, alias="approved")
+            approved = ReleaseChecker(ReleasePolicy.from_dict(strict_policy)).check(
+                scan, diff_dir=diff, alias="approved"
+            )
 
             self.assertEqual(approved["required_release_level"], "L2")
             self.assertEqual(approved["actual_release_level"], "L2")

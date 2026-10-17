@@ -206,6 +206,8 @@ result = load_review_snapshot("work/semantic_review")
 扫描会把三类要求统一写入 `summary/release_readiness.json`。`parsed_required` 的 View
 必须逐一关联清单文件、成功 Parser Task 和实际解析结果文件；缺任务、跳过、失败、空结果、仅元数据或结果文件缺失均不能判为解析通过。`metadata_required` 只表示文件已登记，不代表内容或语义解析通过。版本详情页会显示解析覆盖数及未完成文件。
 
+Readiness 记录包含规则版本、策略指纹和扫描证据指纹。发布检查发现历史记录缺少指纹，或策略、扫描输入、Parser 结果文件存在状态与生成时不同，会先将旧结果保存到 `summary/readiness_history/`，再按当前策略重算并更新 `summary/release_readiness.json`；本次发布检查使用重算结果，不会把旧记录直接当作当前口径下的结论。
+
 Mode/Corner 的路径和文件名提取值只是候选提示，不等于已确认的交付覆盖。只有显式写入
 `scan_meta.json` 的 `delivery_modes` / `required_modes_observed` 和
 `delivery_corners` / `required_corners_observed` 才参与已确认匹配；报告会分别呈现确认值、

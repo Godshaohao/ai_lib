@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 from collections import Counter
+from hashlib import sha256
 import json
 
 from .config import ReleasePolicy
 from lib_guard.atomic import atomic_write_json
-from lib_guard.summary.readiness import build_release_readiness
+from lib_guard.summary.readiness import build_release_readiness, readiness_fingerprint
 
 
 LEVEL_ORDER = {"L0": 0, "L1": 1, "L2": 2}
@@ -23,6 +24,15 @@ def _load_json(path: Path, default: Any) -> Any:
 
 def _write_json(path: Path, data: Any) -> None:
     atomic_write_json(path, data, lock=True)
+
+
+def _archive_readiness(readiness_path: Path, readiness: Mapping[str, Any]) -> Path:
+    payload = json.dumps(readiness, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    fingerprint = sha256(payload.encode("utf-8")).hexdigest()
+    archived_path = readiness_path.parent / "readiness_history" / f"release_readiness_{fingerprint}.json"
+    if not archived_path.exists():
+        _write_json(archived_path, dict(readiness))
+    return archived_path
 
 
 def _issue(severity: str, category: str, title: str, message: str, files: list[str] | None = None) -> dict[str, Any]:
@@ -52,9 +62,13 @@ class ReleaseChecker:
         parser_manifest = _load_json(scan / "parser_manifest.json", {"files": []})
         scan_issues = _load_json(scan / "scan_issues.json", {"issues": []})
         release_readiness = _load_json(scan / "summary" / "release_readiness.json", {})
-        if not release_readiness:
+        current_readiness_fingerprint = readiness_fingerprint(scan, self.policy.to_dict())
+        if release_readiness.get("readiness_fingerprint") != current_readiness_fingerprint:
+            readiness_path = scan / "summary" / "release_readiness.json"
+            if readiness_path.exists():
+                _archive_readiness(readiness_path, release_readiness)
             release_readiness = build_release_readiness(scan, policy_path=self.policy.to_dict())
-            _write_json(scan / "summary" / "release_readiness.json", release_readiness)
+            _write_json(readiness_path, release_readiness)
 
         files = inventory.get("files", []) or []
         file_type_counts = Counter(str(f.get("file_type", "unknown")) for f in files)

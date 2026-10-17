@@ -16,6 +16,42 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class CatalogTimelineTest(unittest.TestCase):
+    def test_catalog_release_check_refreshes_affected_version_detail(self) -> None:
+        from lib_guard.cli_commands import catalog as catalog_commands
+
+        args = Namespace(
+            catalog="/tmp/catalog.json",
+            library="demo",
+            version="v2",
+            diff=None,
+            diff_mode=None,
+            policy="/tmp/policy.json",
+            alias="current",
+            explain=False,
+        )
+        version = {
+            "version_key": "ip/demo/v2",
+            "version_id": "v2",
+            "scan": {"scan_dir": "/tmp/scan/v2"},
+        }
+        with (
+            mock.patch("lib_guard.catalog.index.find_catalog_version", return_value=version),
+            mock.patch("lib_guard.release.checker.check_release_scan", return_value={"release_check_status": "PASS"}),
+            mock.patch("lib_guard.catalog.index.update_catalog_release_status"),
+            mock.patch("lib_guard.release.result.write_release_result"),
+            mock.patch.object(catalog_commands, "render_impacted_catalog_html", return_value={"render_result": {"status": "PASS"}}) as render,
+            mock.patch.object(catalog_commands, "print_json"),
+        ):
+            result = catalog_commands.run_catalog_release_check(args)
+
+        self.assertEqual(result, 0)
+        impacts = render.call_args.args[1]
+        self.assertEqual([(item.kind, item.library, item.version, item.reason) for item in impacts], [
+            ("version_detail", "demo", "v2", "release_check_updated"),
+            ("library_page", "demo", None, "release_check_updated"),
+            ("catalog_index", None, None, "release_check_updated"),
+        ])
+
     def test_runtime_sidecar_prefers_workspace_relative_artifacts_after_workspace_move(self) -> None:
         """Runtime evidence remains usable when a complete work directory is relocated."""
         with tempfile.TemporaryDirectory() as td:

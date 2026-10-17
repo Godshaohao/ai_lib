@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 import json
@@ -77,6 +78,14 @@ DEFAULT_VALIDATION_LEVELS = {
 
 LEVEL_ORDER = {"L0": 0, "L1": 1, "L2": 2}
 ALIAS_REQUIRED_LEVEL = {"stage": "L0", "current": "L1", "approved": "L2"}
+READINESS_RULES_VERSION = "2"
+READINESS_INPUTS = (
+    "scan_meta.json",
+    "file_inventory.json",
+    "parser_manifest.json",
+    "summary/parser_quality.json",
+    "scan_issues.json",
+)
 
 
 def utc_now() -> str:
@@ -129,6 +138,49 @@ def load_release_policy(policy_path: str | Path | Mapping[str, Any] | None = Non
         },
     )
     return policy
+
+
+def readiness_fingerprints(scan_dir: str | Path, policy_path: str | Path | Mapping[str, Any] | None = None) -> dict[str, str]:
+    scan = Path(scan_dir)
+    policy = load_release_policy(policy_path)
+    policy_keys = (
+        "required_views",
+        "optional_views",
+        "required_modes",
+        "required_corners",
+        "validation_levels",
+        "alias_gate",
+    )
+    inputs = {name: read_json(scan / name, default=None) for name in READINESS_INPUTS}
+    parser_manifest = inputs.get("parser_manifest.json") or {}
+    parser_artifacts = []
+    for file_entry in parser_manifest.get("files", []) or []:
+        for task in file_entry.get("parser_tasks", []) or []:
+            result_path = task.get("result_path")
+            if result_path:
+                parser_artifacts.append({
+                    "file": file_entry.get("file"),
+                    "parser_name": task.get("parser_name"),
+                    "result_path": str(result_path),
+                    "exists": _parser_result_exists(scan, result_path),
+                })
+    policy_payload = {key: policy.get(key) for key in policy_keys}
+    policy_encoded = json.dumps(policy_payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    policy_fingerprint = sha256(policy_encoded).hexdigest()
+    evidence_payload = {"inputs": inputs, "parser_artifacts": parser_artifacts}
+    evidence_encoded = json.dumps(evidence_payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    evidence_fingerprint = sha256(evidence_encoded).hexdigest()
+    combined = f"{READINESS_RULES_VERSION}:{policy_fingerprint}:{evidence_fingerprint}".encode("ascii")
+    return {
+        "readiness_rules_version": READINESS_RULES_VERSION,
+        "readiness_policy_fingerprint": policy_fingerprint,
+        "readiness_evidence_fingerprint": evidence_fingerprint,
+        "readiness_fingerprint": sha256(combined).hexdigest(),
+    }
+
+
+def readiness_fingerprint(scan_dir: str | Path, policy_path: str | Path | Mapping[str, Any] | None = None) -> str:
+    return readiness_fingerprints(scan_dir, policy_path)["readiness_fingerprint"]
 
 
 def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -236,6 +288,7 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
     components = [component]
     readiness = {
         "schema_version": "1.0",
+        **readiness_fingerprints(scan, policy),
         "generated_at": utc_now(),
         "bundle_id": component_id,
         "project": scan_meta.get("project") or scan_meta.get("library_name"),

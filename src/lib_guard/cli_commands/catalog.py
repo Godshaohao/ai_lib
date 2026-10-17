@@ -1067,6 +1067,10 @@ def run_catalog_release_check(args: Namespace) -> int:
     write_release_result(release_result_path, release_result_from_check(result))
     version_key = _catalog_version_key(item)
     update_catalog_release_status(args.catalog, version_key=version_key, action="check", status=result.get("release_check_status", "UNKNOWN"), result_path=result_path)
+    library = str(item.get("library_name") or item.get("formal_library_id") or args.library)
+    impacts = impacts_for_versions(library, [str(item.get("version_id") or args.version)], "release_check_updated")
+    render_impact = render_impacted_catalog_html(args, impacts)
+    _attach_render_output(result, render_impact)
     print_json(result)
     return 0 if str(result.get("release_check_status") or "") in RELEASE_CHECK_PASS_STATUSES else 2
 

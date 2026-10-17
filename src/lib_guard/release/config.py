@@ -23,6 +23,9 @@ class ReleasePolicy:
     allowed_scan_status: list[str] = field(default_factory=lambda: ["PASS", "PASS_WITH_WARNING"])
     allowed_scan_modes: list[str] = field(default_factory=lambda: ["scan", "candidate", "release", "signature", "full"])
     required_file_types: dict[str, list[str]] = field(default_factory=lambda: dict(DEFAULT_REQUIRED_TYPES))
+    required_modes: dict[str, list[str]] = field(default_factory=dict)
+    required_corners: dict[str, list[str]] = field(default_factory=dict)
+    validation_levels: dict[str, str] = field(default_factory=lambda: _default_validation_levels())
     require_doc_types: list[str] = field(default_factory=lambda: ["readme", "release_note"])
     block_on_error_issue: bool = True
     block_on_parser_failed: bool = True
@@ -68,6 +71,9 @@ class ReleasePolicy:
             "allowed_scan_modes": self.allowed_scan_modes,
             "required_file_types": self.required_file_types,
             "required_views": self.required_file_types,
+            "required_modes": self.required_modes,
+            "required_corners": self.required_corners,
+            "validation_levels": self.validation_levels,
             "require_doc_types": self.require_doc_types,
             "block_on_error_issue": self.block_on_error_issue,
             "block_on_parser_failed": self.block_on_parser_failed,
@@ -78,3 +84,9 @@ class ReleasePolicy:
             "alias_gate": self.alias_gate,
             "doc_policy": self.doc_policy,
         }
+
+
+def _default_validation_levels() -> dict[str, str]:
+    from lib_guard.summary.readiness import DEFAULT_VALIDATION_LEVELS
+
+    return dict(DEFAULT_VALIDATION_LEVELS)

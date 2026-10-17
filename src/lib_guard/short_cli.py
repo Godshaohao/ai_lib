@@ -1874,6 +1874,7 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             if args.check_only:
                 return [check_cmd]
             if not args.force:
+                check_cmd.append("--no-catalog-render")
                 commands.append(check_cmd)
         command = [
             "release-batch",

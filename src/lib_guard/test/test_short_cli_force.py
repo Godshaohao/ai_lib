@@ -119,6 +119,20 @@ class ShortCliForceTest(unittest.TestCase):
             self.assertIn("--no-render", command)
             self.assertIn("--no-catalog-render", command)
 
+    def test_short_cli_rel_skips_intermediate_readiness_render_before_release_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            self._write_catalog(workspace)
+
+            from lib_guard.short_cli import build_cli_commands, write_default_config
+
+            write_default_config(workspace, raw_root=workspace / "raw")
+            commands = build_cli_commands(["rel", "ucie", "stable", "--apply"], cwd=workspace)
+
+            self.assertIn("release-check", commands[0])
+            self.assertIn("--no-catalog-render", commands[0])
+            self.assertEqual(commands[1][0], "release-batch")
+
     def test_short_cli_rel_without_version_uses_current_effective_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workspace = Path(td)

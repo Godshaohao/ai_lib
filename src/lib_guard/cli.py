@@ -560,6 +560,8 @@ def add_catalog_parser(subparsers: Any) -> None:
     p.add_argument("--diff-mode", choices=["adjacent", "cumulative"])
     p.add_argument("--review-gate")
     p.add_argument("--explain", action="store_true", help="只打印发布检查解释 JSON，不执行发布写入。")
+    p.add_argument("--catalog-html-out")
+    p.add_argument("--no-catalog-render", action="store_true")
     p.set_defaults(func=run_catalog_release_check)
 
     p = sp.add_parser("release-link", help="Run release link dry-run/apply from a catalog version")
