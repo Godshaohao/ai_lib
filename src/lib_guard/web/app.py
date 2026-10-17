@@ -32,7 +32,8 @@ from .read_model import (
     load_web_state,
 )
 from .release_actions import build_release_web_args
-from lib_guard.atomic import atomic_write_json
+from .semantic_actions import prepare_semantic_job, semantic_review_options
+from lib_guard.atomic import atomic_write_json, atomic_write_text
 from lib_guard.effective.release_set import (
     build_release_set_manifest,
     compare_release_sets,
@@ -536,7 +537,7 @@ def _load_cli_result(job_dir: Path) -> dict[str, Any] | None:
     return dict(result) if isinstance(result, Mapping) else None
 
 
-def _job_artifact_map(job_dir: Path) -> dict[str, dict[str, str]]:
+def _job_artifact_map(job_dir: Path) -> dict[str, dict[str, Any]]:
     """Return human-facing files produced by a completed job.
 
     The CLI is still the source of truth.  The web layer only projects known
@@ -548,6 +549,17 @@ def _job_artifact_map(job_dir: Path) -> dict[str, dict[str, str]]:
     if not result:
         return {}
     candidates: list[tuple[str, str, Any, str]] = []
+    if result.get('schema_version') == 'semantic_summary.v1':
+        report_root = job_dir / 'semantic_review'
+        files = result.get('artifacts') or {}
+        candidates.extend([
+            ('markdown', '下载技术检查摘要（Markdown）', report_root / files['markdown'], 'markdown'),
+            ('semantic_checks', '下载完整检查结果（JSON）', report_root / files['check_results'], 'json'),
+            ('semantic_index', '下载对象与来源索引（JSON）', report_root / files['semantic_effective_index'], 'json'),
+        ])
+    scan_html = result.get("scan_html")
+    if isinstance(scan_html, Mapping):
+        candidates.append(("scan_html", "扫描 HTML 报告", scan_html.get("index_html"), "html"))
     out_dir = result.get("out_dir")
     if out_dir:
         out_root = Path(str(out_dir)).expanduser()
@@ -571,7 +583,7 @@ def _job_artifact_map(job_dir: Path) -> dict[str, dict[str, str]]:
                 ("semantic_diff", "语义差异 JSON", out_root / "semantic_diff.json", "json"),
             ]
         )
-    artifacts: dict[str, dict[str, str]] = {}
+    artifacts: dict[str, dict[str, Any]] = {}
     for artifact_id, label, value, kind in candidates:
         if not value:
             continue
@@ -585,6 +597,8 @@ def _job_artifact_map(job_dir: Path) -> dict[str, dict[str, str]]:
             "path": str(path),
             "url": f"/api/runs/{job_dir.name}/artifact/{artifact_id}",
         }
+        if result.get('schema_version') == 'semantic_summary.v1':
+            artifacts[artifact_id]['download'] = True
     return artifacts
 
 
@@ -668,6 +682,8 @@ def _job_result_summary(job_dir: Path) -> str:
         return ""
 
     link = result.get("link_result")
+    if result.get('schema_version') == 'semantic_summary.v1':
+        return '技术检查任务完成，报告文件已保存；执行成功不代表检查全部通过。'
     if isinstance(link, Mapping):
         link_status = str(link.get("status") or result.get("link_status") or "").upper()
         verification = str(result.get("verify_status") or (link.get("verify") or {}).get("status") or "")
@@ -730,6 +746,78 @@ def _job_result_summary(job_dir: Path) -> str:
     if status:
         return f"任务结果：{status}"[:240]
     return ""
+
+
+def _semantic_quality_projection(result: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Project a bounded operator summary from the semantic report.
+
+    The semantic CLI remains the only source of truth.  This projection is
+    deliberately not a release decision: it only tells the operator whether
+    the generated report is complete enough to read and what to do next.
+    """
+
+    if result.get("schema_version") != "semantic_summary.v1":
+        return None
+    counts: dict[str, int] = {}
+    delta_counts: dict[str, int] = {}
+    for source_key, target in (("counts", counts), ("delta_counts", delta_counts)):
+        source = result.get(source_key)
+        if not isinstance(source, Mapping):
+            continue
+        for key, value in source.items():
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                target[str(key)] = target.get(str(key), 0) + number
+    all_counts = {key: counts.get(key, 0) + delta_counts.get(key, 0)
+                  for key in set(counts) | set(delta_counts)}
+
+    scope = result.get("scope")
+    current = scope.get("current") if isinstance(scope, Mapping) else None
+    current = current if isinstance(current, Mapping) else {}
+    base = scope.get("base") if isinstance(scope, Mapping) else None
+    base_selected = isinstance(base, Mapping)
+    coverage = {
+        "selected_files": int(current.get("selected_files") or 0),
+        "effective_files": int(current.get("effective_files") or 0),
+    }
+    if all_counts.get("FAIL", 0):
+        verdict, label = "FAIL", "发现问题"
+        next_action = "先查看报告中的问题明细，再决定是否补证据或修正配置。"
+    elif (all_counts.get("INCOMPLETE", 0) or all_counts.get("NOT_CHECKED", 0)
+          or all_counts.get("UNKNOWN", 0)):
+        verdict, label = "INCOMPLETE", "需要补齐检查"
+        next_action = (
+            "已选择基准，先补齐未检查项并重新生成报告。"
+            if base_selected else
+            "当前只核查了目标版本，未形成版本变化结论；选择变化基准后重新生成报告。"
+        )
+    elif all_counts.get("REVIEW_REQUIRED", 0):
+        verdict, label = "REVIEW_REQUIRED", "需要人工确认"
+        next_action = "查看人工确认项；这只是技术检查摘要，不代表正式放行。"
+    elif result.get("delta_context") == "NO_BASE_EFFECTIVE":
+        verdict, label = "INCOMPLETE", "仅检查当前版"
+        next_action = "当前版独立检查已形成结果，但未形成版本变化结论；需要变化判断时请选择基准。"
+    elif all_counts:
+        verdict, label = "PASS", "检查项已形成结果"
+        next_action = "可下载 Markdown 摘要核对结果；正式放行仍按既有流程执行。"
+    else:
+        verdict, label = "EMPTY", "尚未形成结论"
+        next_action = "确认检查对象和检查项目后重新生成报告。"
+    return {
+        "schema_version": "web_quality_summary.v1",
+        "verdict": verdict,
+        "verdict_label": label,
+        "counts": all_counts,
+        "detail_counts": counts,
+        "delta_counts": delta_counts,
+        "coverage": coverage,
+        "base_selected": base_selected,
+        "next_action": next_action,
+        "note": "任务完成只表示报告生成成功，不代表质量通过或正式放行。",
+    }
 
 
 def _job_status(job_dir: Path, process: subprocess.Popen[str] | None) -> dict[str, Any]:
@@ -811,6 +899,9 @@ def _job_status(job_dir: Path, process: subprocess.Popen[str] | None) -> dict[st
         release_plan = _release_plan_projection(cli_result, request_data)
         if release_plan is not None:
             status["release_plan"] = release_plan
+        quality_summary = _semantic_quality_projection(cli_result)
+        if quality_summary is not None:
+            status["quality_summary"] = quality_summary
     status.update(_job_observation(job_dir, status))
     return status
 
@@ -1061,7 +1152,10 @@ def create_app(
             args.extend(["--config", str(config_value)])
         cli_action = action_spec.cli_action
         multi_release_request = None
-        if action in {'release-set-plan', 'release-set-apply'}:
+        semantic_documents = None
+        if action == 'semantic-review':
+            args, semantic_documents = prepare_semantic_job(web_state, find_catalog_library(web_state, library), payload, root)
+        elif action in {'release-set-plan', 'release-set-apply'}:
             from lib_guard.release.bundle import validate_release_name
             if action == 'release-set-apply' and not _payload_bool(payload, 'acknowledged'):
                 raise ValueError('实际发布必须确认阶段目录、所选库及覆盖设置')
@@ -1452,6 +1546,9 @@ def create_app(
                     raise RuntimeError(f"库正在执行其他动作，请等待当前任务结束：{library}")
             created_epoch = time.time()
             root.mkdir(parents=True, exist_ok=False)
+            if semantic_documents is not None:
+                for name, content in semantic_documents.items():
+                    atomic_write_text(root / name, content)
             if multi_release_request is not None:
                 _write_json(root / 'delivery_request.json', multi_release_request)
             if selected_candidate_input is not None:
@@ -1652,13 +1749,13 @@ def create_app(
     @app.post('/api/formal-directory/refresh')
     def formal_directory_refresh() -> Any:
         try:
-            from lib_guard.release.inventory import inventory_directory
+            from lib_guard.release.inventory import audit_formal_directory
             from lib_guard.atomic import atomic_write_text
             web_state = state()
             root = _bounded_text(request_payload().get('root'), label='正式目录', limit=1000)
             if not root or not Path(root).is_absolute():
                 raise ValueError('请选择正式目录的绝对路径；与临时发布输出目录独立。')
-            snapshot = inventory_directory(root, web_state['catalog'])
+            snapshot = audit_formal_directory(root, web_state['catalog'])
             output = Path(web_state['workspace']) / 'config/formal_directory_inventory.json'
             atomic_write_text(output, json.dumps(snapshot, ensure_ascii=False, indent=2), lock=True)
             return jsonify({key:value for key,value in snapshot.items() if key!='files'})
@@ -2020,7 +2117,8 @@ def create_app(
         allowed_roots = _browse_roots(web_state)
         if not _path_is_within(candidate, allowed_roots):
             return jsonify({"status": "ERROR", "error": "运行产物不在当前工作区允许范围内"}), 400
-        return send_from_directory(candidate.parent, candidate.name)
+        download = (_load_cli_result(root) or {}).get('schema_version') == 'semantic_summary.v1'
+        return send_from_directory(candidate.parent, candidate.name, as_attachment=download)
 
     def action_route(action: str, library: str, version: str) -> Any:
         try:
@@ -2213,6 +2311,19 @@ def create_app(
     @app.post("/api/libraries/<library>/next")
     def next_step(library: str) -> Any:
         return library_action_route("next", library)
+
+    @app.route('/api/libraries/<library>/semantic-review', methods=['GET', 'POST'])
+    def semantic_review(library: str) -> Any:
+        if request.method == 'POST':
+            return library_action_route('semantic-review', library)
+        try:
+            web_state = state()
+            item = find_catalog_library(web_state, library)
+            if item is None:
+                return jsonify({'status': 'NOT_FOUND', 'error': '库不存在'}), 404
+            return jsonify(semantic_review_options(web_state, item))
+        except (OSError, ValueError, TypeError) as exc:
+            return jsonify({'status': 'ERROR', 'error': f'读取技术检查选项失败：{exc}'}), 400
 
     @app.post("/api/libraries/<library>/intake")
     def intake(library: str) -> Any:

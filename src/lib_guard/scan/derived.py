@@ -10,14 +10,14 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
 
 
-def build_scan_derived_outputs(scan_dir: str | Path) -> dict[str, str]:
+def build_scan_derived_outputs(scan_dir: str | Path, policy_path: str | Path | Mapping[str, Any] | None = None) -> dict[str, str]:
     """Build non-core scan outputs from completed scan evidence."""
 
     out = Path(scan_dir)
     try:
         from lib_guard.summary.readiness import build_release_readiness
 
-        readiness = build_release_readiness(out)
+        readiness = build_release_readiness(out, policy_path=policy_path)
     except Exception as exc:
         readiness = {
             "schema_version": "1.0",

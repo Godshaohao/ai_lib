@@ -2,6 +2,57 @@ Status: current
 
 # CLI 参考
 
+## 跨视图技术诊断（实验性，独立入口）
+
+此命令只读最终有效组合与已有扫描，默认不补扫或计算源文件 hash，不参与正式放行：
+
+```bash
+PYTHONPATH=src python3 -m lib_guard.semantic.cli \
+  --effective-manifest /path/to/candidate/effective_manifest.json \
+  --catalog /path/to/work/catalog/catalog.json \
+  --out /path/to/isolated/semantic_review
+```
+
+有明确旧 Effective 时增加 `--base-effective-manifest /path/to/old/effective_manifest.json`。
+缺旧 Effective 不阻止一致性诊断，但变化为 UNKNOWN。没有新增 `lg check` 或默认 Web 动作。
+结果入口为 `summary.json`，其中 artifacts 指向同一快照的中文 `summary.md`、完整检查、
+来源索引与绑定。只读诊断中的 FAIL 表示发现建议核查项，不会阻止发布或修改原报告。
+
+人工异名映射可用 `--mapping /path/to/mapping.json`，最小示例：
+
+```json
+{
+  "confirmed": true,
+  "macro_aliases": [{"view": "liberty", "object": "OTHER", "macro": "M"}],
+  "port_aliases": {"lef": {"DATA_0": "DATA[0]"}}
+}
+```
+
+宏映射必须在当前选定事实中有唯一对应；重复或未确认映射拒绝执行。名称区分大小写，
+没有模糊匹配；LEF `<0>` 只在 BUSBITCHARS 明确时规范化。别名是身份确认，不是覆盖证明。
+未解析、参数宽度未知、角标歧义或过期的证据必须显示 NOT_CHECKED/REVIEW_REQUIRED。
+性能、真实反例和覆盖限制见 `docs/superpowers/plans/2026-10-14-semantic-ir-validation.md`。
+
+检查范围和规则集中在 `configs/semantic_review.json`，不加参数时读取其中的 `default_profile`。
+要检查项目选定的典型 Corner，先调整配置中的 `ip_basic`，再执行：
+
+```bash
+PYTHONPATH=src python3 -m lib_guard.semantic.cli \
+  --effective-manifest /path/to/candidate/effective_manifest.json \
+  --base-effective-manifest /path/to/current/effective_manifest.json \
+  --catalog /path/to/work/catalog/catalog.json \
+  --config configs/semantic_review.json --profile ip_basic \
+  --out /path/to/isolated/semantic_review
+```
+
+方案可配置宏列表、文件模式、Liberty Corner/Mode、规则、属性期望和尺寸容差。
+双方共用同一份配置；结果保存配置指纹与完整方案。Corner/Mode 缺少确认语义证据时为未完成，
+未选中项不显示为检查通过。字段含义与已实现规则见 [配置参考](config_reference.md#跨视图诊断方案)。
+默认自动复用 `<out>/facts` 的稳定文件事实，也可在配置顶层指定 `facts_cache.directory`。
+Results 的 `artifacts.snapshot_manifest` 指向校验清单，`rules_identity` 标识规则版本与实际代码。
+需强制重算 Facts 做结果对账时，将 `facts_cache.reuse` 设为 false 后执行同一命令；这不会补扫 RAW。
+
+
 这份文档是命令字典。第一次完整演练请看
 [基础教程](basic_tutorial.md)。
 

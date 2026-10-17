@@ -77,6 +77,8 @@ class ArchitectureInvariantTest(unittest.TestCase):
                     "mark",
                     "override",
                     "file-diff",
+                    # Explicit report-only diagnostic action; no governance or release mutation.
+                    "semantic-review",
                     "review-gate",
                     "review-packet",
                     "action-file",
@@ -114,6 +116,7 @@ class ArchitectureInvariantTest(unittest.TestCase):
                 "/api/libraries/<library>/intake",
                 "/api/libraries/<library>/window",
                 "/api/libraries/<library>/accept-window",
+                "/api/libraries/<library>/semantic-review",
                 "/api/libraries/<library>/versions/<version>/mark",
                 "/api/libraries/<library>/versions/<version>/override",
                 # Human-authored note write.  It is intentionally not a

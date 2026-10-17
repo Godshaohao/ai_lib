@@ -11,6 +11,50 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class WebUiContractTest(unittest.TestCase):
+    def test_analysis_actions_are_scoped_to_analysis_and_run_console_is_collapsible(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        styles = (ROOT / 'src/lib_guard/web/static/styles.css').read_text()
+        analysis = template.split('id="action-workspace"', 1)[1].split('id="release-workspace"', 1)[0]
+        commandbar = analysis[analysis.index('class="workbench-commandbar"'):analysis.index('class="action-deck-heading"')]
+        for action in ('scan', 'compare', 'file-diff', 'checks', 'review'):
+            self.assertIn(f'data-workbench-command="{action}"', commandbar)
+        self.assertNotIn('data-workbench-command="release"', template)
+        self.assertEqual(template.count('data-stage-target="release-workspace"'), 1)
+        self.assertIn('function activateWorkbenchCommand(', script)
+        self.assertIn("activateWorkbenchCommand(tab.dataset.workbenchCommand || tab.dataset.analysisAction)", script)
+        self.assertIn('<details id="run-workspace" class="runtime-dock runtime-strip"', template)
+        self.assertIn('id="runtime-dock-summary"', template)
+        self.assertLess(template.index('class="runtime-dock runtime-strip"'), template.index('</main>'))
+        pinned = template[template.index('class="pinned-workbench"'):template.index('</section>', template.index('class="pinned-workbench"'))]
+        self.assertNotIn('id="run-workspace"', pinned)
+        self.assertRegex(styles, r'\.console-shell\s*\{[^}]*grid-template-columns:\s*272px minmax\(0, 1fr\)')
+        self.assertRegex(styles, r'\.runtime-dock\s*\{[^}]*position:\s*fixed')
+
+    @unittest.skipUnless(shutil.which('node'), 'Node required')
+    def test_global_workbench_commands_select_the_expected_workspace(self):
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        start = script.index('  function activateWorkbenchCommand(')
+        end = script.index('\n  function ', start + 10)
+        helper = script[start:end]
+        harness = """
+const assert = require('node:assert/strict');
+const calls = [];
+const selectAnalysisAction = value => calls.push(['action', value]);
+const setActiveStageTab = value => calls.push(['stage', value]);
+""" + helper + """
+for (const [command, expected] of Object.entries({scan:'scan', compare:'compare', 'file-diff':'file-diff', review:'review'})) {
+  calls.length = 0;
+  activateWorkbenchCommand(command);
+  assert.deepEqual(calls, [['action', expected], ['stage', 'action-workspace']]);
+}
+calls.length = 0;
+activateWorkbenchCommand('release');
+assert.deepEqual(calls, [['stage', 'release-workspace']]);
+"""
+        result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_lib_db_checklist_is_in_file_structure_and_uses_existing_evidence(self):
         template=(ROOT/'src/lib_guard/web/templates/index.html').read_text()
         script=(ROOT/'src/lib_guard/web/static/app.js').read_text()
@@ -42,11 +86,13 @@ resetFormalInventoryFilters(); assert.equal($('formal-directory-status').value,'
     def test_formal_directory_inventory_is_separate_from_temporary_release(self):
         template=(ROOT/'src/lib_guard/web/templates/index.html').read_text()
         script=(ROOT/'src/lib_guard/web/static/app.js').read_text()
-        for element in ['formal-directory-root','formal-directory-current-root','formal-directory-libraries','formal-directory-files','temporary-directory-panel']:
+        for element in ['formal-directory-root','formal-directory-current-root','formal-directory-libraries','formal-directory-packages','formal-directory-files','formal-audit-status','formal-current-pointer','temporary-directory-panel']:
             self.assertIn(f'id="{element}"',template)
         self.assertIn('/api/formal-directory/refresh',script)
         self.assertIn('formalInventoryRequestId',script)
         self.assertIn('原快照保留',script)
+        self.assertIn('不比较历史版本',script)
+        self.assertIn('没有 release_manifest.json 不影响正式目录核查',script)
 
     @unittest.skipUnless(shutil.which('node'), 'Node required')
     def test_effective_table_saves_edits_before_preview_and_stops_on_failure(self):
@@ -343,9 +389,9 @@ assert.equal(analysisNextStep({scan_evidence_ready:true,base_version:'v1',diff_s
         select = script[script.index('  function selectAnalysisAction('):script.index('  function openFileDiffWorkbench(')]
         harness = """
 const assert = require('node:assert/strict');
-const names = ['scan', 'compare', 'file-diff', 'review'];
+const names = ['scan', 'compare', 'file-diff', 'checks', 'review'];
 const panels = Object.fromEntries(names.map(n => [n, {hidden: n !== 'scan', value: 'retained'}]));
-const tabs = names.map(n => ({dataset: {analysisAction: n}, selected: n === 'scan',
+const tabs = names.map(n => ({dataset: {analysisAction: n}, selected: n === 'scan', classList: {toggle(){}},
   setAttribute(k,v) {this.selected = v === 'true';}, getAttribute() {return this.dataset.analysisAction;}}));
 const document = {querySelectorAll: () => tabs};
 const $ = id => panels[id];
@@ -361,13 +407,20 @@ assert.equal(panels.review.hidden, false);
 """
         subprocess.run(['node', '-e', harness], check=True, capture_output=True, text=True)
 
-    def test_information_hierarchy_keeps_versions_collapsed_and_actions_separate(self):
+    def test_information_hierarchy_prioritizes_versions_and_separates_library_intake(self):
         template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
         script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
-        self.assertIn('<details id="version-list-disclosure" class="pinned-version-board"', template)
-        self.assertNotIn('id="version-list-disclosure" class="pinned-version-board" open', template)
-        self.assertIn('aria-label="版本分析操作"', template)
-        for name in ('scan', 'compare', 'file-diff', 'review'):
+        version_workspace = template.split('id="version-workspace"', 1)[1].split('id="action-workspace"', 1)[0]
+        self.assertRegex(version_workspace, r'<details id="version-list-disclosure" class="pinned-version-board"[^>]* open>')
+        self.assertLess(version_workspace.index('id="version-list-disclosure"'), version_workspace.index('id="library-intake-disclosure"'))
+        intake = version_workspace.split('id="library-intake-disclosure"', 1)[1]
+        self.assertIn('id="registered-library-table-body"', intake)
+        self.assertIn('class="library-intake-zone"', intake)
+        self.assertRegex(version_workspace, r'<details id="library-intake-disclosure"[^>]*>')
+        self.assertIn('aria-label="常用操作"', template)
+        self.assertLess(template.index('id="action-workspace"'), template.index('class="workbench-commandbar"'))
+        self.assertNotIn('class="workbench-commandbar"', template.split('id="action-workspace"', 1)[0])
+        for name in ('scan', 'compare', 'file-diff', 'checks', 'review'):
             self.assertIn(f'data-analysis-action="{name}"', template)
             self.assertIn(f'id="analysis-panel-{name}"', template)
         self.assertIn('function selectAnalysisAction(', script)
@@ -378,9 +431,21 @@ assert.equal(panels.review.hidden, false);
         styles = (ROOT / 'src/lib_guard/web/static/styles.css').read_text()
         rules = re.findall(r'\.version-table-shell\.pinned-version-table-shell\s*\{([^}]+)\}', styles)
         self.assertEqual(len(rules), 1)
-        self.assertIn('max-height: min(30vh, 280px)', rules[0])
-        self.assertIn('min-height: 160px', rules[0])
-        self.assertRegex(styles, r'\.version-work-table th:nth-child\(1\), \.version-work-table td:nth-child\(1\) \{ width: 32%; \}')
+        self.assertIn('max-height: min(55vh, 620px)', rules[0])
+        self.assertNotRegex(rules[0], r'min-height\s*:')
+        self.assertRegex(styles, r'\.version-work-table th:nth-child\(1\), \.version-work-table td:nth-child\(1\) \{ width: 35%; \}')
+
+    def test_version_filter_has_one_entry_and_selected_version_actions_are_centralized(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        version_workspace = template.split('id="version-workspace"', 1)[1].split('id="action-workspace"', 1)[0]
+        self.assertNotIn('id="version-status-filter"', template)
+        self.assertIn('data-version-focus-action="open"', version_workspace)
+        self.assertIn('data-version-focus-action="scan"', version_workspace)
+        self.assertIn('data-version-focus-action="compare"', version_workspace)
+        self.assertNotIn('versionRowActions(item)', script[script.index('function renderVersions()'):script.index('function setActionDeckState(')])
+        self.assertIn("data-version-focus-action", script)
+        self.assertEqual(script.count("document.querySelectorAll('[data-version-focus-action]').forEach((button) => button.addEventListener('click'"), 1)
 
     def test_candidate_confirmation_uses_readable_evidence_and_visible_path(self):
         template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
@@ -497,7 +562,8 @@ const assert = require('node:assert/strict');
 const state={}; const $=()=>({classList:{remove(){}},textContent:''});
 const JOB_TIMEOUT_MS=1800000;
 const statusLabel = x => x, statusClass = x => x;
-const renderJobObservation=()=>{},renderJobArtifacts=()=>{},renderReleasePlanResult=()=>{};
+const renderJobObservation=()=>{},renderJobQualitySummary=()=>{},renderJobArtifacts=()=>{},renderReleasePlanResult=()=>{};
+const invalidateReleasePreview=()=>{};
 const clearActionBusy=()=>{},loadLibraries=async()=>{},showError=()=>{};
 let refreshes=0, returnCode=0;
 const getJson=async()=>({status:returnCode ? 'FAILED':'COMPLETED',return_code:returnCode});
@@ -583,11 +649,30 @@ assert.ok(releaseSetCompareHtml({libraries:[]},'').includes('没有库级对比�
             self.assertIn(f'id="{element}"', delivery)
         settings = template.split('id="management-workspace"', 1)[1]
         self.assertNotIn('id="formal-release-library-panel"', settings)
-        self.assertNotIn('id="rollback-to"', settings)
+        self.assertIn('id="rollback-to"', settings)
         self.assertIn('id="workspace-settings-button"', template)
         self.assertIn('id="scan-settings-heading"', template.split('id="action-workspace"', 1)[1].split('id="release-workspace"', 1)[0])
         ids = re.findall(r'\bid="([^"]+)"', template)
         self.assertEqual(len(ids), len(set(ids)), 'Controls must not be duplicated when moved')
+
+    def test_workspace_content_matches_user_judgement_boundaries(self) -> None:
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        library_workspace = template.split('id="version-workspace"', 1)[1].split('id="action-workspace"', 1)[0]
+        analysis_workspace = template.split('id="action-workspace"', 1)[1].split('id="release-workspace"', 1)[0]
+        delivery_workspace = template.split('id="release-workspace"', 1)[1]
+
+        self.assertNotIn('id="current-effective-stack"', library_workspace)
+        self.assertNotIn('id="effective-selection-body"', library_workspace)
+        self.assertNotIn('id="semantic-review-heading"', library_workspace)
+        self.assertNotIn('class="object-maintenance"', library_workspace)
+        self.assertIn('id="semantic-review-heading"', analysis_workspace)
+        self.assertIn('id="current-effective-stack"', delivery_workspace)
+        self.assertIn('id="effective-selection-body"', delivery_workspace)
+        self.assertIn('id="accept-window-button"', delivery_workspace)
+        settings_workspace = template.split('id="management-workspace"', 1)[1]
+        self.assertIn('class="object-maintenance"', settings_workspace)
+        self.assertIn('总目录报告', template)
+        self.assertIn('当前有效版本未设置', template)
 
     @unittest.skipUnless(shutil.which('node'), 'Node is required for workspace navigation tests')
     def test_workspace_switch_preserves_selection_and_groups_analysis_panels(self) -> None:
@@ -600,12 +685,13 @@ const state = {selectedLibrary:'A', selectedVersion:{version_id:'v2'}, workspace
 const STAGE_IDS = ['version-workspace','action-workspace','release-workspace','management-workspace'];
 const nodes = new Map();
 const $ = id => {
- if (!nodes.has(id)) nodes.set(id, {attrs:{}, hidden:false, classList:{toggle(name, flag){nodes.get(id).hidden=flag;}},setAttribute(name,value){this.attrs[name]=value;}});
+ if (!nodes.has(id)) nodes.set(id, {attrs:{}, hidden:false, classList:{toggle(name, flag){nodes.get(id).hidden=flag;},remove(){}},setAttribute(name,value){this.attrs[name]=value;}});
  return nodes.get(id);
 };
-const tabs=STAGE_IDS.slice(0,3).map(id=>({dataset:{stageTarget:id},classList:{toggle(){}},setAttribute(){}}));
+const tabs=STAGE_IDS.slice(0,3).map(id=>({dataset:{stageTarget:id},attrs:{},classList:{toggle(){},remove(){}},setAttribute(name,value){this.attrs[name]=value;},getAttribute(name){return this.attrs[name] || 'false';}}));
 const document={querySelectorAll:()=>tabs};
 const updateRouteState=()=>{};
+const selectAnalysisAction=()=>{};
 '''
         checks = r'''
 setActiveStageTab('evidence-workspace');
@@ -747,13 +833,13 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn('id="update-note-summary"', template)
         self.assertIn('id="save-update-note-draft"', template)
         self.assertIn('id="publish-update-note"', template)
-        self.assertNotIn(">选择版本<", template)
+        self.assertNotIn('id="select-version-button"', template)
         for action_id, label in (
             ("scan-action-button", "扫描"),
             ("compare-action-button", "对比"),
             ("open-file-diff", "深度文件对比"),
             ("open-review-actions", "审查记录"),
-            ("release-action-button", "发布检查"),
+            ("release-action-button", "检查正式发布条件"),
             ("release-plan-action-button", "生成发布预演"),
         ):
             self.assertIn(f'id="{action_id}"', template)
@@ -808,20 +894,19 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn("action-deck-grid", styles)
         self.assertIn("action-card", styles)
         self.assertIn("version-note-workbench", styles)
-        self.assertIn('class="workflow-operator-strip"', template)
-        grid_section = template.split('class="action-deck-grid"', 1)[1].split('class="workflow-operator-strip"', 1)[0]
-        self.assertNotIn("接入与有效版", grid_section)
+        self.assertIn('class="semantic-review-card"', template)
+        self.assertIn('id="semantic-review-heading"', template)
+        self.assertNotIn("接入与有效版", template)
         self.assertIn("新版本接入", template)
         self.assertIn("读取已保存建议", template)
         self.assertIn("预览处理计划", template)
-        self.assertIn("生成候选", template)
-        self.assertIn("设为当前可用版本", template)
+        self.assertIn("生成待确认候选", template)
+        self.assertIn("确认并设为当前有效", template)
         self.assertNotIn("接入窗口", template)
         self.assertNotIn("下一步预演", template)
         self.assertNotIn("接受候选有效版", template)
         self.assertIn(".action-deck-grid { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 10px;", styles)
         self.assertIn('.action-deck-grid > [hidden] { display: none; }', styles)
-        self.assertIn(".workflow-operator-strip", styles)
 
     def test_new_library_intake_has_a_short_safe_path(self) -> None:
         template = (ROOT / "src" / "lib_guard" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
@@ -836,7 +921,7 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn('id="library-add-apply" type="checkbox" checked', template)
         self.assertIn('id="library-add-refresh" type="checkbox" checked', template)
         self.assertIn("登记并加入目录", template)
-        self.assertIn("同名正式库会替换旧库根", template)
+        self.assertIn("同名已登记库会替换旧库根", template)
         self.assertIn("重新发现候选库", template)
         self.assertIn("读取上次结果", template)
         self.assertIn("修改库名 / 库根", script)
@@ -883,10 +968,7 @@ assert.equal($('release-set-compare').disabled,true);
             "版本列表",
             "库接入与候选库",
             "事实状态",
-            "当前可用版本",
-            "新版本待扫",
-            "基准待扫",
-            "当前版补证据",
+            "当前有效版本",
             "生成处理建议",
             "生成处理计划",
             "运行与默认配置",
@@ -894,7 +976,9 @@ assert.equal($('release-set-compare').disabled,true);
             "工作区默认值",
             "默认原始库根",
             "最少版本数",
-            "保存为默认",
+            "保存目录",
+            "保存扫描默认值",
+            "保存发现默认值",
             "扫描证据",
             "证据读取",
             "版本对比",
@@ -903,7 +987,7 @@ assert.equal($('release-set-compare').disabled,true);
             "完整内容证据会读取文件内容，可能明显变慢",
             "仅生成扫描和对比事实，不刷新页面",
             "版本配置与组合",
-            "设为当前可用版本",
+            "确认并设为当前有效",
             "版本概览",
             "当前版本上下文",
             "当前版本处理范围",
@@ -917,7 +1001,7 @@ assert.equal($('release-set-compare').disabled,true);
             "策略与例外",
             "新版本接入",
             "新库接入",
-            "正式库与候选库",
+            "已登记库与候选库",
             "查看全部工作清单",
             "发现候选库",
             "候选库",
@@ -936,12 +1020,12 @@ assert.equal($('release-set-compare').disabled,true);
             "运行文件级对比",
             "审查门禁",
             "审查记录包",
-            "回退当前可用版本",
+            "回退当前有效版本",
             "执行预定义动作",
             "浏览目录",
             "使用当前目录",
         ):
-            self.assertIn(label, template)
+            self.assertIn(label, script if label in ("新版本待扫", "基准待扫", "当前版补证据") else template)
         self.assertIn('class="settings-disclosure panel"', template)
         self.assertIn('class="settings-section"', template)
         self.assertIn('class="workspace-heading-main"', template)
@@ -959,7 +1043,7 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn('id="action-workspace" class="panel action-deck stage-anchor hidden"', template)
         self.assertIn('id="evidence-workspace" class="content-grid stage-anchor hidden"', template)
         self.assertIn('class="pinned-workbench"', template)
-        self.assertIn('id="run-workspace" class="runtime-strip"', template)
+        self.assertIn('id="run-workspace" class="runtime-dock runtime-strip"', template)
         self.assertNotIn('id="run-workspace" class="panel run-panel stage-anchor hidden"', template)
         self.assertIn('data-stage-target="version-workspace"', template)
         self.assertIn('data-stage-target="action-workspace"', template)
@@ -973,30 +1057,25 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn('id="metric-effective"', template)
         self.assertIn('id="flow-release-value"', template)
         self.assertIn('class="inline-action-details"', template)
-        self.assertIn("IP 使用判断", template)
+        self.assertIn('aria-label="有效组合与版本接入"', template)
         self.assertIn('colspan="7"', template)
         self.assertIn('id="registered-library-table-body"', template)
         self.assertIn('class="file-tree-filter-group"', template)
         self.assertIn('class="file-tree-action-group"', template)
         self.assertIn("版本列表", template)
+        for label in ("当前关注", "全部历史", "新版本待扫", "基准待扫", "当前版补证据", "待对比", "可审查", "当前有效", "发布待确认", "异常", "待扫描"):
+            self.assertIn(label, script)
         for label in (
-            "当前关注",
-            "全部历史",
-            "待扫描",
-            "待对比",
-            "可审查",
-            "当前可用",
-            "发布待确认",
-            "异常",
             "待处理优先",
             "最新版本优先",
             "最旧版本优先",
-            "当前可用优先",
+            "当前有效优先",
             "包类型",
             "对比基准",
-            "证据状态",
-            "事实结论 / 下一步",
-            "操作",
+            '<th scope="col">扫描</th>',
+            '<th scope="col">对比</th>',
+            '<th scope="col">发布检查</th>',
+            "所选版本操作",
         ):
             self.assertIn(label, template)
         self.assertIn('id="version-sort"', template)
@@ -1019,16 +1098,18 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn('id="version-focus-effective"', template)
         self.assertIn('id="version-focus-facts"', template)
         self.assertIn("versionEvidenceChips", script)
-        self.assertIn("versionTaskCell", script)
+        self.assertIn("version-base-label", script)
         self.assertIn("versionRoleLabel", script)
-        self.assertIn("versionRowActions", script)
+        self.assertIn('data-version-focus-action="open"', template)
+        self.assertIn('data-version-focus-action="scan"', template)
+        self.assertIn('data-version-focus-action="compare"', template)
         self.assertIn("发布待确认", script)
         self.assertIn("待扫描", script)
         self.assertIn("待对比", script)
         self.assertIn("可审查", script)
         self.assertIn("version-evidence-stack", styles)
         self.assertIn("版本分析", template)
-        self.assertIn("下一步", template)
+        self.assertIn('id="analysis-next-step"', template)
         self.assertIn("id=\"action-workspace\"", template)
         self.assertIn("id=\"registered-library-table-body\"", template)
         self.assertIn("已登记库", template)
@@ -1041,6 +1122,8 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn("skip_hash_file_types", script)
         self.assertIn("renderActionDeckReadiness", script)
         self.assertIn("openVersionDetail", script)
+        self.assertIn("待确认候选", script)
+        self.assertNotIn("候选有效组合';", script)
 
     def test_effective_stack_and_release_set_have_visible_web_entrypoints(self) -> None:
         template = (ROOT / "src" / "lib_guard" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
@@ -1052,7 +1135,7 @@ assert.equal($('release-set-compare').disabled,true);
             "完整包基线",
             "叠加更新",
             "来源",
-            "候选有效组合",
+            "待确认候选",
             "比较当前与候选",
             "多库发布组合",
             "生成多库组合清单",
@@ -1139,7 +1222,7 @@ assert.equal($('release-set-compare').disabled,true);
             "全部库",
             "需处理库",
             "发布待确认",
-            "无当前可用",
+            "无当前有效",
             "候选待登记",
             "库类型",
             "厂商",
@@ -1168,7 +1251,7 @@ assert.equal($('release-set-compare').disabled,true);
         script = (ROOT / "src" / "lib_guard" / "web" / "static" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "src" / "lib_guard" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
 
-        self.assertIn("库接入与候选库", template)
+        self.assertIn("库管理", template)
         self.assertIn("新库接入", template)
         self.assertIn("从库路径到版本处理", template)
         self.assertIn('class="library-intake-playbook"', template)
@@ -1177,14 +1260,14 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertLess(template.index('id="registered-library-heading"'), template.index('id="candidate-discover-root"'))
         self.assertLess(template.index('id="candidate-discover-root"'), template.index('id="library-add-disclosure"'))
         for label in (
-            "原始库版本概览",
+            "已登记库",
             "重新发现候选库",
             "应用并刷新目录",
             "手动添加库（补充）",
             "库属性（可登记）",
             "登记后自动应用并刷新目录",
             "发现路径",
-            "建议正式库名",
+            "建议已登记库名",
             "核对库根和版本",
         ):
             self.assertIn(label, template)
@@ -1297,9 +1380,10 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn('id="file-change-facets"', template)
         self.assertIn("文件变化总览", template)
         self.assertIn("show-settings-button", template)
-        self.assertLess(template.index('class="primary-stage-tabs"'), template.index('class="pinned-workbench"'))
-        self.assertLess(template.index('class="pinned-workbench"'), template.index('id="version-workspace"'))
-        self.assertLess(template.index('id="run-workspace"'), template.index('id="version-workspace"'))
+        self.assertLess(template.index('class="primary-stage-tabs"'), template.index('id="version-workspace"'))
+        self.assertLess(template.index('id="version-workspace"'), template.index('id="version-list-disclosure"'))
+        self.assertLess(template.index('id="version-list-disclosure"'), template.index('class="pinned-workbench"'))
+        self.assertLess(template.index('id="version-workspace"'), template.index('id="run-workspace"'))
         self.assertLess(template.index('id="version-workspace"'), template.index('id="action-workspace"'))
         self.assertLess(template.index('id="action-workspace"'), template.index('id="evidence-workspace"'))
         self.assertLess(template.index('id="version-workspace"'), template.index('class="panel evidence-workspace"'))

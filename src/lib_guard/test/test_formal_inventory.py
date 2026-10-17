@@ -30,7 +30,9 @@ class FormalInventoryTest(unittest.TestCase):
             pointer.write_text('{"current_effective_id":"keep"}')
             original_links={p.name:p.readlink() for p in formal.iterdir()}
             client=create_app(config_path=config,cwd=root,test_config={'TESTING':True}).test_client()
-            self.assertEqual(client.post('/api/formal-directory/refresh',json={'root':str(formal)}).status_code,200)
+            response = client.post('/api/formal-directory/refresh',json={'root':str(formal)})
+            self.assertEqual(response.status_code,200)
+            self.assertIn(response.get_json()['audit_status'], {'可用', '部分可用', '不可用'})
             result=client.get('/api/formal-directory?library=a&version=20260102_fix&type=lef').get_json()
             self.assertEqual(result['matched_count'],2)
             self.assertEqual(result['versions'],['20260101_full','20260102_fix'])
@@ -58,6 +60,7 @@ class FormalInventoryTest(unittest.TestCase):
             client=create_app(config_path=config,cwd=root,test_config={'TESTING':True}).test_client()
             response=client.post('/api/formal-directory/refresh',json={'root':str(formal)})
             self.assertEqual(response.status_code,200,response.get_json())
+            self.assertEqual(response.get_json()['audit_status'], '部分可用')
             result=client.get('/api/formal-directory').get_json()
             self.assertEqual(result['file_count'],105)
             self.assertEqual(len(result['files']),100)

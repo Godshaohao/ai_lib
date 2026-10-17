@@ -278,8 +278,8 @@ def _scan_view_rows(counts: Mapping[str, int]) -> list[str]:
             f"<td><code>{ui.esc(name)}</code></td>"
             f"<td>{ui.badge(status)}</td>"
             f"<td>{ui.esc(count)}</td>"
-            f"<td>{ui.esc('yes' if name in CORE_VIEW_TYPES else 'no')}</td>"
-            f"<td><code>{ui.esc('count_only' if name in COUNT_ONLY_TYPES and count else 'parsed' if count else 'missing')}</code></td>"
+            f"<td>{ui.esc('重点' if name in CORE_VIEW_TYPES else '-')}</td>"
+            f"<td>{ui.esc(ui.status_label('COUNT_ONLY' if name in COUNT_ONLY_TYPES and count else 'PARSED' if count else 'MISSING'))}</td>"
             f"<td>{ui.esc(_type_meaning(name))}</td>"
             "</tr>"
         )
@@ -296,8 +296,8 @@ def _scan_view_rows_from_review(rows_in: list[Mapping[str, Any]]) -> list[str]:
             f"<td>{ui.esc(item.get('view_label') or item.get('view_type') or '-')}</td>"
             f"<td>{ui.badge(item.get('status') or '-')}</td>"
             f"<td>{ui.esc(item.get('count') or 0)}</td>"
-            f"<td>{ui.esc(item.get('required') or '-')}</td>"
-            f"<td><code>{ui.esc(item.get('evidence_level') or '-')}</code></td>"
+            f"<td>{ui.esc('重点' if str(item.get('required') or '').lower() == 'yes' else '-')}</td>"
+            f"<td>{ui.esc(ui.status_label(item.get('evidence_level') or '-'))}</td>"
             f"<td>{ui.esc(item.get('meaning') or '-')}</td>"
             "</tr>"
         )
@@ -314,7 +314,7 @@ def _files_by_view_rows(rows_in: list[Mapping[str, Any]], limit: int = 800) -> l
             f"<td>{ui.esc(item.get('view_label') or item.get('view_type') or '-')}</td>"
             f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('role') or '-')}</td>"
-            f"<td>{ui.esc(item.get('size_bytes') or '-')}</td>"
+            f"<td>{ui.esc(_format_size_bytes(item.get('size_bytes')))}</td>"
             f"<td>{ui.badge(item.get('evidence_level') or '-')}</td>"
             f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
             "</tr>"
@@ -335,6 +335,16 @@ def _representative_file_rows(rows_in: list[Mapping[str, Any]], *, per_view: int
     return selected
 
 
+def _format_size_bytes(value: Any) -> str:
+    if value in (None, ""):
+        return "-"
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return "-"
+    return f"{size:,} B"
+
+
 def _unknown_file_rows(rows_in: list[Mapping[str, Any]], limit: int = 300) -> list[str]:
     from lib_guard.render import product_theme as ui
 
@@ -344,7 +354,7 @@ def _unknown_file_rows(rows_in: list[Mapping[str, Any]], limit: int = 300) -> li
             "<tr>"
             f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('extension') or '-')}</td>"
-            f"<td>{ui.esc(item.get('size_bytes') or '-')}</td>"
+            f"<td>{ui.esc(_format_size_bytes(item.get('size_bytes')))}</td>"
             f"<td>{ui.badge(item.get('suggested_action') or '-')}</td>"
             f"<td>{ui.esc(item.get('reason') or '-')}</td>"
             "</tr>"
@@ -361,7 +371,7 @@ def _large_metadata_rows(rows_in: list[Mapping[str, Any]], limit: int = 500) -> 
             "<tr>"
             f"<td>{ui.esc(item.get('view_label') or item.get('view_type') or '-')}</td>"
             f"<td>{ui.badge(item.get('evidence_level') or '-')}</td>"
-            f"<td>{ui.esc(item.get('size_bytes') or '-')}</td>"
+            f"<td>{ui.esc(_format_size_bytes(item.get('size_bytes')))}</td>"
             f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('review_policy') or '-')}</td>"
             "</tr>"
@@ -496,14 +506,31 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             encoding="utf-8",
         )
     review = _scan_review_model(scan, out, meta, counts, issue_items, release_readiness, corner_summary, parser_summary)
+    delivery_requirements = release_readiness.get("delivery_requirements") or {}
+    release_view_requirements = delivery_requirements.get("views") or {}
+    release_required_views = release_view_requirements.get("required") or []
+    release_requirement_note = (
+        "扫描重点视图用于提示常见 IP 交付覆盖，不代表正式放行阻塞规则。"
+        "发布必需视图按发布策略配置，当前："
+        + ("、".join(str(item) for item in release_required_views) if release_required_views else "未配置")
+        + "。"
+    )
     write_json(out / "scan_review.json", review)
 
     attention = [(x.get("level"), x.get("category"), x.get("message"), "scan_review.json") for x in (review.get("blockers") or []) + (review.get("warnings") or [])]
-    evidence_status = "AVAILABLE" if review["decision"] != "SCAN_BLOCKED" else "BLOCKED"
+    evidence_status = "已生成" if review["decision"] != "SCAN_BLOCKED" else "BLOCKED"
+    next_status = "BLOCKED" if review["decision"] == "SCAN_BLOCKED" else review["decision"]
+    next_note = (
+        "先处理扫描阻塞项，再重新扫描。"
+        if review["decision"] == "SCAN_BLOCKED"
+        else "可继续对比；扫描结果不代表版本已批准使用或正式放行。"
+        if review["decision"] == "READY_FOR_DIFF"
+        else "先核对注意项，再继续对比；扫描结果不代表版本已批准使用或正式放行。"
+    )
     rail = ui.status_rail([
         ("扫描", review["decision"], review["headline"]),
-        ("人工证据", evidence_status, "已生成视图、文件和问题清单" if evidence_status == "AVAILABLE" else "先处理扫描阻塞项"),
-        ("当前判断", "READY" if evidence_status == "AVAILABLE" else "BLOCKED", "扫描结果可供下一步判断" if evidence_status == "AVAILABLE" else "当前证据不能继续使用"),
+        ("审查材料", evidence_status, "视图、文件和注意项清单" if evidence_status == "已生成" else "当前材料需要补齐"),
+        ("后续处理", next_status, next_note),
     ])
     inline_file_rows = _representative_file_rows(review_files_by_view, per_view=12, limit=120)
     if not inline_file_rows and files:
@@ -518,8 +545,8 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             "扫描结论",
             "只保留是否可继续审阅、缺失视图、注意项和下一步。数量明细放在证据区。",
             ui.metric_grid([
-                ("交付类型", review.get("package_type"), "扫描识别的包类型", "PASS" if review.get("package_type") != "UNKNOWN" else "WARNING"),
-                ("核心视图缺失", len(review["required_views"]["missing"]), "LEF / Liberty / Verilog", "WARNING" if review["required_views"]["missing"] else "PASS"),
+                ("包类型", ui.status_label(review.get("package_type")), "扫描识别结果", "PASS" if review.get("package_type") != "UNKNOWN" else "WARNING"),
+                ("扫描重点视图缺失", len(review["required_views"]["missing"]), "LEF / Liberty / RTL 模型", "WARNING" if review["required_views"]["missing"] else "PASS"),
                 ("元数据/摘要文件", int((review_scan or {}).get("large_metadata_files", len(review_large_metadata)) or 0), "摘要级 / 元数据级证据", "INFO" if review_large_metadata else "PASS"),
                 ("注意项", len(attention), review["headline"], review["decision"]),
             ])
@@ -530,9 +557,9 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         + ui.next_action_panel(review["next_action"]["label"], review["next_action"]["command"], review["next_action"]["reason"], status=review["decision"])
         + ui.panel(
             "视图覆盖矩阵",
-            "先看每类交付视图是否存在、证据等级是什么；数量可以在下方文件证据表展开。",
+            "先看每类交付视图是否存在、证据等级是什么；数量可以在下方文件证据表展开。" + release_requirement_note,
             ui.table(
-                ["视图", "状态", "数量", "必需", "证据等级", "审查含义"],
+                ["视图", "状态", "数量", "扫描重点", "证据等级", "审查含义"],
                 _scan_view_rows_from_review(review_view_rows) if review_view_rows else _scan_view_rows(counts),
                 "暂无视图信息",
             ),
@@ -548,7 +575,7 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
                 "数量必须能追到文件。这里按视图列出具体路径、角色和证据等级；大表支持筛选。",
                 ui.filterable_table(
                     "files-by-view-table",
-                ["视图", "文件类型", "角色", "大小", "证据等级", "文件路径"],
+                ["视图", "文件类型", "角色", "大小（字节）", "证据等级", "文件路径"],
                 _files_by_view_rows(inline_file_rows) if review_files_by_view else _file_rows(inline_file_rows),
                 "暂无文件证据",
                 "筛选视图 / 文件类型 / 文件路径",
@@ -559,7 +586,7 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
             "未识别文件不应被数量淹没；这里集中列出需要分类或确认可忽略的文件。",
             ui.filterable_table(
                 "unknown-file-table",
-                ["文件路径", "扩展名", "大小", "建议动作", "原因"],
+                ["文件路径", "扩展名", "大小（字节）", "建议动作", "原因"],
                 _unknown_file_rows(review_unknown_files),
                 "没有未知文件",
                 "筛选未知文件",
@@ -568,13 +595,13 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         )
         + ui.collapsible_panel(
             "摘要级 / 元数据级文件",
-            "大文件不是没审查，而是按证据等级审查；主页面只保留计数和完整清单入口。",
+            "这些文件按视图类型使用摘要或元数据证据，不代表文件体积大；主页面保留证据等级和清单入口。",
             ui.metric_grid([
                 ("摘要级", large_counts.get("summary_only", 0), "完整清单见 large_metadata_files.tsv", "INFO"),
                 ("元数据级", large_counts.get("metadata_only", 0), "完整清单见 large_metadata_files.tsv", "INFO"),
             ])
             + ui.trace_link_list([
-                ("review/large_metadata_files.tsv", _file_href(review_dir / "large_metadata_files.tsv"), "大文件完整路径、大小和审查策略"),
+                ("review/large_metadata_files.tsv", _file_href(review_dir / "large_metadata_files.tsv"), "摘要级 / 元数据级文件路径、大小和审查策略"),
             ]),
             open=False,
         )
@@ -605,8 +632,8 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
     parser = review.get("parser_summary") or {}
     body += (
         ui.collapsible_panel(
-            "大文件计数与工艺角摘要",
-            "大体量时序、寄生和二进制视图只按路径、文件名和工艺角归类；普通扫描不读取它们的内容。",
+            "未深读视图与工艺角摘要",
+            "这些视图按默认扫描策略只记录数量、路径和文件名工艺角线索；内容深读需另行选择检查策略。",
             ui.metric_grid([
                 ("计数文件", count_only.get("total_files", 0), ", ".join(f"{k}:{v}" for k, v in (count_only.get("file_type_counts") or {}).items()) or "无", "INFO" if count_only.get("total_files") else "PASS"),
                 ("工艺角", len(corner.get("process_counts") or {}), ", ".join(f"{k}:{v}" for k, v in (corner.get("process_counts") or {}).items()) or "无", "PASS" if corner.get("process_counts") else "INFO"),
@@ -635,7 +662,7 @@ def render_scan_html(scan_dir: str | Path, out_dir: str | Path) -> dict[str, Any
         decision=review["decision"],
         rail=rail,
         nav="<a class='active' href='#'>扫描摘要</a><a href='#'>人工证据</a>",
-        meta=ui.compact_meta([("包类型", review.get("package_type")), ("文件总数", review.get("total_files")), ("未知", review.get("unknown_files"))]),
+        meta=ui.compact_meta([("包类型", ui.status_label(review.get("package_type"))), ("文件总数", review.get("total_files")), ("未知", review.get("unknown_files"))]),
     )
     atomic_write_text(out / "index.html", html_text)
     atomic_write_text(
@@ -655,7 +682,7 @@ def _file_rows(files: list[Mapping[str, Any]], limit: int = 800) -> list[str]:
             "<tr>"
             f"<td><code>{ui.esc(item.get('file_type') or '-')}</code></td>"
             f"<td>{ui.esc(item.get('role') or '-')}</td>"
-            f"<td>{ui.esc(item.get('size_bytes') or '-')}</td>"
+            f"<td>{ui.esc(_format_size_bytes(item.get('size_bytes')))}</td>"
             f"<td><code>{ui.esc(item.get('path') or '-')}</code></td>"
             "</tr>"
         )

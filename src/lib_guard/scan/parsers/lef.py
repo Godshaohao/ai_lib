@@ -7,7 +7,7 @@ import re
 
 from .base import BaseParser, make_parser_envelope, record_abs_path, get_field
 
-LEF_PARSER_VERSION = "2.1"
+LEF_PARSER_VERSION = "2.5"
 # A complete geometry payload is useful for small abstracts.  On a large
 # technology LEF it expands every RECT/OBS into JSON and can exceed the source
 # file by several times, without changing the review-level LEF summary.
@@ -52,6 +52,39 @@ def _numeric_values(text: str) -> float | list[float] | str:
     except Exception:
         return text
     return values[0] if len(values) == 1 else values
+
+
+def _lef_statements(lines: Iterable[str]):
+    """Split scalar statements, keeping quoted LEF58 properties opaque."""
+    buffer = []
+    quoted = escaped = False
+    start = 1
+    for line_no, raw in enumerate(lines, start=1):
+        if not buffer:
+            start = line_no
+        for char in raw.rstrip('\r\n'):
+            if not quoted and char == '#':
+                break
+            buffer.append(char)
+            if quoted and escaped:
+                escaped = False
+            elif quoted and char == '\\':
+                escaped = True
+            elif char == '"':
+                quoted = not quoted
+            elif not quoted and char == ';':
+                yield start, ''.join(buffer).strip(), True
+                buffer = []
+                start = line_no
+        if quoted:
+            buffer.append('\n')
+            escaped = False
+        else:
+            if ''.join(buffer).strip():
+                yield start, ''.join(buffer).strip(), True
+            buffer = []
+    if buffer:
+        yield start, ''.join(buffer).strip(), False
 
 
 def _new_tech_layer(name: str, line_no: int) -> dict[str, Any]:
@@ -144,6 +177,7 @@ def _parse_lef_lines(
         "busbitchars": None,
         "dividerchar": None,
         "database_microns": None,
+        "coordinate_units": "um",
         "layers": {},
         "layer_order": [],
         "macros": {},
@@ -165,11 +199,48 @@ def _parse_lef_lines(
     current_layer_name: str | None = None
     in_pin_port = False
     in_obs = False
+    in_properties = False
+    auxiliary_block = None
+    limitations: list[dict[str, Any]] = []
+    duplicate_pin = False
+    malformed = False
+    unsupported_pin_geometry = False
+    unsupported_obs_geometry = False
+    limitation_count = 0
 
-    for line_no, raw in enumerate(lines, start=1):
-        line = raw.split("#", 1)[0].strip()
+    def note_limitation(record):
+        nonlocal limitation_count
+        limitation_count += 1
+        if len(limitations) < 100:
+            limitations.append(record)
+
+    for line_no, line, valid in _lef_statements(lines):
         if not line:
             continue
+        if not valid:
+            malformed = True
+            note_limitation({'line': line_no, 'reason': 'unterminated_quoted_string'})
+            continue
+        if _RE_MACRO_START.match(line) and (current_macro is not None or auxiliary_block is not None or current_tech_layer is not None):
+            malformed = True
+            note_limitation({'line': line_no, 'reason': 'nested_macro_before_block_end'})
+            continue
+        if auxiliary_block is not None:
+            end = _RE_END.match(line)
+            if end and end.group('name') == auxiliary_block:
+                auxiliary_block = None
+            continue
+        if in_properties:
+            if re.match(r'^END\s+PROPERTYDEFINITIONS\b', line, re.I):
+                in_properties = False
+            continue
+        if current_macro is None and re.match(r'^PROPERTYDEFINITIONS\b', line, re.I):
+            in_properties = True
+            continue
+        if (in_pin_port or in_obs) and re.match(r'^(POLYGON|PATH|VIA|RECT\s+(MASK|ITERATE)|LAYER\s+\S+\s+(EXCEPTPGNET|SPACING|DESIGNRULEWIDTH))\b', line, re.I):
+            unsupported_pin_geometry |= in_pin_port
+            unsupported_obs_geometry |= in_obs
+            note_limitation({'line': line_no, 'reason': 'unsupported_geometry', 'statement': line.split()[0]})
 
         if current_tech_layer is not None:
             m_end = _RE_END.match(line)
@@ -182,6 +253,10 @@ def _parse_lef_lines(
             continue
 
         if current_macro is None:
+            auxiliary = re.match(r'^(VIA|VIARULE|SITE|NONDEFAULTRULE)\s+(\S+)', line, re.I)
+            if auxiliary:
+                auxiliary_block = auxiliary.group(2)
+                continue
             matched_header = False
             for regex, key, conv in [
                 (_RE_VERSION, "lef_version", str),
@@ -229,14 +304,24 @@ def _parse_lef_lines(
             continue
 
         if current_pin is not None:
+            if _RE_PIN_START.match(line) or _RE_MACRO_START.match(line):
+                malformed = True
+                note_limitation({'line': line_no, 'reason': 'nested_object_before_pin_end'})
+                continue
             if _RE_PORT.match(line):
+                if in_pin_port:
+                    malformed = True
                 in_pin_port = True
+                current_pin['port_count'] += 1
                 current_layer_name = None
                 continue
             m_end = _RE_END.match(line)
             if m_end:
                 end_name = m_end.group("name")
                 if end_name == current_pin["name"] or (end_name is None and not in_pin_port):
+                    if in_pin_port or end_name is None:
+                        malformed = True
+                        note_limitation({'line': line_no, 'reason': 'unclosed_port_or_unnamed_pin_end'})
                     current_pin["line_end"] = line_no
                     current_pin = None
                     current_layer_name = None
@@ -246,6 +331,9 @@ def _parse_lef_lines(
                     in_pin_port = False
                     current_layer_name = None
                     continue
+                malformed = True
+                note_limitation({'line': line_no, 'reason': 'mismatched_pin_end'})
+                continue
             for regex, key in [(_RE_DIRECTION, "direction"), (_RE_USE, "use"), (_RE_SHAPE, "shape")]:
                 m = regex.match(line)
                 if m:
@@ -262,7 +350,7 @@ def _parse_lef_lines(
                 if m:
                     if retain_geometry:
                         current_pin["rects"].append(
-                            {"layer": current_layer_name, **{k: float(v) for k, v in m.groupdict().items()}}
+                            {"port_index": current_pin['port_count'] - 1, "layer": current_layer_name, **{k: float(v) for k, v in m.groupdict().items()}}
                         )
                     else:
                         current_pin["_rect_count"] = int(current_pin.get("_rect_count", 0)) + 1
@@ -271,6 +359,8 @@ def _parse_lef_lines(
                 if m:
                     current_pin.setdefault("antenna", {})[m.group("key").upper()] = _numeric_values(m.group("value"))
                     continue
+                unsupported_pin_geometry = True
+                note_limitation({'line': line_no, 'reason': 'unsupported_pin_statement', 'statement': line.split()[0]})
             continue
 
         if in_obs:
@@ -294,6 +384,9 @@ def _parse_lef_lines(
                     if current_layer_name:
                         current_macro.setdefault("_obs_layers", []).append(current_layer_name)
                 continue
+            unsupported_obs_geometry = True
+            note_limitation({'line': line_no, 'reason': 'unsupported_obs_statement', 'statement': line.split()[0]})
+            continue
 
         m_end = _RE_END.match(line)
         if m_end and m_end.group("name") == current_macro["name"]:
@@ -302,7 +395,7 @@ def _parse_lef_lines(
             continue
         m = _RE_CLASS.match(line)
         if m:
-            current_macro["class"] = m.group("class")
+            current_macro["class"] = m.group("class").upper()
             continue
         m = _RE_SIZE.match(line)
         if m:
@@ -314,7 +407,7 @@ def _parse_lef_lines(
             continue
         m = _RE_SYMMETRY.match(line)
         if m:
-            current_macro["symmetry"] = m.group("sym").split()
+            current_macro["symmetry"] = m.group("sym").upper().split()
             continue
         m = _RE_SITE.match(line)
         if m:
@@ -323,6 +416,7 @@ def _parse_lef_lines(
         m = _RE_PIN_START.match(line)
         if m:
             pname = m.group("name")
+            duplicate_pin |= pname in current_macro['pins']
             current_pin = {
                 "name": pname,
                 "line_start": line_no,
@@ -334,6 +428,7 @@ def _parse_lef_lines(
                 "layer_count": 0,
                 "rects": [],
                 "rect_count": 0,
+                "port_count": 0,
             }
             current_macro["pins"][pname] = current_pin
             current_macro["pin_order"].append(pname)
@@ -345,6 +440,26 @@ def _parse_lef_lines(
             current_layer_name = None
             continue
 
+    complete = not (malformed or current_macro is not None or current_pin is not None or in_obs or in_properties
+                    or current_tech_layer is not None or auxiliary_block is not None)
+    unique = len(result['macro_order']) == len(set(result['macro_order']))
+    interface_complete = complete and unique and not duplicate_pin
+    result['parse_limitations'] = limitations
+    if not complete:
+        note_limitation({'reason': 'incomplete_or_unsupported_structure'})
+    if not unique or duplicate_pin:
+        note_limitation({'reason': 'duplicate_object_name'})
+    result['parse_limitation_count'] = limitation_count
+    result['semantic_coverage'] = {
+        'schema_version': 'semantic_parser_coverage.v1', 'validated': True,
+        'basis': 'LefParser 2.5 quoted statement boundaries and nested-block validation; RECT-only geometry with explicit PORT groups',
+        'macro_set': 'PRESENT' if complete and unique else 'NOT_EXTRACTED',
+        'port_set': 'PRESENT' if interface_complete else 'NOT_EXTRACTED',
+        'pg_port_set': 'PRESENT' if interface_complete else 'NOT_EXTRACTED',
+        'pin_layers': 'PRESENT' if interface_complete and not unsupported_pin_geometry else 'NOT_EXTRACTED',
+        'pin_geometry': 'PRESENT' if interface_complete and retain_geometry and not unsupported_pin_geometry else 'NOT_EXTRACTED',
+        'obs_geometry': 'PRESENT' if complete and unique and retain_geometry and not unsupported_obs_geometry else 'NOT_EXTRACTED',
+    }
     _finalize_stats(result)
     return result
 

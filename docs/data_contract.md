@@ -2,6 +2,77 @@ Status: current
 
 # 数据契约
 
+## 跨视图语义诊断（只读建议）
+
+`semantic/` 消费已有 `effective_manifest.v2::effective_files` 最终文件及 catalog/runtime
+定位的扫描证据，不合成有效版、不写上游。Effective digest 是组成身份，不是文件内容 hash。
+`validate_effective_manifest` 的身份匹配之外，逐文件还核对来源版本、组件快照、RAW 根、
+inventory 逻辑路径、ParserResult file/abs_path 和当前大小/mtime。符号链接的真实目标相同
+不等于来源逻辑路径相同；禁止 basename 或“最近版本”回退。
+同时核对 inventory、parser_manifest 与 scan_meta 的 scan_id，任务 ref/name/version/status
+必须与结果一致；矛盾、版本缺失及非当前任务的残留结果不作为可信事实。逃出来源版本根的
+链接标为 NOT_CHECKED，不通过当前版本名替外部来源背书。
+
+| 输出契约 | 说明 |
+| --- | --- |
+| `semantic_file_fact.v1` | 原视图对象、属性、单位、端口、parser 版本、来源与 coverage |
+| `semantic_effective_index.v1` | 最终文件映射、事实可用状态、原 manifest 完整性与 evidence trust |
+| `semantic_binding.v1` | library + exact/确认实体 + 明确 variant 的稳定 Macro ID；逻辑 bit 的稳定 Port ID；不同 view/corner 的独立 observations |
+| `semantic_check_result.v1` | PASS/FAIL/REVIEW_REQUIRED/NOT_CHECKED/NOT_APPLICABLE，与证据和原因 |
+| `semantic_delta.v1` | CHANGED/UNCHANGED/UNKNOWN，与旧/新属性及双方来源；不是质量门禁 |
+| `semantic_summary.v1` | advisory、计数、限制及同一完整 generation 的 artifact 引用 |
+| `semantic_fact_record.v1` | 与来源分离的 `semantic_file_fact.v1`，包含 Parser 输出指纹、转换版本/代码、负载校验值和稳定 Fact ID |
+| `semantic_effective_model.v1` | 临时组装的检查范围、Facts 与跨视图绑定；不是新的持久事实源 |
+| `semantic_effective_index_refs.v1` | 快照中的完整有效文件清单及带来源的 Facts 引用，不重复保存完整对象 |
+| `semantic_binding_refs.v1` | 宏与视图来源、Fact ID、对象 local_id；回读时从共享 Facts 恢复对象 |
+| `semantic_snapshot.v1` | 当次 summary、产物校验值；检查、Delta、来源索引和摘要完整后发布 |
+
+`lef_basic` 的新规则为 `semantic_delta.v1` 补充 INCOMPLETE，表示所需 LEF 输入、覆盖或关联不足。
+已有规则的 UNKNOWN 保留兼容。新 LEF 规则携带 `requirements`、`details` 与双方来源；几何明细只保留
+有限的变化 Pin 名称、数量与限制，完整坐标不再次写入检查结果。
+来源索引中的 `macro_index` 是派生投影：READY/AMBIGUOUS/INCOMPLETE 分别表示对象可关联、同名候选冲突、
+证据不足。READY 不等于任何质量规则 PASS；对象身份同时受 IP、Effective 和确认 Variant 上下文约束。
+Macro 增删仅在双方 Macro 集合完整时成立；缺少基准不能把所有对象判成新增。
+Macro 筛选只减少检查对象，不删除所选文件的发现覆盖证据。所选 LEF 文件缺失或无法完整发现对象时，
+不能证明同名候选唯一，已发现对象也不授予 READY/UNCHANGED；可通过明确文件范围排除无关来源。
+LEF 索引复用确认的 Binding canonical identity，`source_object` 与候选列表保留原始 Macro 名称，
+避免别名被误判成增删，也避免同一 canonical identity 的多个 LEF 对象被静默合并。
+
+Parser 2.2 以 `macro_set/port_set/pg_port_set/pin_geometry/obs_geometry` 声明不同覆盖范围。
+RECT 包含 `port_index`，Pin 包含 `port_count`；分组变动不能被扁平 RECT 集合相同掩盖。
+持久语义 Facts 的几何/层坐标不再复制，专门检查通过本任务 `LefCheckFacts` 读取已验证源 ParserResult。
+旧 Facts 与快照保留原内容，新缓存身份由转换代码指纹区分，历史回读不依赖当前转换实现。
+
+共享 Facts 的身份由 Parser 输出内容（包含 Parser 名称/版本）、Facts schema 和转换代码指纹确定。
+原始来源版本/路径、Corner/Mode 与确认依据是独立 provenance，不写入共享事实对象。
+同一 Facts 绑定两个来源时必须产生两份来源引用，不能覆盖原引用。内容复用不提升 coverage。
+同 ID 的合法事实不可被不同负载覆盖；损坏的派生缓存仅可从对应现有 ParserResult 重建。
+当前相同大小/mtime 的新鲜度声明不因 Facts 复用而升级为原始内容相同。
+
+结果 summary 固定配置、确认映射、双方 Effective digest 以及规则版本/实际代码指纹。
+generation 由这些输入及完整结果决定，Facts 存放路径不参与语义身份。
+结果快照存 Facts 引用与必要的检查细节，避免为每版重复保存完整文件模型。
+完整快照不重写；快照产物不一致时报告错误并保持旧结果指针，不将损坏快照静默覆盖。
+`load_review_snapshot()` 校验结果和 Facts 后回读历史，不调用当前规则、不解析 RAW。
+它支持本机制生成的 `semantic_snapshot.v1`；早期没有 snapshot.json 的结果仍按原文件查看。
+
+属性 coverage 为 PRESENT/ABSENT_VERIFIED/NOT_EXTRACTED/NOT_APPLICABLE/FAILED，不能拿 Parser
+PASS 代替完整端口覆盖。旧 ParserResult 默认 NOT_EXTRACTED；受控专业证据可在 data 中声明
+`semantic_coverage = {schema_version: semantic_parser_coverage.v1, validated: true, basis: <验证依据>,
+port_set: PRESENT, pg_port_set: PRESENT}`。这是一项由证据生产者负责的完整性声明，不是操作者
+勾选即可通过的开关；当前旧 parser 不产生该声明。未知参数范围仍降级。
+
+Corner/variant/mode 只接收 envelope 的 `semantic_context`，要求 `confirmed: true` 与非空 `basis`；
+不从文件名猜。Liberty area 不与 LEF 长宽乘积比较。LEF 没有明确单位时不输出可信 um；
+counts-only 或未验证 shape 覆盖时不保留/比较完整几何。Verilog PG 缺失不与 LEF/LIB 强制比较。
+声明完整还必须有实际字段：pins/ports 缺失或 null、几何 rects 未提取、range/width 矛盾
+不能产生完整空集合；layers 与 geometry 的覆盖分别判断，不能借用 port_set 覆盖。
+
+文件新鲜度为 `METADATA_MATCH`，`content_verified: false`；相同大小/mtime 不证明内容相同。
+输出按 `summary.json -> snapshots/<generation>/...` 读取，指针最后原子发布；不要拼接不同
+generation 的文件。诊断 FAIL 仍是命令成功产出的建议，CLI 返回 0；输入/IO 错误返回 2。
+此契约不改变 usage_decision、Review Gate、Release Gate、当前有效版指针。
+
 本文定义 `lib_guard` 各阶段交换的数据契约。契约的目标不是记录所有字段，而是固定
 哪些 artifact 是事实源、哪些是派生模型、哪些只是用户投影。
 

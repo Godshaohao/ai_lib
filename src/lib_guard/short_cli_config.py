@@ -44,6 +44,7 @@ _CONFIG_KEYS = frozenset(
         "render_detail",
         "catalog_policy",
         "release_policy",
+        "semantic_review_config",
         "release_publish_name",
         "release_latest_name",
         "scan_out",
@@ -346,6 +347,7 @@ def load_config(cwd: str | Path, explicit: str | Path | None = None) -> dict[str
         "library_candidates",
         "library_catalog",
         "library_versions",
+        "semantic_review_config",
     ]:
         normalize_workspace_path(key)
     normalize_existing_or_cwd_path("raw_root")

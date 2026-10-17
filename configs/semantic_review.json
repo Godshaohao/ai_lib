@@ -1,0 +1,43 @@
+{
+  "schema_version": "semantic_review_config.v1",
+  "default_profile": "default",
+  "facts_cache": {"reuse": true, "directory": null},
+  "profiles": {
+    "lef_basic": {
+      "macros": [],
+      "required_views": ["lef"],
+      "files": {},
+      "liberty": {"selected": []},
+      "checks": ["LEF_MACRO_DELTA", "LEF_PHYSICAL_DELTA", "LEF_INTERFACE_DELTA", "LEF_GEOMETRY_DELTA", "LEF_OBS_DELTA"],
+      "flag_policy": {},
+      "tolerance_um": 0.000001
+    },
+    "default": {
+      "macros": [],
+      "required_views": ["lef", "liberty", "verilog"],
+      "files": {},
+      "liberty": {"selected": []},
+      "checks": [
+        "MACRO_BINDING", "SIGNAL_PORT_SET", "SIGNAL_PORT_DIRECTION",
+        "PG_PORT_LEF_LIB", "LIB_MACRO_FLAGS", "LEF_SIZE_DELTA",
+        "LEF_PIN_DELTA", "PORT_DECLARATION_DELTA", "LIB_PORT_DELTA"
+      ],
+      "flag_policy": {},
+      "tolerance_um": 0.000001
+    },
+    "ip_basic": {
+      "macros": [],
+      "required_views": ["lef", "liberty", "verilog"],
+      "files": {},
+      "liberty": {
+        "selected": [
+          {"corner": "TT", "mode": "functional", "files": ["*.lib", "*.lib.gz"]},
+          {"corner": "SS", "mode": "functional", "files": ["*.lib", "*.lib.gz"]}
+        ]
+      },
+      "checks": ["MACRO_BINDING", "SIGNAL_PORT_SET", "SIGNAL_PORT_DIRECTION", "PG_PORT_LEF_LIB", "LIB_MACRO_FLAGS", "LEF_SIZE_DELTA", "LIB_PORT_DELTA"],
+      "flag_policy": {"is_macro": true},
+      "tolerance_um": 0.000001
+    }
+  }
+}

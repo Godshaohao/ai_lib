@@ -40,10 +40,173 @@ Status: current
 | 文件 | 控制内容 | 合理修改 |
 | --- | --- | --- |
 | `configs/catalog_policy.json` | RAW 发现、版本路径模式、stage 规则、忽略目录 | 增加真实 RAW pattern，调整 ignored dirs/stage 匹配 |
-| `configs/release_policy.json` | 必需/可选 view、校验等级、release alias gate | 按库类型调整 required views、doc policy、alias gate 严格度 |
+| `configs/release_policy.json` | 必需/可选 View、Mode、Corner、校验等级、release alias gate | 按库类型调整交付要求；不要把扫描模式或链接方式写进 required_modes |
+| `configs/semantic_review.json` | 跨视图诊断方案：宏、文件、Corner/Mode、规则、属性期望和尺寸容差 | 由 `python -m lib_guard.semantic.cli` 读取；检查方案独立于正式发布门禁 |
 | `configs/library_versions.example.tsv` | 版本引用表示例 | 复制到 workspace 作为 `config/library_versions.tsv` 使用 |
 
 ## Workspace 配置
+
+### 跨视图诊断方案
+
+`configs/semantic_review.json` 提炼了 Facts / 按需组装 / Python 规则方案中当前可执行的配置。
+配置只选择已有扫描事实和已实现规则，不修改解析覆盖声明。无需再建立 `check/` 或插件框架，
+执行代码集中在 `src/lib_guard/semantic/`。
+
+| 配置项 | 用途 | 默认值或约束 |
+| --- | --- | --- |
+| `default_profile` | 省略 `--profile` 时使用的方案 | `default` |
+| `profiles.<名称>.mapping` | 人工确认的对象/端口别名与文件上下文配置 | null 时不用映射；相对路径相对于检查配置文件 |
+| `facts_cache.reuse` | 复用已有文件 Facts；设为 false 可重算验证 | 默认 true；关闭时仍持久化 Facts，且不重新读取 RAW |
+| `facts_cache.directory` | 多次诊断共享的 Facts 存储目录 | null 时为 `<out>/facts`；相对路径相对于本配置文件 |
+| `profiles.<名称>.macros` | 选定宏；匹配确认别名后的名称 | 空列表表示全部宏；区分大小写 |
+| `required_views` | 本次纳入组装且要求具备的视图 | `lef/liberty/verilog`；这些视图缺失时绑定不能确认 |
+| `files` | 按视图限制文件路径，如 `{"lef": ["lef/*.lef"]}` | 省略的视图使用 `*`；使用有效组合内的相对路径，`*` 可以跨目录 |
+| `liberty.selected` | Liberty 上下文选择列表 | 空列表不限制；各项之间取并集 |
+| `liberty.selected[].files` | 该上下文的文件候选模式 | 字符串或列表；同一项内与 Corner/Mode 条件同时满足 |
+| `liberty.selected[].corner` | 选择确认过的工艺角 | 如 `TT`，与扫描语义证据精确匹配 |
+| `liberty.selected[].mode` | 选择确认过的运行模式 | 如 `functional`，与扫描语义证据精确匹配 |
+| `checks` | 本次执行并报告的 Python 规则 | 只接受下表已有的规则名，拼写错误会提示 |
+| `flag_policy` | Liberty 属性的项目期望 | 如 `{"is_macro": true, "is_pad": false}`；空对象不作属性要求 |
+| `tolerance_um` | LEF 尺寸、原点比较的绝对容差，单位微米 | 默认 `0.000001`，不改变端口和几何集合的规则 |
+
+| 规则名称 | 已实现的检查 |
+| --- | --- |
+| `MACRO_BINDING` | 宏与跨视图来源能否唯一对应 |
+| `SIGNAL_PORT_SET` | 当前组合的信号端口集合一致性 |
+| `SIGNAL_PORT_DIRECTION` | 当前组合的信号端口方向一致性 |
+| `PG_PORT_LEF_LIB` | LEF / Liberty 电源地端口一致性 |
+| `LIB_MACRO_FLAGS` | Liberty `is_macro/is_pad` 是否满足本方案期望 |
+| `LEF_SIZE_DELTA` | 新旧组合的宽、高、原点变化 |
+| `LEF_PIN_DELTA` | 已有规则支持的 LEF 引脚集合、层和几何变化；覆盖不足时为 UNKNOWN |
+| `PORT_DECLARATION_DELTA` | 已有 Verilog 端口声明方向变化 |
+| `LIB_PORT_DELTA` | 分 Corner 比较 Liberty 信号端口集合/方向，以及电源地端口角色 |
+| `LEF_MACRO_DELTA` | 完整发现、无歧义的 LEF Macro 增删；无旧有效组合时为 INCOMPLETE |
+| `LEF_PHYSICAL_DELTA` | Size / Class / Origin / Symmetry 变化 |
+| `LEF_INTERFACE_DELTA` | Pin Name / Direction / Use 变化，总线按明确 BUSBITCHARS 归一化 |
+| `LEF_GEOMETRY_DELTA` | 显式 PORT 分组下的 RECT 变化；POLYGON/VIA/MASK/ITERATE 等为 INCOMPLETE |
+| `LEF_OBS_DELTA` | RECT 范围的 OBS 变化；未支持或遗漏几何不授予 UNCHANGED |
+
+`lef_basic` 是 LEF-first 验收方案，仅纳入 LEF；不要求提前具备 Liberty/Verilog 绑定。
+Web 的“有效组合 → 技术检查报告”读取本文件中的方案与规则，支持本次任务勾选规则子集。
+工作区 `lib_guard.yml` 可设置 `semantic_review_config: config/semantic_review.json`，路径相对于工作区；
+不设置时继续使用仓库 `configs/semantic_review.json`。Web 默认方案遵循配置的 `default_profile`。
+每次执行固定目标/基准并写入任务内 `review_config.json`，有映射时还冻结 `review_mapping.json`，不改全局配置；不接受任意脚本、
+输出路径、补扫或发布参数。报告仅保存为 Markdown/JSON 文件，运行台只提供状态、日志和下载。
+本方案在原结果索引中增加 `macro_index`，列出 Macro、Variant、Size、Class、Pin Count、
+来源候选和状态。READY 仅表示该 LEF 对象的关联与摘要可用，不是几何、IP 质量或发布通过。
+持久文件 Facts 不复制完整 Pin/OBS 几何；`LefCheckFacts` 在本次任务内复用已读取的源 ParserResult，
+按需提供接口、物理和阻挡检查数据，结束后释放。旧扫描或 counts-only 证据不足时输出 INCOMPLETE，
+不会自动重读 RAW 或偷偷补扫；需要完整范围时由操作者明确更新扫描证据。
+
+运行示例：
+
+```bash
+PYTHONPATH=src python3 -m lib_guard.semantic.cli \
+  --effective-manifest /path/to/new/effective_manifest.json \
+  --base-effective-manifest /path/to/old/effective_manifest.json \
+  --catalog /path/to/catalog.json --profile lef_basic --out /path/to/lef_review
+```
+
+LEF Parser 2.5 保留 RECT 的 PORT 分组并隔离 PROPERTYDEFINITIONS；识别引号内的分号/井号、
+跨行属性字符串和同行多条分号语句。VIARULE/VIA/SITE 内的 LAYER 引用不会覆盖技术层定义。
+不支持的几何语法、重复名称和截断结构都有覆盖限制。LEF 坐标按微米解释，DATABASE MICRONS
+表示数据库分辨率，不能因文件省略该语句就丢掉真实 SIZE。
+
+独立 Reader 交叉验收采用 `lefdef 0.6.0` 的 Cadence Reader 封装，仅安装在隔离验收目录，
+不是项目的强制运行依赖。其矩形封装不作为 POLYGON 全语义相同的证明。
+可复现实验见 `python -m lib_guard.test.lef_review_rehearsal --out <验收目录>`，需在该实验的
+PYTHONPATH 中加入安装了 lefdef 的目录。它不会被日常 scan 自动执行。
+
+内置 `default` 保持原有诊断范围；`ip_basic` 为 TT/SS、functional、`is_macro=true` 的可选方案。
+项目实际不需要这些条件时应编辑或另建方案，不能将示例当作所有 IP 的统一要求。
+`liberty.selected` 选择的是本次语义检查范围，不是“全部必交 Corner 清单”；交付完整性要求仍在
+`release_policy.json`。同一旧/新对比共用一份方案；文件级 Delta 仍由原有 `cmp` 覆盖全部有效文件。
+
+文件路径只用于选择候选，不为 Corner/Mode 背书。上下文必须来自扫描结果中
+`semantic_context.confirmed=true`、明确 `basis` 及相应 `corner/mode`，或来自显式人工配置。
+两者均未提供上下文时，报告显示所选上下文不可用，不能仅凭 `*tt*.lib` 输出通过。
+配置也不能让未声明完整覆盖的解析结果获得端口集合 PASS。
+
+人工上下文映射文件示例：
+
+```json
+{
+  "confirmed": true,
+  "library_id": "ip/Vendor_A.demo",
+  "basis": "负责人核对交付说明与 library 声明后确认 TT 功能视图",
+  "file_contexts": [
+    {"view": "liberty", "files": ["lib/functional/*_TT.lib"], "corner": "TT", "mode": "functional"}
+  ],
+  "macro_aliases": [{"view": "verilog", "object": "renamed_top", "macro": "original_top"}]
+}
+```
+
+`file_contexts` 的 `files` 是有效组合内相对路径模式列表；`view` 限 lef/liberty/verilog，
+每项至少设置 corner/mode/variant 之一。多个规则命中同一文件、与已确认扫描上下文冲突、
+配置未命中可用事实时明确报错。`macro_aliases` 只在名称确实不同且已确认对应关系时设置；唯一精确名称不需要手工逐个登记。
+配置只作用于本次 Model，原扫描及共享 Facts 不改写。Web 要求映射的 library_id 与当前库一致，
+其他库的方案不会混入选项；提交后修改配置不影响已冻结的任务。
+
+Liberty Parser 2.4 按实际嵌套组读取 cell、pin、pg_pin，不把模板/时序组闭合当作 library 结束；
+只声明标量端口集合覆盖，不证明时序表等价。缺分号、截断、重复声明或未支持总线仍保留覆盖不足，
+源位置会写入 Markdown 的“输入证据限制”。Verilog Parser 2.3 按 module 隔离端口，支持简单 ANSI 声明继承和常量范围；
+条件编译接口、参数求值、连接关系不授予完整检查结论。
+Liberty 明确声明 `direction: internal` 的节点不计入外部信号接口，但仍完整保留在源 ParserResult 中；
+未知方向不作此排除。Macro 的工艺角覆盖按 `(名称, variant)` 分别核对，不允许不同 variant 相互补足缺项。
+
+文件 Facts 现在独立保存在 `facts_cache.directory`，按解析输出内容、Parser 版本、Facts schema
+和转换代码指纹复用。来源版本、原始路径与 Corner/Mode 在读取时绑定到独立来源引用，
+不复制进共享 Facts。其内容指纹针对已有 ParserResult，不代表原始文件内容已经验证。
+配置不控制重新解析或自动补扫；原始文件解析仍使用 ScanCache，诊断不读取 RAW 内容或计算 RAW hash。
+未具备内容 hash 的 ScanCache 不跨来源路径复用；具备相同内容 hash 的 Parser 缓存命中后，
+结果来源重新绑定到当前文件。外部 EDA 工具验证仍是独立后续工作。
+
+每次快照的 `summary.json.review_profile` 保存归一化后的完整方案及指纹，`scope.current/base`
+记录双方选中文件、排除文件、选中 Corner/Mode、缺少宏和逐宏上下文缺项。配置变化产生新快照，
+旧快照保留。Markdown 摘要同步显示方案及覆盖范围；未选中项不具有本次语义检查结论。
+`rules_identity` 保存规则版本及实际 Python 代码指纹，`mapping` 保存当次确认映射。
+`snapshot.json` 校验同快照全部产物；相同快照不重写，写入失败保持旧 `summary.json` 指针。
+
+共享配置示例（新增到配置顶层，与 `profiles` 同级）：
+
+```json
+"facts_cache": {"reuse": true, "directory": "../work/index/semantic_facts"}
+```
+
+Facts 一旦被历史结果引用，就属于需要保留的诊断证据。迁移或备份时携带该目录，
+不要按临时缓存随意删除。快照的索引及宏来源保存 Facts 引用，不为每版复制完整解析对象。
+历史回读只依赖快照与 Facts，不需要 Catalog、RAW、扫描目录、Web Job 或 HTML：
+
+```python
+from lib_guard.semantic.results import load_review_snapshot
+result = load_review_snapshot("work/semantic_review")
+# 读取指定历史快照时传入 generation=<summary 中的 64 位指纹>。
+```
+
+### 交付要求 View / Mode / Corner
+
+`release_policy.json` 中的 `required_views` 继续负责文件类型检查；新增的
+`required_modes` 和 `required_corners` 只表示这个库实际必须交付的运行模式和工艺角，
+不等同于扫描命令的 `scan_mode`，也不等同于 `symlink/copy` 链接方式。例如：
+
+```json
+{
+  "required_views": {
+    "ip": ["lef", "liberty", "verilog", "cdl"]
+  },
+  "required_modes": {
+    "ip": ["functional", "scan"]
+  },
+  "required_corners": {
+    "ip": ["tt_0p8v_25c", "ss_0p7v_125c"]
+  }
+}
+```
+
+扫描会把三类要求统一写入 `summary/release_readiness.json`。版本详情页的“交付分析”
+会展示必需项、已发现项和缺失项；配置为空时明确显示“未配置口径”，不会自动推断为通过。
+已配置但缺失时，IP 主判断为“不可接入”。Corner 目前使用文件名/目录中的明确线索，
+不会声称完成内容级 PVT 验证。
 
 `lg init` 会在 workspace 下写出 `lib_guard.yml`。常用字段如下：
 

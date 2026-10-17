@@ -125,6 +125,7 @@ WEB_ACTION_SPECS = {
     "mark": WebActionSpec("version", "mark", "版本类型标记", True),
     "override": WebActionSpec("version", "override", "目录修正", True),
     "file-diff": WebActionSpec("version", "fd", "文件级对比"),
+    "semantic-review": WebActionSpec("library", "semantic-review", "生成技术检查报告"),
     "review-gate": WebActionSpec("version", "rv", "审查门禁"),
     "review-packet": WebActionSpec("version", "review", "审查记录包"),
     "action-file": WebActionSpec("library", "action", "动作文件", True),

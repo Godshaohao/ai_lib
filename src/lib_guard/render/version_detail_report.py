@@ -2582,7 +2582,14 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
     return str(path)
 
 
-def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version: Mapping[str, Any], *, export_markdown: bool = False) -> str:
+def render_version_detail_page(
+    out: str | Path,
+    lib: Mapping[str, Any],
+    version: Mapping[str, Any],
+    *,
+    export_markdown: bool = False,
+    catalog_navigation_available: bool = True,
+) -> str:
     out_path = Path(out)
     lib_id = _library_id(lib)
     version_id = _version_id(version)
@@ -2624,6 +2631,13 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
     decision_model = _as_mapping(ip_model.get("decision"))
     usage_decision = str(decision_model.get("status") or "BLOCKED")
     usage_decision_label = str(decision_model.get("label") or "暂不可判断")
+    if catalog_navigation_available:
+        catalog_nav = "<a href='../../../../index.html'>总目录</a><a href='../../index.html'>库概览</a>"
+    else:
+        catalog_nav = (
+            "<span class='nav-unavailable' title='单版本刷新不会重建目录页'>总目录（刷新目录后可用）</span>"
+            "<span class='nav-unavailable' title='单版本刷新不会重建目录页'>库概览（刷新目录后可用）</span>"
+        )
     html = ui.review_page_shell(
         f"{lib.get('display_name') or lib_id} / {version_id}",
         "版本报告",
@@ -2631,7 +2645,7 @@ def render_version_detail_page(out: str | Path, lib: Mapping[str, Any], version:
         catalog_browser_styles() + body,
         decision=usage_decision,
         decision_label=usage_decision_label,
-        nav="<a href='../../../../index.html'>总目录</a><a href='../../index.html'>库概览</a><a class='active' href='#'>版本详情</a><a href='#file-structure'>文件结构</a>",
+        nav=catalog_nav + "<a class='active' href='#'>版本详情</a><a href='#file-structure'>文件结构</a>",
         meta=ui.compact_meta([("库", lib_id), ("版本", version_id), ("基准版", model.get("base_version") or "-")]),
     )
     common.write_text(page, html)

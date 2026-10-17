@@ -45,7 +45,52 @@ raw delivery
 | Review Gate 聚合 | `src/lib_guard/review/` |
 | HTML 渲染 | `src/lib_guard/render/` |
 | Web 控制层 | `src/lib_guard/web/` | 只读 Catalog/runtime、受控提交动作、复用现有 Version Detail |
+| 跨视图语义诊断 | `src/lib_guard/semantic/` | 从最终 Effective 文件与 Scan 证据派生，独立只读建议，不接入 Release Gate |
 | CLI 入口 | `src/lib_guard/cli.py`, `src/lib_guard/short_cli.py`, `src/lib_guard/cli_commands/` |
+
+### 跨视图语义诊断（实验性）
+
+`effective.py` 按 source_version 精确关联 inventory 与 ParserResult；`adapters.py` 保留
+LEF/Liberty/Verilog 的独立事实；`binding.py` 和 `normalize.py` 只做确认映射、唯一 exact
+名称和上下文明确的总线规范化；`checks.py` 给出一致性建议及双侧属性变化。
+`runner.py` 生成完整派生快照，最后原子发布 `summary.json`；`cli.py` 是独立诊断入口。
+
+当前实施的是“稳定 Facts、按需 Model、脚本化 Rules、版本化 Results”：
+
+| 层 | 实现 | 生命周期与责任 |
+| --- | --- | --- |
+| Facts | `semantic/facts.py`、`adapters.py` | 按解析输出、Parser 版本、Facts schema 及转换代码指纹共享视图原生事实；来源引用分离 |
+| Model | `binding.build_effective_model()`、`profile.py` | 根据最终 Effective、所选宏/View/Corner/Mode 临时组装；不维护全局可变模型 |
+| Rules | `checks.check_bindings()`、`compare_bindings()` | 显式 Python 函数；只运行已选规则；Delta 与质量状态保持独立 |
+| Results | `results.py`、`runner.py` | 固定双方输入、Scope、确认映射、规则代码和 Facts 引用；完整快照确认后再切换结果指针 |
+
+`configs/semantic_review.json` 控制检查方案和 Facts 存储位置。相同事实可被 E2/E3 和不同方案共享；
+解析器或转换代码更新产生新身份，原事实文件及已完成快照不原地更新。需要保留历史诊断时，
+保留快照及其共享 Facts。`load_review_snapshot()` 校验并恢复已保存的结果，不重新运行规则，
+也不依赖原始扫描目录。规则或映射变化产生新 generation；复用和强制重算得到相同语义结果。
+
+Facts 身份依据 ParserResult 内容，不会偷偷读取大型 RAW 做完整 hash，也不会把 ParserResult
+指纹称为 RAW 内容验证。原始文件解析复用仍归 ScanCache；无内容 hash 的条目绑定来源路径，
+有相同内容 hash 的复用条目重新绑定当前来源。此处不新增数据库、插件引擎或依赖调度图。
+
+此模块不调用扫描、哈希、accept、release 或 HTML 工作流。旧解析器缺少完整覆盖声明，
+因此真实库端口集合可为 NOT_CHECKED；不得自动升级为 PASS。当前不接入 Version Detail，
+避免把未验收覆盖范围的诊断变成使用判断。验收与限制见 [语义诊断记录](superpowers/plans/2026-10-14-semantic-ir-validation.md)。
+
+LEF-first 路径进一步将长期摘要和检查明细分开：
+
+| 对象 | 生命周期 | 内容 |
+| --- | --- | --- |
+| File Facts | 共享持久证据 | Macro 名称、接口、Size/Class/Pin Count、来源身份与覆盖；不复制完整几何 |
+| Macro Index | 有效组合结果内的轻量索引 | IP/Effective/确认 Variant 上下文、物理摘要、来源候选和关联状态 |
+| Check Facts | 单次诊断任务 | 从已验证 ParserResult 取得 Interface、Physical、Obstruction 数据，各规则共享，不另存巨型几何模型 |
+| Check Results | 不可覆盖快照 | 每条规则需要的输入、可信范围、变化摘要及源证据引用 |
+
+实现复用 `semantic/lef_checks.py`，没有平行的 checks 目录或通用 Reader 插件框架。
+`lef_basic` 只依赖 LEF，可先做 Macro 索引及 Delta，再使用已有跨视图方案。
+当前已验证 RECT/PORT 分组的比较范围；复杂几何明确为 INCOMPLETE，后续扩展需要独立成熟 Reader
+和新反例验收，而不是向 Macro Index 增加坐标字段。验收记录见
+[Macro 与检查事实](superpowers/plans/2026-10-16-macro-check-facts.md)。
 
 ## 主流程文件地图
 

@@ -6,13 +6,8 @@ import re
 
 from .base import BaseParser, make_parser_envelope, record_abs_path, get_field, read_text_file
 
-LIBERTY_PARSER_VERSION = '2.0'
-_RE_LIBRARY = re.compile(r'\blibrary\s*\(\s*([^\)]+)\s*\)\s*\{', re.I)
-_RE_CELL = re.compile(r'\bcell\s*\(\s*([^\)]+)\s*\)\s*\{', re.I)
-_RE_PIN = re.compile(r'\bpin\s*\(\s*([^\)]+)\s*\)\s*\{', re.I)
-_RE_PG_PIN = re.compile(r'\bpg_pin\s*\(\s*([^\)]+)\s*\)\s*\{', re.I)
+LIBERTY_PARSER_VERSION = '2.4'
 _RE_ATTR = re.compile(r'^\s*([A-Za-z_][\w]*)\s*:\s*([^;]+)\s*;')
-_RE_OC = re.compile(r'\boperating_conditions\s*\(\s*([^\)]+)\s*\)\s*\{', re.I)
 
 
 def _clean_name(x: str) -> str:
@@ -27,77 +22,121 @@ def _clean_attr_value(value: str) -> Any:
     return cleaned
 
 
+_RE_BOUNDARY = re.compile(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/|[{};]', re.S)
+_RE_GROUP = re.compile(r'^([A-Za-z_]\w*)\s*\((.*?)\)\s*$', re.S)
+
+
+def _liberty_statements(text):
+    buffer, position, line_no, start = [], 0, 1, 1
+    valid = True
+    for match in _RE_BOUNDARY.finditer(text):
+        gap = text[position:match.start()]
+        valid &= '"' not in gap and '/*' not in gap
+        buffer.append(gap)
+        line_no += gap.count('\n')
+        token = match.group()
+        if token.startswith(('//', '/*')):
+            buffer.append('\n' * token.count('\n') + ' ')
+        elif token.startswith('"'):
+            buffer.append(token)
+        else:
+            statement = ''.join(buffer)
+            leading = statement[:len(statement) - len(statement.lstrip())]
+            yield token, statement.strip(), start + leading.count('\n'), valid
+            buffer = []
+            start = line_no
+            valid = True
+        line_no += token.count('\n')
+        position = match.end()
+    tail = ''.join(buffer) + text[position:]
+    if tail.strip():
+        yield 'invalid', tail.strip(), start, False
+
+
 def parse_liberty_text(text: str, source: str = '') -> dict[str, Any]:
     result: dict[str, Any] = {'source': source, 'libraries': {}, 'library_order': [], 'stats': {}}
-    stack: list[tuple[str, str]] = []
-    current_lib = None; current_cell = None; current_pin = None; current_pg_pin = None; current_oc = None
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        line = raw.split('//', 1)[0].strip()
-        if not line:
-            continue
-        m = _RE_LIBRARY.search(line)
-        if m:
-            name = _clean_name(m.group(1)); current_lib = name
-            result['libraries'].setdefault(name, {'name': name, 'line_start': line_no, 'cells': {}, 'cell_order': [], 'operating_conditions': {}})
-            result['library_order'].append(name); stack.append(('library', name)); continue
-        m = _RE_CELL.search(line)
-        if m and current_lib:
-            name = _clean_name(m.group(1)); current_cell = name
-            lib = result['libraries'][current_lib]
-            lib['cells'].setdefault(name, {'name': name, 'line_start': line_no, 'area': None, 'is_macro': None, 'is_pad': None, 'attrs': {}, 'attr_lines': {}, 'pins': {}, 'pin_order': [], 'pg_pins': {}})
-            lib['cell_order'].append(name); stack.append(('cell', name)); continue
-        m = _RE_PIN.search(line)
-        if m and current_lib and current_cell:
-            name = _clean_name(m.group(1)); current_pin = name
-            cell = result['libraries'][current_lib]['cells'][current_cell]
-            cell['pins'].setdefault(name, {'name': name, 'line_start': line_no, 'direction': None, 'capacitance': None, 'function': None})
-            cell['pin_order'].append(name); stack.append(('pin', name)); continue
-        m = _RE_PG_PIN.search(line)
-        if m and current_lib and current_cell:
-            name = _clean_name(m.group(1)); current_pg_pin = name
-            cell = result['libraries'][current_lib]['cells'][current_cell]
-            cell['pg_pins'].setdefault(name, {'name': name, 'line_start': line_no, 'pg_type': None, 'voltage_name': None})
-            stack.append(('pg_pin', name)); continue
-        m = _RE_OC.search(line)
-        if m and current_lib:
-            name = _clean_name(m.group(1)); current_oc = name
-            result['libraries'][current_lib]['operating_conditions'].setdefault(name, {'name': name})
-            stack.append(('operating_conditions', name)); continue
-
-        m = _RE_ATTR.match(line)
-        if m:
-            key, value = m.group(1), _clean_attr_value(m.group(2))
-            if current_lib and current_cell and current_pin:
-                if key in {'direction', 'capacitance', 'function', 'related_power_pin', 'related_ground_pin'}:
-                    result['libraries'][current_lib]['cells'][current_cell]['pins'][current_pin][key] = value
-            elif current_lib and current_cell and current_pg_pin:
-                if key in {'pg_type', 'voltage_name'}:
-                    result['libraries'][current_lib]['cells'][current_cell]['pg_pins'][current_pg_pin][key] = value
-            elif current_lib and current_cell:
-                cell = result['libraries'][current_lib]['cells'][current_cell]
+    stack = []
+    complete = True
+    limitations = []
+    for delimiter, statement, line_no, valid in _liberty_statements(text):
+        complete &= valid
+        parent, record = stack[-1] if stack else ('', None)
+        if delimiter == '{':
+            match = _RE_GROUP.fullmatch(statement)
+            if match is None:
+                complete = False
+                if len(limitations) < 100:
+                    limitations.append({'line': line_no, 'reason': 'malformed_group_header_or_missing_semicolon',
+                                        'statement': statement[:160]})
+            kind, name = (match.group(1).lower(), _clean_name(match.group(2))) if match else ('unknown', '')
+            value = None
+            if kind == 'library' and not stack:
+                complete &= name not in result['libraries']
+                value = {'name': name, 'line_start': line_no, 'cells': {}, 'cell_order': [], 'operating_conditions': {}}
+                result['libraries'][name] = value
+                result['library_order'].append(name)
+            elif kind == 'cell' and parent == 'library':
+                complete &= name not in record['cells']
+                value = {'name': name, 'line_start': line_no, 'area': None, 'is_macro': None, 'is_pad': None,
+                         'attrs': {}, 'attr_lines': {}, 'pins': {}, 'pin_order': [], 'pg_pins': {}}
+                record['cells'][name] = value
+                record['cell_order'].append(name)
+            elif kind in {'pin', 'pg_pin'} and parent == 'cell':
+                complete &= bool(name) and ',' not in name
+                group = 'pins' if kind == 'pin' else 'pg_pins'
+                complete &= name not in record[group]
+                value = {'name': name, 'line_start': line_no}
+                value.update({'direction': None, 'capacitance': None, 'function': None} if kind == 'pin'
+                             else {'pg_type': None, 'voltage_name': None})
+                record[group][name] = value
+                if kind == 'pin':
+                    record['pin_order'].append(name)
+            elif kind == 'operating_conditions' and parent == 'library':
+                value = {'name': name}
+                record['operating_conditions'][name] = value
+            elif kind in {'bus', 'bundle', 'pin', 'pg_pin', 'cell', 'library'}:
+                complete = False
+            stack.append((kind, value))
+        elif delimiter == '}':
+            if statement or not stack:
+                complete = False
+            if stack:
+                stack.pop()
+        elif delimiter == ';':
+            if re.match(r'^(pin|pg_pin|bus|bundle|cell|library)\s*\(', statement, re.I):
+                complete = False
+                if len(limitations) < 100:
+                    limitations.append({'line': line_no, 'reason': 'incomplete_object_group', 'statement': statement[:160]})
+            match = _RE_ATTR.match(statement + ';')
+            if not match or record is None:
+                continue
+            key, value = match.group(1), _clean_attr_value(match.group(2))
+            if parent == 'cell':
                 if key == 'area':
-                    try: value = float(value)
-                    except (TypeError, ValueError): pass
-                    cell['area'] = value
-                elif key in {'is_macro', 'is_pad', 'cell_footprint'}:
-                    cell[key] = value
-                cell['attrs'][key] = value
-                cell['attr_lines'][key] = line_no
-            elif current_lib and current_oc:
-                result['libraries'][current_lib]['operating_conditions'][current_oc][key] = value
-
-        if '}' in line and stack:
-            kind, _ = stack.pop()
-            if kind == 'pin': current_pin = None
-            elif kind == 'pg_pin': current_pg_pin = None
-            elif kind == 'cell': current_cell = None
-            elif kind == 'operating_conditions': current_oc = None
-            elif kind == 'library': current_lib = None
-
-    lib_count = len(result['libraries'])
-    cell_count = sum(len(lib['cells']) for lib in result['libraries'].values())
-    pin_count = sum(len(cell['pins']) for lib in result['libraries'].values() for cell in lib['cells'].values())
-    result['stats'] = {'library_count': lib_count, 'cell_count': cell_count, 'pin_count': pin_count}
+                    try:
+                        value = float(value)
+                    except (TypeError, ValueError):
+                        pass
+                if key in {'area', 'is_macro', 'is_pad', 'cell_footprint'}:
+                    record[key] = value
+                record['attrs'][key] = value
+                record['attr_lines'][key] = line_no
+            elif parent == 'pin' and key in {'direction', 'capacitance', 'function', 'related_power_pin', 'related_ground_pin'}:
+                record[key] = value
+            elif parent == 'pg_pin' and key in {'pg_type', 'voltage_name'}:
+                record[key] = value
+            elif parent == 'operating_conditions':
+                record[key] = value
+    complete &= not stack
+    result['stats'] = {'library_count': len(result['libraries']),
+        'cell_count': sum(len(lib['cells']) for lib in result['libraries'].values()),
+        'pin_count': sum(len(cell['pins']) for lib in result['libraries'].values() for cell in lib['cells'].values())}
+    result['semantic_coverage'] = {'schema_version': 'semantic_parser_coverage.v1', 'validated': True,
+        'basis': 'LibertyParser 2.4 balanced groups and nested malformed-object diagnostics; scalar pin/pg_pin declarations only',
+        'port_set': 'PRESENT' if complete else 'NOT_EXTRACTED',
+        'pg_port_set': 'PRESENT' if complete else 'NOT_EXTRACTED'}
+    result['parse_limitations'] = limitations
+    result['unparsed_features'] = limitations
     return result
 
 

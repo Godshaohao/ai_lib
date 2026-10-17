@@ -541,6 +541,11 @@ def render_review_report(report: Mapping[str, Any]) -> str:
         ("状态", delivery.get("status")), ("包类型", delivery.get("package_type")), ("交付文件", delivery.get("file_count")),
         ("必需视图", f"{delivery.get('required_present') or 0} / {delivery.get('required_total') or 0}"),
         ("缺失视图", delivery.get("missing_views")),
+        ("必需模式", delivery.get("required_modes") or "未配置"),
+        ("模式覆盖", f"已发现：{delivery.get('observed_modes') or '无'}；缺失：{delivery.get('missing_modes') or '无'}"),
+        ("必需工艺角", delivery.get("required_corners") or "未配置"),
+        ("工艺角覆盖", f"已发现：{delivery.get('observed_corners') or '无'}；缺失：{delivery.get('missing_corners') or '无'}"),
+        ("交付要求状态", delivery.get("requirement_status")),
         ("组合", delivery.get("package_composition")),
     ]))))
     report_parts.append("</div><div class='review-report-grid'>")

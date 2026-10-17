@@ -5,6 +5,18 @@
     "stdcell": ["liberty", "db", "lef", "gds", "verilog", "cdl"],
     "sram": ["liberty", "db", "lef", "gds", "verilog", "cdl"]
   },
+  "required_modes": {
+    "ip": [],
+    "hard_ip": [],
+    "stdcell": [],
+    "sram": []
+  },
+  "required_corners": {
+    "ip": [],
+    "hard_ip": [],
+    "stdcell": [],
+    "sram": []
+  },
   "optional_views": {
     "ip": ["cdl", "db", "sdc", "upf", "sdf", "waiver", "doc"],
     "hard_ip": ["sdc", "upf", "sdf", "spef", "db", "ibis", "package", "waiver", "doc"],

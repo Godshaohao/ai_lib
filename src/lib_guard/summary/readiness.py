@@ -29,6 +29,22 @@ DEFAULT_OPTIONAL_VIEWS = {
     "package": ["pwl", "spice", "doc"],
 }
 
+DEFAULT_REQUIRED_MODES = {
+    "ip": [],
+    "digital_ip": [],
+    "hard_ip": [],
+    "phy": [],
+    "stdcell": [],
+    "sram": [],
+    "memory": [],
+    "io": [],
+    "pad": [],
+    "package": [],
+    "doc": [],
+}
+
+DEFAULT_REQUIRED_CORNERS = {key: [] for key in DEFAULT_REQUIRED_MODES}
+
 DEFAULT_VALIDATION_LEVELS = {
     "lef": "parsed_required",
     "liberty": "parsed_required",
@@ -88,6 +104,8 @@ def load_release_policy(policy_path: str | Path | Mapping[str, Any] | None = Non
         policy["required_views"] = policy["required_file_types"]
     policy.setdefault("required_views", DEFAULT_REQUIRED_VIEWS)
     policy.setdefault("optional_views", DEFAULT_OPTIONAL_VIEWS)
+    policy.setdefault("required_modes", DEFAULT_REQUIRED_MODES)
+    policy.setdefault("required_corners", DEFAULT_REQUIRED_CORNERS)
     policy.setdefault("validation_levels", DEFAULT_VALIDATION_LEVELS)
     policy.setdefault("required_docs", ["readme", "release_note"])
     policy.setdefault(
@@ -127,6 +145,8 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
 
     required_views = list((policy.get("required_views") or {}).get(library_type, []))
     optional_views = list((policy.get("optional_views") or {}).get(library_type, []))
+    required_modes = _requirement_list((policy.get("required_modes") or {}).get(library_type, []))
+    required_corners = _requirement_list((policy.get("required_corners") or {}).get(library_type, []))
     validation_levels = dict(policy.get("validation_levels") or DEFAULT_VALIDATION_LEVELS)
     parser_by_type = _parser_status_by_type(parser_manifest)
     quality_by_type = _quality_by_type(parser_quality)
@@ -146,6 +166,27 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
                 manual_review_items.append(_manual_review("required_view_pass_empty", component_id, view, result.get("files", []), "必需视图解析结果为空，需要人工确认。"))
         elif result["status"] == "WARNING":
             warning_items.append(_item("warning", "required_view", f"必需视图提示：{view}", result["message"], view))
+
+    delivery_requirements = _build_delivery_requirements(
+        files,
+        scan_meta,
+        required_views=required_views,
+        required_modes=required_modes,
+        required_corners=required_corners,
+        required_view_results=required_view_results,
+    )
+    for kind, result in (("mode", delivery_requirements["modes"]), ("corner", delivery_requirements["corners"])):
+        if result["status"] == "BLOCK":
+            for missing in result["missing"]:
+                blocking_items.append(
+                    _item(
+                        "blocker",
+                        f"required_{kind}",
+                        f"必需{('模式' if kind == 'mode' else '工艺角')}缺失：{missing}",
+                        f"交付要求中声明了 {missing}，但扫描证据没有找到对应交付文件。",
+                        missing,
+                    )
+                )
 
     optional_view_results: dict[str, dict[str, Any]] = {}
     for view in optional_views:
@@ -176,6 +217,8 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
         "version": scan_meta.get("release_version"),
         "root_path": scan_meta.get("root_path"),
         "required_views": required_views,
+        "required_modes": required_modes,
+        "required_corners": required_corners,
         "optional_views": optional_views,
         "required_view_results": required_view_results,
         "optional_view_results": optional_view_results,
@@ -184,6 +227,7 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
         "parser_quality": quality_by_type,
         "issues": blocking_items + warning_items,
         "manual_review_items": manual_review_items,
+        "delivery_requirements": delivery_requirements,
     }
 
     bundle_status = component_status
@@ -202,6 +246,8 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
         "doc_parse_status": "PASS" if doc_summary.get("doc_count", 0) > 0 else "WARNING",
         "doc_summary": doc_summary,
         "required_view_status": required_view_status,
+        "delivery_requirement_status": delivery_requirements["status"],
+        "delivery_requirements": delivery_requirements,
         "diff_level": "NONE",
         "deep_diff_completed": False,
         "allowed_aliases": allowed_aliases,
@@ -223,6 +269,110 @@ def build_release_readiness(scan_dir: str | Path, policy_path: str | Path | Mapp
         "validation_levels": validation_levels,
     }
     return readiness
+
+
+def _requirement_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    return [str(item).strip() for item in values if str(item).strip()]
+
+
+def _normalise_corner(value: Any) -> str:
+    if isinstance(value, Mapping):
+        parts = [value.get("process"), value.get("voltage"), value.get("temperature")]
+        text = "_".join(str(item).strip().lower() for item in parts if str(item or "").strip())
+    else:
+        text = str(value or "").strip().lower()
+    text = text.replace(" ", "_").replace("-", "_")
+    text = text.replace("p", ".")
+    while "__" in text:
+        text = text.replace("__", "_")
+    return text.strip("_")
+
+
+def _observed_delivery_modes(files: list[Mapping[str, Any]], scan_meta: Mapping[str, Any]) -> list[str]:
+    values: set[str] = set()
+    for key in ("delivery_modes", "required_modes_observed"):
+        values.update(_requirement_list(scan_meta.get(key)))
+    for item in files:
+        for key in ("delivery_mode", "operating_mode", "mode"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                values.add(value)
+                break
+    return sorted(values)
+
+
+def _observed_delivery_corners(files: list[Mapping[str, Any]], scan_meta: Mapping[str, Any]) -> list[str]:
+    values: set[str] = set()
+    for key in ("delivery_corners", "required_corners_observed"):
+        values.update(_normalise_corner(item) for item in _requirement_list(scan_meta.get(key)))
+    for item in files:
+        corner = item.get("corner")
+        value = _normalise_corner(corner)
+        if value:
+            values.add(value)
+    return sorted(values)
+
+
+def _requirement_result(required: list[str], observed: list[str], *, kind: str, normalizer=None) -> dict[str, Any]:
+    if not required:
+        return {
+            "status": "NOT_CONFIGURED",
+            "required": [],
+            "observed": observed,
+            "matched": [],
+            "missing": [],
+            "message": f"未配置必需{('模式' if kind == 'mode' else '工艺角')}口径。",
+        }
+    observed_set = {str(item).strip().lower() for item in observed}
+    matched: list[str] = []
+    missing: list[str] = []
+    for item in required:
+        key = normalizer(item) if normalizer else str(item).strip().lower()
+        (matched if key in observed_set else missing).append(item)
+    return {
+        "status": "BLOCK" if missing else "PASS",
+        "required": required,
+        "observed": observed,
+        "matched": matched,
+        "missing": missing,
+        "message": "全部必需项已发现。" if not missing else f"缺少 {len(missing)} 项必需交付{('模式' if kind == 'mode' else '工艺角')}。",
+    }
+
+
+def _build_delivery_requirements(
+    files: list[Mapping[str, Any]],
+    scan_meta: Mapping[str, Any],
+    *,
+    required_views: list[str],
+    required_modes: list[str],
+    required_corners: list[str],
+    required_view_results: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    observed_modes = _observed_delivery_modes(files, scan_meta)
+    observed_corners = _observed_delivery_corners(files, scan_meta)
+    mode_result = _requirement_result(required_modes, observed_modes, kind="mode")
+    corner_result = _requirement_result(required_corners, observed_corners, kind="corner", normalizer=_normalise_corner)
+    view_missing = [view for view in required_views if str((required_view_results.get(view) or {}).get("status")) not in {"PASS", "FOUND"}]
+    view_result = {
+        "status": "BLOCK" if view_missing else "PASS" if required_views else "NOT_CONFIGURED",
+        "required": required_views,
+        "observed": [view for view in required_views if view not in view_missing],
+        "matched": [view for view in required_views if view not in view_missing],
+        "missing": view_missing,
+        "message": "全部必需视图已发现。" if not view_missing else f"缺少 {len(view_missing)} 项必需视图。",
+    }
+    statuses = {view_result["status"], mode_result["status"], corner_result["status"]}
+    overall = "BLOCK" if "BLOCK" in statuses else "PASS" if statuses == {"PASS"} else "NOT_CONFIGURED" if statuses == {"NOT_CONFIGURED"} else "PASS"
+    return {
+        "status": overall,
+        "views": view_result,
+        "modes": mode_result,
+        "corners": corner_result,
+        "message": "交付要求已满足。" if overall == "PASS" else "存在未满足的交付要求。" if overall == "BLOCK" else "未配置 Mode/Corner 交付口径。",
+    }
 
 
 def _parser_status_by_type(parser_manifest: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:

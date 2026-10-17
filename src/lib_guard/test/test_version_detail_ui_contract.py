@@ -115,6 +115,24 @@ class VersionDetailUiContractTest(unittest.TestCase):
             self.assertEqual((page.parent / '../../../../index.html').resolve(), (out / 'index.html').resolve())
             self.assertIn('.hero h1{font-size:22px', html)
 
+    def test_hot_path_version_detail_disables_catalog_links_until_catalog_render(self) -> None:
+        from lib_guard.render.version_detail_report import render_version_detail_page
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "html"
+            page = Path(render_version_detail_page(
+                out,
+                {"library_id": "ip/ucie", "library_name": "ucie"},
+                {"version_id": "v1"},
+                catalog_navigation_available=False,
+            ))
+            html = page.read_text(encoding="utf-8")
+
+        self.assertIn("总目录（刷新目录后可用）", html)
+        self.assertIn("库概览（刷新目录后可用）", html)
+        self.assertNotIn("href='../../../../index.html'", html)
+        self.assertNotIn("href='../../index.html'", html)
+
     def test_web_console_exposes_parallel_version_actions_and_manual_write_controls(self) -> None:
         template = Path(__file__).resolve().parents[1] / "web" / "templates" / "index.html"
         html = template.read_text(encoding="utf-8")

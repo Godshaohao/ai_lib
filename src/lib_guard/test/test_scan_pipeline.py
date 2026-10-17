@@ -213,7 +213,7 @@ class ScanPipelineTest(unittest.TestCase):
                 self.assertEqual(result["result_type"], "parser_result")
                 self.assertIn("parser_name", result)
                 self.assertNotIn("parser", result)
-                expected_version = "2.1" if result["parser_name"] == "LefParser" else "2.0"
+                expected_version = "2.2" if result["parser_name"] == "LefParser" else "2.0"
                 self.assertEqual(result["parser_version"], expected_version)
 
             parser_manifest = json.loads((out / "parser_manifest.json").read_text(encoding="utf-8"))
@@ -623,7 +623,7 @@ class ScanPipelineTest(unittest.TestCase):
                 self.assertEqual(result["result_type"], "parser_result")
                 self.assertIn("parser_name", result)
                 self.assertNotIn("parser", result)
-                self.assertEqual(result["parser_version"], "2.0")
+                self.assertEqual(result["parser_version"], "2.3")
 
             parser_manifest = json.loads((out / "parser_manifest.json").read_text(encoding="utf-8"))
             tasks = [
@@ -635,9 +635,9 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(len(tasks), 1)
             task = tasks[0]
             self.assertEqual(task["parser_name"], "VerilogParser")
-            self.assertEqual(task["parser_version"], "2.0")
+            self.assertEqual(task["parser_version"], "2.3")
             self.assertEqual(task["parser_schema_version"], "1.0")
-            self.assertIn("parser_version=2.0", task["cache_key"])
+            self.assertIn("parser_version=2.3", task["cache_key"])
             self.assertIn("parser_schema_version=1.0", task["cache_key"])
             self.assertEqual(task["cache_status"], "MISS")
             self.assertIn(task["result_status"], {"PASS", "PASS_EMPTY"})
@@ -660,10 +660,10 @@ class ScanPipelineTest(unittest.TestCase):
             registry,
         )
 
-        self.assertEqual([(task.parser_name, task.parser_version) for task in lef_tasks], [("LefParser", "2.1")])
+        self.assertEqual([(task.parser_name, task.parser_version) for task in lef_tasks], [("LefParser", "2.5")])
         self.assertEqual(
             [(task.parser_name, task.parser_version) for task in verilog_tasks],
-            [("VerilogParser", "2.0")],
+            [("VerilogParser", "2.3")],
         )
 
     def test_default_scan_keeps_heavy_views_count_only_and_reports_parser_summary(self) -> None:
@@ -752,7 +752,7 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn("metadata_only", large_metadata)
 
             html_text = (html / "index.html").read_text(encoding="utf-8")
-            self.assertIn("大文件计数", html_text)
+            self.assertIn("未深读视图与工艺角摘要", html_text)
             self.assertIn("工艺角摘要", html_text)
             self.assertIn("解析器摘要", html_text)
             self.assertIn("扫描结论", html_text)
@@ -764,6 +764,72 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertNotIn("delivery type", html_text)
             self.assertNotIn("Metadata only", html_text)
             self.assertIn("元数据级", html_text)
+
+    def test_scan_html_distinguishes_scan_focus_from_release_requirements_and_file_size(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "scan"
+            html = root / "html"
+            (raw / "LEF").mkdir(parents=True)
+            (raw / "LEF" / "small.lef").write_text("VERSION 5.8 ;\n", encoding="utf-8")
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.render.html_report import render_scan_html
+
+            ScanRunner(SimpleNamespace(
+                root_path=str(raw), out_dir=str(out), library_type="ip", library_name="demo",
+                version="v1", scan_mode="scan", scan_id="scan-view-terminology",
+                state_dir=str(root / "state"), cache_dir=str(root / "cache"), skip_cache=True,
+                no_cache=True, no_progress=True, progress_interval=1, parse_jobs=1,
+                tool_version="0.5.0", schema_version="1.0",
+            )).run()
+            render_scan_html(out, html)
+            page = (html / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("扫描重点视图缺失", page)
+        self.assertIn("发布必需视图按发布策略配置", page)
+        self.assertIn("扫描重点", page)
+        self.assertIn("摘要级 / 元数据级证据", page)
+        self.assertNotIn("大文件不是没审查", page)
+        self.assertNotIn("大文件完整路径、大小和审查策略", page)
+
+    def test_scan_report_uses_reader_facing_statuses_and_explicit_byte_sizes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw = root / "raw"
+            out = root / "scan"
+            html = root / "html"
+            (raw / "LEF").mkdir(parents=True)
+            (raw / "LIB" / "NLDM").mkdir(parents=True)
+            (raw / "VERILOG").mkdir(parents=True)
+            (raw / "LEF" / "small.lef").write_text("VERSION 5.8 ;\n", encoding="utf-8")
+            (raw / "LIB" / "NLDM" / "demo.lib").write_text("library (demo) {}\n", encoding="utf-8")
+            (raw / "VERILOG" / "demo.v").write_text("module demo; endmodule\n", encoding="utf-8")
+            from lib_guard.scan.scanner import ScanRunner
+            from lib_guard.render.html_report import render_scan_html
+
+            result = ScanRunner(SimpleNamespace(
+                root_path=str(raw), out_dir=str(out), library_type="ip", library_name="demo",
+                version="v1", scan_mode="scan", scan_id="scan-report-language",
+                state_dir=str(root / "state"), cache_dir=str(root / "cache"), skip_cache=True,
+                no_cache=True, no_progress=True, progress_interval=1, parse_jobs=1,
+                tool_version="0.5.0", schema_version="1.0",
+            )).run()
+            self.assertEqual(result.status, "PASS")
+            meta_path = out / "scan_meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["package_type"] = "PARTIAL_UPDATE"
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+            render_scan_html(out, html)
+            page = (html / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("增量更新包", page)
+        self.assertIn("摘要级证据", page)
+        self.assertIn("大小（字节）", page)
+        self.assertIn("14 B", page)
+        self.assertNotIn(">PARTIAL_UPDATE<", page)
+        self.assertNotIn(">summary_only<", page)
+        self.assertNotIn(">AVAILABLE<", page)
 
     def test_scan_classifies_gzip_files_and_writes_typed_parser_results(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -863,7 +929,7 @@ class ScanPipelineTest(unittest.TestCase):
             task = manifest["files"][0]["parser_tasks"][0]
             self.assertEqual(task["cache_status"], "HIT")
             self.assertEqual(task["result_status"], "PASS")
-            self.assertIn("parser_version=2.0", task["cache_key"])
+            self.assertIn("parser_version=2.3", task["cache_key"])
             self.assertIn("parser_schema_version=1.0", task["cache_key"])
 
     def test_progress_v2_and_parser_task_list_are_written(self) -> None:
@@ -4536,7 +4602,7 @@ class ScanPipelineTest(unittest.TestCase):
             ]:
                 self.assertEqual(result["result_type"], "parser_result")
                 self.assertEqual(result["parser_name"], parser_name)
-                expected_version = "2.1" if parser_name == "LefParser" else "2.0"
+                expected_version = {"LefParser": "2.5", "LibertyParser": "2.4", "VerilogParser": "2.3"}.get(parser_name, "2.0")
                 self.assertEqual(result["parser_version"], expected_version)
                 self.assertEqual(result["parser_schema_version"], "1.0")
                 self.assertEqual(result["file_type"], file_type)

@@ -57,7 +57,13 @@ def render_version_detail_only(
         version=version,
         runtime_merged=True,
     )
-    page = render_version_detail_page(out_dir, lib_state, version_state, export_markdown=export_markdown)
+    page = render_version_detail_page(
+        out_dir,
+        lib_state,
+        version_state,
+        export_markdown=export_markdown,
+        catalog_navigation_available=False,
+    )
     return {
         "status": "PASS",
         "library": lib_state.get("library_name") or lib_state.get("formal_library_id") or library,

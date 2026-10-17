@@ -13,6 +13,11 @@
     selectedLibrary: initialRoute.get('library') || null,
     versions: [],
     effectiveDrafts: new Map(),
+    semanticOptions: null,
+    semanticOptionsLibrary: '',
+    semanticOptionsLoading: false,
+    semanticOptionsError: '',
+    semanticOptionsRequestId: 0,
     formalDirectoryMode: true,
     formalInventory: null,
     formalOffset: 0,
@@ -142,7 +147,7 @@
     $('library-scope-filter').value = ['all', 'pending', 'blocked', 'no_effective', 'candidate'].includes(state.libraryScope) ? state.libraryScope : 'all';
     $('version-filter').value = state.versionQuery;
     if (state.versionFilter === 'scan') state.versionFilter = 'new_scan';
-    $('version-status-filter').value = ['focus', 'all', 'new_scan', 'base_scan', 'effective_hygiene', 'compare', 'review', 'effective', 'blocked', 'error'].includes(state.versionFilter) ? state.versionFilter : 'focus';
+    if (!['focus', 'all', 'new_scan', 'base_scan', 'effective_hygiene', 'compare', 'review', 'effective', 'blocked', 'error'].includes(state.versionFilter)) state.versionFilter = 'focus';
     $('version-sort').value = ['attention', 'date_desc', 'date_asc', 'effective'].includes(state.versionSort) ? state.versionSort : 'attention';
     $('file-change-filter').value = state.fileChangeQuery;
     $('file-change-kind-filter').value = ['all', 'ADDED', 'REMOVED', 'CHANGED', 'PATH_CHANGED'].includes(state.fileChangeKind) ? state.fileChangeKind : 'all';
@@ -189,6 +194,16 @@
     $('evidence-workspace').classList.toggle('hidden', nextStage !== 'action-workspace');
     $('evidence-workspace').setAttribute('aria-hidden', nextStage === 'action-workspace' ? 'false' : 'true');
     $('workspace-settings-button').setAttribute('aria-expanded', nextStage === 'management-workspace' ? 'true' : 'false');
+    if (nextStage !== 'action-workspace') {
+      document.querySelectorAll('[data-analysis-action]').forEach((button) => {
+        button.setAttribute('aria-pressed', 'false');
+        button.classList.remove('is-active');
+      });
+    }
+    if (nextStage === 'action-workspace'
+      && !Array.from(document.querySelectorAll('[data-analysis-action]')).some((button) => button.getAttribute('aria-pressed') === 'true')) {
+      selectAnalysisAction('scan');
+    }
     updateRouteState();
   }
 
@@ -393,6 +408,7 @@
     if (preview) preview.textContent = !hasVersion ? '未选择版本' : effectiveNote.summary
       ? `${label} · ${effectiveNote.use_suggestion || '待确认'}\n${effectiveNote.summary}`
       : label;
+    if (preview) preview.closest('.version-note-preview').hidden = !effectiveNote.summary && status !== 'invalid';
     const chip = $('update-note-status');
     if (chip) {
       chip.textContent = label;
@@ -1154,7 +1170,7 @@
     } else if (state.libraryLoadError) {
       $('library-list').innerHTML = `<p class="empty-note">${escapeHtml(state.libraryLoadError)}</p>`;
     } else {
-      $('library-list').innerHTML = state.libraries.length ? '<p class="empty-note">没有匹配的正式库。</p>' : '<p class="empty-note">目录中没有已登记库。</p>';
+      $('library-list').innerHTML = state.libraries.length ? '<p class="empty-note">没有匹配的已登记库。</p>' : '<p class="empty-note">目录中没有已登记库。</p>';
     }
     renderRegisteredLibraries();
     renderReleaseSetWorkbench();
@@ -1249,7 +1265,7 @@
       all: '全部库',
       pending: '需处理库',
       blocked: '发布待确认',
-      no_effective: '无当前可用',
+      no_effective: '无当前有效',
       candidate: '候选待登记',
     }[state.libraryScope] || '全部库';
     $('library-facet-summary').textContent = `${scopeName} ${visibleRows.length} / ${counts.all} · 有新版本 ${newPendingLibraries} 库 · 基准待扫 ${basePendingLibraries} 库 · 发布待确认 ${counts.blocked} 库`;
@@ -1340,7 +1356,7 @@
       state.effectiveDrafts.set(state.selectedLibrary, {
         base_full: base,
         includes: saved ? [...(saved.accepted_updates || [])] : eligibleEffectiveOverlays(state.versions, base).map((row) => row.version_id).reverse(),
-        source: saved && saved === candidate ? '已保存候选' : saved ? '当前可用组合' : '最新完整包预填',
+        source: saved && saved === candidate ? '已保存候选' : saved ? '当前有效组合' : '最新完整包预填',
         dirty: false, preview: null,
       });
     }
@@ -1514,7 +1530,7 @@
     const rows = effectiveCompositionRows(library?.current_effective_stack || {}, pendingWindow.state === 'ACCEPTED' ? {} : pendingWindow.candidate_effective_stack || {}, state.versions);
     const visible = filterEffectiveCompositionRows(rows, $('effective-composition-scope').value, $('effective-composition-query').value);
     body.innerHTML = visible.length ? visible.map((row) => `<tr>
-      <td><span class="effective-side-label ${row.side === 'current' ? 'is-current' : 'is-candidate'}">${row.side === 'current' ? '当前可用' : '候选组合'}</span></td>
+      <td><span class="effective-side-label ${row.side === 'current' ? 'is-current' : 'is-candidate'}">${row.side === 'current' ? '当前有效' : '待确认候选'}</span></td>
       <td class="effective-order">${row.order}</td><td>${row.role}</td>
       <td class="effective-version-name"><code>${escapeHtml(row.version)}</code></td>
       <td>${row.evidence}</td><td>${row.selectable ? `<button class="button button-secondary button-small" type="button" data-effective-version="${escapeHtml(row.version)}">查看版本</button>` : '版本状态未读取'}</td></tr>`).join('')
@@ -1547,7 +1563,7 @@
     $('current-effective-digest').textContent = shortDigest(stack.effective_digest || stack.manifest_sha256) || '未设置';
     $('current-effective-digest').title = stack.effective_digest || stack.manifest_sha256 || '';
     const candidateAvailable = Boolean(candidate.available || candidate.candidate_effective_id);
-    $('candidate-effective-heading').textContent = acceptedCandidate ? '最近确认组合' : '候选有效组合';
+    $('candidate-effective-heading').textContent = acceptedCandidate ? '最近确认组合' : '待确认候选';
     $('candidate-effective-status').textContent = acceptedCandidate ? '已确认' : candidateAvailable ? '尚未生效' : '未生成';
     $('candidate-effective-id').textContent = candidate.candidate_effective_id || '未生成';
     $('candidate-effective-id').title = candidate.candidate_effective_id || '';
@@ -1574,6 +1590,101 @@
     if (saved.some((row) => row.effective_id === previous)) rollback.value = previous;
     rollback.disabled = !saved.length || Boolean(state.activeAction);
     renderEffectiveCompositionTable();
+  }
+
+  function renderSemanticReviewReadiness() {
+    const ready = state.semanticOptionsLibrary === state.selectedLibrary && state.semanticOptions;
+    const busy = Boolean(state.activeAction) || Boolean(state.semanticOptionsLoading);
+    for (const id of ['semantic-review-target', 'semantic-review-base', 'semantic-review-profile']) $(id).disabled = busy || !ready;
+    $('semantic-review-refresh').disabled = busy || !state.selectedLibrary;
+    const target = $('semantic-review-target').value;
+    const base = $('semantic-review-base').value;
+    const inputs = Array.from($('semantic-review-checks').querySelectorAll('input'));
+    inputs.forEach((input) => { input.disabled = busy || !ready || (input.dataset.requiresBase === 'true' && !base); });
+    const selected = inputs.filter(input => input.checked && (base || input.dataset.requiresBase !== 'true')).length;
+    const omitted = !base && inputs.some(input => input.dataset.requiresBase === 'true');
+    const selectedTarget = ready && state.semanticOptions.targets.find(row => row.id === target);
+    const selectedBase = ready && state.semanticOptions.targets.find(row => row.id === base);
+    $('semantic-review-scope').textContent = selectedTarget
+      ? `实际检查：${selectedTarget.label}（编号 ${target}）${selectedBase ? `；对比：${selectedBase.label}（编号 ${base}）` : '；不做版本对比'}`
+      : '尚未选择检查组合。';
+    $('semantic-review-run').disabled = busy || !ready || !target || target === base || !selected;
+    $('semantic-review-feedback').textContent = state.semanticOptionsLoading ? '正在读取已保存的组合与检查方案…'
+      : state.semanticOptionsError ? state.semanticOptionsError
+      : !state.selectedLibrary ? '请先选择库。'
+      : !ready || !state.semanticOptions.targets.length ? '尚无已生成的有效组合；请先生成候选组合，不需要先设为当前有效。'
+      : !target ? '请选择要检查的已保存组合。'
+      : target === base ? '检查目标与对比基准不能相同。'
+      : !selected ? (omitted ? '请先选择对比基准，或改用包含单组合检查的方案。' : '请至少勾选一项检查。')
+      : state.activeAction === 'semantic-review' ? '正在生成报告；进度和文件入口见顶部运行状态。'
+      : base ? '检查目标及其相对基准的变化。' : (omitted ? '本次仅执行单组合检查；标有“需要基准”的项目不执行。' : '本次仅检查所选组合。');
+    if (ready && state.semanticOptions.notice) $('semantic-review-feedback').textContent = `${state.semanticOptions.notice} ${$('semantic-review-feedback').textContent}`;
+  }
+
+  function renderSemanticReviewChecks(selected = null) {
+    const profile = state.semanticOptions?.profiles.find((item) => item.name === $('semantic-review-profile').value);
+    $('semantic-review-checks').innerHTML = (profile?.checks || []).map((check) =>
+      `<label class="toggle-field"><input type="checkbox" value="${escapeHtml(check.id)}" data-requires-base="${Boolean(check.requires_base)}" ${selected === null || selected.has(check.id) ? 'checked' : ''}>${escapeHtml(check.label)}${check.requires_base ? '（需要基准）' : ''}</label>`).join('');
+    $('semantic-review-checks').querySelectorAll('input').forEach((input) => input.addEventListener('change', renderSemanticReviewReadiness));
+    renderSemanticReviewReadiness();
+  }
+
+  async function loadSemanticReviewOptions() {
+    const library = state.selectedLibrary;
+    const requestId = ++state.semanticOptionsRequestId;
+    const preserve = state.semanticOptionsLibrary === library;
+    const oldProfile = $('semantic-review-profile').value;
+    const selectedChecks = new Set(Array.from($('semantic-review-checks').querySelectorAll('input:checked')).map((input) => input.value));
+    state.semanticOptionsLoading = Boolean(library);
+    state.semanticOptionsError = '';
+    renderSemanticReviewReadiness();
+    if (!library) return;
+    try {
+      const options = await getJson(`/api/libraries/${encodeURIComponent(library)}/semantic-review`);
+      if (requestId !== state.semanticOptionsRequestId || library !== state.selectedLibrary) return;
+      const oldTarget = preserve ? $('semantic-review-target').value : options.default_target;
+      const oldBase = preserve ? $('semantic-review-base').value : options.default_base;
+      state.semanticOptions = options;
+      state.semanticOptionsLibrary = library;
+      const choices = options.targets.map((row) => `<option value="${escapeHtml(row.id)}" ${row.available === false ? 'disabled' : ''}>${escapeHtml(row.label)}</option>`).join('');
+      $('semantic-review-target').innerHTML = '<option value="">选择已生成的组合</option>' + choices;
+      $('semantic-review-base').innerHTML = '<option value="">不对比，仅核查目标</option>' + choices;
+      $('semantic-review-target').value = options.targets.some((row) => row.id === oldTarget && row.available !== false) ? oldTarget : '';
+      $('semantic-review-base').value = options.targets.some((row) => row.id === oldBase && row.available !== false) ? oldBase : '';
+      $('semantic-review-profile').innerHTML = options.profiles.map((profile) => `<option value="${escapeHtml(profile.name)}">${escapeHtml(profile.label)}</option>`).join('');
+      $('semantic-review-profile').value = preserve && options.profiles.some((profile) => profile.name === oldProfile) ? oldProfile : options.default_profile;
+      if (!$('semantic-review-profile').value) $('semantic-review-profile').selectedIndex = 0;
+      renderSemanticReviewChecks(preserve && oldProfile === $('semantic-review-profile').value ? selectedChecks : null);
+    } catch (error) {
+      if (requestId !== state.semanticOptionsRequestId || library !== state.selectedLibrary) return;
+      state.semanticOptions = null;
+      state.semanticOptionsError = `读取技术检查选项失败：${error.message}；可点击刷新组合选项重试。`;
+    } finally {
+      if (requestId === state.semanticOptionsRequestId) {
+        state.semanticOptionsLoading = false;
+        renderSemanticReviewReadiness();
+      }
+    }
+  }
+
+  async function runSemanticReview() {
+    if ($('semantic-review-run').disabled || !state.selectedLibrary || state.activeAction) return;
+    const payload = {target: $('semantic-review-target').value, base: $('semantic-review-base').value,
+      profile: $('semantic-review-profile').value,
+      checks: Array.from($('semantic-review-checks').querySelectorAll('input:checked:not(:disabled)')).map((input) => input.value)};
+    const library = state.selectedLibrary;
+    setActionBusy('semantic-review');
+    try {
+      const task = await getJson(`/api/libraries/${encodeURIComponent(library)}/semantic-review`,
+        {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+      return await startJob(task, `技术检查 ${payload.target}${payload.base ? ` vs ${payload.base}` : ''}`, null, 'semantic-review');
+    } catch (error) {
+      clearActionBusy();
+      state.semanticOptionsError = `提交技术检查失败：${error.message}`;
+      renderSemanticReviewReadiness();
+      showError(state.semanticOptionsError, {action: true});
+      return null;
+    }
   }
 
   function releaseSetLibraryAvailable(item) {
@@ -1716,7 +1827,7 @@
       effective_hygiene: '当前版补证据',
       compare: '待对比',
       review: '可审查',
-      effective: '当前可用',
+      effective: '当前有效',
       blocked: '发布待确认',
       error: '异常',
     }[value] || '当前关注';
@@ -1790,7 +1901,6 @@
       </button>`).join('');
     target.querySelectorAll('[data-version-facet]').forEach((button) => button.addEventListener('click', () => {
       state.versionFilter = button.dataset.versionFacet || 'all';
-      $('version-status-filter').value = state.versionFilter;
       updateRouteState();
       renderVersions();
       renderVersionFacts();
@@ -1799,7 +1909,7 @@
 
   function versionRoleLabel(item) {
     if (!item) return '未选择';
-    if (item.current_effective) return '当前可用';
+    if (item.current_effective) return '当前有效';
     const selected = item.version_id === state.selectedVersion?.version_id;
     if (selected) return '当前对象';
     if (item.focus_scope) return '当前关注';
@@ -1816,41 +1926,10 @@
     const diffLabel = compareFactLabel(item);
     const diffClass = !scanReady && hasCompareRecord(item) ? 'is-warn' : versionStageClass(diffStatus);
     const releaseText = releaseLabel(releaseStatus);
-    return `<div class="version-evidence-stack" aria-label="证据状态">
-      <span class="mini-chip ${scanReady ? 'is-good' : 'is-warn'}">扫 ${escapeHtml(scanLabel)}</span>
-      <span class="mini-chip ${diffClass}">比 ${escapeHtml(diffLabel)}</span>
-      <span class="mini-chip ${releaseStatusClass(releaseStatus).replace('status-', 'is-')}">发 ${escapeHtml(releaseText)}</span>
-    </div>`;
-  }
-
-  function versionRowActions(item) {
-    const readiness = item.action_readiness || {};
-    const disabled = state.activeAction ? ' disabled' : '';
-    const detail = item.version_detail_url
-      ? `<button class="table-action-link" data-version-row-action="open" data-version-id="${escapeHtml(item.version_id)}" type="button"${disabled}>详情</button>`
-      : '';
-    const scan = readiness.scan?.enabled
-      ? `<button class="table-action-link" data-version-row-action="scan" data-version-id="${escapeHtml(item.version_id)}" type="button"${disabled}>扫描</button>`
-      : '';
-    const compare = readiness.compare?.enabled
-      ? `<button class="table-action-link" data-version-row-action="compare" data-version-id="${escapeHtml(item.version_id)}" type="button"${disabled}>对比</button>`
-      : '';
-    return `<div class="version-row-actions">${detail}${scan}${compare}</div>`;
-  }
-
-  function versionTaskCell(item) {
-    const task = deriveVersionTask(item);
-    const summary = isScanAttention(item) ? scanFactLabel(item) : (item.change_summary || compareFactLabel(item));
-    const className = task.state === '需补扫' || task.state === '待扫描' || task.state === '基准待扫描'
-      ? 'is-warn'
-      : task.state === '审查事实已就绪' || task.state === '首版事实已就绪'
-        ? 'is-good'
-        : 'is-neutral';
-    return `<div class="version-task-cell" title="${escapeHtml(task.note)}">
-      <strong>${escapeHtml(summary || task.state)}</strong>
-      <span class="mini-chip ${className}">${escapeHtml(task.state)}</span>
-      <small>${escapeHtml(task.note)}</small>
-    </div>`;
+    const base = item.adjacent_base_version || item.base_version || '';
+    return `<td><span class="mini-chip ${scanReady ? 'is-good' : 'is-warn'}">${escapeHtml(scanLabel)}</span></td>
+      <td><span class="mini-chip ${diffClass}">${escapeHtml(diffLabel)}</span>${base ? `<small class="version-base-label" title="${escapeHtml(base)}">基准：${escapeHtml(base)}</small>` : ''}</td>
+      <td><span class="mini-chip ${releaseStatusClass(releaseStatus).replace('status-', 'is-')}">${escapeHtml(releaseText)}</span></td>`;
   }
 
   function deriveVersionTask(item) {
@@ -1940,32 +2019,33 @@
       loadMore.textContent = state.versionsLoadingMore ? '正在加载…' : hasHiddenLoadedRows ? `再显示 ${VERSION_RENDER_BATCH} 个` : '继续读取版本';
     }
     if (state.versionsLoading) {
-      $('version-table-body').innerHTML = '<tr><td colspan="7" class="empty-cell">正在读取版本列表…</td></tr>';
+      $('version-table-body').innerHTML = '<tr><td colspan="5" class="empty-cell">正在读取版本列表…</td></tr>';
       return;
     }
     if (state.versionLoadError) {
-      $('version-table-body').innerHTML = `<tr><td colspan="7" class="empty-cell">${escapeHtml(state.versionLoadError)}</td></tr>`;
+      $('version-table-body').innerHTML = `<tr><td colspan="5" class="empty-cell">${escapeHtml(state.versionLoadError)}</td></tr>`;
       return;
     }
     $('version-table-body').innerHTML = rows.length ? rows.map((item) => `
       <tr class="version-row ${item.version_id === state.selectedVersion?.version_id ? 'selected' : ''}" data-version="${escapeHtml(item.version_id)}">
-        <td><button class="version-link" type="button" title="${escapeHtml(item.version_id)}">${escapeHtml(item.version_id)}</button></td>
-        <td><span class="role-label">${escapeHtml(versionRoleLabel(item))}</span></td>
+        <td><button class="version-link" type="button" title="${escapeHtml(item.version_id)} · ${escapeHtml(versionRoleLabel(item))}">${escapeHtml(item.version_id)}</button></td>
         <td><span class="package-pill">${escapeHtml(packageLabel(item.package_type))}</span></td>
-        <td><code class="base-version-cell" title="${escapeHtml(item.adjacent_base_version || item.base_version || '')}">${escapeHtml(item.adjacent_base_version || item.base_version || '无基准')}</code></td>
-        <td>${versionEvidenceChips(item)}</td>
-        <td class="change-summary">${versionTaskCell(item)}</td>
-        <td>${versionRowActions(item)}</td>
-      </tr>`).join('') : `<tr><td colspan="7" class="empty-cell">${state.versions.length ? '没有符合筛选条件的版本。' : '该库没有版本记录。'}</td></tr>`;
+        ${versionEvidenceChips(item)}
+      </tr>`).join('') : `<tr><td colspan="5" class="empty-cell">${state.versions.length ? '没有符合筛选条件的版本。' : '该库没有版本记录。'}</td></tr>`;
     document.querySelectorAll('[data-version]').forEach((row) => row.addEventListener('click', () => selectVersion(row.dataset.version)));
-    document.querySelectorAll('[data-version-row-action]').forEach((button) => button.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      const versionId = button.dataset.versionId || '';
-      const action = button.dataset.versionRowAction || '';
-      if (versionId && state.selectedVersion?.version_id !== versionId) selectVersion(versionId, { rerender: true });
-      if (action === 'open') return openVersionDetail();
-      if (action === 'scan' || action === 'compare') return runAction(action);
-    }));
+    document.querySelectorAll('[data-version-focus-action]').forEach((button) => {
+      const action = button.dataset.versionFocusAction;
+      button.disabled = !state.selectedVersion || Boolean(state.activeAction)
+        || (action === 'open' && !state.selectedVersion?.version_detail_url)
+        || (action === 'scan' && !state.selectedVersion?.action_readiness?.scan?.enabled)
+        || (action === 'compare' && !state.selectedVersion?.action_readiness?.compare?.enabled);
+      button.title = button.disabled && action === 'open' ? '该版本详情尚未生成。'
+        : button.disabled && action === 'scan' ? '当前版本暂不满足扫描条件。'
+          : button.disabled && action === 'compare' ? '请先准备扫描证据和有效基准。' : '';
+    });
+    $('version-focus-action-hint').textContent = state.selectedVersion
+      ? '操作针对当前所选版本；更多核查与审查在“版本分析”中。'
+      : '选择版本后执行操作';
   }
 
   function setActionDeckState(name, availability) {
@@ -2003,6 +2083,11 @@
     if (row.status === 'FAILED' || row.error) return 'failed';
     const value = row.link_action || row.status;
     return ({LINK: 'new', REPLACE: 'replace', KEEP: 'same', WOULD_LINK: 'new', WOULD_REPLACE: 'replace', WOULD_KEEP: 'same'})[value] || 'unknown';
+  }
+
+  function initialReleaseLinkScope(rows) {
+    return rows.some((row) => row.error || row.warning || ['replace', 'failed'].includes(releaseLinkAction(row)))
+      ? 'focus' : 'all';
   }
 
   function filterReleaseLinks(rows, query, type, scope) {
@@ -2045,7 +2130,7 @@
     const rows = plan.link_rows || [];
     const tableState = state.releaseTable?.plan === plan
       ? state.releaseTable
-      : {plan, query: '', type: '', scope: 'focus', page: 0};
+      : {plan, query: '', type: '', scope: initialReleaseLinkScope(rows), page: 0};
     state.releaseTable = tableState;
     const verified = ['APPLIED', 'FORCED_APPLIED'].includes(plan.status) && ['PASS', 'PASS_WITH_WARNING'].includes(plan.verify_status);
     const previewReady = plan.dry_run && ['DRY_RUN', 'FORCE_DRY_RUN'].includes(plan.status);
@@ -2202,11 +2287,22 @@
     if (!tabs.some(tab => tab.dataset.analysisAction === action)) return;
     tabs.forEach(tab => {
       const selected = tab.dataset.analysisAction === action;
-      tab.setAttribute('aria-selected', String(selected));
-      tab.tabIndex = selected ? 0 : -1;
+      tab.setAttribute('aria-pressed', String(selected));
+      tab.classList.toggle('is-active', selected);
       const panel = $(tab.getAttribute('aria-controls'));
       if (panel) panel.hidden = !selected;
     });
+  }
+
+  function activateWorkbenchCommand(command) {
+    if (command === 'release') {
+      setActiveStageTab('release-workspace');
+      return;
+    }
+    const action = ['scan', 'compare', 'file-diff', 'checks', 'review'].includes(command) ? command : '';
+    if (!action) return;
+    selectAnalysisAction(action);
+    setActiveStageTab('action-workspace');
   }
 
   function openFileDiffWorkbench() {
@@ -2307,7 +2403,7 @@
     $('flow-object-value').textContent = item.version_id || '未选择版本';
     $('flow-facts-value').textContent = `扫描 ${scanFactLabel(item)} · 对比 ${compareFactLabel(item)}`;
     $('flow-release-value').textContent = releaseLabel(item.release_status);
-    $('version-role').textContent = item.current_effective ? '当前可用' : stageLabel(item.stage);
+    $('version-role').textContent = item.current_effective ? '当前有效' : stageLabel(item.stage);
     $('version-role').className = `status-chip ${item.current_effective ? 'status-good' : 'status-neutral'}`;
     $('selected-version-id').textContent = item.version_id;
     $('version-decision').textContent = reviewDecision.label;
@@ -2323,7 +2419,7 @@
     $('version-focus-facts').textContent = `扫描 ${scanFactLabel(item)} · 对比 ${compareFactLabel(item)} · ${releaseLabel(item.release_status)}`;
     const detail = item.version_detail_url ? `<a class="text-link" href="${item.version_detail_url}" target="_blank" rel="noreferrer">打开版本详情页 ↗</a>` : '<span class="muted">版本详情尚未生成</span>';
     $('version-facts').innerHTML = [
-      ['包类型', packageLabel(item.package_type)], ['版本角色', item.current_effective ? '当前可用' : stageLabel(item.stage)], ['对比基准', item.base_version || '未设置'],
+      ['包类型', packageLabel(item.package_type)], ['版本角色', item.current_effective ? '当前有效' : stageLabel(item.stage)], ['对比基准', item.base_version || '未设置'],
     ].map(([label, value]) => `<div class="fact-row"><span>${label}</span><strong title="${escapeHtml(value)}">${escapeHtml(value)}</strong></div>`).join('') + `<div class="fact-link">${detail}</div>`;
     $('base-version').value = item.adjacent_base_version || item.base_version || '';
     $('base-version').dataset.manual = 'false';
@@ -2351,7 +2447,7 @@
       button.innerHTML = `<span aria-hidden="true">${icon}</span> ${escapeHtml(label)}`;
     });
     const forceButton = $('release-force-action-button');
-    $('release-apply-action-button').disabled = !Boolean((displayReadiness['release-check'] || {}).enabled) || Boolean(state.activeAction);
+    invalidateReleasePreview();
     const forceTarget = state.formalReleaseTarget;
     const forceReady = Boolean((displayReadiness['release-check'] || {}).enabled) && Boolean(forceTarget);
     forceButton.disabled = !forceReady || Boolean(state.activeAction);
@@ -2419,6 +2515,7 @@
     setHashTypeChecks('[data-force-hash-type]', settings.force_hash_file_types || '');
     setHashTypeChecks('[data-skip-hash-type]', settings.skip_hash_file_types || '');
     $('render-detail').checked = settings.render_detail !== false;
+    renderDefaultSettings();
     updateSettingsSummary();
     const discoverRoot = $('candidate-discover-root');
     if (discoverRoot && !discoverRoot.value.trim()) discoverRoot.value = paths.raw_root || '';
@@ -2446,10 +2543,10 @@
       $('selected-library-meta').textContent = '填写工作区目录和原始库根后，才能登记库、发现候选和生成报告。';
       $('selected-library-crumb').textContent = '未连接';
       $('library-count').textContent = '0';
-      $('library-list').innerHTML = '<div class="empty-note">初始化后显示正式库。</div>';
+      $('library-list').innerHTML = '<div class="empty-note">初始化后显示已登记库。</div>';
       $('library-facet-summary').textContent = '尚未连接工作区';
       $('version-count').textContent = '未初始化';
-      $('version-table-body').innerHTML = '<tr><td colspan="7" class="empty-cell">请先初始化工作区。</td></tr>';
+      $('version-table-body').innerHTML = '<tr><td colspan="5" class="empty-cell">请先初始化工作区。</td></tr>';
       $('version-pagination-summary').textContent = '未初始化';
     }
     const button = $('setup-create-config');
@@ -2617,7 +2714,7 @@
     const disclosure = $('library-add-disclosure');
     if (disclosure) disclosure.open = true;
     const note = $('library-add-prefill-note');
-    if (note) note.textContent = `已带入候选库“${candidate.library_id}”。请核对正式库名和库根目录后，登记并加入目录。`;
+    if (note) note.textContent = `已带入候选库“${candidate.library_id}”。请核对已登记库名和库根目录后，登记并加入目录。`;
     window.requestAnimationFrame(() => {
       $('library-add-id').focus();
       disclosure?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2756,7 +2853,7 @@
     status.textContent = state.formalReleaseLoading ? '读取中' : snapshot?.status === 'READY' ? `发布阶段 ${(snapshot.stages || []).length}` : snapshot?.status === 'MISSING' ? '尚未读取' : '索引异常';
     status.className = `status-chip ${state.formalReleaseLoading ? 'status-neutral' : snapshot?.status === 'READY' ? 'status-good' : snapshot?.status === 'MISSING' ? 'status-neutral' : 'status-bad'}`;
     if (state.formalReleaseLoading) {
-      note.textContent = '正在读取已发布清单；不会扫描 RAW，也不会执行发布。';
+      note.textContent = '正在读取正式目录记录；不会扫描 RAW，也不会执行发布。';
       body.innerHTML = '<tr><td colspan="7" class="muted">读取正式发布库中…</td></tr>';
       return;
     }
@@ -2766,12 +2863,12 @@
       return;
     }
     if (!snapshot || snapshot.status === 'MISSING') {
-      note.textContent = '尚无发布库索引。确认发布根目录后点击“刷新发布库”；该动作只读取 release_manifest.json。';
+      note.textContent = '尚无发布历史索引。没有 release_manifest.json 不影响正式目录核查；切换到“正式目录盘点”并刷新实际路径即可。';
       body.innerHTML = '<tr><td colspan="7" class="muted">尚未读取正式发布库目录。</td></tr>';
       return;
     }
     const rows = visibleFormalReleaseLibraries();
-    note.textContent = `发布根目录：${snapshot.release_root || '未记录'}；${(snapshot.stages || []).length} 个当前阶段；来源明细 ${state.formalReleaseLibraries.length} 个库。${snapshot.truncated ? ' 已达到读取上限，请收窄目录。' : ''}`;
+    note.textContent = `发布根目录：${snapshot.release_root || '未记录'}；历史清单阶段 ${(snapshot.stages || []).length} 个；来源明细 ${state.formalReleaseLibraries.length} 个库。当前目录结构请看上方正式目录盘点。${snapshot.truncated ? ' 已达到读取上限，请收窄目录。' : ''}`;
     body.innerHTML = rows.length ? rows.map((row) => {
       const history = Array.isArray(row.history) ? row.history : [];
       const mapped = String(row.raw_catalog_match || '');
@@ -2835,15 +2932,26 @@
     $('formal-directory-version').value=version;
     $('formal-directory-type').innerHTML = '<option value="">全部类型</option>'+Object.keys(snapshot.type_counts || {}).sort().map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(fileTypeLabel(name))}</option>`).join('');
     $('formal-directory-type').value = type;
+    const auditStatus = snapshot.audit_status || (snapshot.status === 'READY' ? '已读取' : '尚未核查');
+    const pointer = snapshot.current_pointer || {};
+    const pointerText = pointer.name ? `${pointer.name} → ${pointer.target || '—'}` : (pointer.target || pointer.status || '未配置');
     const summary = snapshot.status === 'READY'
-      ? `${rows.length} 个来源库 · 最近盘点 ${new Date(snapshot.refreshed_at).toLocaleString('zh-CN',{hour12:false})}${snapshot.ignored_directory_links?.length ? ` · 未展开目录链接 ${snapshot.ignored_directory_links.length}` : ''}`
+      ? `${auditStatus} · ${snapshot.package_count || 0} 个正式包 · 最近盘点 ${new Date(snapshot.refreshed_at).toLocaleString('zh-CN',{hour12:false})}${snapshot.manifest_present ? ' · 检测到可选来源清单' : ' · 未要求来源清单'}`
       : '指定实际正式目录后刷新；无需发布清单。临时发布输出路径不会被修改。';
     $('formal-directory-summary').textContent = summary;
     $('formal-directory-current-root').textContent = snapshot.root || '尚未盘点';
+    $('formal-audit-status').textContent = auditStatus;
+    $('formal-audit-status').className = auditStatus === '可用' ? 'status-good' : auditStatus === '不可用' ? 'status-bad' : 'status-warn';
+    $('formal-package-count').textContent = snapshot.package_count ?? 0;
+    $('formal-current-pointer').textContent = pointerText;
+    $('formal-file-view-count').textContent = `${snapshot.file_count || 0} / ${Object.keys(snapshot.view_counts || {}).length}`;
+    $('formal-anomaly-count').textContent = `${snapshot.broken_count || 0} / ${(snapshot.extra_paths || []).length}`;
+    $('formal-directory-policy').textContent = snapshot.comparison_policy || '正式目录只核查当前交付结构，不比较历史版本；来源版本需要清单或链接目标支持。';
     [['formal-files-all','全部文件',snapshot.file_count || 0,''],['formal-files-unknown','来源待确认',snapshot.unknown_count || 0,'unknown'],['formal-files-broken','断链',snapshot.broken_count || 0,'broken']].forEach(([id,label,count,check])=>{
       $(id).innerHTML=`${label} <b>${count}</b>`;
       $(id).setAttribute('aria-pressed',String(!library && !version && !type && !$('formal-directory-query').value && $('formal-directory-status').value===check));
     });
+    $('formal-directory-packages').innerHTML = (snapshot.packages || []).map(row => `<tr><td><strong>${escapeHtml(row.name)}</strong><small><code>${escapeHtml(row.path)}</code></small></td><td>${row.file_count || 0}</td><td>${escapeHtml(Object.entries(row.views || {}).map(([name,count]) => `${name} ${count}`).join(' / ') || '未发现视图文件')}</td><td>${pointer.target === row.name && pointer.status === '正常' ? '<span class="status-chip status-good">当前入口</span>' : '<span class="status-chip status-neutral">正式包</span>'}</td></tr>`).join('') || '<tr><td colspan="4">没有发现 lib_NL* 正式包。若输入的是单个 lib_NL* 目录，它本身会被作为一个正式包核查。</td></tr>';
     $('formal-directory-libraries').innerHTML = rows.map(row=>`<tr><td><button class="button button-quiet" type="button" data-formal-library="${escapeHtml(row.library)}">${escapeHtml(row.library)}</button></td><td>${escapeHtml(row.versions.join('、'))}</td><td>${row.file_count}</td><td>${escapeHtml(Object.entries(row.types).map(([name,count])=>`${fileTypeLabel(name)} ${count}`).join(' / '))}</td><td>${row.broken_count ? `<span class="status-chip status-bad">${row.broken_count}</span>` : '0'}</td></tr>`).join('') || '<tr><td colspan="5">尚无已识别来源库；来源待确认的文件仍在下方保留。</td></tr>';
     $('formal-directory-libraries').querySelectorAll('[data-formal-library]').forEach(button=>button.addEventListener('click',()=>{ $('formal-directory-library').value=button.dataset.formalLibrary; $('formal-directory-version').value=''; state.formalOffset=0; loadFormalInventory(); }));
     $('formal-directory-files').innerHTML = (snapshot.files || []).map(row=>`<tr class="${row.link_status==='链接失效' ? 'formal-link-broken' : ''}"><td><code>${escapeHtml(row.path)}</code></td><td>${escapeHtml(row.library || '待确认')}<br>${escapeHtml(row.version || '版本待确认')}</td><td><code>${escapeHtml(row.source_path || '普通文件，无链接来源')}</code></td><td>${escapeHtml(fileTypeLabel(row.file_type))}</td><td>${escapeHtml(row.corner || '未记录')}</td><td><span class="status-chip ${row.link_status==='链接失效' ? 'status-bad' : row.link_status==='链接正常' ? 'status-good' : 'status-neutral'}">${escapeHtml(row.link_status)}</span><br>${escapeHtml(row.source_status)}</td></tr>`).join('') || '<tr><td colspan="6">没有匹配文件。<br>可清除筛选条件重新查看。</td></tr>';
@@ -2852,11 +2960,16 @@
     $('formal-directory-prev').disabled = !state.formalOffset;
     $('formal-directory-next').disabled = state.formalOffset + 100 >= (snapshot.matched_count || 0);
     if (state.directoryMode === 'published' && state.formalDirectoryMode) {
-      const visible = rows.filter(row=>row.library.toLowerCase().includes(state.publishedQuery.toLowerCase()));
-      $('library-count').textContent = rows.length;
-      $('library-facet-summary').textContent = `${rows.length} 个正式来源库 · ${snapshot.unknown_count || 0} 个文件待确认`;
-      $('library-list').innerHTML = visible.map(row=>`<button class="library-item ${library===row.library ? 'selected' : ''}" type="button" aria-pressed="${library===row.library}" data-formal-select="${escapeHtml(row.library)}"><strong>${escapeHtml(row.library)}</strong><small>${row.versions.length} 个来源版本 / ${row.file_count} 个文件</small></button>`).join('') || '<p class="empty-note">填写右侧正式目录路径并刷新。</p>';
+      const queryText = state.publishedQuery.toLowerCase();
+      const visible = rows.filter(row=>row.library.toLowerCase().includes(queryText));
+      const packages = (snapshot.packages || []).filter(row=>String(row.name || '').toLowerCase().includes(queryText));
+      $('library-count').textContent = rows.length || packages.length;
+      $('library-facet-summary').textContent = rows.length ? `${rows.length} 个正式来源库 · ${snapshot.unknown_count || 0} 个文件待确认` : `${packages.length} 个正式包 · 来源版本未记录`;
+      $('library-list').innerHTML = rows.length
+        ? visible.map(row=>`<button class="library-item ${library===row.library ? 'selected' : ''}" type="button" aria-pressed="${library===row.library}" data-formal-select="${escapeHtml(row.library)}"><strong>${escapeHtml(row.library)}</strong><small>${row.versions.length} 个来源版本 / ${row.file_count} 个文件</small></button>`).join()
+        : packages.map(row=>`<button class="library-item" type="button" data-formal-package="${escapeHtml(row.name)}"><strong>${escapeHtml(row.name)}</strong><small>${row.file_count || 0} 个文件 · ${escapeHtml(Object.keys(row.views || {}).join(' / ') || '未记录视图')}</small></button>`).join() || '<p class="empty-note">填写右侧正式目录路径并刷新。</p>';
       $('library-list').querySelectorAll('[data-formal-select]').forEach(button=>button.addEventListener('click',()=>{ $('formal-directory-library').value=button.dataset.formalSelect; $('formal-directory-version').value=''; state.formalOffset=0; loadFormalInventory(); }));
+      $('library-list').querySelectorAll('[data-formal-package]').forEach(button=>button.addEventListener('click',()=>{ $('formal-directory-library').value=''; $('formal-directory-version').value=''; $('formal-directory-type').value=''; $('formal-directory-status').value=''; $('formal-directory-query').value=button.dataset.formalPackage; state.formalOffset=0; loadFormalInventory(); }));
     }
   }
 
@@ -3105,23 +3218,52 @@
     };
   }
 
-  function workspaceConfigPayload() {
-    return {
+  function renderDefaultSettings() {
+    const settings = state.workspace?.scan_strategy || {};
+    const paths = state.workspace?.paths || {};
+    const release = state.workspace?.release_settings || {};
+    const discovery = state.workspace?.discovery_strategy || {};
+    for (const kind of ['force', 'skip']) {
+      const container = $(`default-${kind}-hash-types`);
+      if (!container.children.length) container.innerHTML = Array.from(document.querySelectorAll(`[data-${kind}-hash-type]`)).map(input =>
+        `<label class="toggle-field"><input type="checkbox" value="${escapeHtml(input.value)}" data-default-${kind}-hash-type>${escapeHtml(input.parentElement.textContent.trim())}</label>`).join('');
+    }
+    for (const key of ['raw_root', 'release_root']) $(`config-${key.replaceAll('_', '-')}`).value = paths[key] || '';
+    $('config-release-publish-name').value = release.publish_name || '';
+    $('config-release-latest-name').value = release.latest_name || 'latest';
+    $('config-hash-policy').value = settings.hash_policy || 'smart';
+    $('config-parse-jobs').value = String(settings.parse_jobs || 8);
+    for (const key of ['parse_file_types', 'parse_exclude_file_types']) $(`config-${key.replaceAll('_', '-')}`).value = settings[key] || '';
+    setHashTypeChecks('[data-default-force-hash-type]', settings.force_hash_file_types || '');
+    setHashTypeChecks('[data-default-skip-hash-type]', settings.skip_hash_file_types || '');
+    $('config-render-detail').checked = settings.render_detail !== false;
+    for (const [key, fallback] of Object.entries({max_depth: 4, min_versions: 1, max_dirs: 5000, max_candidates: 200})) {
+      $(`config-discover-${key.replaceAll('_', '-')}`).value = String(discovery[key] || fallback);
+    }
+  }
+
+  function workspaceConfigPayload(group = 'directories') {
+    if (group === 'directories') return {
       raw_root: $('config-raw-root')?.value.trim() || '',
       release_root: $('config-release-root')?.value.trim() || '',
       release_publish_name: $('config-release-publish-name')?.value.trim() || '',
       release_latest_name: $('config-release-latest-name')?.value.trim() || 'latest',
-      parse_jobs: $('parse-jobs').value,
-      hash_policy: $('hash-policy').value,
-      force_hash_file_types: Array.from(document.querySelectorAll('[data-force-hash-type]:checked')).map((input) => input.value),
-      skip_hash_file_types: Array.from(document.querySelectorAll('[data-skip-hash-type]:checked')).map((input) => input.value),
-      parse_file_types: $('parse-file-types').value.trim(),
-      parse_exclude_file_types: $('parse-exclude-file-types').value.trim(),
-      render_detail: $('render-detail').checked,
-      discover_max_depth: $('config-discover-max-depth')?.value || $('candidate-max-depth')?.value || '4',
-      discover_min_versions: $('config-discover-min-versions')?.value || $('candidate-min-versions')?.value || '1',
-      discover_max_dirs: $('config-discover-max-dirs')?.value || $('candidate-max-dirs')?.value || '5000',
-      discover_max_candidates: $('config-discover-max-candidates')?.value || $('candidate-max-candidates')?.value || '200',
+    };
+    if (group === 'scan') return {
+      parse_jobs: $('config-parse-jobs').value,
+      hash_policy: $('config-hash-policy').value,
+      force_hash_file_types: Array.from(document.querySelectorAll('[data-default-force-hash-type]:checked')).map((input) => input.value),
+      skip_hash_file_types: Array.from(document.querySelectorAll('[data-default-skip-hash-type]:checked')).map((input) => input.value),
+      parse_file_types: $('config-parse-file-types').value.trim(),
+      parse_exclude_file_types: $('config-parse-exclude-file-types').value.trim(),
+      render_detail: $('config-render-detail').checked,
+    };
+    if (group !== 'discovery') throw new Error('未知配置分组');
+    return {
+      discover_max_depth: $('config-discover-max-depth').value,
+      discover_min_versions: $('config-discover-min-versions').value,
+      discover_max_dirs: $('config-discover-max-dirs').value,
+      discover_max_candidates: $('config-discover-max-candidates').value,
     };
   }
 
@@ -3133,21 +3275,24 @@
     feedback.classList.toggle('is-error', kind === 'error');
   }
 
-  async function saveWorkspaceSettings() {
+  async function saveWorkspaceSettings(group = 'directories') {
     if (state.settingsSaving) return;
     state.settingsSaving = true;
-    const button = $('save-settings');
+    const button = $(group === 'directories' ? 'save-settings' : `save-${group}-settings`);
     if (button) button.disabled = true;
     showSettingsFeedback('正在保存工作区默认配置…');
     try {
       const payload = await getJson('/api/workspace/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(workspaceConfigPayload()),
+        body: JSON.stringify(workspaceConfigPayload(group)),
       });
       state.workspace = { ...(state.workspace || {}), paths: payload.paths, scan_strategy: payload.scan_strategy, discovery_strategy: payload.discovery_strategy, release_settings: payload.release_settings };
-      renderWorkspaceSettings();
-      showSettingsFeedback(`已保存默认配置；备份：${payload.backup || '已生成'}`);
+      if (group === 'directories') {
+        $('release-root-display').value = payload.paths.release_root || '未配置';
+        invalidateReleasePreview();
+      }
+      showSettingsFeedback(`已保存${{directories: '目录', scan: '扫描默认值', discovery: '发现默认值'}[group]}；本次任务参数保持不变。备份：${payload.backup || '已生成'}`);
     } catch (error) {
       showSettingsFeedback(`保存失败：${error.message}`, 'error');
     } finally {
@@ -3194,7 +3339,8 @@
     // Jobs use this path after completion, so clearing here would hide the
     // just-produced release preview and other current-version projections.
     if (name === state.selectedLibrary && state.versions.length) {
-      return refreshVersionsForSelectedLibrary(++state.libraryRequestId);
+      await refreshVersionsForSelectedLibrary(++state.libraryRequestId);
+      return loadSemanticReviewOptions();
     }
     if (state.formalReleaseTarget && (state.formalReleaseTarget.raw_catalog_name || state.formalReleaseTarget.raw_catalog_match) !== name) {
       state.formalReleaseTarget = null;
@@ -3217,7 +3363,6 @@
       state.versionQuery = '';
       state.versionFilter = 'focus';
       $('version-filter').value = '';
-      $('version-status-filter').value = 'focus';
     }
     updateRouteState();
     renderLibraries();
@@ -3229,6 +3374,7 @@
     renderVersions();
     renderVersionFacts();
     try {
+      await loadSemanticReviewOptions();
       await refreshVersionsForSelectedLibrary(requestId);
       if (requestId === state.libraryRequestId) $('selected-library-meta').textContent = `${name} · ${library ? libraryMetaLine(library) : '未标注库信息'}`;
     } catch (error) {
@@ -3285,12 +3431,13 @@
         state.versionsLoadingMore = false;
         state.versionsLoading = false;
         state.versionLoadError = '';
-        $('selected-library').textContent = '选择一个正式库';
+        $('selected-library').textContent = '选择一个已登记库';
         $('selected-library-crumb').textContent = '未选择';
-        $('selected-library-meta').textContent = '目录中没有可查看的正式库。';
+        $('selected-library-meta').textContent = '目录中没有可查看的已登记库。';
         renderMetrics(null);
         renderVersions();
         renderVersionFacts();
+        await loadSemanticReviewOptions();
       }
     } catch (error) {
       if (requestId !== state.libraryLoadRequestId) return;
@@ -3353,6 +3500,7 @@
     });
     renderLibraryCandidates();
     renderEffectiveSelection();
+    renderSemanticReviewReadiness();
   }
 
   function clearActionBusy() {
@@ -3360,6 +3508,7 @@
     document.querySelectorAll('[data-action], [data-workflow-action], [data-correction-action], [data-command-action]').forEach((button) => button.classList.remove('is-busy'));
     renderVersionFacts();
     renderLibraryCandidates();
+    renderSemanticReviewReadiness();
   }
 
   function setWorkflowStatus(value, className = 'status-neutral') {
@@ -3394,6 +3543,27 @@
       acknowledged: $('release-force-acknowledged').checked,
     };
     return {};
+  }
+
+  function releasePreviewKey() {
+    return JSON.stringify([state.selectedLibrary, state.selectedVersion?.version_id,
+      $('release-root-display').value, state.formalReleaseTarget?.library_id || '', actionPayload('release-plan')]);
+  }
+
+  function releasePreviewReady() {
+    const plan = state.releasePlan;
+    return Boolean(plan?.dry_run && ['DRY_RUN', 'PARTIAL_DRY_RUN'].includes(plan.status)
+      && plan.library === state.selectedLibrary && plan.version === state.selectedVersion?.version_id
+      && state.releasePreviewKey === releasePreviewKey());
+  }
+
+  function invalidateReleasePreview() {
+    const stale = Boolean(state.releasePlan?.dry_run && state.releasePreviewKey && state.releasePreviewKey !== releasePreviewKey());
+    $('release-preview-stale').classList.toggle('hidden', !stale);
+    const ready = releasePreviewReady();
+    $('release-apply-action-button').classList.toggle('hidden', !ready);
+    $('release-apply-action-button').disabled = !ready || Boolean(state.activeAction);
+    return stale;
   }
 
   function webActionSpec(action) {
@@ -3505,11 +3675,11 @@
     }
     if (action === 'effective-rollback') {
       const current = currentEffectiveStack();
-      return `回退当前可用组合\n库：${state.selectedLibrary}\n当前：${current.current_effective_id || '未设置'}\n目标：${$('rollback-to').value}\n回退人：${$('rollback-by').value.trim()}\n原因：${$('rollback-reason').value.trim()}\n不修改原始文件或发布链接。是否继续？`;
+      return `回退当前有效组合\n库：${state.selectedLibrary}\n当前：${current.current_effective_id || '未设置'}\n目标：${$('rollback-to').value}\n回退人：${$('rollback-by').value.trim()}\n原因：${$('rollback-reason').value.trim()}\n不修改原始文件或发布链接。是否继续？`;
     }
     const configured = webActionSpec(action).confirmation;
     if (configured) return configured;
-    if (action === 'library-accept') return `即将登记已勾选的 ${state.selectedCandidateIds.size} 个候选库，并自动刷新正式库列表。原始候选快照不会被改写。是否继续？`;
+    if (action === 'library-accept') return `即将登记已勾选的 ${state.selectedCandidateIds.size} 个候选库，并自动刷新已登记库列表。原始候选快照不会被改写。是否继续？`;
     return `即将执行${commandLabel(action)}，结果会写入工作区运行记录。是否继续？`;
   }
 
@@ -3672,13 +3842,13 @@
   function writeConfirmation(action) {
     const library = state.libraries.find((row) => row.library_name === state.selectedLibrary);
     const candidate = library?.pending_window?.candidate_effective_id;
-    const target = action === 'accept-window' ? `设为当前可用版本：${candidate || '未生成'}` : action === 'intake-apply' ? '执行完整处理计划' : '按处理建议执行';
+    const target = action === 'accept-window' ? `设为当前有效版本：${candidate || '未生成'}` : action === 'intake-apply' ? '执行完整处理计划' : '按处理建议执行';
     const composition = (stack) => `${stack?.base_full_version || '未设置'} + ${(stack?.accepted_updates || []).join(' + ') || '无叠加更新'}`;
     const current = library?.current_effective_stack || {};
     const next = library?.pending_window?.candidate_effective_stack || {};
     const detail = action === 'accept-window'
-      ? `当前组合：${current.current_effective_id || '未设置'}\n当前组成：${composition(current)}\n候选组合：${candidate || '未生成'}\n候选组成：${composition(next)}\n确认人：${$('accepted-by').value.trim() || '未填写'}\n确认说明：${$('accept-note').value.trim() || '未填写'}\n只切换当前可用组合，不创建发布链接。`
-      : `所选完整包：${effectiveSelectionDraft()?.base_full || '未设置'}\n叠加顺序：${(effectiveSelectionDraft()?.includes || []).join(' → ') || '无叠加更新'}\n按已预览策略执行扫描、组合和对比，不切换当前可用组合，不创建发布链接。`;
+      ? `当前组合：${current.current_effective_id || '未设置'}\n当前组成：${composition(current)}\n候选组合：${candidate || '未生成'}\n候选组成：${composition(next)}\n确认人：${$('accepted-by').value.trim() || '未填写'}\n确认说明：${$('accept-note').value.trim() || '未填写'}\n只切换当前有效组合，不创建发布链接。`
+      : `所选完整包：${effectiveSelectionDraft()?.base_full || '未设置'}\n叠加顺序：${(effectiveSelectionDraft()?.includes || []).join(' → ') || '无叠加更新'}\n按已预览策略执行扫描、组合和对比，不切换当前有效组合，不创建发布链接。`;
     return `即将${target}\n库：${state.selectedLibrary}\n${detail}\n是否继续？`;
   }
 
@@ -3725,8 +3895,39 @@
     }
     container.innerHTML = `<strong>运行产物</strong>${rows.map((item) => {
       const suffix = item.kind === 'html' ? ' ↗' : '';
-      return `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer" title="${escapeHtml(item.path || '')}">${escapeHtml(item.label)}${suffix}</a>`;
+      const mode = item.download ? 'download' : 'target="_blank" rel="noreferrer"';
+      return `<a href="${escapeHtml(item.url)}" ${mode} title="${escapeHtml(item.path || '')}">${escapeHtml(item.label)}${suffix}</a>`;
     }).join('')}`;
+  }
+
+  function renderJobQualitySummary(summary = null) {
+    const container = $('job-quality-summary');
+    if (!container) return;
+    if (!summary || !summary.verdict) {
+      container.classList.add('hidden');
+      return;
+    }
+    const verdictClass = summary.verdict === 'PASS'
+      ? 'status-good'
+      : ['FAIL'].includes(summary.verdict)
+        ? 'status-bad'
+        : ['INCOMPLETE', 'REVIEW_REQUIRED'].includes(summary.verdict)
+          ? 'status-warn'
+          : 'status-neutral';
+    const labels = {PASS: '通过', REVIEW_REQUIRED: '需人工确认', INCOMPLETE: '未完成', NOT_CHECKED: '未检查', UNKNOWN: '无法判定', FAIL: '发现问题', CHANGED: '有变化', UNCHANGED: '无变化', NOT_APPLICABLE: '不适用'};
+    const counts = summary.counts || {};
+    const countOrder = ['PASS', 'REVIEW_REQUIRED', 'INCOMPLETE', 'NOT_CHECKED', 'UNKNOWN', 'FAIL', 'CHANGED', 'UNCHANGED', 'NOT_APPLICABLE'];
+    const countRows = countOrder.filter((key) => Number(counts[key] || 0) > 0);
+    $('job-quality-verdict').className = `status-chip ${verdictClass}`;
+    $('job-quality-verdict').textContent = summary.verdict_label || '未形成结论';
+    $('job-quality-counts').innerHTML = countRows.length
+      ? countRows.map((key) => `<span>${labels[key] || escapeHtml(key)} ${Number(counts[key])}</span>`).join('')
+      : '<span>暂无可展示的检查项结果</span>';
+    const coverage = summary.coverage || {};
+    $('job-quality-coverage').textContent = `检查范围：已选 ${Number(coverage.selected_files || 0)} / 交付文件 ${Number(coverage.effective_files || 0)}；${summary.base_selected ? '已选择变化基准。' : '未选择变化基准。'}`;
+    $('job-quality-next').textContent = `下一步：${summary.next_action || '查看报告文件。'}`;
+    $('job-quality-note').textContent = summary.note || '任务完成不等于质量通过。';
+    container.classList.remove('hidden');
   }
 
   async function startJob(result, label, workflowAction = null, commandAction = null, context = {}) {
@@ -3737,6 +3938,7 @@
     $('job-status').className = `status-chip ${statusClass(result.status)}`;
     $('job-summary').textContent = `${label}已提交，任务 ${result.job_id} 正在等待运行结果。`;
     $('run-workspace')?.classList.add('has-live-job');
+    if ($('run-workspace')) $('run-workspace').open = true;
     $('job-observation').classList.remove('hidden');
     $('job-stage').textContent = '阶段：等待子任务输出';
     $('job-percent').textContent = '进度：未提供';
@@ -3748,6 +3950,7 @@
     $('job-log-size').textContent = '原文 0 B，已显示 0 B';
     $('job-log-link').classList.add('hidden');
     $('job-log-link').removeAttribute('href');
+    renderJobQualitySummary(null);
     renderJobArtifacts([]);
     if (state.pollTimer) clearInterval(state.pollTimer);
     const completion = new Promise((resolve, reject) => { state.jobWaiter = { resolve, reject }; });
@@ -3760,6 +3963,11 @@
     if (!state.selectedLibrary || !state.selectedVersion || state.activeAction) return;
     const payload = { ...actionPayload(action), ...(payloadOverrides || {}) };
     if (action === 'release-apply') {
+      if (!releasePreviewReady()) {
+        invalidateReleasePreview();
+        showError('请先为当前版本和当前发布设置生成有效预演，核对结果后再创建链接。', { action: true });
+        return null;
+      }
       const layout = payload.publish_name ? `正式目录：${payload.publish_name}\n最新指针：${payload.latest_name || 'latest'}\n覆盖前备份：history/${payload.publish_name}_日期（同日覆盖）` : `发布别名：${payload.alias}`;
       const message = `实际发布：${state.selectedLibrary} / ${state.selectedVersion.version_id}\n目标：${$('release-root-display').value}\n${layout}\n方式：${payload.link_mode}\n允许覆盖：${payload.publish_name || payload.overwrite ? '是' : '否'}\n将创建交付文件并更新发布入口；不会跳过门禁或校验。是否继续？`;
       if (!window.confirm(message)) return null;
@@ -3779,9 +3987,10 @@
       url = `/api/release-libraries/${encodeURIComponent(state.formalReleaseTarget.library_id)}/versions/${encodeURIComponent(version)}/force-overwrite`;
     }
     setActionBusy(action);
+    const previewKey = releasePreviewKey();
     try {
       const result = await getJson(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      return await startJob(result, actionLabel(action), null, requestAction);
+      return await startJob(result, actionLabel(action), null, requestAction, {previewKey});
     } catch (error) {
       clearActionBusy();
       showError(`${actionLabel(action)}失败：${error.message}`, { action: true });
@@ -3816,7 +4025,7 @@
     }
     if (action === 'accept-window' && !$('accepted-by').value.trim()) {
       setWorkflowStatus('FAILED', 'status-bad');
-      $('workflow-summary').textContent = '设为当前可用版本前必须填写确认人。';
+      $('workflow-summary').textContent = '确认当前有效版本前必须填写确认人。';
       return;
     }
     if (writeAction && !window.confirm(writeConfirmation(action))) return;
@@ -3831,8 +4040,8 @@
       setActionBusy(action);
       const result = await getJson(`/api/libraries/${encodeURIComponent(state.selectedLibrary)}/${endpointAction}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       setWorkflowStatus(result.status, statusClass(result.status));
-      $('workflow-summary').textContent = `${endpointAction === 'window' ? '读取已保存建议' : ['next-preview', 'intake-preview'].includes(action) ? '预览处理计划' : action === 'accept-window' ? '确认当前可用版本' : '执行并生成候选'}已提交。详情将在运行记录中更新。`;
-      const completed = await startJob(result, endpointAction === 'next' ? '处理建议' : endpointAction === 'intake' ? '处理计划' : endpointAction === 'accept-window' ? '确认当前可用版本' : '查看建议', action);
+      $('workflow-summary').textContent = `${endpointAction === 'window' ? '读取已保存建议' : ['next-preview', 'intake-preview'].includes(action) ? '预览处理计划' : action === 'accept-window' ? '确认当前有效版本' : '执行并生成候选'}已提交。详情将在运行记录中更新。`;
+      const completed = await startJob(result, endpointAction === 'next' ? '处理建议' : endpointAction === 'intake' ? '处理计划' : endpointAction === 'accept-window' ? '确认当前有效版本' : '查看建议', action);
       if (completed?.return_code === 0 && action.endsWith('-preview') && effectiveSelectionKey(draft) === selectionKey) {
         draft.preview = {key: selectionKey, endpoint: endpointAction, payload: {...payload, includes: [...payload.includes]}};
       }
@@ -3852,10 +4061,10 @@
     const messages = {
       'next-preview': '计划预览已完成。核对运行记录中的基线与更新包，再点击“执行并生成候选”。',
       'intake-preview': '完整计划预览已完成。核对计划后，可在高级计划设置中执行完整计划。',
-      'next-apply': '处理建议已执行，工作区状态已重新读取。候选组合生成后，可继续核对或确认当前可用版本。',
-      'intake-apply': '处理计划已执行，工作区状态已重新读取。候选组合生成后，可继续核对或确认当前可用版本。',
-      window: '已读取接入建议，页面已重新读取候选组合和当前可用版本。',
-      'accept-window': '当前可用版本已确认，页面已重新读取有效组合。',
+      'next-apply': '处理建议已执行，工作区状态已重新读取。候选组合生成后，可继续核对或确认当前有效版本。',
+      'intake-apply': '处理计划已执行，工作区状态已重新读取。候选组合生成后，可继续核对或确认当前有效版本。',
+      window: '已读取接入建议，页面已重新读取候选组合和当前有效版本。',
+      'accept-window': '当前有效版本已确认，页面已重新读取有效组合。',
     };
     return messages[action] || '库级流程已完成，工作区状态已重新读取。';
   }
@@ -3888,6 +4097,7 @@
       const elapsed = state.pollStartedAt ? Date.now() - state.pollStartedAt : 0;
       const elapsedLabel = `${Math.max(1, Math.round(elapsed / 1000))} 秒`;
       renderJobObservation(result, elapsed);
+      renderJobQualitySummary(result.quality_summary || null);
       renderJobArtifacts(result.artifacts || []);
       $('job-summary').textContent = terminal
         ? (result.result_summary
@@ -3911,7 +4121,9 @@
         state.activeJob = null;
         if (['release-plan', 'release-overwrite-preview', 'release-force', 'release-apply', 'release-set-plan', 'release-set-apply'].includes(completedJob?.commandAction)) {
           state.releasePlan = result.release_plan || null;
+          state.releasePreviewKey = completedJob.previewKey || '';
           renderReleasePlanResult();
+          invalidateReleasePreview();
         }
         if (completedJob?.workflowAction) {
           setWorkflowStatus(elapsed >= JOB_TIMEOUT_MS && !terminal ? 'RUNNING' : result.status, statusClass(result.status));
@@ -3970,8 +4182,12 @@
     });
   });
   $('version-filter').addEventListener('input', (event) => { state.versionQuery = event.target.value; state.versionRenderLimit = VERSION_RENDER_BATCH; updateRouteState(); renderVersions(); renderVersionFacts(); });
-  $('version-status-filter').addEventListener('change', (event) => { state.versionFilter = event.target.value; state.versionRenderLimit = VERSION_RENDER_BATCH; updateRouteState(); renderVersions(); renderVersionFacts(); });
   $('version-sort').addEventListener('change', (event) => { state.versionSort = event.target.value; state.versionRenderLimit = VERSION_RENDER_BATCH; updateRouteState(); renderVersions(); renderVersionFacts(); });
+  document.querySelectorAll('[data-version-focus-action]').forEach((button) => button.addEventListener('click', () => {
+    const action = button.dataset.versionFocusAction;
+    if (action === 'open') openVersionDetail();
+    if (action === 'scan' || action === 'compare') runAction(action);
+  }));
   $('load-more-versions').addEventListener('click', () => {
     if (state.versionsLoadingMore) return;
     const allRows = filteredVersions();
@@ -4083,13 +4299,13 @@
     });
   });
   document.querySelectorAll('[data-analysis-action]').forEach((tab, index, tabs) => {
-    tab.addEventListener('click', () => selectAnalysisAction(tab.dataset.analysisAction));
+    tab.addEventListener('click', () => activateWorkbenchCommand(tab.dataset.workbenchCommand || tab.dataset.analysisAction));
     tab.addEventListener('keydown', event => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[tabs.length - 1] : tabs[(index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
-      selectAnalysisAction(next.dataset.analysisAction);
+      activateWorkbenchCommand(next.dataset.workbenchCommand || next.dataset.analysisAction);
       next.focus();
     });
   });
@@ -4168,32 +4384,12 @@
       .catch((error) => showError(error.message));
   });
   $('reset-settings').addEventListener('click', () => {
-    const settings = state.workspace?.scan_strategy || {};
-    const discovery = state.workspace?.discovery_strategy || {};
-    const paths = state.workspace?.paths || {};
-    if ($('config-raw-root')) $('config-raw-root').value = paths.raw_root || '';
-    if ($('config-discover-max-depth')) $('config-discover-max-depth').value = String(discovery.max_depth || '4');
-    if ($('config-discover-min-versions')) $('config-discover-min-versions').value = String(discovery.min_versions || '1');
-    if ($('config-discover-max-dirs')) $('config-discover-max-dirs').value = String(discovery.max_dirs || '5000');
-    if ($('config-discover-max-candidates')) $('config-discover-max-candidates').value = String(discovery.max_candidates || '200');
-    if ($('candidate-max-depth')) $('candidate-max-depth').value = String(discovery.max_depth || '4');
-    if ($('candidate-min-versions')) $('candidate-min-versions').value = String(discovery.min_versions || '1');
-    if ($('candidate-max-dirs')) $('candidate-max-dirs').value = String(discovery.max_dirs || '5000');
-    if ($('candidate-max-candidates')) $('candidate-max-candidates').value = String(discovery.max_candidates || '200');
-    $('hash-policy').value = settings.hash_policy || 'smart';
-    $('parse-jobs').value = String(settings.parse_jobs || '8');
-    $('parse-file-types').value = settings.parse_file_types || '';
-    $('parse-exclude-file-types').value = settings.parse_exclude_file_types || '';
-    setHashTypeChecks('[data-force-hash-type]', settings.force_hash_file_types || '');
-    setHashTypeChecks('[data-skip-hash-type]', settings.skip_hash_file_types || '');
-    $('render-detail').checked = settings.render_detail !== false;
-    $('scan-if-missing').checked = false;
-    $('rescan').checked = false;
-    $('compare-mode').value = 'adjacent';
+    renderDefaultSettings();
     showSettingsFeedback();
-    updateSettingsSummary();
   });
   $('save-settings').addEventListener('click', () => saveWorkspaceSettings());
+  $('save-scan-settings').addEventListener('click', () => saveWorkspaceSettings('scan'));
+  $('save-discovery-settings').addEventListener('click', () => saveWorkspaceSettings('discovery'));
   $('setup-create-config').addEventListener('click', () => submitWorkspaceSetup());
   $('release-set-build').addEventListener('click', () => buildReleaseSet());
   $('release-set-filter').addEventListener('input', renderReleaseSetWorkbench);
@@ -4219,11 +4415,20 @@
     $('release-overwrite').disabled = named;
     if (named) $('release-overwrite').checked = true;
   });
+  ['release-publish-name', 'release-latest-name', 'release-alias', 'release-link-mode', 'release-overwrite'].forEach(id => {
+    $(id).addEventListener('input', () => { renderVersionFacts(); invalidateReleasePreview(); });
+    $(id).addEventListener('change', () => { renderVersionFacts(); invalidateReleasePreview(); });
+  });
   ['release-force-by', 'release-force-reason', 'release-force-acknowledged'].forEach((id) => {
     $(id).addEventListener('input', renderVersionFacts);
     $(id).addEventListener('change', renderVersionFacts);
   });
   $('open-version-detail-button').addEventListener('click', openVersionDetail);
+  $('semantic-review-run').addEventListener('click', runSemanticReview);
+  $('semantic-review-refresh').addEventListener('click', loadSemanticReviewOptions);
+  $('semantic-review-profile').addEventListener('change', () => renderSemanticReviewChecks());
+  $('semantic-review-target').addEventListener('change', renderSemanticReviewReadiness);
+  $('semantic-review-base').addEventListener('change', renderSemanticReviewReadiness);
   document.querySelectorAll('[data-workflow-action]').forEach((button) => button.addEventListener('click', () => runWorkflow(button.dataset.workflowAction)));
   $('effective-composition-query').addEventListener('input', renderEffectiveCompositionTable);
   $('effective-selection-load-all').addEventListener('click', loadAllEffectiveVersions);

@@ -311,7 +311,7 @@ class ScanRunner:
     def _build_derived_outputs(self, context: ScanContext) -> None:
         from .derived import build_scan_derived_outputs
 
-        build_scan_derived_outputs(context.out_dir)
+        build_scan_derived_outputs(context.out_dir, policy_path=_get(context.config, "release_policy", None))
 
     def _context(self) -> ScanContext:
         scan_id = str(_get(self.config, "scan_id", time.strftime("%Y%m%d_%H%M%S")))
@@ -469,7 +469,11 @@ class ScanRunner:
 
     def _cached_execution(self, plan: dict[str, Any], record: Any, cached: dict[str, Any]) -> Any:
         from .parser_engine import ParserExecution
+        from .parsers.base import record_abs_path
 
+        cached = {**cached, 'file': _record_path(record),
+                  'abs_path': str(record_abs_path(record).resolve()),
+                  'file_type': _get(record, 'file_type'), 'compression': _get(record, 'compression')}
         result_status = str(cached.get("status", "PASS") if isinstance(cached, Mapping) else "PASS")
         entry = {
             "task_id": plan["task_id"],
@@ -620,6 +624,10 @@ class ScanRunner:
     def _parser_cache_key(self, record: Any, task: Any, parser_schema_version: str, context: ScanContext) -> str:
         parser_config_hash = self._parser_config_hash(context)
         content_hash = str(_get(record, "hash") or "")
+        source = _get(record, "abs_path")
+        if not source:
+            root = Path(str(_get(context, "root_path", _get(self.config, "root_path", "."))))
+            source = str(root / _record_path(record))
         # Smart scan deliberately skips content hashing for large EDA views.
         # A missing hash is not an identity: many delivered files share the
         # same timestamp. Keep their relative path and size in the cache key
@@ -627,7 +635,7 @@ class ScanRunner:
         file_identity = (
             f"hash:{content_hash}"
             if content_hash
-            else f"path:{_record_path(record)}|size:{_get(record, 'size_bytes')}|mtime:{_get(record, 'mtime')}"
+            else f"source:{Path(str(source)).absolute()}|path:{_record_path(record)}|size:{_get(record, 'size_bytes')}|mtime:{_get(record, 'mtime')}"
         )
         parts = {
             "cache_namespace": "parser_v2",

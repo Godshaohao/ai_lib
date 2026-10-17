@@ -657,6 +657,8 @@ def _delivery_completeness(model: Mapping[str, Any]) -> dict[str, Any]:
             "missing": [],
             "optional_present": 0,
             "release_level": "",
+            "delivery_requirements": {},
+            "delivery_requirement_status": "UNKNOWN",
         }
 
     required: dict[str, Mapping[str, Any]] = {}
@@ -695,16 +697,29 @@ def _delivery_completeness(model: Mapping[str, Any]) -> dict[str, Any]:
     else:
         status = "UNCONFIGURED"
         label = "未配置口径"
+    delivery_requirements = _as_mapping(readiness.get("delivery_requirements"))
+    requirement_status = str(readiness.get("delivery_requirement_status") or delivery_requirements.get("status") or "").upper()
+    contract_missing: list[str] = []
+    for key, label_text in (("modes", "模式"), ("corners", "工艺角")):
+        result = _as_mapping(delivery_requirements.get(key))
+        contract_missing.extend(f"{label_text}：{item}" for item in result.get("missing", []) or [])
+    if requirement_status == "BLOCK":
+        status = "BLOCKED"
+        label = "交付要求不满足"
     return {
         "status": status,
         "label": label,
         "required_total": len(required),
         "required_present": required_present,
         "required_views": [view_label(key) for key in required],
+        "present": [view_label(key) for key, result in required.items() if is_present(result)],
         "missing": [view_label(key) for key in missing_keys],
         "optional_present": optional_present,
         "optional_total": len(optional),
         "release_level": str(readiness.get("release_level_candidate") or ""),
+        "delivery_requirements": delivery_requirements,
+        "delivery_requirement_status": requirement_status or "NOT_CONFIGURED",
+        "contract_missing": contract_missing,
     }
 
 
@@ -723,6 +738,7 @@ def _ip_next_action(
     base_blocked: bool,
     diff_missing: bool,
     required_view_missing: bool,
+    required_delivery_missing: bool = False,
     first_version: bool,
     p0p1: int,
     removed: int,
@@ -745,11 +761,11 @@ def _ip_next_action(
             "label": "生成可信对比",
             "detail": "补齐当前版本相对基准版的 diff 证据，再判断变化和使用影响。",
         }
-    if required_view_missing:
+    if required_view_missing or required_delivery_missing:
         return {
             "kind": "complete_required_view",
-            "label": "确认必需视图",
-            "detail": "补齐或确认缺失的必需视图后，再判断版本是否可接入。",
+            "label": "确认必需视图" if required_view_missing else "确认必需交付项",
+            "detail": "补齐或确认缺失的必需视图后，再判断版本是否可接入。" if required_view_missing and not required_delivery_missing else "补齐或确认缺失的 View、Mode、Corner 后，再判断版本是否可接入。",
         }
     if first_version:
         return {
@@ -805,6 +821,7 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
     gate_blocking, gate_attention, gate_status = _review_gate_counts(model)
     delivery_completeness = _delivery_completeness(model)
     required_view_missing = delivery_completeness["status"] == "MISSING"
+    delivery_requirement_missing = delivery_completeness.get("delivery_requirement_status") == "BLOCK"
 
     if base_blocked:
         ip_decision = "BLOCKED"
@@ -814,11 +831,11 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         ip_decision = "BLOCKED"
         ip_label = "暂不可判断"
         main_reason = f"尚未生成相对{base_noun}的可信对比，当前不能判断版本变化。"
-    elif required_view_missing:
+    elif required_view_missing or delivery_requirement_missing:
         ip_decision = "BLOCKED"
         ip_label = "不可接入"
-        missing = "、".join(delivery_completeness.get("missing", []) or [])
-        main_reason = f"当前交付缺少必需视图：{missing or '未标明'}；在补齐前不可接入。"
+        missing = "、".join((delivery_completeness.get("missing", []) or []) + (delivery_completeness.get("contract_missing", []) or []))
+        main_reason = f"当前交付不满足必需交付项：{missing or '未标明'}；在补齐前不可接入。"
     elif first_version:
         ip_decision = "USAGE_REVIEW_REQUIRED"
         ip_label = "首版需审查"
@@ -855,6 +872,7 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         base_blocked=base_blocked,
         diff_missing=diff_missing,
         required_view_missing=required_view_missing,
+        required_delivery_missing=delivery_requirement_missing,
         first_version=first_version,
         p0p1=p0p1,
         removed=removed,
@@ -1146,6 +1164,9 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
 
     missing_views = [str(item) for item in delivery.get("missing", []) or [] if str(item).strip()]
     delivery_status = str(delivery.get("status") or "UNKNOWN").upper()
+    delivery_requirements = _as_mapping(delivery.get("delivery_requirements"))
+    mode_requirements = _as_mapping(delivery_requirements.get("modes"))
+    corner_requirements = _as_mapping(delivery_requirements.get("corners"))
     delivery_analysis = {
         "status": "MISSING" if missing_views or delivery_status in {"MISSING", "INCOMPLETE", "BLOCKED"} else delivery_status,
         "package_type": str(model.get("package_type") or "UNKNOWN_PACKAGE"),
@@ -1154,6 +1175,13 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
         "required_present": _report_count(delivery.get("required_present")),
         "missing_views": missing_views,
         "present_views": [str(item) for item in delivery.get("present", []) or []],
+        "requirement_status": str(delivery.get("delivery_requirement_status") or delivery_requirements.get("status") or "NOT_CONFIGURED"),
+        "required_modes": [str(item) for item in mode_requirements.get("required", []) or []],
+        "observed_modes": [str(item) for item in mode_requirements.get("observed", []) or []],
+        "missing_modes": [str(item) for item in mode_requirements.get("missing", []) or []],
+        "required_corners": [str(item) for item in corner_requirements.get("required", []) or []],
+        "observed_corners": [str(item) for item in corner_requirements.get("observed", []) or []],
+        "missing_corners": [str(item) for item in corner_requirements.get("missing", []) or []],
         "package_composition": [
             str(item) for item in model.get("package_composition", []) or [] if str(item).strip()
         ],

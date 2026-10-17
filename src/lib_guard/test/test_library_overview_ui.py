@@ -24,7 +24,7 @@ class LibraryOverviewUITest(unittest.TestCase):
         self.assertLess(template.index('id="registered-library-heading"'), template.index('id="candidate-discover-root"'))
         self.assertLess(template.index('id="candidate-discover-root"'), template.index('id="library-add-disclosure"'))
         self.assertEqual(template.count('id="registered-library-table-body"'), 1)
-        for label in ['原始库版本概览', '最新版本', '最新更新时间', '重新发现候选库', '手动添加库（补充）', '读取上次结果']:
+        for label in ['已登记库', '最新版本', '最新更新时间', '重新发现候选库', '手动添加库（补充）', '读取上次结果']:
             self.assertIn(label, template)
 
     def test_overview_counts_actual_versions_and_exposes_mtime_source(self):

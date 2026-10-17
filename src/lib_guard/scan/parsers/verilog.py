@@ -4,7 +4,7 @@ from typing import Any
 import re
 from .base import BaseParser, make_parser_envelope, record_abs_path, get_field, read_text_file
 
-VERILOG_PARSER_VERSION = '2.0'
+VERILOG_PARSER_VERSION = '2.3'
 VERILOG_PARSE_STRATEGY = "lightweight_rtl_interface"
 VERILOG_PARSED_FIELDS = ["module", "port", "direction", "width", "declared_range", "module_count", "port_count"]
 VERILOG_UNPARSED_FEATURES = [
@@ -33,27 +33,61 @@ def _width(range_text: str | None) -> int | str | None:
 def parse_verilog_text(text: str, source: str = '') -> dict[str, Any]:
     clean = _strip_comments(text)
     modules: dict[str, Any] = {}
-    for mm in _RE_MODULE.finditer(clean):
+    headers = list(_RE_MODULE.finditer(clean))
+    ends = list(re.finditer(r'\bendmodule\b', clean))
+    complete = len(headers) == len(ends) == len(re.findall(r'\bmodule\b', clean))
+    directives = list(re.finditer(r'`(ifdef|ifndef|elsif|else|endif|include|define)\b[^\n]*', clean))
+    directive_index = conditional_depth = 0
+    port_pattern = re.compile(r'(?:(input|output|inout)\s+)?(?:(?:wire|reg|logic|bit|signed|unsigned)\s+)*(\[[^\]]+\])?\s*([A-Za-z_][\w$]*)', re.I)
+    end_index = 0
+    for index, mm in enumerate(headers):
         name, header = mm.group(1), mm.group(2)
-        modules.setdefault(name, {'name': name, 'ports': {}, 'port_order': [], 'parameters': []})
+        while directive_index < len(directives) and directives[directive_index].start() < mm.start():
+            directive = directives[directive_index]
+            kind = directive.group(1)
+            conditional_depth += 1 if kind in {'ifdef', 'ifndef'} else -1 if kind == 'endif' else 0
+            complete &= conditional_depth >= 0 and kind != 'include' and directive.end() <= mm.start()
+            directive_index += 1
+        complete &= conditional_depth == 0
+        complete &= name not in modules and '#' not in mm.group(0)
+        module = {'name': name, 'ports': {}, 'port_order': [], 'parameters': []}
+        modules[name] = module
+        inherited_direction = inherited_range = None
         for raw_port in [p.strip() for p in header.replace('\n', ' ').split(',') if p.strip()]:
-            toks = raw_port.split()
-            pname = toks[-1].strip('.()')
-            if pname and pname not in modules[name]['ports']:
-                modules[name]['ports'][pname] = {'name': pname, 'direction': None, 'width': None, 'declared_range': None}
-                modules[name]['port_order'].append(pname)
-    for decl in _RE_DECL.finditer(clean):
-        direction, rng, names = decl.group(1).lower(), decl.group(2), decl.group(3)
-        width = _width(rng)
-        for token in names.split(','):
-            pname = token.strip().split('=')[0].strip()
-            if not pname: continue
-            # assign declaration to all modules that have the port, or only module if one module exists
-            targets = [m for m in modules.values() if pname in m['ports']] or (list(modules.values()) if len(modules) == 1 else [])
-            for mod in targets:
-                mod['ports'].setdefault(pname, {'name': pname})
-                if pname not in mod['port_order']: mod['port_order'].append(pname)
-                mod['ports'][pname].update({'direction': direction, 'width': width, 'declared_range': rng})
+            port = port_pattern.fullmatch(raw_port)
+            if not port:
+                complete = False
+                continue
+            direction, rng, pname = port.groups()
+            if direction:
+                inherited_direction, inherited_range = direction.lower(), rng
+            elif rng:
+                complete = False
+            complete &= pname not in module['ports']
+            module['ports'][pname] = {'name': pname, 'direction': inherited_direction,
+                'width': _width(inherited_range) if inherited_direction else None, 'declared_range': inherited_range}
+            module['port_order'].append(pname)
+        while end_index < len(ends) and ends[end_index].start() < mm.end():
+            end_index += 1
+        end = ends[end_index] if end_index < len(ends) else None
+        next_header = headers[index + 1].start() if index + 1 < len(headers) else len(clean)
+        if end is None or end.start() > next_header:
+            complete = False
+            continue
+        declaration_scope = clean[mm.start():end.end()]
+        complete &= not bool(re.search(r'`|\b(function|task|interface|modport)\b|"', declaration_scope))
+        # Body declarations belong only to this module, never another module sharing a port name.
+        declared = {name for name, port in module['ports'].items() if port['direction'] is not None}
+        for decl in _RE_DECL.finditer(clean[mm.end():end.start()]):
+            direction, rng, names = decl.group(1).lower(), decl.group(2), decl.group(3)
+            for token in names.split(','):
+                pname = token.strip()
+                if pname not in module['ports'] or pname in declared:
+                    complete = False
+                    continue
+                declared.add(pname)
+                module['ports'][pname].update(direction=direction, width=_width(rng), declared_range=rng)
+        complete &= all(port['direction'] is not None and isinstance(port['width'], int) for port in module['ports'].values())
     return {
         'source': source,
         'parse_strategy': VERILOG_PARSE_STRATEGY,
@@ -63,6 +97,9 @@ def parse_verilog_text(text: str, source: str = '') -> dict[str, Any]:
         'modules': modules,
         'module_order': list(modules.keys()),
         'stats': {'module_count': len(modules), 'port_count': sum(len(m['ports']) for m in modules.values())},
+        'semantic_coverage': {'schema_version': 'semantic_parser_coverage.v1', 'validated': True,
+            'basis': 'VerilogParser 2.3 conflict-checked module-scoped scalar/literal-range interfaces; guarded UDP is not interface evidence; no elaboration',
+            'port_set': 'PRESENT' if complete else 'NOT_EXTRACTED', 'pg_port_set': 'NOT_APPLICABLE'},
     }
 
 def parse_verilog_data_file(path: str | Path) -> dict[str, Any]:

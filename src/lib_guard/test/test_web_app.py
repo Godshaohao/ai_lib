@@ -1819,6 +1819,57 @@ class WebAppTest(unittest.TestCase):
             self.assertEqual(inline_export.get_data()[:2], b"PK")
             inline_export.close()
 
+    def test_completed_scan_run_exposes_scan_html_artifact(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            workspace = root / "workspace"
+            raw_root = root / "raw"
+            report = workspace / "reports" / "demo" / "v1" / "scan_html" / "index.html"
+            report.parent.mkdir(parents=True)
+            raw_root.mkdir()
+            report.write_text("<html><body>扫描报告</body></html>", encoding="utf-8")
+            config_path = workspace / "lib_guard.yml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        f"workspace: {workspace}",
+                        f"raw_root: {raw_root}",
+                        f"catalog: {SMOKE_CONFIG.parent / 'catalog' / 'catalog.json'}",
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            run = workspace / "jobs" / "scan_demo"
+            run.mkdir(parents=True)
+            result = {
+                "schema_version": "web_job_result.v1",
+                "result": "ok",
+                "exit_code": 0,
+                "cli_result": {"status": "PASS", "scan_html": {"index_html": str(report)}},
+            }
+            (run / "result.json").write_text(json.dumps(result), encoding="utf-8")
+            (run / "status.json").write_text(
+                json.dumps({"job_id": run.name, "status": "COMPLETED", "return_code": 0}),
+                encoding="utf-8",
+            )
+            (run / "stdout.log").write_text("", encoding="utf-8")
+
+            client = create_app(
+                config_path=config_path,
+                cwd=ROOT,
+                test_config={"TESTING": True, "job_root": str(workspace / "jobs")},
+            ).test_client()
+            status = client.get(f"/api/runs/{run.name}")
+            self.assertEqual(status.status_code, 200)
+            artifact = next(item for item in status.get_json()["artifacts"] if item["id"] == "scan_html")
+            self.assertEqual(artifact["kind"], "html")
+            response = client.get(artifact["url"])
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("扫描报告", response.get_data(as_text=True))
+            response.close()
+
     def test_file_diff_route_rejects_explicit_files_outside_allowed_roots(self) -> None:
         from lib_guard.web.app import create_app
 

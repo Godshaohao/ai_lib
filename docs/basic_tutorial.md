@@ -857,6 +857,50 @@ $PROJ/scripts/lg.csh fd <LIBRARY> <VERSION> db/top.db --base <BASE_VERSION> --ty
 `--force-large` 只影响这一次手动 `fd`，不会改变 Version Review 或 pairwise 默认策略。
 `summary-only` 和 `metadata-only` 是证据等级，不自动代表不完整，也不自动构成 blocker。
 
+### Web 生成技术检查报告（仅文件）
+
+在“库与版本 → 有效组合 → 技术检查报告”执行：
+
+1. 选择已经生成的当前、候选或已保存组合；尚无组合时先生成候选，不必先确认生效。
+2. 选择对比基准，或选“不对比，仅核查目标”。没有基准时，版本变化检查会明确显示不完整，不会把全部 Macro 当成新增。
+3. 选择“LEF 对象与变化”或已配置的跨视图方案，勾选本次要执行的检查。
+4. 点击“生成检查报告”，在顶部运行状态查看日志，完成后下载 Markdown 摘要、完整检查结果 JSON 或对象与来源索引 JSON。
+
+页面不展示报告正文、不自动补扫、不刷新版本详情页、不切换有效组合，也不执行发布。
+任务完成只表示报告生成成功，不代表 IP 质量或所有属性检查通过。
+缺少扫描证据时会在文件报告中标注未检查/不完整；需要补充证据时请显式执行扫描。
+
+默认文件位置：
+
+```text
+<WORKSPACE>/web_jobs/semantic-review_<任务编号>/
+  request.json                 # 本次任务参数与来源
+  target_effective.json         # 提交时固定的目标清单
+  base_effective.json           # 可选：提交时固定的基准清单
+  review_config.json            # 本次实际规则，不修改全局配置
+  review_mapping.json           # 可选：本次固定的人工上下文和名称映射
+  stdout.log
+  semantic_review/
+    summary.json               # 指向本次完整报告快照
+    facts/                     # 由已有 ParserResult 派生的共享事实
+    snapshots/<generation>/
+      summary.md
+      check_results.json
+      semantic_effective_index.json
+      macro_bindings.json
+      snapshot.json
+```
+
+自定义 Job 根目录时，以顶部文件入口提示的实际绝对路径为准。
+当前记录与组合清单不一致时，该组合不会被静默当作已确认基准；其他有效组合和无基准检查仍可执行。
+
+跨视图方案提示缺工艺角时，不需要重新编辑扫描 JSON。由维护者在工作区 `lib_guard.yml` 指定
+`semantic_review_config: config/semantic_review.json`；方案的 `mapping` 指向人工确认的文件上下文映射，
+完整字段见 [配置参考](config_reference.md#跨视图诊断方案)。确认库名、文件范围、工艺角和功能模式后，
+点击“刷新组合选项”再运行。该动作不补扫；原解析器有缺陷时，必须显式更新扫描证据。
+Markdown 会列出输入语法限制和来源行号。DECAP/FILLER/TAP 等只有物理视图的对象不能因缺少 Liberty/RTL
+就被声称“全视图通过”；按本库交付要求核对，不把通用方案当成正式门禁。
+
 ## 9. 静态部门审查与 Review Gate
 
 推荐使用静态 Review Packet。它把真正需要专业判断的问题按 View 路由给部门；人只填写

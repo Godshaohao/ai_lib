@@ -30,6 +30,18 @@ KEY_FILE_TYPES = {
     "tech_config",
 }
 
+DELIVERY_MODE_TOKENS = {
+    "functional": "functional",
+    "scan": "scan",
+    "test": "test",
+    "low_power": "low_power",
+    "lowpower": "low_power",
+    "timing": "timing",
+    "emulation": "emulation",
+    "simulation": "simulation",
+    "signoff": "signoff",
+}
+
 DEFAULT_SCAN_IGNORE_DIRS = {
     ".git",
     "__pycache__",
@@ -101,6 +113,21 @@ def extract_filename_corner(path: str) -> dict[str, Any] | None:
     if not any([process, voltage, temperature]):
         return None
     return {"process": process, "voltage": voltage, "temperature": temperature}
+
+
+def extract_delivery_mode(path: str) -> str | None:
+    """Extract only explicit delivery-mode path/name tokens.
+
+    This is deliberately narrower than scan mode.  A directory named ``scan``
+    in the source package can describe a delivered operating mode, while the
+    scanner's own ``scan_mode`` describes how evidence was collected.
+    """
+
+    text = re.sub(r"[^a-z0-9_]+", "_", str(path or "").lower())
+    for token, normalized in DELIVERY_MODE_TOKENS.items():
+        if re.search(rf"(?:^|_){re.escape(token)}(?:_|$)", text):
+            return normalized
+    return None
 
 
 def corner_filename_summary(records: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -198,6 +225,7 @@ class FileClassifier:
                 "is_key_doc": file_type == "doc" and role in {"readme", "release_note", "integration_guide", "update_note"},
                 "doc_type": role if file_type == "doc" else None,
                 "corner": extract_filename_corner(str(_get(record, "path", name))),
+                "delivery_mode": extract_delivery_mode(str(_get(record, "path", name))),
             }
         )
         return record

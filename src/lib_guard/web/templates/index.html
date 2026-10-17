@@ -14,7 +14,6 @@
       <span class="brand-mark">LG</span>
       <div>
         <h1>库运行台</h1>
-        <p>库资产、版本状态与受控动作</p>
       </div>
     </div>
     <div class="topbar-meta">
@@ -46,7 +45,7 @@
           <option value="all">全部库</option>
           <option value="pending">需处理库</option>
           <option value="blocked">发布待确认</option>
-          <option value="no_effective">无当前可用</option>
+          <option value="no_effective">无当前有效</option>
           <option value="candidate">候选待登记</option>
         </select>
         <select id="library-kind-filter" aria-label="按库类型筛选">
@@ -61,7 +60,7 @@
       </div>
       <div id="library-facet-summary" class="library-facet-summary">全部库 0</div>
       <div id="library-list" class="library-list" aria-live="polite"></div>
-      <div id="directory-boundary" class="rail-footnote"><strong>数据边界</strong><br>页面只读取已确认的 Catalog，不会自动发现或刷新 RAW。</div>
+      <details class="rail-footnote"><summary>目录说明</summary><p id="directory-boundary">源库来自已登记目录。</p></details>
     </aside>
 
     <main id="workspace-main" class="workspace" tabindex="-1">
@@ -70,9 +69,12 @@
         <section id="formal-directory-panel" aria-label="正式目录盘点">
           <h2>正式发布目录</h2>
           <div class="formal-directory-toolbar"><label>实际交付路径<input id="formal-directory-root" type="text" placeholder="例如 /proj/library/lib_NL2.1.0"></label><button id="formal-directory-refresh" class="button button-primary" type="button">刷新目录</button></div>
-          <p id="formal-directory-summary" role="status">指定已使用的正式目录；只盘点文件与链接，不扫描 RAW，不修改链接。</p>
+          <p id="formal-directory-summary" role="status">指定已使用的正式目录；只核查当前交付结构、文件和链接，不扫描 RAW，不修改链接。</p>
           <p class="muted">当前快照目录：<code id="formal-directory-current-root">尚未盘点</code></p>
+          <div id="formal-directory-health" class="formal-directory-health" role="status" aria-live="polite"><div><span>交付状态</span><strong id="formal-audit-status">尚未核查</strong></div><div><span>正式包</span><strong id="formal-package-count">0</strong></div><div><span>当前入口</span><strong id="formal-current-pointer">未配置</strong></div><div><span>文件 / 视图</span><strong id="formal-file-view-count">0 / 0</strong></div><div><span>断链 / 额外内容</span><strong id="formal-anomaly-count">0 / 0</strong></div></div>
+          <p id="formal-directory-policy" class="formal-directory-policy">正式目录只回答“当前交付是否可读、结构是否完整、入口是否有效”；不比较历史版本，也不要求 release_manifest.json。</p>
           <div class="formal-directory-metrics" role="group" aria-label="盘点结果快捷筛选"><button id="formal-files-all" type="button" class="facet-chip">全部文件 <b>0</b></button><button id="formal-files-unknown" type="button" class="facet-chip">来源待确认 <b>0</b></button><button id="formal-files-broken" type="button" class="facet-chip">断链 <b>0</b></button></div>
+          <div class="formal-release-library-table-wrap"><table><caption>正式包与视图结构</caption><thead><tr><th>正式包</th><th>文件数</th><th>视图 / 数量</th><th>入口与来源</th></tr></thead><tbody id="formal-directory-packages"></tbody></table></div>
           <div class="formal-release-library-table-wrap"><table><caption>正式目录包含的库与版本</caption><thead><tr><th>库</th><th>来源版本</th><th>文件数</th><th>文件类型 / 数量</th><th>断链</th></tr></thead><tbody id="formal-directory-libraries"></tbody></table></div>
           <div class="formal-directory-filters"><label>来源库<select id="formal-directory-library"><option value="">全部库</option></select></label><label>来源版本<select id="formal-directory-version"><option value="">全部版本</option></select></label><label>类型<select id="formal-directory-type"><option value="">全部类型</option></select></label><label>核查<select id="formal-directory-status"><option value="">全部文件</option><option value="unknown">来源待确认</option><option value="broken">链接失效</option></select></label><label class="formal-directory-query-field">文件或路径<input id="formal-directory-query" type="search"></label><button id="formal-directory-search" class="button button-secondary" type="button">检索</button><button id="formal-directory-clear" class="button button-quiet" type="button">清除条件</button></div>
           <div class="action-row formal-directory-pagination"><span id="formal-directory-count" role="status"></span><button id="formal-directory-prev" class="button button-secondary" type="button">上一页</button><button id="formal-directory-next" class="button button-secondary" type="button">下一页</button><button id="formal-directory-copy" class="button button-secondary" type="button" disabled>复制本页正式路径</button><span id="formal-directory-copy-status" role="status"></span></div>
@@ -115,14 +117,14 @@
 
       <section class="workspace-heading">
         <div class="workspace-heading-main">
-          <div class="breadcrumb"><span>库目录</span><span aria-hidden="true">/</span><strong id="selected-library-crumb">未选择</strong></div>
-          <h2 id="selected-library">选择一个正式库</h2>
+          <div class="breadcrumb sr-only"><span>库目录</span><span aria-hidden="true">/</span><strong id="selected-library-crumb">未选择</strong></div>
+          <h2 id="selected-library">选择一个已登记库</h2>
           <p id="selected-library-meta" class="muted">从左侧库目录开始查看版本状态。</p>
         </div>
         <div class="heading-actions">
           <a id="catalog-report-link" class="button button-secondary hidden" target="_blank" rel="noopener">总目录报告 ↗</a>
           <span id="catalog-report-missing" class="muted">总目录报告尚未生成</span>
-          <span id="catalog-source" class="source-label">事实来源：目录快照（Catalog）</span>
+          <span id="catalog-source" class="sr-only">事实来源：目录快照（Catalog）</span>
           <button id="reload-button" class="button button-secondary" type="button">重新读取状态</button>
         </div>
       </section>
@@ -141,7 +143,7 @@
           <label class="compact-field">库类型<select id="setup-library-type"><option value="ip">IP 库</option><option value="stdcell">标准单元库</option><option value="macro">宏库</option></select></label>
           <div class="setup-actions">
             <button id="setup-create-config" class="button button-primary" type="button">创建配置并连接</button>
-            <span id="setup-feedback" class="command-summary">创建配置只写入工作区，不会扫描、对比或修改当前可用版本。</span>
+            <span id="setup-feedback" class="command-summary">创建配置只写入工作区，不会扫描、对比或修改当前有效版本。</span>
           </div>
         </div>
       </section>
@@ -151,48 +153,26 @@
         <span class="workflow-context-divider" aria-hidden="true">/</span>
         <div class="workflow-context-item"><span>已有事实</span><strong id="flow-facts-value">等待扫描与对比</strong></div>
         <span class="workflow-context-divider" aria-hidden="true">/</span>
-        <div class="workflow-context-item"><span>当前可用版本</span><strong id="metric-effective">未设置</strong></div>
+        <div class="workflow-context-item"><span>当前有效版本</span><strong id="metric-effective">未设置</strong></div>
         <span class="workflow-context-divider" aria-hidden="true">/</span>
         <div class="workflow-context-item"><span>管理状态</span><strong id="flow-release-value">未检查</strong></div>
       </section>
 
-      <section class="pinned-workbench" aria-label="固定版本与运行状态">
-        <div class="pinned-version-strip">
-          <div class="version-focus-strip" aria-label="当前版本焦点">
-            <div><span>当前对象</span><strong id="version-focus-target">未选择版本</strong></div>
-            <div><span>建议基准</span><strong id="version-focus-base">未选择版本</strong></div>
-            <div><span>当前可用</span><strong id="version-focus-effective">未设置</strong></div>
-            <div><span>证据状态</span><strong id="version-focus-facts">等待选择</strong></div>
-          </div>
-        </div>
-
-        <details id="version-list-disclosure" class="pinned-version-board" aria-label="版本状态列表">
-          <summary>版本列表 · 切换版本 / 查看历史</summary>
+      <section id="version-workspace" class="panel version-panel stage-anchor">
+      <details id="version-list-disclosure" class="pinned-version-board" aria-label="版本状态列表" open>
+          <summary>版本列表</summary>
           <div id="version-status-facets" class="version-status-facets" aria-label="版本状态计数"></div>
           <div class="pinned-version-board-head">
             <div>
-              <span class="zone-kicker">版本列表</span>
               <strong>当前库版本状态</strong>
             </div>
             <div class="table-tools">
               <label class="table-search"><span class="sr-only">搜索版本</span><span aria-hidden="true">⌕</span><input id="version-filter" type="search" placeholder="搜索版本" autocomplete="off"></label>
-              <select id="version-status-filter" aria-label="按状态筛选版本">
-                <option value="focus">当前关注</option>
-                <option value="new_scan">新版本待扫</option>
-                <option value="base_scan">基准待扫</option>
-                <option value="effective_hygiene">当前版补证据</option>
-                <option value="compare">待对比</option>
-                <option value="review">可审查</option>
-                <option value="effective">当前可用</option>
-                <option value="blocked">发布待确认</option>
-                <option value="error">异常</option>
-                <option value="all">全部历史</option>
-              </select>
               <select id="version-sort" aria-label="版本排序">
                 <option value="attention">待处理优先</option>
                 <option value="date_desc">最新版本优先</option>
                 <option value="date_asc">最旧版本优先</option>
-                <option value="effective">当前可用优先</option>
+                <option value="effective">当前有效优先</option>
               </select>
               <span id="version-count" class="count-label">未选择库</span>
             </div>
@@ -201,10 +181,10 @@
             <table class="version-work-table">
               <caption class="sr-only">当前库的版本状态列表</caption>
               <thead>
-                <tr><th scope="col">版本</th><th scope="col">角色</th><th scope="col">包类型</th><th scope="col">对比基准</th><th scope="col">证据状态</th><th scope="col">事实结论 / 下一步</th><th scope="col">操作</th></tr>
+                <tr><th scope="col">版本</th><th scope="col">包类型</th><th scope="col">扫描</th><th scope="col">对比</th><th scope="col">发布检查</th></tr>
               </thead>
               <tbody id="version-table-body">
-                <tr><td colspan="7" class="empty-cell">请选择正式库</td></tr>
+                <tr><td colspan="5" class="empty-cell">请选择已登记库</td></tr>
               </tbody>
             </table>
           </div>
@@ -214,57 +194,39 @@
           </div>
         </details>
 
-        <section id="run-workspace" class="runtime-strip" aria-label="运行反馈">
-          <div class="runtime-strip-head">
-            <span class="zone-kicker">运行状态</span>
-            <span id="job-status" class="status-chip status-neutral">暂无任务</span>
-            <p id="job-summary" class="runtime-summary" aria-live="polite">执行动作后显示任务状态。</p>
-            <a id="job-log-link" class="text-link hidden" href="#" target="_blank" rel="noreferrer">打开完整运行日志 ↗</a>
+        <section class="pinned-workbench" aria-label="当前版本焦点">
+          <div class="pinned-version-strip"><div class="version-focus-strip" aria-label="当前版本焦点">
+            <div><span>所选版本</span><strong id="version-focus-target">未选择版本</strong></div>
+            <div><span>对比基准</span><strong id="version-focus-base">未选择版本</strong></div>
+            <div><span>当前有效</span><strong id="version-focus-effective">未设置</strong></div>
+            <div><span>处理状态</span><strong id="version-focus-facts">等待选择</strong></div>
+          </div></div>
+          <div class="version-focus-actions" aria-label="所选版本操作">
+            <button class="button button-secondary button-small" type="button" data-version-focus-action="open" disabled>打开详情</button>
+            <button class="button button-primary button-small" type="button" data-version-focus-action="scan" disabled>扫描</button>
+            <button class="button button-secondary button-small" type="button" data-version-focus-action="compare" disabled>对比</button>
+            <span id="version-focus-action-hint" class="muted">选择版本后执行操作</span>
           </div>
-          <div id="job-observation" class="job-observation runtime-observation hidden" aria-live="polite">
-            <div class="job-observation-meta">
-              <span id="job-stage">阶段：等待</span>
-              <span id="job-percent">进度：未提供</span>
-              <span id="job-elapsed">用时：-</span>
-            </div>
-            <div class="progress-track" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-              <div id="job-progress-bar" class="progress-bar"></div>
-            </div>
-            <p id="job-progress-note" class="job-progress-note">等待底层任务输出阶段信息。</p>
-            <details class="job-log-details runtime-log-details">
-              <summary>终端输出 <span id="job-log-size">原文 0 B，已显示 0 B</span></summary>
-              <pre id="job-log-tail">尚未产生终端输出。</pre>
-            </details>
-          </div>
-          <div id="job-artifacts" class="job-artifacts hidden" aria-live="polite"></div>
         </section>
-      </section>
 
-      <section id="version-workspace" class="panel version-panel stage-anchor">
-        <div class="panel-heading">
-          <div>
-            <h3>库接入与候选库</h3>
-            <p class="panel-subtitle">第 1 阶段只负责新库登记、候选库确认和目录刷新；版本列表已固定在顶部工作条。</p>
-          </div>
-        </div>
+        <details id="library-intake-disclosure" class="library-intake-disclosure">
+          <summary>库管理：登记与新库发现 <span>仅在接入或修正登记时展开</span></summary>
         <section class="candidate-workbench registered-library-workbench" aria-labelledby="registered-library-heading">
           <div class="candidate-workbench-heading">
-            <div><h5 id="registered-library-heading">原始库版本概览</h5><p>最新更新时间来自目录快照记录的版本目录变更时间，不是扫描时间或供应商发布日期。</p></div>
+            <div><h5 id="registered-library-heading">已登记库</h5></div>
             <span id="registered-library-status" class="status-chip status-neutral">读取中</span>
           </div>
           <div class="candidate-toolbar"><label class="compact-field candidate-search">搜索原始库<input id="registered-library-filter" type="search" placeholder="库名、最新版本或根目录"></label><button id="reset-registered-filter" class="button button-secondary button-small" type="button">清除筛选</button><span id="registered-library-count" class="muted"></span></div>
           <div class="candidate-table-wrap" tabindex="0">
-            <table class="candidate-table registered-library-table"><thead><tr><th scope="col">原始库</th><th scope="col">库根目录</th><th scope="col">版本数</th><th scope="col">最新版本</th><th scope="col">最新更新时间</th><th scope="col">当前可用版本</th><th scope="col">操作</th></tr></thead><tbody id="registered-library-table-body"><tr><td colspan="7" class="muted">正在读取原始库。</td></tr></tbody></table>
+            <table class="candidate-table registered-library-table"><thead><tr><th scope="col">原始库</th><th scope="col">库根目录</th><th scope="col">版本数</th><th scope="col">最新版本</th><th scope="col">最新更新时间</th><th scope="col">当前有效版本</th><th scope="col">操作</th></tr></thead><tbody id="registered-library-table-body"><tr><td colspan="7" class="muted">正在读取原始库。</td></tr></tbody></table>
           </div>
         </section>
         <section class="library-intake-zone" aria-label="新库接入与候选库确认">
           <div class="library-intake-zone-heading">
             <div>
-              <span class="zone-kicker">新库接入</span>
-              <h4>从库路径开始</h4>
-              <p>选择路径，重新发现候选，核对并勾选登记。已有库的新版本使用“刷新当前库目录”，无需重复登记。</p>
+              <h4>登记新库</h4>
+              <p>已有库收到新版本时，刷新当前库目录即可。</p>
             </div>
-            <span class="status-chip status-neutral">先入库，再处理版本</span>
           </div>
           <section class="library-intake-playbook" aria-label="从库路径到版本处理">
             <article class="intake-step-card">
@@ -286,26 +248,26 @@
             <summary class="command-group-heading"><div><h4>手动添加库（补充）</h4><p>发现漏识别或已明确库根时使用；登记后自动应用并刷新目录。</p></div><span class="command-family">手工登记</span></summary>
             <div class="command-group-body">
               <div class="library-add-note-grid" aria-label="添加新库说明">
-                <div><strong>库属性（可登记）</strong><span>正式库名、库根目录、显示名称、厂商和中间路径。</span></div>
-                <div><strong>登记后自动应用并刷新目录</strong><span>同名正式库会替换库根，等价于修改该库登记。</span></div>
-                <div><strong>不会扫描，也不会切换当前可用版本</strong><span>版本处理仍在第 2 阶段完成。</span></div>
+                <div><strong>库属性（可登记）</strong><span>已登记库名、库根目录、显示名称、厂商和中间路径。</span></div>
+                <div><strong>登记后自动应用并刷新目录</strong><span>同名已登记库会替换库根，等价于修改该库登记。</span></div>
+                <div><strong>不会扫描，也不会切换当前有效版本</strong><span>版本处理仍在第 2 阶段完成。</span></div>
               </div>
               <div class="command-form-grid command-add-grid">
-                <label class="compact-field">正式库名<input id="library-add-id" type="text" placeholder="例如 Vendor_A.ucie"></label>
+                <label class="compact-field">已登记库名<input id="library-add-id" type="text" placeholder="例如 Vendor_A.ucie"></label>
                 <label class="compact-field wide-field">库根目录<div class="path-input-row"><input id="library-add-root" type="text" placeholder="点击浏览目录选择，或手动输入"><button id="browse-library-root" class="button button-secondary button-small" type="button">浏览目录</button></div></label>
                 <label class="compact-field">显示名称<input id="library-add-display" type="text" placeholder="可留空"></label>
                 <details class="settings-advanced"><summary>可选信息</summary><div class="command-form-grid"><label class="compact-field">厂商<input id="library-add-vendor" type="text" placeholder="可留空"></label><label class="compact-field">中间路径<input id="library-add-middle" type="text" placeholder="可留空"></label></div></details>
                 <input id="library-add-apply" type="checkbox" checked hidden>
                 <input id="library-add-refresh" type="checkbox" checked hidden>
               </div>
-              <p id="library-add-prefill-note" class="command-summary">只有一个版本也可以登记；登记后先扫描。同名正式库会替换旧库根并刷新库列表，不会扫描或切换当前可用版本。</p>
+              <p id="library-add-prefill-note" class="command-summary">只有一个版本也可以登记；登记后先扫描。同名已登记库会替换旧库根并刷新库列表，不会扫描或切换当前有效版本。</p>
               <p id="library-add-feedback" class="command-feedback hidden" role="alert"></p>
               <div class="action-row"><button class="button button-primary" data-command-action="library-add" type="button">登记并加入目录</button></div>
             </div>
           </details>
 
           <section class="command-group library-directory-group">
-            <div class="command-group-heading"><div><h4>正式库与候选库</h4><p>正式库用于版本处理；候选库必须人工勾选确认后才会进入正式库目录。</p></div><span class="command-family">查看 / 登记</span></div>
+            <div class="command-group-heading"><div><h4>已登记库与候选库</h4><p>已登记库用于版本处理；候选库必须人工勾选确认后才会进入已登记库目录。</p></div><span class="command-family">查看 / 登记</span></div>
             <div class="command-action-strip">
               <div class="command-action-cell">
                 <button class="button button-secondary" data-command-action="worklist" type="button">查看全部工作清单</button>
@@ -313,7 +275,7 @@
               </div>
               <div class="command-action-cell">
                 <button class="button button-secondary" data-command-action="catalog-refresh" type="button" disabled>刷新当前库目录</button>
-                <small>只刷新目录投影，不改变当前可用版本。</small>
+                <small>只刷新目录投影，不改变当前有效版本。</small>
               </div>
               <details class="command-action-cell">
                 <summary>登记表维护</summary>
@@ -342,7 +304,7 @@
               <div class="candidate-selection-bar"><span id="candidate-selection-summary">尚未选择候选库</span><button id="register-selected-candidates" class="button button-primary button-small" type="button" disabled>登记已选库</button></div>
               <p id="candidate-snapshot-note" class="command-summary">读取中…</p>
               <div class="candidate-table-wrap" tabindex="0">
-                <table class="candidate-table"><thead><tr><th scope="col"><input id="candidate-select-all" type="checkbox" aria-label="全选当前筛选中可登记的候选库"></th><th scope="col">建议正式库名</th><th scope="col">库根目录</th><th scope="col">版本</th><th scope="col">发现的文件类型</th><th scope="col">登记 / 修改</th></tr></thead><tbody id="candidate-table-body"><tr><td colspan="6" class="muted">尚未读取候选快照。</td></tr></tbody></table>
+                <table class="candidate-table"><thead><tr><th scope="col"><input id="candidate-select-all" type="checkbox" aria-label="全选当前筛选中可登记的候选库"></th><th scope="col">建议已登记库名</th><th scope="col">库根目录</th><th scope="col">版本</th><th scope="col">发现的文件类型</th><th scope="col">登记 / 修改</th></tr></thead><tbody id="candidate-table-body"><tr><td colspan="6" class="muted">尚未读取候选快照。</td></tr></tbody></table>
               </div>
               <details class="candidate-discovery-settings">
                 <summary>高级搜索限制</summary>
@@ -357,112 +319,22 @@
             </section>
           </section>
         </section>
+        </details>
 
-        <section class="workflow-operator-strip" aria-label="库级新版本接入">
-          <details id="current-effective-stack" class="effective-stack-panel" aria-label="当前有效组合" open><summary>有效组合</summary>
-            <div class="effective-comparison-grid">
-              <section class="effective-current-summary" aria-label="当前可用组合">
-                <div class="effective-summary-heading"><h4>当前可用</h4><span id="current-effective-source" class="status-chip status-neutral">来源：未读取</span></div>
-                <dl class="effective-summary-facts">
-                  <div><dt>完整包基线</dt><dd id="current-effective-base">未设置</dd></div>
-                  <div><dt>叠加更新</dt><dd id="current-effective-overlays">无</dd></div>
-                </dl>
-                <details class="effective-identifiers"><summary>组合标识</summary><dl><div><dt>组合编号</dt><dd id="current-effective-id">未设置</dd></div><div><dt>组合指纹</dt><dd id="current-effective-digest">未设置</dd></div></dl></details>
-              </section>
-              <section id="candidate-effective-stack" class="effective-candidate-summary" aria-label="候选有效组合">
-                <div class="effective-summary-heading"><h4 id="candidate-effective-heading">候选有效组合</h4><span id="candidate-effective-status" class="status-chip status-neutral">尚未生效</span></div>
-                <strong id="candidate-effective-id">未生成</strong>
-                <p id="candidate-effective-source">来源：未生成处理计划</p>
-              </section>
-            </div>
-            <section class="effective-composition-section" aria-label="有效组合组成">
-              <div class="effective-composition-toolbar">
-                <h4>组成版本</h4>
-                <label>组合<select id="effective-composition-scope"><option value="all">当前与候选</option><option value="current">当前可用</option><option value="candidate">候选组合</option></select></label>
-                <label>搜索<input id="effective-composition-query" type="search" placeholder="搜索版本或角色"></label>
-                <button id="effective-composition-reset" class="button button-secondary button-small" type="button">清除筛选</button>
-                <span id="effective-composition-count" role="status">0 个组成版本</span>
-              </div>
-              <div class="effective-composition-scroll"><table class="effective-composition-table"><thead><tr><th scope="col">组合</th><th scope="col">顺序</th><th scope="col">角色</th><th scope="col">版本</th><th scope="col">扫描证据</th><th scope="col">操作</th></tr></thead><tbody id="effective-composition-body"><tr><td colspan="6">尚无组合，先预览处理计划。</td></tr></tbody></table></div>
-            </section>
-          </details>
-          <article class="action-card action-card-workflow">
-            <div class="action-card-heading"><div><span class="action-card-kicker">当前可用组合维护</span><h4>准备与确认新版本</h4></div><span id="workflow-status" class="status-chip status-neutral">未连接</span></div>
-            <section class="effective-selection" aria-label="选择有效组合">
-              <div class="action-row"><h5>版本配置与组合</h5><span id="effective-selection-count"></span><button id="effective-selection-load-all" class="button button-secondary button-small" type="button" disabled>读取全部版本</button></div>
-              <p id="effective-selection-status" class="muted" aria-live="polite">未找到完整包基线</p>
-              <div class="effective-selection-scroll"><table><caption class="sr-only">完整包基线与叠加更新选择</caption><thead><tr><th>基线 / 纳入</th><th>版本</th><th>包类型</th><th>对比基准</th><th>扫描证据</th><th>修改</th></tr></thead><tbody id="effective-selection-body"></tbody></table></div>
-              <h5>叠加顺序</h5><ol id="effective-selection-order" class="effective-selection-order"></ol>
-            </section>
-            <div class="workflow-step-grid" aria-label="新版本接入步骤">
-              <div class="workflow-step"><span>1</span><button id="next-preview-button" class="button button-primary" data-workflow-action="next-preview" type="button" disabled>预览组合</button><small>有属性修改时先保存，再预览</small></div>
-              <div class="workflow-step"><span>2</span><button id="next-apply-button" class="button button-secondary" data-workflow-action="next-apply" type="button" disabled>生成候选</button><small>补缺失扫描、组合、对比与刷新</small></div>
-              <div class="workflow-step"><span>3</span><a id="compare-current-candidate" class="button button-secondary" hidden target="_blank" rel="noopener">比较当前与候选</a><span id="workflow-compare-placeholder" class="button button-secondary" aria-disabled="true">核对候选差异</span><a id="candidate-composition-report" hidden target="_blank" rel="noopener">查看组成、覆盖与冲突</a><small id="workflow-compare-hint">执行后生成核对结果</small></div>
-            </div>
-            <section class="inline-action-details">
-              <h5>确认候选为当前可用组合</h5>
-              <div class="inline-action-fields workflow-inline-fields">
-                <label class="compact-field">确认人<input id="accepted-by" type="text" placeholder="设为当前可用版本时填写"></label>
-                <label class="compact-field">确认说明<input id="accept-note" type="text" placeholder="例如：接口验证通过"></label>
-              </div>
-              <div class="action-row effective-confirm-actions"><span id="write-action-hint">当前没有可确认的新版本。</span><button id="accept-window-button" class="button button-approve" data-workflow-action="accept-window" type="button" disabled>设为当前可用版本</button></div>
-            </section>
-            <details class="inline-action-details">
-              <summary>高级计划设置</summary>
-              <div class="inline-action-fields workflow-inline-fields">
-                <label class="compact-field">从此版本之后处理（可选）<input id="since-version" type="text" placeholder="留空表示自动判断"></label>
-                <label class="toggle-field"><input id="rebuild-workflow" type="checkbox"> 重新计算建议</label>
-              </div>
-              <div hidden><button id="window-button" data-workflow-action="window" type="button" disabled>读取已保存建议</button><button id="intake-preview-button" data-workflow-action="intake-preview" type="button" disabled>预览完整计划</button><button id="intake-apply-button" data-workflow-action="intake-apply" type="button" disabled>执行完整计划</button></div>
-            </details>
-            <p id="workflow-summary" class="workflow-summary" aria-live="polite">选择库后，这里显示系统建议、计划和确认结果。</p>
-          </article>
-        </section>
-      <details class="object-maintenance"><summary>版本属性与异常处理</summary>      <details class="panel correction-panel">
-        <summary class="correction-summary"><span><strong>阶段与默认对比规则</strong><small>包类型和指定基准在版本配置表中修改。</small></span><span aria-hidden="true">⌄</span></summary>
-        <div class="correction-body">
-          <div class="correction-grid">
-            <label hidden>短类型标记<select id="mark-type"><option value="FULL">FULL：完整包</option><option value="FIX">FIX：增量修订</option><option value="HOTFIX">HOTFIX：紧急修订</option><option value="UNKNOWN">UNKNOWN：待确认</option></select></label>
-            <label hidden>目录包类型<select id="package-type"><option value="FULL_PACKAGE">完整包</option><option value="PARTIAL_UPDATE">增量更新</option><option value="HOTFIX">紧急修订</option><option value="DOC_UPDATE">文档更新</option><option value="UNKNOWN_PACKAGE">未确认</option></select></label>
-            <label class="compact-field">阶段<select id="stage"><option value="unknown">未标注</option><option value="initial">初始版</option><option value="candidate">候选版</option><option value="dated">已登记</option><option value="ad-hoc">临时版</option><option value="stable">稳定版</option><option value="final">正式版</option></select></label>
-            <label class="compact-field">默认对比<select id="compare-default"><option value="previous_effective">上一有效版</option><option value="full_baseline">完整包基线</option><option value="none">不自动对比</option></select></label>
-            <label hidden>完整包基线<input id="base-full" type="text" placeholder="版本名，可留空"></label>
-            <label hidden>上一有效版<input id="previous-effective" type="text" placeholder="版本名，可留空"></label>
-            <label class="compact-field wide-field">修正说明<input id="override-note" type="text" placeholder="说明为什么需要人工修正"></label>
-          </div>
-          <div class="action-row correction-actions">
-            <button id="mark-button" hidden data-correction-action="mark" type="button" disabled>标记版本类型</button>
-            <button id="override-button" class="button button-primary" data-correction-action="override" type="button" disabled>保存目录修正</button>
-          </div>
-        </div>
-      </details>
-          <details class="command-group command-subgroup">
-            <summary class="command-group-heading"><div><h4>异常维护</h4><p>回退当前可用版本或执行预定义动作；审查记录和发布检查已移至页面顶部动作区。</p></div><span class="command-family">例外处理</span></summary>
-            <div class="command-group-body command-admin-grid">
-              <section class="command-card">
-                <h5>回退当前可用版本</h5>
-                <div class="command-form-grid compact-command-grid">
-                  <label class="compact-field">已保存组合<select id="rollback-to"><option value="">选择回退目标</option></select></label>
-                  <label class="compact-field">回退人<input id="rollback-by" type="text" placeholder="必填"></label>
-                  <label class="compact-field wide-field">回退原因<input id="rollback-reason" type="text" placeholder="必填并进入审计记录"></label>
-                </div>
-                <button class="button button-secondary" data-command-action="effective-rollback" type="button" disabled>提交当前可用版本回退</button>
-              </section>
-              <section class="command-card command-card-inline">
-                <div><h5>预定义动作</h5><p>使用当前库已经登记的动作文件，网页不接受自定义路径。</p></div>
-                <button class="button button-secondary" data-command-action="action-file" type="button" disabled>执行预定义动作</button>
-              </section>
-            </div>
-          </details>
-</details>
       </section>
 
       <section id="action-workspace" class="panel action-deck stage-anchor hidden" aria-label="版本分析">
+        <div class="workbench-commandbar" role="toolbar" aria-label="常用操作">
+          <span class="workbench-commandbar-label">分析操作</span>
+          <button id="analysis-tab-scan" class="workbench-command is-active" type="button" aria-pressed="true" aria-controls="analysis-panel-scan" data-analysis-action="scan" data-workbench-command="scan">扫描</button>
+          <button id="analysis-tab-compare" class="workbench-command" type="button" aria-pressed="false" aria-controls="analysis-panel-compare" data-analysis-action="compare" data-workbench-command="compare">版本对比</button>
+          <button id="analysis-tab-file-diff" class="workbench-command" type="button" aria-pressed="false" aria-controls="analysis-panel-file-diff" data-analysis-action="file-diff" data-workbench-command="file-diff">深度文件对比</button>
+          <button id="analysis-tab-checks" class="workbench-command" type="button" aria-pressed="false" aria-controls="analysis-panel-checks" data-analysis-action="checks" data-workbench-command="checks">技术检查</button>
+          <button id="analysis-tab-review" class="workbench-command" type="button" aria-pressed="false" aria-controls="analysis-panel-review" data-analysis-action="review" data-workbench-command="review">审查</button>
+        </div>
         <div class="action-deck-heading">
           <div>
-            <span class="zone-kicker">操作台</span>
             <h3>版本分析</h3>
-            <p></p>
           </div>
           <div class="action-deck-recommendation">
             <button id="open-version-detail-button" class="button button-primary" type="button" disabled>打开版本详情页</button>
@@ -512,13 +384,21 @@
           </div>
         </details>
 
-        <div class="analysis-action-tabs" role="tablist" aria-label="版本分析操作">
-          <button id="analysis-tab-scan" type="button" role="tab" aria-selected="true" aria-controls="analysis-panel-scan" data-analysis-action="scan">扫描</button>
-          <button id="analysis-tab-compare" type="button" role="tab" aria-selected="false" aria-controls="analysis-panel-compare" data-analysis-action="compare" tabindex="-1">对比</button>
-          <button id="analysis-tab-file-diff" type="button" role="tab" aria-selected="false" aria-controls="analysis-panel-file-diff" data-analysis-action="file-diff" tabindex="-1">深度文件对比</button>
-          <button id="analysis-tab-review" type="button" role="tab" aria-selected="false" aria-controls="analysis-panel-review" data-analysis-action="review" tabindex="-1">审查记录</button>
-        </div>
         <div class="action-deck-grid">
+          <section id="analysis-panel-checks" class="semantic-review-card" role="tabpanel" aria-labelledby="analysis-tab-checks" hidden>
+            <h4 id="semantic-review-heading" class="sr-only">生成技术检查报告</h4>
+            <div class="inline-action-fields">
+              <label class="compact-field">检查组合<select id="semantic-review-target" disabled><option value="">选择已生成的组合</option></select></label>
+              <label class="compact-field">对比基准（可选）<select id="semantic-review-base" disabled><option value="">不做版本对比</option></select></label>
+              <label class="compact-field wide-field">检查方案<select id="semantic-review-profile" disabled><option value="lef_basic">LEF 对象与变化</option></select></label>
+            </div>
+            <p id="semantic-review-scope" class="task-object-summary" aria-live="polite">尚未选择检查组合。</p>
+            <small class="muted">检查对象独立于顶部版本选择，以这里的组成版本为准。</small>
+            <fieldset class="semantic-review-group"><legend>检查项目</legend><div id="semantic-review-checks" class="hash-type-options"></div></fieldset>
+            <p id="semantic-review-feedback" class="muted" role="status" aria-live="polite">选择版本后读取检查选项。</p>
+            <div class="action-row"><button id="semantic-review-run" class="button button-primary" data-semantic-action="semantic-review" type="button" disabled>生成检查报告</button><button id="semantic-review-refresh" class="button button-secondary" type="button" disabled>刷新检查选项</button></div>
+            <p class="semantic-review-note">复用已有扫描，只生成报告文件。完成后可下载摘要和详细清单。</p>
+          </section>
           <article id="analysis-panel-scan" class="action-card action-card-primary" role="tabpanel" aria-labelledby="analysis-tab-scan">
             <div class="action-card-heading"><h4>扫描</h4><span id="scan-action-state" class="status-chip status-neutral">等待对象</span></div>
             <div class="action-card-footer"><button id="scan-action-button" class="button button-primary" data-action="scan" type="button" disabled>生成扫描</button><button id="show-settings-button" class="button button-quiet" type="button">扫描设置</button></div>
@@ -759,13 +639,71 @@
       </div>
 
       <section id="release-workspace" class="panel stage-anchor hidden" aria-label="发布交付">
-        <div class="panel-heading"><h3>发布交付</h3></div>
+        <div class="panel-heading"><div><h3>发布交付</h3></div></div>
+        <details class="release-composition-zone" aria-label="有效组合与版本接入">
+          <summary>管理有效版本 · 选择完整包与增量包</summary>
+          <details id="current-effective-stack" class="effective-stack-panel" aria-label="当前有效组合" open><summary>当前有效组合</summary>
+            <div class="effective-comparison-grid">
+              <section class="effective-current-summary" aria-label="当前有效组合">
+                <div class="effective-summary-heading"><h4>当前有效</h4><span id="current-effective-source" class="status-chip status-neutral">当前有效版本未设置</span></div>
+                <dl class="effective-summary-facts">
+                  <div><dt>完整包基线</dt><dd id="current-effective-base">未设置</dd></div>
+                  <div><dt>叠加更新</dt><dd id="current-effective-overlays">无</dd></div>
+                </dl>
+                <details class="effective-identifiers"><summary>组合详情</summary><dl><div><dt>组合编号</dt><dd id="current-effective-id">未设置</dd></div><div><dt>组合指纹</dt><dd id="current-effective-digest">未设置</dd></div></dl></details>
+              </section>
+              <section id="candidate-effective-stack" class="effective-candidate-summary" aria-label="待确认候选组合">
+                <div class="effective-summary-heading"><h4 id="candidate-effective-heading">待确认候选</h4><span id="candidate-effective-status" class="status-chip status-neutral">尚未生效</span></div>
+                <strong id="candidate-effective-id">未生成</strong>
+                <p id="candidate-effective-source">来源：未生成处理计划</p>
+              </section>
+            </div>
+            <section class="effective-composition-section" aria-label="有效组合组成">
+              <div class="effective-composition-toolbar">
+                <h4>组合组成</h4>
+                <label>查看<select id="effective-composition-scope"><option value="all">当前与候选</option><option value="current">当前有效</option><option value="candidate">待确认候选</option></select></label>
+                <label>搜索<input id="effective-composition-query" type="search" placeholder="搜索版本或角色"></label>
+                <button id="effective-composition-reset" class="button button-secondary button-small" type="button">清除筛选</button>
+                <span id="effective-composition-count" role="status">0 个组成版本</span>
+              </div>
+              <div class="effective-composition-scroll"><table class="effective-composition-table"><thead><tr><th scope="col">组合</th><th scope="col">顺序</th><th scope="col">角色</th><th scope="col">版本</th><th scope="col">扫描证据</th><th scope="col">操作</th></tr></thead><tbody id="effective-composition-body"><tr><td colspan="6">尚无组合，先预览处理计划。</td></tr></tbody></table></div>
+            </section>
+          </details>
+          <article class="action-card action-card-workflow">
+            <div class="action-card-heading"><h4>选择版本</h4><span id="workflow-status" class="status-chip status-neutral">未连接</span></div>
+            <section class="effective-selection" aria-label="选择有效组合">
+              <div class="action-row"><h5>版本配置与组合</h5><span id="effective-selection-count"></span><button id="effective-selection-load-all" class="button button-secondary button-small" type="button" disabled>读取全部版本</button></div>
+              <p id="effective-selection-status" class="muted" aria-live="polite">未找到完整包基线</p>
+              <div class="effective-selection-scroll"><table><caption class="sr-only">完整包基线与叠加更新选择</caption><thead><tr><th>基线 / 纳入</th><th>版本</th><th>包类型</th><th>对比基准</th><th>扫描证据</th><th>修改</th></tr></thead><tbody id="effective-selection-body"></tbody></table></div>
+              <h5>叠加顺序</h5><ol id="effective-selection-order" class="effective-selection-order"></ol>
+            </section>
+            <div class="workflow-step-grid" aria-label="新版本接入步骤">
+              <div class="workflow-step"><span>1</span><button id="next-preview-button" class="button button-primary" data-workflow-action="next-preview" type="button" disabled>预览组合</button><small>只生成计划，不切换当前有效版本</small></div>
+              <div class="workflow-step"><span>2</span><button id="next-apply-button" class="button button-secondary" data-workflow-action="next-apply" type="button" disabled>生成待确认候选</button><small>补缺失扫描、组合、对比与刷新</small></div>
+              <div class="workflow-step"><span>3</span><a id="compare-current-candidate" class="button button-secondary" hidden target="_blank" rel="noopener">比较当前与候选</a><span id="workflow-compare-placeholder" class="button button-secondary" aria-disabled="true">核对候选差异</span><a id="candidate-composition-report" hidden target="_blank" rel="noopener">查看组成、覆盖与冲突</a><small id="workflow-compare-hint">执行后生成核对结果</small></div>
+            </div>
+            <section class="inline-action-details">
+              <h5>确认候选为当前有效版本</h5>
+              <div class="inline-action-fields workflow-inline-fields">
+                <label class="compact-field">确认人<input id="accepted-by" type="text" placeholder="确认时必填"></label>
+                <label class="compact-field">确认说明<input id="accept-note" type="text" placeholder="例如：接口验证通过"></label>
+              </div>
+              <div class="action-row effective-confirm-actions"><span id="write-action-hint">当前没有可确认的新版本。</span><button id="accept-window-button" class="button button-approve" data-workflow-action="accept-window" type="button" disabled>确认并设为当前有效</button></div>
+            </section>
+            <details class="inline-action-details">
+              <summary>高级计划设置</summary>
+              <div class="inline-action-fields workflow-inline-fields">
+                <label class="compact-field">从此版本之后处理（可选）<input id="since-version" type="text" placeholder="留空表示自动判断"></label>
+                <label class="toggle-field"><input id="rebuild-workflow" type="checkbox"> 重新计算建议</label>
+              </div>
+              <div hidden><button id="window-button" data-workflow-action="window" type="button" disabled>读取已保存建议</button><button id="intake-preview-button" data-workflow-action="intake-preview" type="button" disabled>预览完整计划</button><button id="intake-apply-button" data-workflow-action="intake-apply" type="button" disabled>执行完整计划</button></div>
+            </details>
+            <p id="workflow-summary" class="workflow-summary" aria-live="polite">选择库后，这里显示系统建议、计划和确认结果。</p>
+          </article>
+        </details>
         <div class="release-workspace-actions">          <article class="action-card">
-            <div class="action-card-heading"><div><span class="action-card-kicker">交付检查</span><h4>发布检查</h4></div><span id="release-action-state" class="status-chip status-neutral">等待对象</span></div>
-            <p>检查条件、预演链接或实际发布。实际发布切换发布别名，不改变 IP 使用判断或当前有效组合。</p>
-            <div class="action-card-footer"><button id="release-action-button" class="button button-secondary" data-action="release-check" type="button" disabled>检查正式发布条件</button><button id="release-plan-action-button" class="button button-primary" data-action="release-plan" type="button" disabled>生成发布预演</button></div>
-            <button id="release-apply-action-button" class="button button-primary button-small" data-action="release-apply" type="button" disabled>确认并创建链接</button>
-            <details class="inline-action-details release-plan-details">
+            <div class="action-card-heading"><h4>发布链接</h4><span id="release-action-state" class="status-chip status-neutral">等待对象</span></div>
+            <details class="inline-action-details release-plan-details" open>
               <summary>发布设置</summary>
               <div class="release-plan-fields">
                 <label class="compact-field wide-field">发布目录<input id="release-root-display" type="text" readonly></label>
@@ -776,8 +714,7 @@
                 <label class="toggle-field"><input id="release-overwrite" type="checkbox" checked> 覆盖已有目标（正式目录默认开启）</label>
               </div>
               <p id="release-overwrite-target" class="command-summary">未选择覆盖目标；预演默认不会覆盖已有正式发布。</p>
-              <p class="command-summary">预演不写入发布目录。实际发布会检查门禁、创建链接并校验；受阻时不会强制绕过。</p>
-              <p class="command-summary">填写正式目录名后默认覆盖；旧链接保存到 history/正式目录名_日期，同一天更新同一份备份。最新指针指向正式目录。</p>
+              <p class="command-summary">覆盖前备份旧链接：history/目录名_日期。同一天更新同一份备份。</p>
               <details class="release-force-details">
                 <summary>受控强制发布</summary>
                 <p>仅用于已选择的正式库覆盖目标。页面固定执行覆盖、审计和发布校验；不能跳过校验或传入额外命令参数。</p>
@@ -790,9 +727,12 @@
               </details>
             </details>
             <small id="release-action-note">先核对发布目录和链接预演，再确认创建链接。</small>
+            <div class="action-card-footer"><button id="release-action-button" class="button button-secondary" data-action="release-check" type="button" disabled>检查正式发布条件</button><button id="release-plan-action-button" class="button button-primary" data-action="release-plan" type="button" disabled>生成发布预演</button></div>
+            <p id="release-preview-stale" class="command-feedback hidden" role="status">发布对象或参数已变更，之前的预演不适用于当前设置。请重新预演后核对。</p>
+            <div id="release-plan-result" class="release-plan-result hidden" aria-live="polite"></div>
+            <button id="release-apply-action-button" class="button button-primary button-small hidden" data-action="release-apply" type="button" disabled>确认并创建链接</button>
           </article>
 </div>
-        <div id="release-plan-result" class="release-plan-result hidden" aria-live="polite"></div>
 
 
           <section id="formal-release-library-panel" class="command-group formal-release-library-panel" aria-label="正式发布库查询">
@@ -808,7 +748,7 @@
               <label class="compact-field">筛选正式库<input id="formal-release-library-filter" type="search" placeholder="库名或版本" autocomplete="off"></label>
               <button id="refresh-formal-release-libraries" class="button button-secondary button-small" type="button">刷新发布库</button>
             </div>
-            <p id="formal-release-library-note" class="command-summary">刷新仅读取 release_manifest.json；不会扫描 RAW、不会变更发布链接。</p>
+            <p id="formal-release-library-note" class="command-summary">发布历史清单是可选增强信息；没有 release_manifest.json 也不会否定正式目录。要核查当前文件、视图和 latest/current，请使用上方“正式目录盘点”。</p>
             <div class="release-set-table-wrap"><table><caption class="sr-only">当前发布阶段</caption><thead><tr><th>阶段目录</th><th>库 / 文件</th><th>最新指针</th><th>链接核查</th><th>操作</th></tr></thead><tbody id="release-stage-body"><tr><td colspan="5">刷新后显示各阶段当前交付，不显示历史备份。</td></tr></tbody></table></div>
             <details><summary>按库查询交付来源</summary>
             <div class="formal-release-library-table-wrap">
@@ -889,24 +829,44 @@
             <span id="settings-summary" class="settings-current">智能取证 · 并发 8 · 自动刷新</span>
           </summary>
           <div class="settings-body">
-            <div class="settings-toolbar"><div><strong>工作区默认值</strong><span>保存目录与当前扫描、对比参数为默认值。</span></div><div class="settings-toolbar-actions"><button id="save-settings" class="button button-primary button-small" type="button">保存为默认</button><button id="reset-settings" class="button button-secondary button-small" type="button">恢复默认</button></div></div>
+            <div class="settings-toolbar"><div><strong>工作区默认值</strong></div><button id="reset-settings" class="button button-secondary button-small" type="button">撤销未保存的设置</button></div>
             <p id="settings-save-feedback" class="command-feedback hidden" role="status"></p>
 
             <section class="settings-section" aria-labelledby="workspace-defaults-heading">
-              <div class="settings-section-heading"><div><h4 id="workspace-defaults-heading">工作区默认值</h4><p>控制默认原始库根和候选发现范围；适合内网迁移后集中调整。</p></div><span class="settings-scope">用于入库</span></div>
+              <div class="settings-section-heading"><h4 id="workspace-defaults-heading">工作区目录</h4></div>
               <div class="settings-form-grid settings-form-grid-advanced">
                 <label class="compact-field wide-field">默认原始库根<input id="config-raw-root" type="text" placeholder="例如 /proj/mxc700/library/N7/IP"><small class="field-help">发现候选、浏览目录和库登记的默认范围；必须是已存在目录。</small></label>
                 <label class="compact-field wide-field">正式发布根目录<input id="config-release-root" type="text" placeholder="例如 /proj/release/IP"><small class="field-help">用于发布链接和查询交付；不作为 RAW 扫描输入，只有确认发布才写入。</small></label>
                 <label class="compact-field">默认正式目录名<input id="config-release-publish-name" type="text" placeholder="例如 lib_NL7"></label>
                 <label class="compact-field">默认最新指针名<input id="config-release-latest-name" type="text" value="latest"></label>
+              </div>
+              <button id="save-settings" class="button button-primary button-small" type="button">保存目录</button>
+            </section>
+            <section class="settings-section" aria-labelledby="scan-defaults-heading">
+              <div class="settings-section-heading"><h4 id="scan-defaults-heading">扫描默认值</h4></div>
+              <div class="settings-form-grid">
+                <label class="compact-field">哈希策略<select id="config-hash-policy"><option value="smart">按需读取（smart）</option><option value="none">不读取内容（none）</option><option value="full">完整读取（full）</option></select></label>
+                <label class="compact-field">解析并发<select id="config-parse-jobs"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option></select></label>
+                <label class="compact-field">解析类型<input id="config-parse-file-types" placeholder="留空使用默认类型"></label>
+                <label class="compact-field">排除解析类型<input id="config-parse-exclude-file-types" placeholder="例如 gds,db"></label>
+              </div>
+              <fieldset><legend>强制完整哈希</legend><div id="default-force-hash-types" class="hash-type-options"></div></fieldset>
+              <fieldset><legend>跳过内容哈希</legend><div id="default-skip-hash-types" class="hash-type-options"></div></fieldset>
+              <label class="toggle-field"><input id="config-render-detail" type="checkbox" checked>扫描后刷新详情页</label>
+              <button id="save-scan-settings" class="button button-primary button-small" type="button">保存扫描默认值</button>
+            </section>
+            <section class="settings-section" aria-labelledby="discovery-defaults-heading">
+              <div class="settings-section-heading"><h4 id="discovery-defaults-heading">发现默认值</h4></div>
+              <div class="settings-form-grid settings-form-grid-advanced">
                 <label class="compact-field">发现深度<input id="config-discover-max-depth" type="number" min="1" max="8" value="4"></label>
                 <label class="compact-field">最少版本数<input id="config-discover-min-versions" type="number" min="1" max="100" value="1"><small class="field-help">默认 1，可发现只有一个版本的新库；单版本候选仍需人工确认。</small></label>
                 <label class="compact-field">最大目录数<input id="config-discover-max-dirs" type="number" min="1" max="100000" value="5000"></label>
                 <label class="compact-field">最多候选数<input id="config-discover-max-candidates" type="number" min="1" max="10000" value="200"></label>
               </div>
+              <button id="save-discovery-settings" class="button button-primary button-small" type="button">保存发现默认值</button>
             </section>
 
-            <p class="settings-default-note">“保存为默认”会更新工作区配置并生成备份；不点击保存时，页面设置只随本次任务提交。</p>
+            <p class="settings-default-note">按分组保存并备份配置。扫描页的本次参数不随此处保存；重新打开工作台时加载新默认值。</p>
             <details class="path-details">
               <summary>查看工作区路径和数据边界</summary>
               <dl id="workspace-paths" class="path-list"><div><dt>Catalog</dt><dd>读取中</dd></div></dl>
@@ -915,7 +875,57 @@
         </details>
       </section>
 
+      <details class="object-maintenance"><summary>版本属性与异常处理</summary>
+        <details class="panel correction-panel">
+          <summary class="correction-summary"><span><strong>阶段与默认对比规则</strong><small>包类型和指定基准在版本配置表中修改。</small></span><span aria-hidden="true">⌄</span></summary>
+          <div class="correction-body">
+            <div class="correction-grid">
+              <label hidden>短类型标记<select id="mark-type"><option value="FULL">FULL：完整包</option><option value="FIX">FIX：增量修订</option><option value="HOTFIX">HOTFIX：紧急修订</option><option value="UNKNOWN">UNKNOWN：待确认</option></select></label>
+              <label hidden>目录包类型<select id="package-type"><option value="FULL_PACKAGE">完整包</option><option value="PARTIAL_UPDATE">增量更新</option><option value="HOTFIX">紧急修订</option><option value="DOC_UPDATE">文档更新</option><option value="UNKNOWN_PACKAGE">未确认</option></select></label>
+              <label class="compact-field">阶段<select id="stage"><option value="unknown">未标注</option><option value="initial">初始版</option><option value="candidate">候选版</option><option value="dated">已登记</option><option value="ad-hoc">临时版</option><option value="stable">稳定版</option><option value="final">正式版</option></select></label>
+              <label class="compact-field">默认对比<select id="compare-default"><option value="previous_effective">上一有效版</option><option value="full_baseline">完整包基线</option><option value="none">不自动对比</option></select></label>
+              <label hidden>完整包基线<input id="base-full" type="text" placeholder="版本名，可留空"></label>
+              <label hidden>上一有效版<input id="previous-effective" type="text" placeholder="版本名，可留空"></label>
+              <label class="compact-field wide-field">修正说明<input id="override-note" type="text" placeholder="说明为什么需要人工修正"></label>
+            </div>
+            <div class="action-row correction-actions">
+              <button id="mark-button" hidden data-correction-action="mark" type="button" disabled>标记版本类型</button>
+              <button id="override-button" class="button button-primary" data-correction-action="override" type="button" disabled>保存目录修正</button>
+            </div>
+          </div>
+        </details>
+        <details class="command-group command-subgroup">
+          <summary class="command-group-heading"><div><h4>异常维护</h4><p>回退当前有效版本或执行预定义动作；只在确认异常时使用。</p></div><span class="command-family">例外处理</span></summary>
+          <div class="command-group-body command-admin-grid">
+            <section class="command-card">
+              <h5>回退当前有效版本</h5>
+              <div class="command-form-grid compact-command-grid">
+                <label class="compact-field">已保存组合<select id="rollback-to"><option value="">选择回退目标</option></select></label>
+                <label class="compact-field">回退人<input id="rollback-by" type="text" placeholder="必填"></label>
+                <label class="compact-field wide-field">回退原因<input id="rollback-reason" type="text" placeholder="必填并进入审计记录"></label>
+              </div>
+              <button class="button button-secondary" data-command-action="effective-rollback" type="button" disabled>提交当前有效版本回退</button>
+            </section>
+            <section class="command-card command-card-inline">
+              <div><h5>预定义动作</h5><p>使用当前库已经登记的动作文件，网页不接受自定义路径。</p></div>
+              <button class="button button-secondary" data-command-action="action-file" type="button" disabled>执行预定义动作</button>
+            </section>
+          </div>
+        </details>
+      </details>
+
       </section>
+      <details id="run-workspace" class="runtime-dock runtime-strip" aria-label="运行反馈">
+        <summary id="runtime-dock-summary" class="runtime-strip-head"><span class="zone-kicker">运行状态</span><span id="job-status" class="status-chip status-neutral">暂无任务</span><p id="job-summary" class="runtime-summary" aria-live="polite">执行动作后显示任务状态。</p><a id="job-log-link" class="text-link hidden" href="#" target="_blank" rel="noreferrer">打开完整运行日志 ↗</a></summary>
+        <div id="job-observation" class="job-observation runtime-observation hidden" aria-live="polite">
+          <div class="job-observation-meta"><span id="job-stage">阶段：等待</span><span id="job-percent">进度：未提供</span><span id="job-elapsed">用时：-</span></div>
+          <div class="progress-track" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="job-progress-bar" class="progress-bar"></div></div>
+          <p id="job-progress-note" class="job-progress-note">等待底层任务输出阶段信息。</p>
+          <div id="job-quality-summary" class="job-quality-summary hidden" aria-live="polite"><div class="job-quality-heading"><strong>检查摘要</strong><span id="job-quality-verdict" class="status-chip status-neutral">未形成结论</span></div><div id="job-quality-counts" class="job-quality-counts"></div><p id="job-quality-coverage" class="job-quality-coverage"></p><p id="job-quality-next" class="job-quality-next"></p><p id="job-quality-note" class="job-quality-note"></p></div>
+          <details class="job-log-details runtime-log-details"><summary>终端输出 <span id="job-log-size">原文 0 B，已显示 0 B</span></summary><pre id="job-log-tail">尚未产生终端输出。</pre></details>
+        </div>
+        <div id="job-artifacts" class="job-artifacts hidden" aria-live="polite"></div>
+      </details>
     </main>
   </div>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
