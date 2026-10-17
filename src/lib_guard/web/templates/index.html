@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lib Guard 库运行台</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css', v='20261017.5') }}">
 </head>
 <body>
   <noscript><p role="alert">工作台未连接：请通过已启动服务的 http 地址打开。此文件是服务端模板，直接打开不能读取发布库或执行操作。</p></noscript>
@@ -30,10 +30,6 @@
           <p id="directory-note" class="section-note">只显示已登记源库</p>
         </div>
         <span id="library-count" class="count-badge">0</span>
-      </div>
-      <div class="directory-switch" role="group" aria-label="目录来源">
-        <button id="directory-source" type="button" aria-pressed="true">源库</button>
-        <button id="directory-published" type="button" aria-pressed="false">已发布</button>
       </div>
       <label class="search-box">
         <span class="sr-only">搜索库</span>
@@ -64,7 +60,21 @@
     </aside>
 
     <main id="workspace-main" class="workspace" tabindex="-1">
-      <section id="published-release-inspector" class="hidden" aria-label="已发布交付核查">
+      <nav class="primary-work-domains" aria-label="工作域">
+        <button type="button" data-primary-target="library" aria-current="page">库工作台</button>
+        <button type="button" data-primary-target="release" aria-current="false">发布中心</button>
+      </nav>
+      <nav class="library-view-tabs" role="tablist" aria-label="库工作台视图">
+        <button class="primary-stage-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="version-workspace" data-stage-target="version-workspace"><strong>版本</strong></button>
+        <button class="primary-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="action-workspace evidence-workspace" data-stage-target="action-workspace"><strong>分析与结果</strong></button>
+        <button id="workspace-settings-button" class="primary-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="management-workspace" aria-expanded="false" data-stage-target="management-workspace"><strong>设置与维护</strong></button>
+      </nav>
+      <nav class="release-view-tabs hidden" role="tablist" aria-label="发布中心视图">
+        <button id="directory-source" class="primary-stage-tab is-active" type="button" role="tab" aria-selected="true" aria-pressed="true" aria-controls="release-workspace" data-stage-target="release-workspace"><strong>发布操作</strong></button>
+        <button id="directory-published" class="primary-stage-tab" type="button" role="tab" aria-selected="false" aria-pressed="false" aria-controls="published-release-inspector" data-stage-target="published-release-inspector"><strong>已发布目录</strong></button>
+      </nav>
+
+      <section id="published-release-inspector" class="panel stage-anchor hidden" aria-label="已发布交付核查">
         <div class="action-row formal-directory-tabs" role="group" aria-label="交付查询来源"><button id="formal-directory-tab" class="button button-primary" type="button" aria-pressed="true">正式目录盘点</button><button id="temporary-directory-tab" class="button button-secondary" type="button" aria-pressed="false">临时发布记录</button></div>
         <section id="formal-directory-panel" aria-label="正式目录盘点">
           <h2>正式发布目录</h2>
@@ -81,41 +91,16 @@
           <div class="formal-directory-files"><table><caption>正式文件与实际来源</caption><thead><tr><th>正式文件绝对路径</th><th>库 / 版本</th><th>实际链接目标</th><th>类型</th><th>工艺角</th><th>核查 / 来源</th></tr></thead><tbody id="formal-directory-files"></tbody></table></div>
         </section>
         <section id="temporary-directory-panel" hidden>
-        <div class="published-heading"><div><h2 id="published-stage-title">选择发布阶段</h2><p id="published-stage-meta"></p></div>
-          <button id="published-refresh" class="button button-secondary" type="button">刷新发布目录</button>
-          <button id="published-root-settings" class="button button-secondary" type="button">发布根设置</button>
-          <button id="published-update" class="button button-secondary" type="button" disabled>准备更新发布</button>
-        </div>
+        <div class="published-heading"><div><h2 id="published-stage-title">选择发布阶段</h2><p id="published-stage-meta"></p></div><button id="published-refresh" class="button button-secondary" type="button">刷新发布目录</button><button id="published-root-settings" class="button button-secondary" type="button">发布根设置</button><button id="published-update" class="button button-secondary" type="button" disabled>准备更新发布</button></div>
         <p id="published-stage-summary" class="command-summary"></p>
-        <section id="published-registration-panel" class="hidden" aria-label="缺交付清单的现有目录">
-          <h3>已有交付，缺少来源登记</h3>
-          <p>以下目录或指针已存在，但缺少交付清单。库与版本来源尚不能确认；不会修改现有链接。</p>
-          <table><thead><tr><th>交付目录</th><th>实际路径</th><th>指针</th><th>状态</th></tr></thead><tbody id="published-unregistered"></tbody></table>
-        </section>
+        <section id="published-registration-panel" class="hidden" aria-label="缺交付清单的现有目录"><h3>已有交付，缺少来源登记</h3><p>以下目录或指针已存在，但缺少交付清单。库与版本来源尚不能确认；不会修改现有链接。</p><table><thead><tr><th>交付目录</th><th>实际路径</th><th>指针</th><th>状态</th></tr></thead><tbody id="published-unregistered"></tbody></table></section>
         <div class="formal-release-library-table-wrap published-library-inventory"><table><caption>全部发布来源</caption><thead><tr><th>库 / 类别</th><th>交付版本</th><th>文件数 / 类型</th><th>工艺角（Corner）</th><th>本次链接处理</th><th>操作</th></tr></thead><tbody id="published-components"><tr><td colspan="6">尚未连接服务读取交付来源。</td></tr></tbody></table></div>
         <details class="published-view-summary"><summary>按文件类型汇总</summary><div class="formal-release-library-table-wrap"><table><caption>交付视图统计</caption><thead><tr><th>文件类型</th><th>文件数</th><th>涉及库数</th><th>工艺角（Corner）</th><th>文件</th></tr></thead><tbody id="published-view-inventory"></tbody></table></div></details>
-        <div id="published-file-workbench" tabindex="-1">
-        <h3 class="published-files-heading">交付文件核查</h3>
-        <div class="published-filter-bar" role="group" aria-label="交付文件筛选">
-          <label class="compact-field">来源库<select id="published-library-filter"><option value="">全部库</option></select></label>
-          <label class="compact-field">文件类型<select id="published-view"><option value="">全部类型</option></select></label>
-          <label class="compact-field">链接核查<select id="published-link-status"><option value="">全部状态</option><option value="abnormal">仅异常</option><option value="READY">目标一致</option><option value="MISMATCH">目标不一致</option><option value="MISSING">文件缺失 / 链接失效</option><option value="COPIED">复制交付</option></select></label>
-          <label class="compact-field published-search-field">文件或来源路径<input id="published-file-query" type="search" placeholder="检索交付文件"></label>
-          <button id="published-search" class="button button-secondary" type="button">检索</button><button id="published-clear" class="button button-secondary" type="button">清除筛选</button>
-        </div>
-        <div class="published-pagination"><span id="published-file-count"></span><span id="published-check-scope">链接核查不读取文件内容</span><button id="published-previous" class="button button-secondary" type="button">上一页</button><button id="published-next" class="button button-secondary" type="button">下一页</button></div>
-        <div class="published-files-wrap"><table><caption>实际交付文件与链接目标</caption><thead><tr><th>交付文件</th><th>库 / 来源版本</th><th>链接目标</th><th>核查</th></tr></thead><tbody id="published-files"></tbody></table></div>
-        </div>
+        <div id="published-file-workbench" tabindex="-1"><h3 class="published-files-heading">交付文件核查</h3><div class="published-filter-bar" role="group" aria-label="交付文件筛选"><label class="compact-field">来源库<select id="published-library-filter"><option value="">全部库</option></select></label><label class="compact-field">文件类型<select id="published-view"><option value="">全部类型</option></select></label><label class="compact-field">链接核查<select id="published-link-status"><option value="">全部状态</option><option value="abnormal">仅异常</option><option value="READY">目标一致</option><option value="MISMATCH">目标不一致</option><option value="MISSING">文件缺失 / 链接失效</option><option value="COPIED">复制交付</option></select></label><label class="compact-field published-search-field">文件或来源路径<input id="published-file-query" type="search" placeholder="检索交付文件"></label><button id="published-search" class="button button-secondary" type="button">检索</button><button id="published-clear" class="button button-secondary" type="button">清除筛选</button></div><div class="published-pagination"><span id="published-file-count"></span><span id="published-check-scope">链接核查不读取文件内容</span><button id="published-previous" class="button button-secondary" type="button">上一页</button><button id="published-next" class="button button-secondary" type="button">下一页</button></div><div class="published-files-wrap"><table><caption>实际交付文件与链接目标</caption><thead><tr><th>交付文件</th><th>库 / 来源版本</th><th>链接目标</th><th>核查</th></tr></thead><tbody id="published-files"></tbody></table></div></div>
         </section>
       </section>
-      <nav class="primary-stage-tabs" role="tablist" aria-label="工作区">
-        <button class="primary-stage-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="version-workspace" data-stage-target="version-workspace"><strong>库与版本</strong></button>
-        <button class="primary-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="action-workspace evidence-workspace" data-stage-target="action-workspace"><strong>版本分析</strong></button>
-        <button class="primary-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="release-workspace" data-stage-target="release-workspace"><strong>发布交付</strong></button>
-        <button id="workspace-settings-button" class="button button-quiet" type="button" aria-controls="management-workspace" aria-expanded="false">设置</button>
-      </nav>
 
-      <section class="workspace-heading">
+      <section id="workspace-heading" class="workspace-heading">
         <div class="workspace-heading-main">
           <div class="breadcrumb sr-only"><span>库目录</span><span aria-hidden="true">/</span><strong id="selected-library-crumb">未选择</strong></div>
           <h2 id="selected-library">选择一个已登记库</h2>
@@ -162,6 +147,7 @@
       <details id="version-list-disclosure" class="pinned-version-board" aria-label="版本状态列表" open>
           <summary>版本列表</summary>
           <div id="version-status-facets" class="version-status-facets" aria-label="版本状态计数"></div>
+          <details id="advanced-version-filters" class="advanced-version-filters"><summary>高级筛选</summary><div id="version-advanced-facets" class="version-status-facets" aria-label="高级版本状态筛选"></div></details>
           <div class="pinned-version-board-head">
             <div>
               <strong>当前库版本状态</strong>
@@ -203,8 +189,7 @@
           </div></div>
           <div class="version-focus-actions" aria-label="所选版本操作">
             <button class="button button-secondary button-small" type="button" data-version-focus-action="open" disabled>打开详情</button>
-            <button class="button button-primary button-small" type="button" data-version-focus-action="scan" disabled>扫描</button>
-            <button class="button button-secondary button-small" type="button" data-version-focus-action="compare" disabled>对比</button>
+            <button class="button button-primary button-small" type="button" data-version-focus-action="next" disabled>选择版本</button>
             <span id="version-focus-action-hint" class="muted">选择版本后执行操作</span>
           </div>
         </section>
@@ -324,6 +309,12 @@
       </section>
 
       <section id="action-workspace" class="panel action-deck stage-anchor hidden" aria-label="版本分析">
+        <section id="version-result-summary" class="version-result-summary" aria-label="已有版本结果">
+          <div class="version-result-heading"><h3>已有结果</h3><a id="version-result-detail" class="text-link hidden" target="_blank" rel="noreferrer">打开版本详情 ↗</a></div>
+          <p id="version-result-change" class="version-result-change">选择版本后显示已生成的扫描与对比结果。</p>
+          <div class="version-result-facts"><div><span>扫描</span><strong id="version-result-scan">未读取</strong></div><div><span>对比</span><strong id="version-result-compare">未读取</strong></div><div><span>对比基准</span><strong id="version-result-base">未读取</strong></div></div>
+          <div id="version-result-links" class="version-result-links" aria-label="已有报告入口"></div>
+        </section>
         <div class="workbench-commandbar" role="toolbar" aria-label="常用操作">
           <span class="workbench-commandbar-label">分析操作</span>
           <button id="analysis-tab-scan" class="workbench-command is-active" type="button" aria-pressed="true" aria-controls="analysis-panel-scan" data-analysis-action="scan" data-workbench-command="scan">扫描</button>
@@ -371,15 +362,20 @@
             <label class="compact-field">更新人<input id="update-note-author" type="text" maxlength="80" placeholder="例如 chenhao"></label>
             <label class="compact-field wide-field">影响场景<input id="update-note-impact" type="text" maxlength="500" placeholder="用逗号分隔，例如 时序签核, 物理实现"></label>
             <label class="compact-field note-summary-field">备注摘要<textarea id="update-note-summary" rows="3" maxlength="1200" placeholder="说明本次版本变化、适用范围和使用者最需要知道的结论"></textarea></label>
+          </div>
+          <details class="version-note-advanced">
+            <summary>详细变化、风险与证据（可选）</summary>
+            <div class="version-note-grid version-note-detail-grid">
             <label class="compact-field">关键变化<textarea id="update-note-key-changes" rows="4" maxlength="1200" placeholder="每行一条，最多 24 条"></textarea></label>
             <label class="compact-field">风险提醒<textarea id="update-note-risks" rows="4" maxlength="1200" placeholder="每行一条，最多 24 条"></textarea></label>
             <label class="compact-field">必须确认<textarea id="update-note-must-check" rows="4" maxlength="1200" placeholder="每行一条，最多 24 条"></textarea></label>
             <label class="compact-field wide-field">证据引用<input id="update-note-evidence" type="text" maxlength="800" placeholder="用逗号分隔，例如 scan_report.html, current_lib_diff.md"></label>
-          </div>
+            </div>
+          </details>
           <div class="version-note-actions">
             <button id="load-update-note" class="button button-secondary button-small" type="button" disabled>读取备注</button>
             <button id="save-update-note-draft" class="button button-secondary button-small" type="button" disabled>保存草稿</button>
-            <button id="publish-update-note" class="button button-primary button-small" type="button" disabled>发布到详情页</button>
+            <button id="publish-update-note" class="button button-primary button-small" type="button" disabled>更新版本说明</button>
             <span id="update-note-feedback" class="command-summary">选择版本后显示备注状态。</span>
           </div>
         </details>
@@ -701,7 +697,13 @@
             <p id="workflow-summary" class="workflow-summary" aria-live="polite">选择库后，这里显示系统建议、计划和确认结果。</p>
           </article>
         </details>
-        <div class="release-workspace-actions">          <article class="action-card">
+        <div class="release-subview-tabs" role="tablist" aria-label="发布中心操作">
+          <button type="button" role="tab" aria-selected="true" data-release-subview="single">单库发布</button>
+          <button type="button" role="tab" aria-selected="false" data-release-subview="multi">多库组合</button>
+          <button type="button" role="tab" aria-selected="false" data-release-subview="inventory">发布阶段</button>
+        </div>
+        <div id="release-single-panel" class="release-workspace-actions" data-release-panel="single">
+          <article class="action-card">
             <div class="action-card-heading"><h4>发布链接</h4><span id="release-action-state" class="status-chip status-neutral">等待对象</span></div>
             <details class="inline-action-details release-plan-details" open>
               <summary>发布设置</summary>
@@ -732,10 +734,10 @@
             <div id="release-plan-result" class="release-plan-result hidden" aria-live="polite"></div>
             <button id="release-apply-action-button" class="button button-primary button-small hidden" data-action="release-apply" type="button" disabled>确认并创建链接</button>
           </article>
-</div>
+        </div>
 
 
-          <section id="formal-release-library-panel" class="command-group formal-release-library-panel" aria-label="正式发布库查询">
+          <section id="formal-release-library-panel" class="command-group formal-release-library-panel hidden" data-release-panel="inventory" aria-label="正式发布库查询">
             <div class="command-group-heading">
               <div>
                 <h4>正式发布库</h4>
@@ -761,7 +763,7 @@
             </details>
           </section>
 
-          <section id="release-set-panel" class="command-group release-set-panel" aria-label="多库发布组合">
+          <section id="release-set-panel" class="command-group release-set-panel hidden" data-release-panel="multi" aria-label="多库发布组合">
             <div class="command-group-heading">
               <div>
                 <h4>多库阶段发布</h4>
@@ -928,6 +930,6 @@
       </details>
     </main>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20261017.5') }}"></script>
 </body>
 </html>

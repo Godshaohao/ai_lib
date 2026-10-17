@@ -470,6 +470,18 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["libraries"][0]["library_name"], LIBRARY)
 
+    def test_loading_workbench_and_selecting_existing_read_routes_creates_no_job(self) -> None:
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td:
+            job_root = Path(td) / "jobs"
+            app = create_app(config_path=SMOKE_CONFIG, cwd=ROOT, test_config={"TESTING": True, "job_root": str(job_root)})
+            client = app.test_client()
+            self.assertEqual(client.get("/").status_code, 200)
+            self.assertEqual(client.get("/api/libraries").status_code, 200)
+            self.assertEqual(client.get(f"/api/libraries/{LIBRARY}/versions").status_code, 200)
+            self.assertFalse(job_root.exists(), "Navigation and read-only library selection must not enqueue jobs")
+
     def test_unknown_library_is_rejected_before_job_creation(self) -> None:
         from lib_guard.web.app import create_app
 

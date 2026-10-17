@@ -108,14 +108,36 @@
   const $ = (id) => document.getElementById(id);
   const JOB_TIMEOUT_MS = 30 * 60 * 1000;
   const VERSION_RENDER_BATCH = 25;
-  const STAGE_IDS = ['version-workspace', 'action-workspace', 'release-workspace', 'management-workspace'];
+  const STAGE_IDS = ['version-workspace', 'action-workspace', 'release-workspace', 'management-workspace', 'published-release-inspector'];
   const requestedStage = initialRoute.get('stage') === 'evidence-workspace' ? 'action-workspace' : initialRoute.get('stage');
-  const initialStage = STAGE_IDS.includes(requestedStage)
+  const initialStage = initialRoute.get('directory') === 'published'
+    ? 'published-release-inspector'
+    : STAGE_IDS.includes(requestedStage)
     ? requestedStage
     : initialTab === 'changes'
       ? 'action-workspace'
       : 'version-workspace';
   state.activeStage = initialStage;
+
+  function primaryDomainForStage(stageId) {
+    return ['release-workspace', 'published-release-inspector'].includes(stageId) ? 'release' : 'library';
+  }
+
+  function setReleaseSubview(nextView) {
+    const tabs = Array.from(document.querySelectorAll('[data-release-subview]'));
+    if (!tabs.some((tab) => tab.dataset.releaseSubview === nextView)) return;
+    tabs.forEach((tab) => {
+      const active = tab.dataset.releaseSubview === nextView;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+      tab.classList.toggle('is-active', active);
+    });
+    document.querySelectorAll('[data-release-panel]').forEach((panel) => {
+      const active = panel.dataset.releasePanel === nextView;
+      panel.classList.toggle('hidden', !active);
+      panel.setAttribute('aria-hidden', String(!active));
+    });
+  }
 
   function updateRouteState() {
     const params = new URLSearchParams();
@@ -176,6 +198,7 @@
   function setActiveStageTab(stageId) {
     const requested = stageId === 'evidence-workspace' ? 'action-workspace' : stageId;
     const nextStage = STAGE_IDS.includes(requested) ? requested : STAGE_IDS[0];
+    const domain = primaryDomainForStage(nextStage);
     state.activeStage = nextStage;
     document.querySelectorAll('[data-stage-target]').forEach((tab) => {
       const active = tab.dataset.stageTarget === nextStage;
@@ -191,6 +214,15 @@
       panel.classList.toggle('hidden', !active);
       panel.setAttribute('aria-hidden', active ? 'false' : 'true');
     });
+    document.querySelectorAll('[data-primary-target]').forEach((tab) => {
+      const active = tab.dataset.primaryTarget === domain;
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-current', active ? 'page' : 'false');
+    });
+    document.querySelector('.library-view-tabs').classList.toggle('hidden', domain !== 'library');
+    document.querySelector('.release-view-tabs').classList.toggle('hidden', domain !== 'release');
+    $('workspace-heading').classList.toggle('hidden', domain === 'release');
+    $('workspace-setup-panel').classList.toggle('hidden', domain === 'release' || !state.workspace?.setup_required);
     $('evidence-workspace').classList.toggle('hidden', nextStage !== 'action-workspace');
     $('evidence-workspace').setAttribute('aria-hidden', nextStage === 'action-workspace' ? 'false' : 'true');
     $('workspace-settings-button').setAttribute('aria-expanded', nextStage === 'management-workspace' ? 'true' : 'false');
@@ -1888,18 +1920,23 @@
 
   function renderVersionFacets() {
     const target = $('version-status-facets');
-    if (!target) return;
+    const advancedTarget = $('version-advanced-facets');
+    if (!target || !advancedTarget) return;
     if (!state.selectedLibrary) {
       target.innerHTML = '<span class="version-facet-note">选择库后显示版本状态计数。</span>';
+      advancedTarget.innerHTML = '';
       return;
     }
     const counts = versionFacetCounts();
-    const filters = ['focus', 'new_scan', 'base_scan', 'effective_hygiene', 'compare', 'review', 'effective', 'blocked', 'error', 'all'];
-    target.innerHTML = filters.map((filter) => `
+    const filters = ['focus', 'all', 'error'];
+    const advancedFilters = ['new_scan', 'base_scan', 'effective_hygiene', 'compare', 'review', 'effective', 'blocked'];
+    const render = (items) => items.map((filter) => `
       <button class="version-facet ${state.versionFilter === filter ? 'is-active' : ''}" data-version-facet="${filter}" type="button">
         <span>${escapeHtml(versionFilterName(filter))}</span><strong>${Number(counts[filter] || 0)}</strong>
       </button>`).join('');
-    target.querySelectorAll('[data-version-facet]').forEach((button) => button.addEventListener('click', () => {
+    target.innerHTML = render(filters);
+    advancedTarget.innerHTML = render(advancedFilters);
+    document.querySelectorAll('[data-version-facet]').forEach((button) => button.addEventListener('click', () => {
       state.versionFilter = button.dataset.versionFacet || 'all';
       updateRouteState();
       renderVersions();
@@ -1947,6 +1984,34 @@
     return { state: '审查事实已就绪', action: '打开详情', kind: 'open', base, note: '扫描和对比事实已生成，可查看版本详情页。' };
   }
 
+  function versionPrimaryAction(item) {
+    if (!item) return { kind: '', label: '选择版本', reason: '从版本列表选择一个版本。', disabled: true };
+    const packageType = String(item.package_type || '').toUpperCase();
+    if (['UNKNOWN', 'UNKNOWN_PACKAGE', 'UNCLASSIFIED'].includes(packageType)) {
+      return { kind: 'settings', label: '修正包类型', reason: '包类型未确认；先在设置与维护中确认版本类型。' };
+    }
+    const readiness = effectiveReadiness(item, item.action_readiness || {});
+    const task = deriveVersionTask(item);
+    if (task.action === '扫描' || task.action === '补扫') {
+      return readiness.scan?.enabled
+        ? { kind: 'scan', label: task.action, reason: task.note }
+        : { kind: 'analysis', label: '查看扫描条件', reason: readiness.scan?.reason || task.note };
+    }
+    if (task.action === '对比') {
+      return readiness.compare?.enabled
+        ? { kind: 'compare', label: readiness.compare.button_label || '对比', reason: readiness.compare.reason || task.note }
+        : { kind: 'analysis', label: '查看对比条件', reason: readiness.compare?.reason || task.note };
+    }
+    if (item.version_detail_url) return { kind: 'open', label: '打开详情', reason: task.note };
+    return { kind: 'analysis', label: '查看已有结果', reason: '扫描事实已存在；当前没有可打开的版本详情页。' };
+  }
+
+  function versionFocusActionDisabled(item, action, activeAction) {
+    return !item || Boolean(activeAction)
+      || (action === 'open' && !item.version_detail_url)
+      || (action === 'next' && versionPrimaryAction(item).disabled);
+  }
+
   function scanFactLabel(item) {
     if (item?.scan_evidence_ready) return '扫描已就绪';
     const status = String(item?.scan_status || 'NOT_SCANNED').toUpperCase();
@@ -1966,6 +2031,38 @@
     if (!item?.scan_evidence_ready && hasCompareRecord(item)) return '对比记录待验证';
     if (diffStatus === 'NOT_APPLICABLE') return '无需对比';
     return item?.change_summary || statusLabel(diffStatus);
+  }
+
+  function renderVersionResultSummary(item) {
+    const change = $('version-result-change');
+    const scan = $('version-result-scan');
+    const compare = $('version-result-compare');
+    const base = $('version-result-base');
+    const links = $('version-result-links');
+    const detail = $('version-result-detail');
+    if (!change || !scan || !compare || !base || !links || !detail) return;
+    if (!item) {
+      change.textContent = '选择版本后显示已生成的扫描与对比结果。';
+      scan.textContent = '未读取';
+      compare.textContent = '未读取';
+      base.textContent = '未读取';
+      links.innerHTML = '';
+      detail.classList.add('hidden');
+      detail.removeAttribute('href');
+      return;
+    }
+    change.textContent = String(item.change_summary || (hasCompareRecord(item) ? statusLabel(item.diff_status) : '尚无对比结果；扫描完成不代表已完成版本对比。'));
+    scan.textContent = scanFactLabel(item);
+    compare.textContent = compareFactLabel(item);
+    base.textContent = item.base_version || '无对比基准';
+    detail.classList.toggle('hidden', !item.version_detail_url);
+    if (item.version_detail_url) detail.href = item.version_detail_url;
+    else detail.removeAttribute('href');
+    const entries = [
+      ['扫描报告', item.scan_html],
+      ['对比报告', item.diff_html],
+    ].filter(([, href]) => typeof href === 'string' && (/^https?:\/\//.test(href) || href.startsWith('/artifacts/')));
+    links.innerHTML = entries.map(([label, href]) => `<a class="text-link" href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${label} ↗</a>`).join('');
   }
 
   function filteredVersions() {
@@ -2035,16 +2132,17 @@
     document.querySelectorAll('[data-version]').forEach((row) => row.addEventListener('click', () => selectVersion(row.dataset.version)));
     document.querySelectorAll('[data-version-focus-action]').forEach((button) => {
       const action = button.dataset.versionFocusAction;
-      button.disabled = !state.selectedVersion || Boolean(state.activeAction)
-        || (action === 'open' && !state.selectedVersion?.version_detail_url)
-        || (action === 'scan' && !state.selectedVersion?.action_readiness?.scan?.enabled)
-        || (action === 'compare' && !state.selectedVersion?.action_readiness?.compare?.enabled);
-      button.title = button.disabled && action === 'open' ? '该版本详情尚未生成。'
-        : button.disabled && action === 'scan' ? '当前版本暂不满足扫描条件。'
-          : button.disabled && action === 'compare' ? '请先准备扫描证据和有效基准。' : '';
+      button.disabled = versionFocusActionDisabled(state.selectedVersion, action, state.activeAction);
+      if (action === 'next') {
+        const next = versionPrimaryAction(state.selectedVersion);
+        button.textContent = next.label;
+        button.title = next.reason;
+      } else {
+        button.title = button.disabled ? '该版本详情尚未生成。' : '';
+      }
     });
     $('version-focus-action-hint').textContent = state.selectedVersion
-      ? '操作针对当前所选版本；更多核查与审查在“版本分析”中。'
+      ? versionPrimaryAction(state.selectedVersion).reason
       : '选择版本后执行操作';
   }
 
@@ -2382,6 +2480,7 @@
       $('version-focus-base').textContent = '未选择版本';
       $('version-focus-effective').textContent = library?.current_effective || '未设置';
       $('version-focus-facts').textContent = '等待选择';
+      renderVersionResultSummary(null);
       renderActionDeckReadiness(null);
       renderActionDeckNavigation(null);
       updateExplicitFileDiffState();
@@ -2417,6 +2516,7 @@
     $('version-focus-base').textContent = task.base || '无可比基准';
     $('version-focus-effective').textContent = library?.current_effective || '未设置';
     $('version-focus-facts').textContent = `扫描 ${scanFactLabel(item)} · 对比 ${compareFactLabel(item)} · ${releaseLabel(item.release_status)}`;
+    renderVersionResultSummary(item);
     const detail = item.version_detail_url ? `<a class="text-link" href="${item.version_detail_url}" target="_blank" rel="noreferrer">打开版本详情页 ↗</a>` : '<span class="muted">版本详情尚未生成</span>';
     $('version-facts').innerHTML = [
       ['包类型', packageLabel(item.package_type)], ['版本角色', item.current_effective ? '当前有效' : stageLabel(item.stage)], ['对比基准', item.base_version || '未设置'],
@@ -2990,15 +3090,13 @@
     state.directoryMode = mode;
     state.publishedRequestId += 1;
     const published = mode === 'published';
-    document.body.classList.toggle('release-directory-mode', published);
-    $('published-release-inspector').classList.toggle('hidden', !published);
-    $('source-library-filters').classList.toggle('hidden', published);
     $('directory-source').setAttribute('aria-pressed', String(!published));
     $('directory-published').setAttribute('aria-pressed', String(published));
     $('directory-note').textContent = published ? '正式目录与临时发布记录' : '只显示已登记源库';
     $('directory-boundary').textContent = published ? '正式目录按实际文件盘点；临时输出单独查看。刷新不修改交付链接。' : '源库来自已登记目录；查看不扫描、不发布。';
     $('library-filter').value = published ? state.publishedQuery : state.libraryQuery;
     $('library-filter').placeholder = published ? state.formalDirectoryMode ? '搜索正式来源库' : '搜索发布阶段或包含的库' : '搜索库名称';
+    setActiveStageTab(published ? 'published-release-inspector' : 'version-workspace');
     renderLibraries();
     updateRouteState();
     if (published) loadPublishedDetail();
@@ -4186,7 +4284,16 @@
   document.querySelectorAll('[data-version-focus-action]').forEach((button) => button.addEventListener('click', () => {
     const action = button.dataset.versionFocusAction;
     if (action === 'open') openVersionDetail();
-    if (action === 'scan' || action === 'compare') runAction(action);
+    if (action === 'next') {
+      const next = versionPrimaryAction(state.selectedVersion);
+      if (next.kind === 'scan' || next.kind === 'compare') runAction(next.kind);
+      if (next.kind === 'open') openVersionDetail();
+      if (next.kind === 'settings') setActiveStageTab('management-workspace');
+      if (next.kind === 'analysis') {
+        setActiveStageTab('action-workspace');
+        selectAnalysisAction('review');
+      }
+    }
   }));
   $('load-more-versions').addEventListener('click', () => {
     if (state.versionsLoadingMore) return;
@@ -4284,12 +4391,37 @@
       activateWorkspaceTab(tabs[(current + offset + tabs.length) % tabs.length].dataset.workspaceTab, { focus: true });
     });
   });
+  document.querySelectorAll('[data-primary-target]').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      if (tab.dataset.primaryTarget === 'release') {
+        state.directoryMode = 'source';
+        setDirectoryMode('source');
+        setActiveStageTab('release-workspace');
+      } else {
+        setDirectoryMode('source');
+        setActiveStageTab('version-workspace');
+      }
+    });
+  });
+  document.querySelectorAll('[data-release-subview]').forEach((tab) => {
+    tab.addEventListener('click', () => setReleaseSubview(tab.dataset.releaseSubview));
+    tab.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = Array.from(document.querySelectorAll('[data-release-subview]'));
+      const current = tabs.indexOf(tab);
+      const offset = event.key === 'ArrowRight' ? 1 : -1;
+      const next = tabs[(current + offset + tabs.length) % tabs.length];
+      setReleaseSubview(next.dataset.releaseSubview);
+      next.focus();
+    });
+  });
   document.querySelectorAll('[data-stage-target]').forEach((tab) => {
     tab.addEventListener('click', () => scrollToStage(tab.dataset.stageTarget));
     tab.addEventListener('keydown', (event) => {
       if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
       event.preventDefault();
-      const tabs = Array.from(document.querySelectorAll('[data-stage-target]'));
+      const tabs = Array.from(tab.closest('[role="tablist"]').querySelectorAll('[data-stage-target]'));
       const current = tabs.indexOf(tab);
       const offset = event.key === 'ArrowRight' ? 1 : -1;
       const next = tabs[(current + offset + tabs.length) % tabs.length];
@@ -4330,11 +4462,7 @@
     scrollToStage('action-workspace');
     window.requestAnimationFrame(() => settings.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
   });
-  $('workspace-settings-button').addEventListener('click', () => {
-    const closing = state.activeStage === 'management-workspace';
-    scrollToStage(closing ? 'action-workspace' : 'management-workspace');
-    if (!closing) $('settings-disclosure').open = true;
-  });
+  $('workspace-settings-button').addEventListener('click', () => $('settings-disclosure').open = true);
   $('open-file-diff').addEventListener('click', openFileDiffWorkbench);
   $('open-review-actions').addEventListener('click', openReviewActions);
   $('load-update-note').addEventListener('click', () => loadUpdateNoteForSelectedVersion().catch((error) => setUpdateNoteFeedback(`读取备注失败：${error.message}`, 'error')));
@@ -4446,8 +4574,8 @@
       if (button.dataset.uiAction === 'focus-version-actions') focusVersionActions();
     });
   });
-  $('directory-source').addEventListener('click', () => setDirectoryMode('source'));
-  $('directory-published').addEventListener('click', () => setDirectoryMode('published'));
+  $('directory-source').addEventListener('click', () => { setDirectoryMode('source'); setActiveStageTab('release-workspace'); });
+  $('directory-published').addEventListener('click', () => { state.directoryMode = 'published'; setDirectoryMode('published'); });
   $('published-refresh').addEventListener('click', () => refreshFormalReleaseLibraries());
   $('published-root-settings').addEventListener('click', () => {
     setDirectoryMode('source'); setActiveStageTab('management-workspace');
@@ -4505,6 +4633,7 @@
   restoreRouteControls();
   renderUpdateNote();
   activateWorkspaceTab(state.workspaceTab);
+  setReleaseSubview('single');
   setActiveStageTab(state.activeStage);
   setDirectoryMode(state.directoryMode);
   getJson('/api/health').then(() => { $('health-badge').textContent = '服务正常'; $('health-badge').className = 'status-chip status-good'; }).catch(() => { $('health-badge').textContent = '服务异常'; $('health-badge').className = 'status-chip status-bad'; });

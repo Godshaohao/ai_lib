@@ -11,6 +11,155 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class WebUiContractTest(unittest.TestCase):
+    def test_primary_navigation_has_two_work_domains_and_contextual_views(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        primary = template.split('class="primary-work-domains"', 1)[1].split('</nav>', 1)[0]
+        self.assertEqual(primary.count('data-primary-target='), 2)
+        self.assertIn('data-primary-target="library"', primary)
+        self.assertIn('data-primary-target="release"', primary)
+        self.assertIn('class="library-view-tabs"', template)
+        self.assertIn('data-stage-target="version-workspace"', template)
+        self.assertIn('data-stage-target="action-workspace"', template)
+        self.assertIn('data-stage-target="management-workspace"', template)
+        self.assertIn('class="release-view-tabs hidden"', template)
+        self.assertIn('id="workspace-heading"', template)
+        self.assertIn('data-stage-target="release-workspace"', template)
+        self.assertIn('data-stage-target="published-release-inspector"', template)
+        self.assertIn('function primaryDomainForStage(', script)
+        self.assertNotIn('release-directory-mode .workspace >', (ROOT / 'src/lib_guard/web/static/styles.css').read_text())
+        self.assertIn('id="advanced-version-filters"', template)
+        self.assertIn('id="version-advanced-facets"', template)
+        self.assertIn("const filters = ['focus', 'all', 'error']", script)
+
+    def test_web_assets_use_a_cache_version(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        self.assertIn("filename='styles.css', v=", template)
+        self.assertIn("filename='app.js', v=", template)
+
+    def test_selected_version_has_one_readiness_driven_primary_action(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        version_workspace = template.split('id="version-workspace"', 1)[1].split('id="action-workspace"', 1)[0]
+        self.assertIn('data-version-focus-action="next"', version_workspace)
+        self.assertIn('data-version-focus-action="open"', version_workspace)
+        self.assertNotIn('data-version-focus-action="scan"', version_workspace)
+        self.assertNotIn('data-version-focus-action="compare"', version_workspace)
+        self.assertIn('function versionPrimaryAction(', script)
+        self.assertIn("versionPrimaryAction(state.selectedVersion)", script)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for primary-action state tests')
+    def test_primary_action_maps_existing_version_states_without_fake_actions(self):
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        helper = script[script.index('  function versionPrimaryAction('):script.index('  function scanFactLabel(')]
+        harness = r"""
+const assert = require('node:assert/strict');
+const effectiveReadiness = (item, readiness) => readiness;
+const deriveVersionTask = item => item.task;
+""" + helper + r"""
+assert.deepEqual(versionPrimaryAction(null), {
+  kind:'', label:'选择版本', reason:'从版本列表选择一个版本。', disabled:true
+});
+assert.equal(versionPrimaryAction({package_type:'UNKNOWN_PACKAGE'}).kind, 'settings');
+assert.deepEqual(versionPrimaryAction({package_type:'FULL_PACKAGE', task:{action:'扫描',note:'初次扫描'}, action_readiness:{scan:{enabled:true}}}),
+  {kind:'scan',label:'扫描',reason:'初次扫描'});
+assert.equal(versionPrimaryAction({package_type:'FULL_PACKAGE', task:{action:'补扫',note:'证据缺失'}, action_readiness:{scan:{enabled:true}}}).kind, 'scan');
+assert.deepEqual(versionPrimaryAction({package_type:'FULL_PACKAGE', task:{action:'扫描',note:'被阻塞'}, action_readiness:{scan:{enabled:false,reason:'路径不可读'}}}),
+  {kind:'analysis',label:'查看扫描条件',reason:'路径不可读'});
+assert.deepEqual(versionPrimaryAction({package_type:'PARTIAL_UPDATE', task:{action:'对比',note:'需对比'}, action_readiness:{compare:{enabled:true,button_label:'补扫并对比',reason:'先补基准'}}}),
+  {kind:'compare',label:'补扫并对比',reason:'先补基准'});
+assert.deepEqual(versionPrimaryAction({package_type:'PARTIAL_UPDATE', task:{action:'对比',note:'需对比'}, action_readiness:{compare:{enabled:false,reason:'基准未扫描'}}}),
+  {kind:'analysis',label:'查看对比条件',reason:'基准未扫描'});
+assert.deepEqual(versionPrimaryAction({package_type:'FULL_PACKAGE', task:{action:'打开详情',note:'事实已就绪'}, version_detail_url:'/detail'}),
+  {kind:'open',label:'打开详情',reason:'事实已就绪'});
+assert.deepEqual(versionPrimaryAction({package_type:'FULL_PACKAGE', task:{action:'打开详情',note:'事实已就绪'}}),
+  {kind:'analysis',label:'查看已有结果',reason:'扫描事实已存在；当前没有可打开的版本详情页。'});
+"""
+        result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for running-action state tests')
+    def test_version_focus_action_is_disabled_while_a_job_is_running(self):
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        self.assertIn('  function versionFocusActionDisabled(', script)
+        helper = script[script.index('  function versionFocusActionDisabled('):script.index('\n  function scanFactLabel(', script.index('  function versionFocusActionDisabled('))]
+        harness = r"""
+const assert = require('node:assert/strict');
+const versionPrimaryAction = item => item?.next || {disabled:!item};
+""" + helper + r"""
+const selected={version_detail_url:'/detail',next:{disabled:false}};
+assert.equal(versionFocusActionDisabled(selected,'next',null),false);
+assert.equal(versionFocusActionDisabled(selected,'next','scan'),true);
+assert.equal(versionFocusActionDisabled(selected,'open','compare'),true);
+assert.equal(versionFocusActionDisabled({next:{disabled:true}},'next',null),true);
+assert.equal(versionFocusActionDisabled(null,'next',null),true);
+"""
+        result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_version_note_default_form_is_concise_and_keeps_advanced_fields(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        note = template.split('class="version-note-workbench"', 1)[1].split('</details>', 1)[0]
+        self.assertIn('id="update-note-summary"', note)
+        self.assertIn('id="update-note-impact"', note)
+        self.assertIn('id="update-note-suggestion"', note)
+        self.assertIn('class="version-note-advanced"', template)
+        self.assertIn('id="update-note-risks"', template)
+        self.assertIn('id="update-note-evidence"', template)
+        self.assertIn('>更新版本说明</button>', template)
+        self.assertNotIn('>发布到详情页</button>', template)
+
+    def test_release_center_separates_single_multi_and_inventory_views(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        self.assertIn('role="tablist" aria-label="发布中心操作"', template)
+        for view in ('single', 'multi', 'inventory'):
+            self.assertIn(f'data-release-subview="{view}"', template)
+        self.assertIn('id="release-single-panel"', template)
+        self.assertIn('id="release-set-panel"', template)
+        self.assertIn('id="formal-release-library-panel"', template)
+        self.assertIn('function setReleaseSubview(', script)
+        self.assertIn("data-release-subview", script)
+
+    def test_analysis_leads_with_existing_results_before_expert_actions(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        analysis = template.split('id="action-workspace"', 1)[1].split('id="release-workspace"', 1)[0]
+        self.assertLess(analysis.index('id="version-result-summary"'), analysis.index('class="workbench-commandbar"'))
+        for element_id in ('version-result-scan', 'version-result-compare', 'version-result-links'):
+            self.assertIn(f'id="{element_id}"', analysis)
+        renderer = script[script.index('function renderVersionResultSummary('):script.index('\n  function ', script.index('function renderVersionResultSummary(') + 10)]
+        self.assertIn('scanFactLabel(item)', renderer)
+        self.assertIn('compareFactLabel(item)', renderer)
+        self.assertNotIn('risk', renderer.lower())
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for result summary rendering tests')
+    def test_result_summary_shows_recorded_comparison_base_not_suggested_base(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        self.assertIn('id="version-result-base"', template)
+        start = script.index('  function renderVersionResultSummary(')
+        end = script.index('\n  function filteredVersions()', start)
+        renderer = script[start:end]
+        harness = r"""
+const assert = require('node:assert/strict');
+const elements = new Map();
+const $ = id => { if (!elements.has(id)) elements.set(id, {textContent:'',innerHTML:'',href:'',removeAttribute(){},classList:{add(){},remove(){},toggle(){}}}); return elements.get(id); };
+const hasCompareRecord = item => Boolean(item.diff_status && item.diff_status !== 'NOT_APPLICABLE');
+const scanFactLabel = item => item.scan_evidence_ready ? '扫描已就绪' : '未扫描';
+const compareFactLabel = item => item.diff_status === 'NOT_APPLICABLE' ? '无需对比' : item.change_summary || '待对比';
+const escapeHtml = value => String(value);
+""" + renderer + r"""
+renderVersionResultSummary({version_id:'fix2',base_version:'full1',adjacent_base_version:'fix1',scan_evidence_ready:true,
+ scan_status:'PASS',diff_status:'PASS',change_summary:'新增 2 / 修改 1'});
+assert.equal($('version-result-base').textContent, 'full1');
+renderVersionResultSummary({version_id:'first',base_version:null,adjacent_base_version:null,scan_evidence_ready:true,
+ scan_status:'PASS',diff_status:'NOT_APPLICABLE',change_summary:'初始基线'});
+assert.equal($('version-result-base').textContent, '无对比基准');
+"""
+        result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_analysis_actions_are_scoped_to_analysis_and_run_console_is_collapsible(self):
         template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
         script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
@@ -232,6 +381,50 @@ const startJob=async()=>{state.activeAction=null;return {return_code:outcome,res
         result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for failed workflow preservation tests')
+    def test_failed_next_apply_preserves_current_stack_selection_and_run_log(self):
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        selection = script[script.index('  function effectiveSelectionKey('):script.index('  function renderEffectiveSelection(')]
+        workflow = script[script.index('  function workflowRequest('):script.index('  function workflowSuccessMessage(')]
+        harness = r"""
+const assert = require('node:assert/strict');
+const state = {selectedLibrary:'demo',activeAction:null,effectiveDrafts:new Map(),versions:[]};
+const library = {current_effective_stack:{current_effective_id:'E_old',base_full_version:'full_old',accepted_updates:['fix_old']},
+ pending_window:{candidate_effective_id:'E_candidate',candidate_effective_stack:{base_full_version:'full',accepted_updates:['fix']}}};
+const selectedLibraryRow = () => library;
+const elements = new Map();
+const $ = id => {if(!elements.has(id)) elements.set(id,{value:'owner',checked:false,textContent:'',className:'',href:'',classList:{remove(){},add(){}}});return elements.get(id);};
+let sent = null;
+const getJson = async (url, options) => {sent={url,payload:JSON.parse(options.body)};return {status:'QUEUED',job_id:'job-failed'};};
+const startJob = async result => { $('job-log-link').href='/api/runs/job-failed/log'; $('job-log-link').classList.remove('hidden'); clearActionBusy(); return {return_code:2,status:'FAILED',log_url:'/api/runs/job-failed/log',result_summary:'处理失败'}; };
+const strategyPayload = () => ({hash_policy:'smart'});
+const setActionBusy = action => {state.activeAction=action;};
+const clearActionBusy = () => {state.activeAction=null;};
+const setWorkflowStatus = (status, cls) => { $('workflow-status').textContent=status; $('workflow-status').className=cls; };
+const statusClass = () => 'status-bad';
+const renderVersionFacts = () => {};
+const writeConfirmation = () => '确认';
+const window = {confirm:()=>true};
+""" + selection + workflow + r"""
+(async()=>{
+ const draft=effectiveSelectionDraft();
+ draft.preview={key:effectiveSelectionKey(draft),endpoint:'next',payload:{base_full:'full',includes:['fix']}};
+ const preview=draft.preview;
+ await runWorkflow('next-apply');
+ assert.ok(sent.url.endsWith('/demo/next'));
+ assert.deepEqual(sent.payload,{base_full:'full',includes:['fix'],apply:true,plan_only:false});
+ assert.equal(state.effectiveDrafts.get('demo'),draft);
+ assert.strictEqual(draft.preview,preview);
+ assert.equal(library.current_effective_stack.current_effective_id,'E_old');
+ assert.equal(library.pending_window.candidate_effective_id,'E_candidate');
+ assert.equal(state.activeAction,null);
+ assert.equal($('job-log-link').href,'/api/runs/job-failed/log');
+ assert.equal($('workflow-summary').textContent,'处理失败');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     @unittest.skipUnless(shutil.which('node'), 'Node is required for selection pagination tests')
     def test_manual_selection_loads_all_pages_only_on_demand(self):
         script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
@@ -381,7 +574,7 @@ assert.equal(analysisNextStep({scan_evidence_ready:true,base_version:'v1',diff_s
         self.assertIn('--table-row-height: 40px', styles)
         self.assertIn('.version-focus-strip strong { white-space: normal;', styles)
         self.assertIn('.action-deck-grid > .action-card { border: 0;', styles)
-        self.assertIn('grid-template-columns: repeat(3, max-content) minmax(72px, 1fr)', styles)
+        self.assertIn('.primary-work-domains { position: sticky;', styles)
 
     @unittest.skipUnless(shutil.which('node'), 'Node is required for action selection tests')
     def test_analysis_action_switch_preserves_forms_and_exposes_one_panel(self):
@@ -441,8 +634,9 @@ assert.equal(panels.review.hidden, false);
         version_workspace = template.split('id="version-workspace"', 1)[1].split('id="action-workspace"', 1)[0]
         self.assertNotIn('id="version-status-filter"', template)
         self.assertIn('data-version-focus-action="open"', version_workspace)
-        self.assertIn('data-version-focus-action="scan"', version_workspace)
-        self.assertIn('data-version-focus-action="compare"', version_workspace)
+        self.assertIn('data-version-focus-action="next"', version_workspace)
+        self.assertNotIn('data-version-focus-action="scan"', version_workspace)
+        self.assertNotIn('data-version-focus-action="compare"', version_workspace)
         self.assertNotIn('versionRowActions(item)', script[script.index('function renderVersions()'):script.index('function setActionDeckState(')])
         self.assertIn("data-version-focus-action", script)
         self.assertEqual(script.count("document.querySelectorAll('[data-version-focus-action]').forEach((button) => button.addEventListener('click'"), 1)
@@ -593,7 +787,7 @@ const assert = require('node:assert/strict');
 const state = {selectedLibrary:'A', selectedVersion:{version_id:'v2'}, publishedRequestId:0, publishedQuery:'NL', libraryQuery:'A'};
 const nodes = new Map();
 const $ = id => { if (!nodes.has(id)) nodes.set(id,{classList:{toggle(){}},setAttribute(){},value:'',textContent:''}); return nodes.get(id); };
-const document = {body:{classList:{toggle(){}}}};
+const setActiveStageTab = stage => { state.activeStage = stage; };
 let reads = 0;
 const renderLibraries = () => {};
 const updateRouteState = () => {};
@@ -639,11 +833,14 @@ assert.ok(releaseSetCompareHtml({libraries:[]},'').includes('没有库级对比�
 
     def test_workspaces_have_one_owner_for_analysis_delivery_and_settings(self) -> None:
         template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
-        self.assertIn('<strong>库与版本</strong>', template)
-        self.assertIn('<strong>版本分析</strong>', template)
-        self.assertIn('<strong>发布交付</strong>', template)
+        self.assertIn('data-primary-target="library"', template)
+        self.assertIn('data-primary-target="release"', template)
+        self.assertIn('<strong>版本</strong>', template)
+        self.assertIn('<strong>分析与结果</strong>', template)
+        self.assertIn('<strong>发布操作</strong>', template)
         self.assertNotIn('data-stage-target="evidence-workspace"', template)
-        self.assertNotIn('data-stage-target="management-workspace"', template)
+        self.assertIn('data-stage-target="management-workspace"', template)
+        self.assertIn('data-stage-target="published-release-inspector"', template)
         delivery = template.split('id="release-workspace"', 1)[1].split('id="management-workspace"', 1)[0]
         for element in ('release-action-button', 'release-plan-result', 'formal-release-library-panel', 'release-set-panel'):
             self.assertIn(f'id="{element}"', delivery)
@@ -682,14 +879,17 @@ assert.ok(releaseSetCompareHtml({libraries:[]},'').includes('没有库级对比�
         harness = r'''
 const assert = require('node:assert/strict');
 const state = {selectedLibrary:'A', selectedVersion:{version_id:'v2'}, workspaceTab:'changes'};
-const STAGE_IDS = ['version-workspace','action-workspace','release-workspace','management-workspace'];
+const STAGE_IDS = ['version-workspace','action-workspace','release-workspace','management-workspace','published-release-inspector'];
 const nodes = new Map();
 const $ = id => {
  if (!nodes.has(id)) nodes.set(id, {attrs:{}, hidden:false, classList:{toggle(name, flag){nodes.get(id).hidden=flag;},remove(){}},setAttribute(name,value){this.attrs[name]=value;}});
  return nodes.get(id);
 };
-const tabs=STAGE_IDS.slice(0,3).map(id=>({dataset:{stageTarget:id},attrs:{},classList:{toggle(){},remove(){}},setAttribute(name,value){this.attrs[name]=value;},getAttribute(name){return this.attrs[name] || 'false';}}));
-const document={querySelectorAll:()=>tabs};
+const tabs=STAGE_IDS.map(id=>({dataset:{stageTarget:id},attrs:{},classList:{toggle(){},remove(){}},setAttribute(name,value){this.attrs[name]=value;},getAttribute(name){return this.attrs[name] || 'false';}}));
+const primary=['library','release'].map(id=>({dataset:{primaryTarget:id},classList:{toggle(){}},setAttribute(){}}));
+const navs={'.library-view-tabs':{classList:{toggle(){}}},'.release-view-tabs':{classList:{toggle(){}}}};
+const document={querySelectorAll:selector=>selector==='[data-primary-target]'?primary:selector==='[data-analysis-action]'?[]:tabs,querySelector:selector=>navs[selector]};
+const primaryDomainForStage = stage => ['release-workspace','published-release-inspector'].includes(stage) ? 'release' : 'library';
 const updateRouteState=()=>{};
 const selectAnalysisAction=()=>{};
 '''
@@ -995,9 +1195,9 @@ assert.equal($('release-set-compare').disabled,true);
             "版本分析",
             "文件核对",
             "变化清单",
-            "库与版本",
-            "发布交付",
-            "配置与维护",
+            "库工作台",
+            "发布中心",
+            "设置与维护",
             "策略与例外",
             "新版本接入",
             "新库接入",
@@ -1037,8 +1237,8 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn("新版本接入", template)
         self.assertIn("action-deck", template)
         self.assertIn('class="control-zone stage-anchor hidden"', template)
-        self.assertIn('class="primary-stage-tabs" role="tablist"', template)
-        self.assertLess(template.index('class="primary-stage-tabs"'), template.index('class="workspace-heading"'))
+        self.assertIn('class="primary-work-domains"', template)
+        self.assertLess(template.index('class="primary-work-domains"'), template.index('class="workspace-heading"'))
         self.assertIn('class="workflow-context sr-only"', template)
         self.assertIn('id="action-workspace" class="panel action-deck stage-anchor hidden"', template)
         self.assertIn('id="evidence-workspace" class="content-grid stage-anchor hidden"', template)
@@ -1101,8 +1301,9 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn("version-base-label", script)
         self.assertIn("versionRoleLabel", script)
         self.assertIn('data-version-focus-action="open"', template)
-        self.assertIn('data-version-focus-action="scan"', template)
-        self.assertIn('data-version-focus-action="compare"', template)
+        self.assertIn('data-version-focus-action="next"', template)
+        self.assertNotIn('data-version-focus-action="scan"', template)
+        self.assertNotIn('data-version-focus-action="compare"', template)
         self.assertIn("发布待确认", script)
         self.assertIn("待扫描", script)
         self.assertIn("待对比", script)
@@ -1380,7 +1581,7 @@ assert.equal($('release-set-compare').disabled,true);
         self.assertIn('id="file-change-facets"', template)
         self.assertIn("文件变化总览", template)
         self.assertIn("show-settings-button", template)
-        self.assertLess(template.index('class="primary-stage-tabs"'), template.index('id="version-workspace"'))
+        self.assertLess(template.index('class="primary-work-domains"'), template.index('id="version-workspace"'))
         self.assertLess(template.index('id="version-workspace"'), template.index('id="version-list-disclosure"'))
         self.assertLess(template.index('id="version-list-disclosure"'), template.index('class="pinned-workbench"'))
         self.assertLess(template.index('id="version-workspace"'), template.index('id="run-workspace"'))
