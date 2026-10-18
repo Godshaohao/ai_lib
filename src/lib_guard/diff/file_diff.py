@@ -87,7 +87,7 @@ def comparison_capability(file_type: str) -> dict[str, Any]:
             "text_diff_available": True,
             "parameters": list(parameters),
             "parameter_method": "解析器抽取字段 + 双栏逐行核对",
-            "hash_provenance": "解析结构内容摘要",
+            "hash_provenance": "本次手工两两对比计算完整源文件 SHA-256；解析字段另行比较",
         }
     if normalized in BINARY_METADATA_ONLY_TYPES:
         return {
@@ -151,11 +151,20 @@ def _ignored_bookkeeping_changes(old_data: Any, new_data: Any) -> dict[str, Any]
 
 def _status_label(status: str) -> str:
     labels = {
-        "SAME": "未发现内容变化",
-        "DIFF": "内容有变化",
-        "FAILED": "解析失败",
+        "SAME": "源文件字节相同",
+        "DIFF": "源文件字节不同",
+        "FAILED": "核对失败",
     }
     return labels.get(str(status).upper(), str(status or "未知"))
+
+
+def _parsed_fields_label(status: str) -> str:
+    return {
+        "SAME": "已提取字段无差异",
+        "DIFF": "已提取字段有差异",
+        "NOT_CHECKED": "解析字段未核对",
+        "NOT_APPLICABLE": "不适用结构化字段比较",
+    }.get(str(status).upper(), "解析字段状态未知")
 
 
 def _is_gzip_file(path: Path) -> bool:
@@ -575,6 +584,8 @@ def _render_markdown_summary(
         "| 项 | 值 |",
         "| --- | --- |",
         f"| 结果 | {_markdown_cell(status_text)} |",
+        f"| 源文件内容 | {_markdown_cell(_status_label(summary.get('source_content_status')) if summary.get('source_content_status') != 'UNVERIFIED' else '源文件内容未验证')} |",
+        f"| 已提取字段 | {_markdown_cell(_parsed_fields_label(summary.get('parsed_fields_status')))} |",
         f"| 文件类型 | {_markdown_cell(TYPE_LABELS.get(file_type, file_type))} |",
         f"| 结构化变化 | {_markdown_cell(change_count)} |",
         f"| 已忽略证据字段 | {_markdown_cell(f'{ignored_count} 项' + (f'：{ignored_keys}' if ignored_keys else ''))} |",
@@ -598,6 +609,8 @@ def _render_markdown_summary(
         "## 变化类型",
         "",
     ])
+    if summary.get("unexplained_change"):
+        lines.extend(["源文件字节不同，但已提取字段无差异；可能涉及注释、格式、压缩封装或当前 Parser 未覆盖的内容，需查看原始差异。", ""])
     if by_type:
         lines.extend(["| 类型 | 数量 |", "| --- | ---: |"])
         lines.extend(f"| {_markdown_cell(key)} | {int(value)} |" for key, value in sorted(by_type.items()))
@@ -700,6 +713,8 @@ def _render_index(out: Path, meta: dict[str, Any], summary: dict[str, Any], sema
                 ("旧侧文件", meta.get("old_file")),
                 ("新侧文件", meta.get("new_file")),
                 ("内容判定", status_text),
+                ("源文件内容", _status_label(summary.get("source_content_status")) if summary.get("source_content_status") != "UNVERIFIED" else "源文件内容未验证"),
+                ("已提取字段", _parsed_fields_label(summary.get("parsed_fields_status"))),
                 ("已忽略证据字段", f"{ignored_count} 项" + (f"：{ignored_keys}" if ignored_keys else "")),
                 ("导出文件", "file_diff_export.zip"),
             ]),
@@ -724,10 +739,12 @@ def _render_index(out: Path, meta: dict[str, Any], summary: dict[str, Any], sema
         +
         ui.panel(
             "单文件深度对比结论",
-            "单文件深度页只服务一个 old_file → new_file。对比主页面只保留任务和入口。",
+            "源文件字节不同，但已提取字段无差异；请查看原始文本，当前解析器可能未覆盖变化内容。"
+            if summary.get("unexplained_change") else "原始字节与已提取字段分别判定；本页只对应所选的一对文件。",
             ui.metric_grid([
                 ("文件类型", file_type, TYPE_LABELS.get(file_type, file_type), "PASS"),
-                ("内容结论", status_text, "基于工程内容字段", status),
+                ("内容结论", status_text, "基于源文件完整 SHA-256", status),
+                ("解析字段", _parsed_fields_label(summary.get("parsed_fields_status")), "仅限当前解析器提取范围", "INFO"),
                 ("结构化变化", change_count, "semantic_diff.json", status),
                 ("解析器", parser_status, "old / new", "WARNING" if "FAILED" in parser_status else "PASS"),
                 ("证据模式", evidence_mode_label, "结构化 + 原始文本 / 元数据级证据", "METADATA_ONLY" if evidence_mode == "metadata-only" else "PASS"),
@@ -741,7 +758,7 @@ def _render_index(out: Path, meta: dict[str, Any], summary: dict[str, Any], sema
             ui.compact_meta([
                 ("已忽略字段数", ignored_count),
                 ("字段", ignored_keys or "-"),
-                ("判定口径", "仅比较工程内容字段"),
+                ("判定口径", "源文件 SHA-256 判定原始字节；已提取字段单独比较"),
             ]),
         )
         + ui.panel("变化域分布", "用于快速定位变化集中在哪些结构域。", ui.table(["域", "变化数"], domain_rows, "未发现结构化变化"))
@@ -788,6 +805,11 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _source_stamp(path: Path) -> dict[str, int]:
+    stat = path.stat()
+    return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
 def _unsupported_metadata_parse(file_type: str, path: Path) -> dict[str, Any]:
@@ -860,52 +882,78 @@ def _diff_pairwise_files(
     *, task_id: str | None = None, library_id: str | None = None,
     version_id: str | None = None, base_version: str | None = None,
 ) -> dict[str, Any]:
-    old = Path(old_file)
-    new = Path(new_file)
+    old = Path(old_file).expanduser().resolve()
+    new = Path(new_file).expanduser().resolve()
     out = Path(out_dir)
     # A failed overwrite must not leave the previous DONE generation attachable.
     _write_json(out / 'pairwise_result.json', {'status': 'RUNNING', 'generated_at': _utc_now()})
-    source_stamps = {}
-    for side, path in [('old', old), ('new', new)]:
-        stat = path.stat()
-        source_stamps[side] = {'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
     capability = comparison_capability(file_type)
-    old_result = _parse_file(file_type, old)
-    new_result = _parse_file(file_type, new)
+    source_stamps: dict[str, dict[str, int]] = {}
+    content_sha256: dict[str, str] = {}
+    old_result: dict[str, Any] = {"status": "NOT_CHECKED", "data": {}, "issues": []}
+    new_result: dict[str, Any] = {"status": "NOT_CHECKED", "data": {}, "issues": []}
+    source_error = ""
+    source_changed = False
+    try:
+        for side, path in (("old", old), ("new", new)):
+            source_stamps[side] = _source_stamp(path)
+        old_result = _parse_file(file_type, old)
+        new_result = _parse_file(file_type, new)
+        for side, path, parsed in (("old", old, old_result), ("new", new, new_result)):
+            cached_hash = (parsed.get("data") or {}).get("sha256_bytes") if capability["evidence_mode"] == "metadata_only" else None
+            content_sha256[side] = cached_hash or _sha256_file(path)
+        if capability["text_diff_available"]:
+            _render_raw_text_diff(old, new, out)
+        source_changed = any(_source_stamp(path) != source_stamps[side] for side, path in (("old", old), ("new", new)))
+    except OSError as exc:
+        source_error = f"{type(exc).__name__}: {exc}"
+
     old_data = old_result.get("data", {})
     new_data = new_result.get("data", {})
     old_content_data = _content_data(old_data)
     new_content_data = _content_data(new_data)
     old_hash = _stable_hash(old_content_data)
     new_hash = _stable_hash(new_content_data)
-    content_sha256: dict[str, str] | None = None
-    if capability["evidence_mode"] == "metadata_only":
-        # This is explicit user-requested pairwise work, not scan-wide hashing.
-        # It prevents binary files with equal parser metadata from being declared
-        # identical solely because their byte sizes happen to match.
-        content_sha256 = {"old": _sha256_file(old), "new": _sha256_file(new)}
-        status = "SAME" if content_sha256["old"] == content_sha256["new"] else "DIFF"
-    else:
-        status = "SAME" if old_hash == new_hash else "DIFF"
+    source_content_status = (
+        "UNVERIFIED" if source_error or source_changed or len(content_sha256) != 2
+        else "SAME" if content_sha256["old"] == content_sha256["new"] else "DIFF"
+    )
+    parser_statuses = {str(res.get("status") or "").upper() for res in (old_result, new_result)}
+    parsed_fields_status = (
+        "NOT_CHECKED" if source_content_status == "UNVERIFIED" or "FAILED" in parser_statuses else
+        "NOT_APPLICABLE" if capability["evidence_mode"] == "metadata_only" else
+        "NOT_CHECKED" if not parser_statuses.issubset({"PASS", "PASS_WITH_WARNING"}) else
+        "SAME" if old_hash == new_hash else "DIFF"
+    )
+    status = "FAILED" if source_content_status == "UNVERIFIED" or "FAILED" in parser_statuses else source_content_status
     issues: list[dict[str, Any]] = []
+    if source_error or source_changed:
+        issues.append({"severity": "error", "category": "source",
+                       "title": "源文件检查期间不可验证",
+                       "message": source_error or "源文件大小或修改时间在检查期间变化；请对稳定的文件重新执行。"})
     for res, side in [(old_result, "old"), (new_result, "new")]:
         for issue in res.get("issues", []) or []:
             issues.append({"severity": issue.get("severity") or "warning", "category": issue.get("category") or "parser", "title": f"{side} parser issue", "message": issue.get("message") or str(issue)})
         if str(res.get("status")).upper() == "FAILED":
-            status = "FAILED"
             issues.append({"severity": "error", "category": "parser", "title": "解析器失败", "message": f"{side} 侧解析器失败"})
     meta = {"schema_version": "1.0", "diff_type": "pairwise_file_diff", "file_type": file_type, "old_file": str(old), "new_file": str(new), "comparison_capability": capability}
-    summary = {"schema_version": "1.0", "status": status, "file_type": file_type, "old_parser_status": old_result.get("status"), "new_parser_status": new_result.get("status"), "old_hash": old_hash, "new_hash": new_hash, "changed": status == "DIFF", "comparison_capability": capability}
-    if content_sha256 is not None:
-        summary["content_sha256"] = content_sha256
+    summary = {"schema_version": "1.0", "status": status, "file_type": file_type,
+               "source_content_status": source_content_status, "content_sha256": content_sha256,
+               "parsed_fields_status": parsed_fields_status,
+               "unexplained_change": source_content_status == "DIFF" and parsed_fields_status == "SAME",
+               "source_stability": "SOURCE_CHANGED_DURING_CHECK" if source_changed else "UNVERIFIED" if source_error else "STABLE",
+               "old_parser_status": old_result.get("status"), "new_parser_status": new_result.get("status"),
+               "old_hash": old_hash, "new_hash": new_hash, "changed": status == "DIFF", "comparison_capability": capability}
     old_extract = {"schema_version": "1.0", "file_type": file_type, "parser_status": old_result.get("status"), "data": old_data, "issues": old_result.get("issues", [])}
     new_extract = {"schema_version": "1.0", "file_type": file_type, "parser_status": new_result.get("status"), "data": new_data, "issues": new_result.get("issues", [])}
-    semantic_old = old_content_data if content_sha256 is None else {**old_content_data, "content_sha256": content_sha256["old"]}
-    semantic_new = new_content_data if content_sha256 is None else {**new_content_data, "content_sha256": content_sha256["new"]}
-    semantic = _semantic_diff(semantic_old, semantic_new)
+    if parsed_fields_status in {"NOT_CHECKED", "NOT_APPLICABLE"}:
+        semantic = {"schema_version": "1.0", "status": parsed_fields_status,
+                    "summary": {"change_count": 0, "by_type": {}}, "changes": [], "truncated": False}
+    else:
+        semantic = _semantic_diff(old_content_data, new_content_data)
     semantic["ignored_changes"] = _ignored_bookkeeping_changes(old_data, new_data)
     change_count = int((semantic.get("summary") or {}).get("change_count") or 0)
-    pairwise_result = {"schema_version": "pairwise_result.v1", "task_id": task_id or out.name, "library_id": library_id, "version_id": version_id, "base_version": base_version, "file_type": file_type, "old_file": str(old), "new_file": str(new), "status": "FAILED" if status == "FAILED" else "DONE", "result": status, "change_count": change_count, "review_result": "NEED_EXPERT_REVIEW" if status == "DIFF" else "NOT_REVIEWED", "reviewer_note": "", "comparison_capability": capability, "html": str(out / "index.html"), "markdown": str(out / "pairwise_summary.md"), "text_diff_html": str(out / "raw_text_diff.html") if capability["text_diff_available"] else None, "export": str(out / "file_diff_export.zip"), "generated_at": _utc_now()}
+    pairwise_result = {"schema_version": "pairwise_result.v1", "task_id": task_id or out.name, "library_id": library_id, "version_id": version_id, "base_version": base_version, "file_type": file_type, "old_file": str(old), "new_file": str(new), "status": "FAILED" if status == "FAILED" else "DONE", "result": status, "source_content_status": source_content_status, "content_sha256": content_sha256, "parsed_fields_status": parsed_fields_status, "unexplained_change": summary["unexplained_change"], "change_count": change_count, "review_result": "NEED_EXPERT_REVIEW" if status == "DIFF" else "NOT_REVIEWED", "reviewer_note": "", "comparison_capability": capability, "html": str(out / "index.html"), "markdown": str(out / "pairwise_summary.md"), "text_diff_html": str(out / "raw_text_diff.html") if capability["text_diff_available"] and (out / "raw_text_diff.html").exists() else None, "export": str(out / "file_diff_export.zip"), "generated_at": _utc_now()}
     pairwise_result['source_stamps'] = source_stamps
     detail = {"schema_version": "1.0", "file_type": file_type, "old": old_result, "new": new_result}
     issue_payload = {"schema_version": "1.0", "issues": issues, "summary": {"error": sum(1 for i in issues if str(i.get('severity')).lower() == 'error'), "warning": sum(1 for i in issues if str(i.get('severity')).lower() != 'error')}}
@@ -919,9 +967,7 @@ def _diff_pairwise_files(
     _write_json(out / "pairwise_result.json", pairwise_result)
     _render_markdown_summary(out, meta, summary, semantic, issues)
     raw_text_diff = out / "raw_text_diff.html"
-    if capability["text_diff_available"]:
-        _render_raw_text_diff(old, new, out)
-    elif raw_text_diff.is_file():
+    if not capability["text_diff_available"] and raw_text_diff.is_file():
         raw_text_diff.unlink()
     _render_index(out, meta, summary, semantic, issues)
     export_path = _render_export_zip(out)

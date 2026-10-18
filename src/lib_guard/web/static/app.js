@@ -1140,8 +1140,8 @@
     const matches = candidate && candidate.eligible && candidate.library === state.selectedLibrary && candidate.version === state.selectedVersion?.version_id;
     const button = $('save-representative-file');
     button.disabled = !matches || Boolean(state.activeAction);
-    button.textContent = matches ? `保存 ${fileTypeLabel(candidate.file_type)} 到详情` : '保存到版本详情';
-    button.title = matches ? '保存本次结果与备注；替换详情页中同类型的代表文件，不改变版本总体判断。' : '先完成当前版本的一组深度文件对比，再保存结果。';
+    button.textContent = matches ? `更新 ${fileTypeLabel(candidate.file_type)} 备注` : '更新核查备注';
+    button.title = matches ? '文件对比已自动同步；这里仅补充人工备注。' : '当前版本的深度对比完成后可补充人工备注。';
   }
   async function loadRepresentativeFiles() {
     updateRepresentativeButton();
@@ -1158,7 +1158,7 @@
       const label = side === 'old' ? '旧' : '新';
       return `<div class="representative-source" title="${escapeHtml(path)}"><span>${label}</span><code>${escapeHtml(path.split(/[\\/]/).pop())}</code></div>`;
     }).join('') + `<details class="representative-paths"><summary>原始路径 / 复制</summary>${['old', 'new'].map((side) => `<code>${escapeHtml(row[`${side}_file`])}</code><button type="button" class="button button-secondary button-small" data-representative-copy="${escapeHtml(row[`${side}_file`])}">复制${side === 'old' ? '旧' : '新'}文件路径</button>`).join('')}</details>`;
-    $('representative-file-list').innerHTML = rows.length ? `<div class="release-link-scroll"><table><colgroup><col style="width:12%"><col style="width:38%"><col style="width:20%"><col style="width:30%"></colgroup><thead><tr><th>已保存类型</th><th>所选文件</th><th>文件状态</th><th>核查备注</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(fileTypeLabel(row.file_type))}</td><td>${sourcePair(row)}</td><td>${escapeHtml(row.freshness)}</td><td>${escapeHtml(row.note || '未填写')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">尚未保存核查结果。</p>';
+    $('representative-file-list').innerHTML = rows.length ? `<div class="release-link-scroll"><table><colgroup><col style="width:12%"><col style="width:38%"><col style="width:20%"><col style="width:30%"></colgroup><thead><tr><th>已同步类型</th><th>所选文件</th><th>文件状态</th><th>核查备注</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(fileTypeLabel(row.file_type))}</td><td>${sourcePair(row)}</td><td>${escapeHtml(row.freshness)}</td><td>${escapeHtml(row.note || '未填写')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">尚无已同步核查结果。</p>';
     $('representative-file-list').querySelectorAll('[data-representative-copy]').forEach((button) => button.addEventListener('click', async () => {
       const ok = await copyText(button.dataset.representativeCopy);
       button.textContent = ok ? '已复制路径' : '复制失败';
@@ -1169,15 +1169,29 @@
     const candidate = representativeCandidate;
     if (!endpoint || !candidate || $('save-representative-file').disabled) return;
     $('save-representative-file').disabled = true;
-    $('representative-feedback').textContent = '正在保存并刷新当前版本详情…';
+    $('representative-feedback').textContent = '正在更新备注并刷新阅读报告…';
     try {
       const result = await getJson(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({job_id:candidate.job_id, note:$('representative-note').value, updated_by:$('representative-author').value || 'web'})});
       if (endpoint !== representativeEndpoint()) return;
-      $('representative-feedback').textContent = result.render?.status === 'PASS' ? '已加入详情页；仅代表所选文件，不代表整个视图通过。' : `结果已保存，但详情刷新失败：${result.render?.error || '原因未知'}`;
+      $('representative-feedback').textContent = result.render?.status === 'PASS' ? '备注已更新；文件结果仍仅代表所选文件。' : `备注已保存，但报告刷新失败：${result.render?.error || '原因未知'}`;
       await loadRepresentativeFiles();
     } catch (error) {
       $('representative-feedback').textContent = `保存失败：${error.message}`;
     } finally { updateRepresentativeButton(); }
+  }
+  async function refreshReaderReport() {
+    const endpoint = representativeEndpoint();
+    if (!endpoint) return;
+    const button = $('refresh-reader-report');
+    button.disabled = true;
+    $('representative-feedback').textContent = '正在从已保存的检查结果重建阅读报告…';
+    try {
+      await getJson(endpoint.replace('/representative-files', '/refresh-reader-report'), {method:'POST'});
+      $('representative-feedback').textContent = '阅读报告已刷新，检查任务无需重跑。';
+      await loadRepresentativeFiles();
+    } catch (error) {
+      $('representative-feedback').textContent = `阅读报告刷新失败：${error.message}`;
+    } finally { button.disabled = false; }
   }
 
   function renderLibraries() {
@@ -4092,6 +4106,15 @@
         : String(result.status || task.status).toUpperCase() === 'QUEUED'
           ? `${task.label}已登记，正在排队。${result.queue_reason || ''}`
           : `${task.label} · ${[task.library, task.version].filter(Boolean).join(' / ') || '工作区任务'} · 已用时 ${Math.max(1, Math.round(elapsed / 1000))} 秒。`;
+    const syncFailed = task.terminal && result.status === 'COMPLETED' && result.return_code === 0
+      && ['file-diff', 'semantic-review'].includes(task.commandAction || result.action) && result.reader_sync?.status === 'FAILED';
+    $('job-reader-sync').classList.toggle('hidden', !syncFailed && !task.readerSyncMessage);
+    $('retry-reader-sync').classList.toggle('hidden', !syncFailed);
+    $('job-reader-sync-result').textContent = task.readerSyncMessage || '';
+    if (syncFailed) {
+      $('job-summary').textContent += ` 检查结果已生成，但阅读报告同步失败：${result.reader_sync.error || '原因未知'}。`;
+      $('retry-reader-sync').disabled = Boolean(task.readerSyncBusy);
+    }
     $('job-stage').textContent = result.stage ? `阶段：${result.stage}` : `阶段：${task.terminal ? '已结束' : '等待子任务输出'}`;
     $('job-percent').textContent = result.progress_percent == null ? '进度：未提供' : `进度：${result.progress_percent}%`;
     $('job-elapsed').textContent = `用时：${Math.max(1, Math.round(elapsed / 1000))} 秒`;
@@ -4131,6 +4154,27 @@
     renderSelectedJob(latest);
     if (!latest.terminal && !latest.timedOut) pollJob(latest.id);
   }
+
+  $('retry-reader-sync').addEventListener('click', async () => {
+    const task = state.jobTasks.get(state.selectedJobId);
+    if (!task || task.readerSyncBusy || task.result?.reader_sync?.status !== 'FAILED') return;
+    task.readerSyncBusy = true;
+    task.readerSyncMessage = '正在同步…';
+    renderSelectedJob(task);
+    try {
+      const response = await getJson(`/api/runs/${encodeURIComponent(task.id)}/retry-reader-sync`, {method: 'POST'});
+      task.result = await getJson(`/api/runs/${encodeURIComponent(task.id)}`);
+      const sync = response.reader_sync || {};
+      task.readerSyncMessage = sync.status === 'PASS' ? '阅读报告同步成功。'
+        : sync.status === 'SKIPPED' ? `未同步：${sync.reason || '无可发布结果'}`
+        : `同步失败：${sync.error || '原因未知'}`;
+    } catch (error) {
+      task.readerSyncMessage = `同步失败：${error.message}`;
+    } finally {
+      task.readerSyncBusy = false;
+      if (state.selectedJobId === task.id) renderSelectedJob(task);
+    }
+  });
 
   async function startJob(result, label, workflowAction = null, commandAction = null, context = {}) {
     const task = {
@@ -4305,8 +4349,14 @@
         const completedJob = task;
         if (task.commandAction === 'file-diff' && task.library === state.selectedLibrary && task.version === state.selectedVersion?.version_id) {
           representativeCandidate = {...(result.file_diff_review || {}), job_id:jobId};
-          $('representative-feedback').textContent = representativeCandidate.eligible ? `${fileTypeLabel(representativeCandidate.file_type)} 对比已完成；保存后替换该类型的当前核查结果。` : '此任务未产生可保存的对比结果，请先核对日志。';
+          const sync = result.reader_sync || {};
+          $('representative-feedback').textContent = sync.status === 'PASS'
+            ? `${fileTypeLabel(representativeCandidate.file_type)} 已自动同步到阅读报告；可补充核查备注。`
+            : sync.status === 'FAILED' ? `对比已完成，阅读报告同步失败：${sync.error || '请重新刷新报告'}。不必重新对比。`
+            : sync.status === 'SKIPPED' ? (sync.reason || '本次对比未自动归属版本。')
+            : '对比已完成；请在任务产物中核对结果。';
           updateRepresentativeButton();
+          if (sync.status === 'PASS') await loadRepresentativeFiles();
         }
         const taskIsFocused = task.library === state.selectedLibrary && task.version === state.selectedVersion?.version_id;
         if (taskIsFocused && ['release-plan', 'release-overwrite-preview', 'release-force', 'release-apply', 'release-set-plan', 'release-set-apply'].includes(task.commandAction)) {
@@ -4454,6 +4504,7 @@
   $('file-diff-explicit-force-large').addEventListener('change', updateExplicitFileDiffState);
   $('run-explicit-file-diff').addEventListener('click', runExplicitFileDiff);
   $('save-representative-file').addEventListener('click', saveRepresentativeFile);
+  $('refresh-reader-report').addEventListener('click', refreshReaderReport);
   $('file-tree-filter').addEventListener('input', scheduleFileTreeRender);
   $('file-tree-type-filter').addEventListener('change', renderFileTree);
   $('select-visible-files').addEventListener('click', () => {

@@ -1,5 +1,25 @@
 Status: current
 
+## 2026-10-18 工程内容与使用影响报告验收
+
+本节是当前口径。旧节中的数字和页面结构是当时的验收快照，不代表当前报告。
+
+| 检查项 | 验收证据 | 结果与边界 |
+| --- | --- | --- |
+| 阅读顺序 | 人工版本备注在前，随后为交付情况、工程结论、未确认范围、建议动作；文件矩阵与来源折叠在后 | 页面及桌面浏览器验证通过；技术检查不冒充正式放行 |
+| 交付口径 | ASAP7 页面当前仅要求 RTL 模型 1 / 1，证据为元数据级；Mode/Corner 要求未配置 | 页面不再把局部配置写成整库交付齐全；需由目标 IP 确定完整交付要求 |
+| 文件与工程变化分层 | 当前文件层新增 172、删除 1、修改 4，另有 1 项待核对；所选 SL LEF 内容相同 | 文件变化不等于单元或接口变化，单文件相同不能掩盖其他视图待核查；首版不虚构文件对比 |
+| 交付明细 | RTL 元数据级视图显示“文件已发现；未要求深度解析” | 不再显示易误读的“0 / 0 文件满足检查口径” |
+| 真实 ASAP7 | `20260627_asap7` 报告：所选 SL LEF 为 212 个单元、1326 个 Pin，Site `asap7sc7p5t`、高度 0.27 µm；完整源文件 SHA-256 相同 | 只对该文件写“内容未变化”，不推广到全部 LEF 或整个版本 |
+| 对象与接口 | 可搜索、筛选的限高表格；点开 `AND2x2_ASAP7_75t_SL` 可见信号与电源 Pin、方向和层 | 桌面浏览器点击验证通过 |
+| 证据下钻 | 所选文件“详细对比”打开源文件字节相同、结构化变化 0 的报告；原始绝对路径按需展开 | 浏览器点击验证通过；页面默认不平铺完整路径 |
+| 受控技术变化 | 本地受控库 4 类文件生成 11 条对象级变化，含 LEF 尺寸、Pin 方向、几何、OBS，Liberty 面积与接口，Verilog 位宽，CDL 端口 | 证明已支持的字段；不代表未提取的语法或时序性能已验证 |
+| 首版与组合 | 无基准时不声明版本无变化；FULL + 两层增量的检查归属最后目标版本、保留顺序 | 自动测试覆盖 |
+| 新鲜度与恢复 | 来源变化标过期；失败任务保留上次成功结果；同步失败可重试；删除 HTML 可从事实与已存结果重建 | 自动测试覆盖；不重新扫描 RAW |
+| 门禁边界 | 工程检查是建议性证据，正式 Release Gate 不因本报告修改 | 保持现有门禁规则 |
+
+回归：`PYTHONPATH=src python3 -m unittest discover -s src/lib_guard/test -p 'test*.py' -q`，1105 项通过；日志 `/tmp/ai_lib_reader_scope_tests_20261018.log`。本轮还完成了修改文件的 `compileall`、`git diff --check` 和桌面浏览器交付明细点击检查。浏览器验收页面为 `http://127.0.0.1:5082/artifacts/libraries/ip_vendor_A.openroad_platform.openroad_asap7/versions/20260627_asap7/index.html`。该样本只验证所选 SL LEF 的工程内容；Liberty 时序数值、全部 LEF 与文件级 Mode/Corner 对应尚不能据此判定通过。
+
 ## 2026-10-14 匹配减负与深度核查联动
 
 - 根因不是 108 个文件都需要手工比对：此演练基准 Liberty 清单及原始目录只有 4 个文件，本版为 112 个。包装目录变化不应把完整基准中不存在的文件一律归为待核对。
@@ -216,7 +236,7 @@ Gate 1/2/3 通过而 Gate 4 未执行时，只能称为“代码回归通过”�
 | VD-P0-03 | 变化数量自洽 | 新增、删除、修改、重点文件和视图矩阵不出现互相矛盾的文案 | `test_change_status_is_separate_from_usage_decision`、`test_view_delta_is_a_structured_comparison_table` |
 | VD-P0-04 | 单版本可读 | 没有 Base 时展示自身交付文件、视图和证据等级，不虚构空 diff | `test_first_full_version_without_base_uses_scan_coverage_not_empty_diff` |
 | VD-P0-05 | 页面入口唯一 | 文件结构直接合并到详情页；不再生成或依赖独立完整文件证据页 | `test_version_detail_includes_compact_file_structure_section`、`test_version_detail_page_removes_stale_standalone_file_evidence` |
-| VD-P0-06 | 事实源边界 | HTML 不读取 RAW、不展示绝对路径、不把 HTML 当作数据源 | `test_version_detail_uses_scan_evidence_for_release_notes_without_raw_rglob`、`test_version_detail_does_not_expose_absolute_raw_paths` |
+| VD-P0-06 | 事实源边界 | HTML 不重新解析 RAW、不把 HTML 当作数据源；原始文件绝对路径只在证据区按需展开 | `test_version_detail_uses_scan_evidence_for_release_notes_without_raw_rglob`、工程报告浏览器验收 |
 | VD-P0-07 | 必需视图联动 | `delivery_completeness.status == MISSING` 时，IP 主状态必须为“不可接入”，并列出缺失视图 | `test_missing_required_view_blocks_ip_user_decision` |
 | VD-P0-08 | 首屏可行动性 | 当主状态不是“可接入”时，首屏直接显示唯一主因和结构化“下一步”；不依赖展开 Report/Evidence 才能知道下一动作。READY 也必须有事实核对动作 | `test_missing_diff_is_blocked_instead_of_presented_as_normal_review`、`test_version_detail_has_stable_semantic_sections`、浏览器 `hasNextAction` |
 | VD-P0-09 | 证据可核对 | `file_diff evidence -> Review Model -> View Delta Matrix -> Focus Files -> File Tree` 对账；增删改、路径变化且内容相同、重点文件子集和缺失/过期状态必须可解释 | `test_review_report_has_fixed_sections_and_reconciled_counts`、`test_review_report_marks_declared_file_diff_mismatch`、`test_update_detail_model_projects_confirmed_path_changes`、A-H 浏览器场景 |

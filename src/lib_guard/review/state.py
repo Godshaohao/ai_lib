@@ -73,7 +73,9 @@ def _pairwise_results_for_task(task: Mapping[str, Any]) -> Mapping[str, Any] | N
         return result
     if (out / "file_diff_summary.json").exists():
         summary = read_json(out / "file_diff_summary.json", {}) or {}
-        return {"status": "DONE", "result": summary.get("status"), "change_count": 1 if summary.get("changed") else 0, "html": str(out / "index.html")}
+        summary_status = str(summary.get("status") or "").upper()
+        status = "DONE" if summary_status in {"SAME", "DIFF"} else "FAILED" if summary_status == "FAILED" else "PENDING"
+        return {"status": status, "result": summary.get("status"), "change_count": 1 if summary.get("changed") else 0, "html": str(out / "index.html")}
     return None
 
 
@@ -92,8 +94,10 @@ def _pairwise(version: Mapping[str, Any]) -> tuple[str, list[dict[str, Any]], di
             item["result"] = result
             if item["status"] == "FAILED":
                 failed += 1
-            else:
+            elif item["status"] in {"DONE", "PASS", "SAME", "DIFF"}:
                 done += 1
+            else:
+                pending += 1
         else:
             item["status"] = item.get("status") or "PENDING"
             pending += 1

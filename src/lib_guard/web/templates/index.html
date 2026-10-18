@@ -485,13 +485,13 @@
             </details>
             <small id="file-diff-action-note">选择版本及对比基准后可选择文件。</small>
             <section aria-label="代表文件核查" class="representative-review-panel">
-              <div class="representative-heading"><h5>详情页核查结果</h5><a id="representative-detail-link" class="text-link hidden" target="_blank" rel="noreferrer">查看已保存结果</a></div>
+              <div class="representative-heading"><h5>详情页核查结果</h5><a id="representative-detail-link" class="text-link hidden" target="_blank" rel="noreferrer">查看阅读报告</a><button id="refresh-reader-report" type="button" class="button button-secondary button-small">刷新阅读报告</button></div>
               <div class="representative-editor">
                 <label class="compact-field">核查备注<textarea id="representative-note" rows="2" maxlength="1000" placeholder="使用影响、核查结论或待确认项"></textarea></label>
                 <div class="representative-save"><label class="compact-field">核查人<input id="representative-author" maxlength="80" placeholder="姓名"></label>
-                <button id="save-representative-file" type="button" class="button button-secondary button-small" disabled>保存到版本详情</button></div>
+                <button id="save-representative-file" type="button" class="button button-secondary button-small" disabled>更新核查备注</button></div>
               </div>
-              <p id="representative-feedback" role="status">完成文件对比后，可将这组结果加入详情页。</p>
+              <p id="representative-feedback" role="status">当前版本的文件对比完成后会自动进入阅读报告；任意两文件不自动归属。</p>
               <div id="representative-file-list" aria-label="已保存的代表文件"></div>
             </section>
           </article>
@@ -924,6 +924,7 @@
           <div class="job-observation-meta"><span id="job-stage">阶段：等待</span><span id="job-percent">进度：未提供</span><span id="job-elapsed">用时：-</span></div>
           <div class="progress-track" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="job-progress-bar" class="progress-bar"></div></div>
           <p id="job-progress-note" class="job-progress-note">等待底层任务输出阶段信息。</p>
+          <div id="job-reader-sync" class="hidden" aria-live="polite"><button id="retry-reader-sync" type="button" class="button button-secondary button-small">重试报告同步</button><span id="job-reader-sync-result"></span></div>
           <div id="job-quality-summary" class="job-quality-summary hidden" aria-live="polite"><div class="job-quality-heading"><strong>检查摘要</strong><span id="job-quality-verdict" class="status-chip status-neutral">未形成结论</span></div><div id="job-quality-counts" class="job-quality-counts"></div><p id="job-quality-coverage" class="job-quality-coverage"></p><p id="job-quality-next" class="job-quality-next"></p><p id="job-quality-note" class="job-quality-note"></p></div>
           <details class="job-log-details runtime-log-details"><summary>终端输出 <span id="job-log-size">原文 0 B，已显示 0 B</span></summary><pre id="job-log-tail">尚未产生终端输出。</pre></details>
         </div>
@@ -931,6 +932,6 @@
       </details>
     </main>
   </div>
-  <script src="{{ url_for('static', filename='app.js', v='20261017.7') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20261018.1') }}"></script>
 </body>
 </html>

@@ -756,11 +756,26 @@ def _pairwise_result_for(task: Mapping[str, Any]) -> tuple[str, str, str]:
         result = read_json(result_path, default=None)
         if result:
             status = str(result.get("status") or "DONE")
-            note = f"{result.get('result') or '-'} / changes={result.get('change_count', 0)}"
-            href = _file_href(result.get("html") or (Path(str(expected)) / "index.html"))
+            raw = {
+                "SAME": "源文件字节相同",
+                "DIFF": "源文件字节不同",
+            }.get(str(result.get("source_content_status") or "").upper(), "源文件内容未验证")
+            parsed = {
+                "SAME": "已提取字段无差异",
+                "DIFF": "已提取字段有差异",
+                "NOT_APPLICABLE": "解析字段不适用",
+                "NOT_CHECKED": "解析字段未核对",
+            }.get(str(result.get("parsed_fields_status") or "").upper(), "旧报告字段结论未验证")
+            note = f"{raw}；{parsed}"
+            if status.upper() in {"DONE", "PASS", "SAME", "DIFF"}:
+                href = _file_href(result.get("html") or (Path(str(expected)) / "index.html"))
         elif (Path(str(expected)) / "index.html").exists():
-            status = "DONE"
-            href = _file_href(Path(str(expected)) / "index.html")
+            summary = read_json(Path(str(expected)) / "file_diff_summary.json", default={}) or {}
+            summary_status = str(summary.get("status") or "").upper()
+            status = "FAILED" if summary_status == "FAILED" else "PENDING" if summary_status in {"RUNNING", "PENDING"} else "DONE"
+            note = "旧报告：源文件内容未验证"
+            if status == "DONE":
+                href = _file_href(Path(str(expected)) / "index.html")
     return status, note, href
 
 

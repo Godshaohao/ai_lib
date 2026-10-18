@@ -123,6 +123,9 @@ class ArchitectureInvariantTest(unittest.TestCase):
                 # background action and must not be added to WEB_MUTATING_ACTIONS.
                 "/api/libraries/<library>/versions/<version>/update-note",
                 "/api/libraries/<library>/versions/<version>/representative-files",
+                # Projection-only retry; does not run checks or change review/release facts.
+                "/api/libraries/<library>/versions/<version>/refresh-reader-report",
+                "/api/runs/<job_id>/retry-reader-sync",
                 "/api/libraries/<library>/versions/<version>/file-diff",
                 "/api/libraries/<library>/versions/<version>/review-gate",
                 "/api/libraries/<library>/versions/<version>/review-packet",

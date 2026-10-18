@@ -13,6 +13,32 @@ LIBRARY = "vendor_A.openroad_platform.openroad_asap7"
 
 
 class WebAppTest(unittest.TestCase):
+    def test_reader_report_can_be_rebuilt_without_running_a_scan_or_check(self):
+        from lib_guard.web.app import create_app
+        with tempfile.TemporaryDirectory() as td, patch.dict('os.environ', {}, clear=True):
+            root = Path(td)
+            raw = root / 'raw/full'
+            raw.mkdir(parents=True)
+            workspace = root / 'workspace'
+            client = create_app(cwd=root, test_config={'TESTING': True}).test_client()
+            self.assertEqual(client.post('/api/workspace/init', json={
+                'workspace': str(workspace), 'raw_root': str(root / 'raw'),
+            }).status_code, 200)
+            catalog = workspace / 'catalog/catalog.json'
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(json.dumps({'libraries': [{'library_id': 'demo', 'library_name': 'demo',
+                'versions': [{'version_id': 'full', 'raw_path': str(raw)}]}]}))
+            with patch('lib_guard.web.app.subprocess.Popen') as process:
+                response = client.post('/api/libraries/demo/versions/full/refresh-reader-report')
+                self.assertEqual(response.status_code, 200, response.get_json())
+                page = Path(response.get_json()['render']['version_detail_html'])
+                self.assertTrue(page.is_file())
+                page.unlink()
+                rebuilt = client.post('/api/libraries/demo/versions/full/refresh-reader-report')
+                self.assertEqual(rebuilt.status_code, 200, rebuilt.get_json())
+                self.assertTrue(page.is_file())
+                process.assert_not_called()
+
     def test_candidate_plan_feedback_names_composition_without_claiming_accept_ready(self):
         from lib_guard.web.app import _job_result_summary
         with tempfile.TemporaryDirectory() as td:
@@ -49,8 +75,8 @@ class WebAppTest(unittest.TestCase):
                 ({'status': 'FAILED', 'scan_dir': '/scan', 'version': 'v2', 'scan_error': 'Permission denied'}, '扫描失败'),
                 ({'status': 'FAILED', 'old_version': 'v1', 'new_version': 'v2'}, '版本对比失败'),
                 ({'status': 'UNSUPPORTED', 'summary': {'file_type': 'db', 'changed': False}, 'pairwise_result': '/pair'}, '未完成'),
-                ({'status': 'DONE', 'summary': {'file_type': 'db'}, 'pairwise_result': '/pair'}, '未确认内容一致'),
-                ({'status': 'SAME', 'summary': {'file_type': 'lef', 'status': 'SAME', 'changed': False}, 'pairwise_result': '/pair'}, '内容相同'),
+                ({'status': 'DONE', 'summary': {'file_type': 'db'}, 'pairwise_result': '/pair'}, '源文件内容未验证'),
+                ({'status': 'SAME', 'summary': {'file_type': 'lef', 'status': 'SAME', 'changed': False}, 'pairwise_result': '/pair'}, '已提取字段无差异，源文件内容未验证'),
             ):
                 (root / 'result.json').write_text(json.dumps({'cli_result': result}))
                 summary = _job_result_summary(root)
@@ -1632,7 +1658,7 @@ class WebAppTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            self.assertEqual(_job_result_summary(root), "深度核对完成 · LEF · 内容有变化")
+            self.assertEqual(_job_result_summary(root), "深度核对完成 · LEF · 旧报告有变化，源文件内容未验证")
 
     def test_arbitrary_action_route_does_not_exist(self) -> None:
         from lib_guard.web.app import create_app

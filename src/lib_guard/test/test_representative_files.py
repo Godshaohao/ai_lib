@@ -8,6 +8,47 @@ from lib_guard.diff.file_diff import diff_pairwise_files
 
 
 class RepresentativeFilesTest(unittest.TestCase):
+    def test_two_pairs_of_the_same_type_remain_visible_and_keep_raw_evidence(self):
+        from lib_guard.review.representative_files import load_representative_files, save_representative_file
+        from lib_guard.render.version_file_checks import render_file_checks
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for name in ('alpha', 'beta'):
+                old, new = root / f'{name}_old.v', root / f'{name}_new.v'
+                old.write_text('module top(input a, output y); assign y=a; endmodule\n')
+                new.write_text('module top(input a, output y); assign y=~a; endmodule\n')
+                out = root / f'{name}_diff'
+                diff_pairwise_files('verilog', old, new, out)
+                save_representative_file(root / 'notes', 'A', 'v2', out, note=name)
+            rows = load_representative_files(root / 'notes', 'A', 'v2')
+            self.assertEqual(len(rows), 2)
+            self.assertEqual({row['note'] for row in rows}, {'alpha', 'beta'})
+            self.assertTrue(all(row['source_content_status'] == 'DIFF' for row in rows))
+            self.assertTrue(all(row['parsed_fields_status'] == 'SAME' for row in rows))
+            html = render_file_checks(rows, {}, root / 'html/index.html')
+            self.assertIn('已加入 2 对文件', html)
+            self.assertIn('源文件字节不同', html)
+
+    def test_legacy_parser_only_same_is_not_reported_as_raw_same(self):
+        from lib_guard.review.representative_files import load_representative_files
+        from lib_guard.render.version_file_checks import render_file_checks
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            index = root / 'notes' / 'A' / 'v2' / 'representative_files.json'
+            index.parent.mkdir(parents=True)
+            index.write_text(json.dumps({'files': {'verilog': {
+                'file_type': 'verilog', 'old_file': str(root / 'old.v'), 'new_file': str(root / 'new.v'),
+                'result': 'SAME', 'change_count': 0, 'changes': [], 'note': '', 'updated_by': 'old',
+                'saved_at': '2026-10-17T00:00:00+00:00', 'evidence_id': 'old',
+                'evidence_dir': str(root / 'missing'),
+            }}}))
+            rows = load_representative_files(root / 'notes', 'A', 'v2')
+            html = render_file_checks(rows, {}, root / 'html/index.html')
+            self.assertIn('源文件内容未验证', html)
+            self.assertNotIn('所选文件未检出差异', html)
+
     def test_save_replace_stale_and_reconstruct(self):
         from lib_guard.review.representative_files import save_representative_file, load_representative_files
         from lib_guard.render.version_file_checks import render_file_checks
@@ -76,13 +117,15 @@ class RepresentativeFilesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             workspace = Path(td)
             raw = workspace / 'raw'
-            raw.mkdir()
-            old, new = raw / 'old.v', raw / 'new.v'
+            (raw / 'v1').mkdir(parents=True)
+            (raw / 'v2').mkdir(parents=True)
+            old, new = raw / 'v1/old.v', raw / 'v2/new.v'
             old.write_text('module top(input a); endmodule')
             new.write_text('module top(input a); endmodule')
             catalog = workspace / 'catalog/catalog.json'
             catalog.parent.mkdir()
-            catalog.write_text(json.dumps({'libraries': [{'library_name': 'A', 'library_id': 'ip/A', 'library_type': 'ip', 'versions': [{'version_id': 'v2', 'raw_path': str(raw)}]}]}))
+            catalog.write_text(json.dumps({'libraries': [{'library_name': 'A', 'library_id': 'ip/A', 'library_type': 'ip', 'versions': [
+                {'version_id': 'v1', 'raw_path': str(raw / 'v1')}, {'version_id': 'v2', 'raw_path': str(raw / 'v2')}]}]}))
             config = workspace / 'lib_guard.yml'
             config.write_text(f'workspace: {workspace}\nraw_root: {raw}\ncatalog: {catalog}\ncatalog_html: {workspace / "reports/site"}\n')
             out = workspace / 'file_diff/pair'

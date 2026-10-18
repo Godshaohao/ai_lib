@@ -14,10 +14,12 @@ Purpose:
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from lib_guard.catalog.runtime import load_catalog_view
+from lib_guard.atomic import file_lock
 from lib_guard.render.impact import RenderImpact, dedup_impacts, serialize_impacts
 
 
@@ -49,21 +51,23 @@ def render_version_detail_only(
     from lib_guard.review.state import build_review_version_state
     from lib_guard.render.version_detail_report import render_version_detail_page
 
-    catalog = catalog_view if catalog_view is not None else load_catalog_view(catalog_path)
-    lib_state, version_state = build_review_version_state(
-        catalog,
-        out_dir=out_dir,
-        library=library,
-        version=version,
-        runtime_merged=True,
-    )
-    page = render_version_detail_page(
-        out_dir,
-        lib_state,
-        version_state,
-        export_markdown=export_markdown,
-        catalog_navigation_available=False,
-    )
+    lock_key = sha256(f'{library}\0{version}'.encode('utf-8')).hexdigest()[:24]
+    with file_lock(Path(out_dir) / '.render_locks' / f'{lock_key}.lock'):
+        catalog = catalog_view if catalog_view is not None else load_catalog_view(catalog_path)
+        lib_state, version_state = build_review_version_state(
+            catalog,
+            out_dir=out_dir,
+            library=library,
+            version=version,
+            runtime_merged=True,
+        )
+        page = render_version_detail_page(
+            out_dir,
+            lib_state,
+            version_state,
+            export_markdown=export_markdown,
+            catalog_navigation_available=False,
+        )
     return {
         "status": "PASS",
         "library": lib_state.get("library_name") or lib_state.get("formal_library_id") or library,

@@ -1023,6 +1023,64 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         path = str(item.get("path") or "")
         change = str(item.get("change") or "")
         item.update(path_match_evidence.get(path) or default_path_match_evidence(change, path))
+    from lib_guard.review.publication import load_current_file_checks, load_semantic_projection
+    from lib_guard.review.engineering import build_engineering_report, file_check_alignment
+    notes_root = review_notes_root(catalog_html_out=out_path)
+    evidence_library = str(lib.get('library_id') or lib_id)
+    selected_checks = load_current_file_checks(notes_root, evidence_library, version_id)
+    semantic_check = load_semantic_projection(notes_root, evidence_library, version_id)
+    if evidence_library != lib_id:
+        selected_checks = selected_checks or load_current_file_checks(notes_root, lib_id, version_id)
+        semantic_check = semantic_check or load_semantic_projection(notes_root, lib_id, version_id)
+    scan_evidence = _build_scan_evidence_model(version)
+    source_roots = {
+        'current': str(version.get('raw_path') or ''),
+        'base': next((str(row.get('raw_path') or '') for row in lib.get('versions', []) or []
+                      if isinstance(row, Mapping) and row.get('version_id') == base_version), ''),
+    }
+    evidence_conflicts, confirmed_unchanged = [], []
+    inventory_cache = {}
+    logical_pairs = {
+        (str(item.get('old') or ''), str(item.get('new') or '')): str(item.get('logical_path') or '')
+        for item in file_diff.get('logical_path_changes', [])
+        if isinstance(item, Mapping)
+    }
+    for check in selected_checks:
+        if not source_roots['base'] and check.get('base_version') == base_version:
+            source_roots['base'] = str(check.get('base_raw_path') or '')
+        check['report_alignment'] = file_check_alignment({
+            'base_version': base_version, 'source_roots': source_roots,
+            'diff_meta': diff_meta, 'scan_evidence': scan_evidence,
+        }, check, inventory_cache)
+        if check.get('source_content_status') != 'SAME' or check.get('freshness') != '文件状态未改变':
+            continue
+        old_file = Path(str(check.get('old_file') or '')).resolve()
+        base_roots = [Path(str(item.get('raw_path'))).resolve() for item in lib.get('versions', []) or []
+                      if isinstance(item, Mapping) and item.get('version_id') == base_version and item.get('raw_path')]
+        if not base_roots and check.get('base_raw_path'):
+            base_roots = [Path(str(check['base_raw_path'])).resolve()]
+        base_matches = check.get('base_version') == base_version and any(
+            old_file.is_relative_to(root) for root in base_roots
+        )
+        if not base_matches:
+            continue
+        current_root = Path(str(version.get('raw_path') or '')).resolve()
+        new_file = Path(str(check.get('new_file') or '')).resolve()
+        if not new_file.is_relative_to(current_root):
+            continue
+        old_root = next((root for root in base_roots if old_file.is_relative_to(root)), None)
+        old_relative = old_file.relative_to(old_root).as_posix() if old_root else ''
+        new_relative = new_file.relative_to(current_root).as_posix()
+        relative = logical_pairs.get((old_relative, new_relative), new_relative)
+        for item in file_changes:
+            if item.get('path') == relative and item.get('change') == 'changed':
+                evidence_conflicts.append(relative)
+                hashes = check.get('content_sha256') or {}
+                if (check['report_alignment'] == 'ALIGNED' and len(str(hashes.get('old') or '')) == 64
+                        and hashes.get('old') == hashes.get('new')):
+                    item['change'] = 'confirmed_same'
+                    confirmed_unchanged.append(relative)
+    file_changes = [item for item in file_changes if item.get('change') != 'confirmed_same']
     added_files = _as_int(summary.get("added_files", _as_mapping(file_diff.get("counts")).get("added")))
     removed_files = _as_int(summary.get("removed_files", _as_mapping(file_diff.get("counts")).get("removed")))
     changed_files = summary.get("changed_files")
@@ -1032,8 +1090,9 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
             for item in file_changes
             if str(item.get("change") or "").upper() in {"CHANGED", "MODIFIED"}
         )
+    else:
+        changed_files = max(0, _as_int(changed_files) - len(confirmed_unchanged))
     path_restructure = _path_restructure_summary(file_diff, summary)
-    scan_evidence = _build_scan_evidence_model(version)
     first_version_review = _is_first_version_review(version, base_ref=base_ref, scan_evidence=scan_evidence)
     summary_status = str(summary.get("status") or "").upper()
     if first_version_review:
@@ -1096,10 +1155,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "markdown_export": str(md_path),
     }
     update_note = load_update_note(review_notes_root(catalog_html_out=out_path), lib_id, version_id)
-    from lib_guard.review.representative_files import load_representative_files
     from lib_guard.scan.artifacts import build_lib_db_correspondence
-
-    selected_checks = load_representative_files(review_notes_root(catalog_html_out=out_path), lib_id, version_id)
     scan_inventory = _as_mapping(scan_evidence.get('inventory'))
     model = {
         "schema_version": "version_update_detail.v1",
@@ -1110,11 +1166,7 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "library_name": _library_name(lib),
         "version_id": version_id,
         "target_version": version_id,
-        "source_roots": {
-            "current": str(version.get("raw_path") or scan_context.get("raw_path") or ""),
-            "base": next((str(row.get("raw_path") or "") for row in lib.get("versions", []) or []
-                          if isinstance(row, Mapping) and str(row.get("version_id") or "") == str(base_version)), ""),
-        },
+        "source_roots": source_roots,
         "base_ref": base_ref,
         "base_version": base_version,
         "base_source": base_source,
@@ -1176,6 +1228,9 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
         "trace_links": trace_links,
         "update_note": update_note,
         "representative_files": selected_checks,
+        "evidence_conflicts": evidence_conflicts,
+        "confirmed_unchanged_files": confirmed_unchanged,
+        "semantic_check": semantic_check,
         "lib_db_correspondence": build_lib_db_correspondence(scan_inventory.get('files', []), scan_inventory.get('root_path') or version.get('raw_path') or ''),
         "render_context": {
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -1208,6 +1263,9 @@ def build_version_update_detail_model(out: str | Path, lib: Mapping[str, Any], v
     model["version_review_model"] = build_version_review_model(model)
     model["ip_user_view_model"] = _as_mapping(model["version_review_model"].get("ip_user_view"))
     model["review_report"] = _as_mapping(model["version_review_model"].get("review_report"))
+    model['review_contact'] = (version.get('review_owner') or _as_mapping(version.get('review_packet')).get('review_owner')
+                               or lib.get('review_owner') or lib.get('owner') or '')
+    model['engineering_report'] = build_engineering_report(model)
     return model
 
 
@@ -1560,6 +1618,7 @@ body{background:var(--review-canvas);color:var(--review-ink)}
 .hero{padding:14px 24px;box-shadow:none;border-bottom-width:2px}.hero h1{font-size:22px;margin:3px 0 4px}.hero p{font-size:12px}.hero .compact-meta{margin-top:6px;gap:12px}.hero .compact-meta span{border:0;background:transparent;border-radius:0;padding:0}.hero .kicker,.hero-status:before{letter-spacing:0}.workspace{padding:16px 24px 32px;margin:0 auto}
 .panel,.version-overview{border-radius:6px;box-shadow:none}.review-secondary-column>.panel{border-radius:6px;box-shadow:none}.review-top-layout{grid-template-columns:minmax(0,1.8fr) minmax(300px,.8fr);gap:16px}.view-delta-table{min-width:0}.review-layout{grid-template-columns:minmax(0,1fr) 300px}.view-delta-table td{overflow-wrap:anywhere}.review-top-matrix>.panel .panel-head,.review-top-matrix>.panel .panel-body{padding:12px 14px}.review-top-summary .overview-cell{min-height:0;padding:8px 12px}
 .update-note-panel{border-top:3px solid var(--review-teal);border-radius:6px;margin-bottom:16px}.update-note-head{padding:10px 14px;background:#fff;align-items:center}.update-note-head h2{font-size:16px;margin:0}.update-note-head .section-kicker{display:none}.update-note-body{padding:10px 14px}.update-note-summary{border:0;border-radius:0;padding:0;background:#fff;grid-template-columns:72px minmax(0,1fr) minmax(150px,.3fr)}.update-note-summary>b{color:var(--review-muted)}.update-note-summary p{font-size:13px}.update-note-columns{gap:12px;margin-top:10px}.update-note-list{border:0;border-radius:0}.update-note-list h3{padding:5px 0;background:#fff}.update-note-list ul{padding:6px 0 0 16px;max-height:110px}.update-note-provenance{margin-top:8px;border-top:1px solid var(--review-line);padding-top:6px;font-size:12px;color:var(--review-muted)}.update-note-provenance summary{cursor:pointer}.update-note-provenance .update-note-meta{overflow-wrap:anywhere}
+.update-note-more{margin-top:10px;padding-top:8px;border-top:1px solid var(--review-line)}.update-note-more>summary{cursor:pointer;color:#245d50;font-size:12px;font-weight:700}.update-note-more[open] .update-note-columns{margin-top:8px}
 .review-secondary-column .refresh-status-list{border:0}.review-secondary-column .refresh-status-row{grid-template-columns:72px minmax(0,1fr)}.review-secondary-column .refresh-status-row span{grid-column:1 / -1}.review-secondary-column .metric-value{font-size:15px;white-space:normal}
 .view-delta-toolbar{padding-bottom:8px;margin-bottom:8px}.view-delta-filter-bar{grid-template-columns:minmax(0,1fr);padding:8px;border-radius:4px;gap:6px}.view-delta-filter-head{display:none}.view-delta-totals{grid-column:1}.view-delta-search{min-width:140px;flex:1 1 170px}.view-delta-select select{min-width:105px}.view-delta-filter-controls{gap:6px}.view-delta-search,.view-delta-select{border-radius:4px}.view-delta-scroll-note{display:none}
 </style>
@@ -1763,9 +1822,93 @@ def _version_overview_panel(model: Mapping[str, Any]) -> str:
     )
 
 
+def _reader_summary(model: Mapping[str, Any], version: Mapping[str, Any]) -> str:
+    from lib_guard.render.version_semantic_checks import _no_delta_base, semantic_reader_totals
+    engineering = _as_mapping(model.get('engineering_report'))
+    comparison = _as_mapping(_as_mapping(model.get('ip_user_view_model')).get('comparison'))
+    visible = _as_mapping(comparison.get('visible_counts'))
+    has_comparison = (str(model.get('review_mode') or '') != 'first_version'
+                      and str(model.get('status') or '').upper() not in {'DIFF_NOT_RUN', 'NO_DIFF_SUMMARY', 'NEEDS_BASE_CONFIRM'})
+    added, removed, modified = (_as_int(visible.get(key)) for key in ('added', 'removed', 'changed'))
+    unmatched = _as_int(visible.get('unmatched_new')) + _as_int(visible.get('unmatched_base'))
+    has_file_changes = has_comparison and any((added, removed, modified, unmatched))
+    file_context = ''
+    if has_file_changes:
+        pending = f'；另有待核对 {unmatched} 项' if unmatched else ''
+        file_context = (f'<details class="reader-file-counts"><summary>查看文件变化数量</summary>'
+                        f'<p class="reader-file-context"><strong>文件范围</strong> '
+                        f'新增 {added}、删除 {removed}、修改 {modified}{pending}；'
+                        '文件变化不等同于已确认的单元或接口变化。</p></details>')
+    release, _, _ = _management_gate_release_status(version)
+    semantic = _as_mapping(model.get('semantic_check'))
+    if semantic.get('status') == 'CURRENT':
+        counts = semantic_reader_totals(semantic)
+        if _no_delta_base(semantic):
+            version_changes = '版本变化未执行：未选择基准组合'
+        elif not counts['delta_executed'] and not counts['delta_pending']:
+            version_changes = '版本变化尚无检查结果'
+        else:
+            version_changes = f"版本变化 {counts['changed']} 项 / 变化证据不足 {counts['delta_pending']} 项"
+        technical = (f"组合检查：{counts['current_failed']} 项未通过 / {counts['current_pending']} 项未确认；"
+                     + version_changes)
+        if not counts['current_executed'] and not counts['current_pending']:
+            technical = '尚未执行当前版独立检查；' + technical
+    elif semantic:
+        technical = '组合检查结果已过期，当前范围尚未确认'
+    else:
+        technical = '跨视图对应与组合检查尚未执行'
+    if engineering.get('delivery', {}).get('missing') or engineering.get('delivery', {}).get('contract_missing'):
+        next_action = '补齐所列必需视图，并确认目标流程需要的模式与工艺角。'
+    elif engineering.get('failures') or engineering.get('changed'):
+        next_action = ' '.join(dict.fromkeys(item['advice'] for item in engineering.get('findings', [])
+                                            if item['status'] in {'CHANGED', 'FAIL'}))[:240]
+    elif any('不代表整库交付齐全' in item for item in engineering.get('limitations', [])):
+        next_action = '先确认该 IP 的完整交付要求，再核对本版文件变化中与使用相关的视图。'
+    elif has_file_changes:
+        next_action = '先核对本版文件变化中与使用相关的视图，再按需检查代表文件或完整组合。'
+    elif engineering.get('same_files'):
+        next_action = '所选文件内容一致；更新引用路径时可沿用该文件的已有定义，其余视图与组合尚需按使用范围检查。'
+    else:
+        next_action = '先核对下方单元与接口规格；需要版本影响结论时选择代表文件对比。'
+    facts = '<br>'.join(ui.esc(item) for item in engineering.get('key_facts', [])[:3])
+    limits = '；'.join(engineering.get('limitations', [])[:2])
+    limit_note = f'<small>未完成核查：{ui.esc(limits)}</small>' if limits else ''
+    return (
+        '<section data-section="reader-summary" class="reader-summary">'
+        '<h2>阅读要点</h2>'
+        '<div class="reader-summary-lead">'
+        f'<div class="reader-action"><strong>建议动作</strong><p>{ui.esc(next_action)}</p></div>'
+        f'<div class="reader-fact"><strong>已确认</strong><p>{facts or "尚无工程结论"}</p></div>'
+        '</div>'
+        '<div class="reader-summary-grid">'
+        f'<div><span>交付情况</span><b>{ui.esc(engineering.get("delivery_summary") or "交付要求待确认")}</b></div>'
+        f'<div><span>检查范围</span><b>{ui.esc(technical)}</b>{limit_note}</div>'
+        f'<div><span>正式放行</span><b>{ui.esc(release)}</b></div>'
+        '</div>'
+        f'{file_context}'
+        f'<p class="reader-contact">处理联系：{ui.esc(engineering.get("contact") or "未登记")}</p>'
+        '<style>.reader-summary{margin-bottom:16px;background:#fff;border-top:2px solid #138675}'
+        '.reader-summary h2{margin:0;padding:12px 16px 8px;font-size:16px}'
+        '.reader-summary-lead{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:0;border-bottom:1px solid #e4e8ef}'
+        '.reader-summary-lead>div{padding:12px 16px}.reader-summary-lead>div+div{border-left:1px solid #e4e8ef}'
+        '.reader-summary-lead strong{display:block;color:#526574;font-size:12px}.reader-summary-lead p{margin:6px 0 0;font-size:14px;line-height:1.5}'
+        '.reader-action{background:#f1f8f4}.reader-action p{font-weight:700;color:#17392f}'
+        '.reader-summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}'
+        '.reader-summary-grid>div{padding:10px 16px;border-right:1px solid #e4e8ef}'
+        '.reader-summary-grid>div:last-child{border-right:0}.reader-summary-grid span{display:block;font-size:11px;color:#667085}'
+        '.reader-summary-grid b{display:block;margin-top:3px;font-size:12px;line-height:1.4;color:#172033;font-weight:650}'
+        '.reader-summary-grid small{display:block;margin-top:6px;font-size:11px;color:#526574}'
+        '.reader-summary .reader-contact{margin:0;padding:8px 16px;border-top:1px solid #e4e8ef;color:#526574;font-size:11px}'
+        '.reader-file-counts{padding:8px 16px;border-top:1px solid #e4e8ef;font-size:12px;color:#526574}'
+        '.reader-file-counts summary{cursor:pointer;color:#245d50;font-weight:700}.reader-file-context{margin:8px 0 2px}'
+        '@media(max-width:900px){.reader-summary-lead,.reader-summary-grid{grid-template-columns:1fr}'
+        '.reader-summary-lead>div+div{border-left:0;border-top:1px solid #e4e8ef}}</style></section>'
+    )
+
+
 def _note_status_label(status: Any) -> str:
     value = str(status or "").lower()
-    return {"published": "已发布", "draft": "草稿", "missing": "暂无", "invalid": "格式异常"}.get(value, value or "暂无")
+    return {"published": "备注已发布", "draft": "草稿", "missing": "暂无", "invalid": "格式异常"}.get(value, value or "暂无")
 
 
 def _note_conflict_warning(model: Mapping[str, Any], note: Mapping[str, Any]) -> str:
@@ -1830,11 +1973,11 @@ def _version_update_note_panel(model: Mapping[str, Any]) -> str:
         _note_conflict_warning(model, note),
         "<div class='update-note-body'>",
         f"<div class='update-note-summary'><b>备注摘要</b><p>{ui.esc(summary)}</p><div class='update-note-tags'>{impact_tags}</div></div>",
-        "<div class='update-note-columns'>",
+        '<details class="update-note-more"><summary>查看关键变化、风险与必须确认项</summary><div class="update-note-columns">',
         _note_list("关键变化", note.get("key_changes"), empty="未填写关键变化"),
         _note_list("风险提醒", note.get("risks"), empty="未填写风险提醒"),
         _note_list("必须确认", note.get("must_check"), empty="未填写必须确认项"),
-        "</div>",
+        "</div></details>",
         "<details class='update-note-provenance'><summary>备注来源与更新时间</summary>",
         evidence_html,
         f"<div class='update-note-meta'>{meta_html}</div></details>",
@@ -2454,6 +2597,7 @@ def render_version_update_detail_panel(model: Mapping[str, Any], *, href_base: P
     )
 
 def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Path) -> str:
+    from lib_guard.render.version_engineering import engineering_markdown
     path = Path(out_md)
     path.parent.mkdir(parents=True, exist_ok=True)
     primary_next_action = _as_mapping(model.get("primary_next_action"))
@@ -2480,6 +2624,8 @@ def export_current_lib_diff_markdown(model: Mapping[str, Any], out_md: str | Pat
         "---",
         "",
         "# 当前库变化",
+        "",
+        engineering_markdown(model.get('engineering_report') or {}),
         "",
         f"{model.get('headline') or '-'}",
         "",
@@ -2603,10 +2749,15 @@ def render_version_detail_page(
     if export_markdown:
         export_current_lib_diff_markdown(model, md_path)
     from lib_guard.render.version_file_checks import render_file_checks
+    from lib_guard.render.version_semantic_checks import render_semantic_check
+    from lib_guard.render.version_engineering import render_engineering_report
     body = (
         _version_detail_styles()
         + "<main class='version-main'>"
         + _version_update_note_panel(model)
+        + _reader_summary(model, version)
+        + render_engineering_report(model['engineering_report'], page)
+        + "<details class='reader-file-sources' data-section='file-sources'><summary>文件与来源</summary>"
         + "<div class='review-top-layout'>"
         + "<section class='review-top-matrix'>"
         + render_version_update_detail_panel(model, href_base=page.parent)
@@ -2616,6 +2767,7 @@ def render_version_detail_page(
         + "</section>"
         + "</div>"
         + render_review_report(_as_mapping(model.get("review_report")))
+        + render_semantic_check(model.get('semantic_check', {}), page)
         + render_file_checks(model.get('representative_files', []), model.get('lib_db_correspondence', {}), page)
         + "<div class='review-layout'>"
         + "<section class='review-primary-column'>"
@@ -2625,6 +2777,7 @@ def render_version_detail_page(
         + _review_evidence_sidebar(model, version)
         + "</aside>"
         + "</div>"
+        + "</details>"
         + "</main>"
     )
     ip_model = _as_mapping(model.get("ip_user_view_model"))
@@ -2645,10 +2798,11 @@ def render_version_detail_page(
         catalog_browser_styles() + body,
         decision=usage_decision,
         decision_label=usage_decision_label,
-        nav=catalog_nav + "<a class='active' href='#'>版本详情</a><a href='#file-structure'>文件结构</a>",
+        nav=catalog_nav + "<a class='active' href='#'>版本详情</a><a href='#engineering-content'>库内容</a><a href='#engineering-results'>工程检查</a><a href='#file-structure' onclick=\"document.querySelector('.reader-file-sources').open=true\">文件结构</a>",
         meta=ui.compact_meta([("库", lib_id), ("版本", version_id), ("基准版", model.get("base_version") or "-")]),
     )
-    common.write_text(page, html)
+    from lib_guard.atomic import atomic_write_text
+    atomic_write_text(page, html)
     if stale_evidence_page.is_file():
         stale_evidence_page.unlink()
     return str(page)

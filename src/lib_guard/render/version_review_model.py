@@ -271,6 +271,11 @@ def build_ip_change_projection(
     for source in file_changes:
         item = dict(source)
         kind = str(item.get("change") or item.get("status") or "").upper()
+        display_kind = str(item.get("display_change") or "").upper()
+        if display_kind in {"UNMATCHED_NEW", "UNMATCHED_BASE"}:
+            counts[display_kind.lower()] += 1
+            visible_changes.append(item)
+            continue
         if kind == "REMOVED" and delete_semantics == "out_of_scope_missing":
             item["display_change"] = "BASELINE_ONLY"
             baseline_only_changes.append(item)
@@ -1262,7 +1267,9 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
     reconciliation_checks = {
         "file_diff_items_match_view_matrix": visible_file_counts == content_row_totals,
         "declared_file_diff_matches_items": not has_declared_counts
-        or declared_counts == {key: _report_count(raw_file_counts.get(key)) for key in ("added", "removed", "changed")},
+        or declared_counts == {
+            key: _report_count(raw_file_counts.get(key)) + (len(model.get('confirmed_unchanged_files') or []) if key == 'changed' else 0)
+            for key in ("added", "removed", "changed")},
         "path_changes_match_view_matrix": (
             len(path_change_items) == _report_count(row_totals.get("path_changed_same_content"))
             and (
@@ -1308,6 +1315,8 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
         "focus_files": _report_change_counts(focus_items),
         "file_tree_changes": visible_file_counts,
         "checks": reconciliation_checks,
+        "reader_corrections": [{'path': path, 'reason': '同一源快照的完整文件 Hash 确认相同'}
+                               for path in model.get('confirmed_unchanged_files', [])],
     }
     view_delta_analysis["evidence_reconciliation"] = evidence_reconciliation
     visible_by_path = {str(item.get('path') or ''): item for item in visible_file_changes}

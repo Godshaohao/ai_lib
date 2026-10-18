@@ -408,6 +408,8 @@ def add_file_diff_parser(subparsers: Any) -> None:
         p.add_argument("--library-id")
         p.add_argument("--version-id")
         p.add_argument("--base-version")
+        p.add_argument("--catalog", help=SUPPRESS)
+        p.add_argument("--catalog-html-out", help=SUPPRESS)
         # Accepted from the short CLI's explicit large-file safety gate. The
         # gate is enforced before this parser; the execution handler only
         # needs to accept the marker while running the already-approved job.

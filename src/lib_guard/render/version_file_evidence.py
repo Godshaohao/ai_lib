@@ -95,12 +95,14 @@ def _evidence_records(model: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 def _tree_status(value: Any) -> str:
     text = str(value or "current").strip().lower()
+    if text == 'unverified':
+        return 'unmatched_new'
     return text if text in TREE_STATUS_LABELS else "current"
 
 
 TREE_STATUS_LABELS = {
     'added': '新增', 'removed': '删除', 'changed': '修改', 'current': '本版文件',
-    'unmatched_new': '本版待核对', 'unmatched_base': '基准版待核对',
+    'unverified': '待核对', 'unmatched_new': '本版待核对', 'unmatched_base': '基准版待核对',
     'baseline_only': '本包未交付',
 }
 BASELINE_STATUSES = {'removed', 'unmatched_base', 'baseline_only'}
@@ -277,7 +279,7 @@ def render_version_file_evidence_section(model: Mapping[str, Any]) -> str:
         ".file-tree,.file-tree ul{list-style:none;margin:0;padding:0}.file-tree ul{padding-left:22px}.tree-folder{margin:1px 0}.tree-folder details{border-left:1px solid #d9e2ea}.tree-folder summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px;padding:5px 8px;cursor:pointer;border-radius:7px;color:#243746}.tree-folder summary:hover{background:#eef5f5}.tree-folder summary:focus-visible,.tree-filter-chip:focus-visible,.tree-search:focus-within,.tree-select:focus-within{outline:3px solid rgba(21,94,239,.22);outline-offset:1px}.tree-folder-name{display:flex;align-items:center;gap:7px;font-weight:800;min-width:0}.tree-folder-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;color:#5b7280;font-size:14px;transition:transform .15s}.tree-folder details[open]>summary .tree-folder-icon{transform:rotate(90deg)}.tree-folder-count{flex:0 0 auto;color:#758594;font:12px var(--mono);white-space:nowrap}"
         ".tree-file{display:grid;grid-template-columns:54px minmax(260px,1fr) minmax(230px,.8fr);gap:9px;align-items:center;min-height:32px;padding:4px 8px 4px 22px;border-left:1px solid #d9e2ea}.tree-file:hover{background:#f0f7f7}.tree-file code{overflow-wrap:anywhere;word-break:break-word;color:#1e3b4b}.tree-file-meta{color:#71808b;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tree-file-mark{display:inline-flex;justify-content:center;width:46px;border-radius:4px;padding:2px 4px;font-size:11px;font-weight:800}.tree-file-mark.added{color:#087443;background:#e9f7f0}.tree-file-mark.removed{color:#ae3b2c;background:#fff0ed}.tree-file-mark.changed{color:#a35c08;background:#fff3df}.tree-file-mark.current{color:#1e5baa;background:#e9f1ff}.tree-hidden{display:none!important}.tree-empty{padding:24px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:9px}"
         ".file-tree-toolbar{display:grid;grid-template-columns:minmax(230px,1.2fr) minmax(210px,1fr) minmax(150px,.7fr) minmax(150px,.7fr);gap:10px;align-items:center;margin-bottom:10px}.tree-search{display:flex;align-items:center;gap:8px;min-width:0;border:1px solid var(--line);border-radius:999px;background:#fff;padding:7px 12px}.tree-search span,.tree-select span{font-size:12px;color:var(--muted);font-weight:800;white-space:nowrap}.tree-search input{width:100%;border:0;outline:0;background:transparent;font-size:13px}.tree-filters{display:flex;gap:6px;flex-wrap:wrap}.tree-filter-chip{border:1px solid var(--line);border-radius:999px;background:#fff;color:#344054;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer}.tree-filter-chip.active{border-color:#9cc2ff;background:#eef4ff;color:#1849a9}.tree-select{display:flex;align-items:center;gap:6px;min-width:0;border:1px solid var(--line);border-radius:8px;background:#fff;padding:5px 8px}.tree-select select{width:100%;min-width:0;border:0;outline:0;background:transparent;color:#344054;font-size:12px}.tree-actions{display:flex;gap:6px;flex-wrap:wrap}.tree-actions .btn{min-height:32px}.tree-count{grid-column:1 / -1;color:var(--muted);font-size:12px;font-weight:800;white-space:nowrap}.file-tree-note{margin:0 0 12px;color:var(--muted);font-size:12px}.file-tree-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;color:var(--muted);font-size:12px}.file-tree-legend span{display:inline-flex;align-items:center;gap:5px}.file-tree-legend i{display:inline-block;width:9px;height:9px;border-radius:2px}.file-tree-legend .added{background:#43a782}.file-tree-legend .removed{background:#c85545}.file-tree-legend .changed{background:#d4862a}.file-tree-legend .current{background:#4b86c5}@media(max-width:1100px){.file-tree-toolbar{grid-template-columns:1fr 1fr}.tree-actions{justify-content:flex-start}.tree-count{grid-column:1 / -1}}@media(max-width:760px){.tree-file{grid-template-columns:54px minmax(0,1fr)}.tree-file-meta{grid-column:2}.file-tree-toolbar{grid-template-columns:1fr}.tree-count{grid-column:auto;justify-self:start}}"
-        ".tree-file{grid-template-columns:90px minmax(0,1fr) minmax(120px,.65fr) 72px}.tree-file-mark{width:auto}.tree-file-mark.unmatched_new,.tree-file-mark.unmatched_base{color:#70510e;background:#fff3df}.tree-source-path{grid-column:auto}.tree-source-path[open]{grid-column:2 / -1}.tree-source-path summary{white-space:nowrap}"
+        ".tree-file{grid-template-columns:90px minmax(0,1fr) minmax(120px,.65fr) 72px}.tree-file-mark{width:auto}.tree-file-mark.unverified,.tree-file-mark.unmatched_new,.tree-file-mark.unmatched_base{color:#70510e;background:#fff3df}.tree-source-path{grid-column:auto}.tree-source-path[open]{grid-column:2 / -1}.tree-source-path summary{white-space:nowrap}"
         "</style>"
         '<section id="file-structure" data-section="file-structure" class="file-evidence-section">'
         + ui.panel(
@@ -289,7 +291,7 @@ def render_version_file_evidence_section(model: Mapping[str, Any]) -> str:
             + "<div class='file-tree-scroll'>"
             + _file_tree_html(model, default_filter)
             + "</div>"
-            + "<div class='file-tree-legend'><span><i class='added'></i>新增</span><span><i class='removed'></i>删除</span><span><i class='changed'></i>修改</span><span><i class='current'></i>当前文件</span></div>",
+            + "<div class='file-tree-legend'><span><i class='added'></i>新增</span><span><i class='removed'></i>删除</span><span><i class='changed'></i>修改</span><span><i class='unmatched_new'></i>待核对</span><span><i class='current'></i>当前文件</span></div>",
         )
         + "<script>"
         + r"""

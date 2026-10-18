@@ -35,8 +35,9 @@ from .read_model import (
 )
 from .release_actions import build_release_web_args
 from .semantic_actions import prepare_semantic_job, semantic_review_options
+from lib_guard.semantic.profile import DEFAULT_CONFIG_PATH
 from .job_scheduler import JobAdmission, actions_conflict, acquire_catalog_writer_lock, acquire_global_slot
-from lib_guard.atomic import atomic_write_json, atomic_write_text
+from lib_guard.atomic import atomic_write_json, atomic_write_text, file_lock
 from lib_guard.effective.release_set import (
     build_release_set_manifest,
     compare_release_sets,
@@ -746,7 +747,18 @@ def _job_result_summary(job_dir: Path) -> str:
     if result.get("pairwise_result") and isinstance(pairwise, Mapping):
         file_type = str(pairwise.get("file_type") or "文件").upper()
         comparison = str(pairwise.get("status") or status).upper()
-        changed = "内容相同" if comparison == "SAME" else "内容有变化" if pairwise.get("changed") is True else "未确认内容一致"
+        raw = str(pairwise.get("source_content_status") or "").upper()
+        parsed = str(pairwise.get("parsed_fields_status") or "").upper()
+        if raw == "SAME":
+            changed = "源文件字节相同"
+        elif raw == "DIFF":
+            changed = "源文件已变化，当前字段未解释差异" if parsed == "SAME" else "源文件字节不同"
+        elif raw == "UNVERIFIED":
+            changed = "源文件内容未验证"
+        elif comparison == "SAME":
+            changed = "已提取字段无差异，源文件内容未验证"
+        else:
+            changed = "旧报告有变化，源文件内容未验证"
         return f"深度核对完成 · {file_type} · {changed}"[:240]
     if result.get("old_version") and result.get("new_version"):
         return f"版本对比完成 · {result['old_version']} → {result['new_version']}"[:240]
@@ -855,6 +867,8 @@ def _job_status(job_dir: Path, process: subprocess.Popen[str] | None, *, managed
         return_code = process.poll()
         if return_code is None:
             status.update({"status": "RUNNING", "pid": process.pid})
+        elif managed and str(status.get('status') or '').upper() == 'RUNNING':
+            status.update({'status': 'RUNNING', 'phase': '同步阅读报告'})
         else:
             status.update({
                 "status": "COMPLETED" if return_code == 0 else "FAILED",
@@ -1168,7 +1182,8 @@ def create_app(
         return unique
 
     def run_cli_job(job_id: str, root: Path, args: list[str],
-                    action: str, cwd: str, env: Mapping[str, str]) -> None:
+                    action: str, cwd: str, env: Mapping[str, str],
+                    catalog_path: str, html_out: str, profile_config_path: str | None = None) -> None:
         lock_root = root.parent / ".scheduler_locks"
         try:
             with ExitStack() as resources:
@@ -1190,10 +1205,24 @@ def create_app(
                         "action": action, "started_epoch": started_epoch,
                     })
                     return_code = process.wait()
+                reader_sync: dict[str, Any] = {'status': 'SKIPPED'}
+                if return_code == 0 and action in {'file-diff', 'semantic-review'}:
+                    try:
+                        from lib_guard.review.publication import sync_operator_result
+                        machine_result = _record_machine_result(root, return_code)
+                        recorded_request = json.loads((root / 'request.json').read_text(encoding='utf-8'))
+                        reader_sync = sync_operator_result(recorded_request, machine_result or {},
+                                                            catalog_path, html_out, root,
+                                                            started_epoch=started_epoch,
+                                                            profile_config_path=profile_config_path)
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        reader_sync = {'status': 'FAILED', 'error': str(exc),
+                                       'next_action': '检查结果已保留；重新运行报告刷新即可，不必重新对比。'}
                 _write_json(root / "status.json", {
                     "job_id": job_id, "status": "COMPLETED" if return_code == 0 else "FAILED",
                     "pid": process.pid, "return_code": return_code, "action": action,
                     "started_epoch": started_epoch, "finished_epoch": time.time(),
+                    "reader_sync": reader_sync,
                 })
         except Exception as exc:
             _write_json(root / "status.json", {
@@ -1602,6 +1631,14 @@ def create_app(
             },
             "created_by": "web_console",
         }
+        if action in {'file-diff', 'semantic-review'}:
+            request_payload['reader_target'] = {
+                'workspace': str(Path(web_state['workspace']).resolve()),
+                'catalog_path': str(Path(web_state['catalog_path']).resolve()),
+                'catalog_html': str(Path(web_state['catalog_html']).resolve()),
+                'config_path': str(Path(workspace_config_path()).resolve()),
+                'profile_config_path': str(Path(web_state['config'].get('semantic_review_config') or DEFAULT_CONFIG_PATH).resolve()),
+            }
         if candidate_selection is not None:
             request_payload["candidate_selection"] = candidate_selection
         formal_release_target = payload.get("formal_release_target")
@@ -1660,7 +1697,9 @@ def create_app(
                 try:
                     future = job_admission.submit(
                         job_executor,
-                        lambda: run_cli_job(job_id, root, args, action, app.config["LIB_GUARD_CWD"], env),
+                        lambda: run_cli_job(job_id, root, args, action, app.config["LIB_GUARD_CWD"], env,
+                                            str(web_state['catalog_path']), str(web_state['catalog_html']),
+                                            str(web_state['config'].get('semantic_review_config') or DEFAULT_CONFIG_PATH)),
                     )
                     job_futures[job_id] = future
                 except RuntimeError as exc:
@@ -2042,16 +2081,22 @@ def create_app(
             target_root = target.get('raw_path')
             old_roots = [Path(row['raw_path']).resolve() for lib in web_state['catalog'].get('libraries', [])
                          if target in lib.get('versions', [])
-                         for row in lib.get('versions', []) if row.get('raw_path')]
+                         for row in lib.get('versions', []) if row.get('raw_path') and row.get('version_id') != version]
             if not target_root or not _path_is_within(Path(str(pair.get('new_file') or '')).resolve(), [Path(target_root).resolve()]):
                 raise ValueError('新侧文件不属于当前版本；任意文件对比仍可查看，但不能加入这个版本详情。')
             if not _path_is_within(Path(str(pair.get('old_file') or '')).resolve(), old_roots):
                 raise ValueError('旧侧文件不属于当前库，请选择同库基准文件后加入详情。')
+            verified_base_root = next((candidate for candidate in old_roots
+                                        if Path(str(pair.get('old_file') or '')).resolve().is_relative_to(candidate)), None)
             save_representative_file(
                 notes_root, library, version, out,
                 note=_bounded_text(payload.get('note'), label='核查备注', limit=1000),
                 updated_by=_bounded_text(payload.get('updated_by') or 'web', label='核查人', limit=80),
                 expected_generation=result['generated_at'],
+                base_version_override=pair.get('base_version'),
+                base_root_override=verified_base_root,
+                started_epoch=(json.loads((root / 'status.json').read_text(encoding='utf-8')).get('started_epoch')
+                               if (root / 'status.json').is_file() else None),
             )
             try:
                 from lib_guard.render.version_detail_fast import render_version_detail_only
@@ -2064,6 +2109,22 @@ def create_app(
             return jsonify({'status': 'ERROR', 'error': str(exc)}), 400
         except OSError as exc:
             return jsonify({'status': 'ERROR', 'error': f'记录或产物不可读：{exc}'}), 503
+
+    @app.post('/api/libraries/<library>/versions/<version>/refresh-reader-report')
+    def refresh_reader_report(library: str, version: str) -> Any:
+        try:
+            web_state = state()
+            if find_catalog_version(web_state, library, version) is None:
+                return jsonify({'status': 'NOT_FOUND', 'error': '库或版本不存在'}), 404
+            from lib_guard.render.version_detail_fast import render_version_detail_only
+            rendered = render_version_detail_only(catalog_path=web_state['catalog_path'],
+                                                  out_dir=web_state['catalog_html'],
+                                                  library=library, version=version, export_markdown=True)
+            return jsonify({'status': 'PASS', 'render': rendered})
+        except (ValueError, TypeError, KeyError) as exc:
+            return jsonify({'status': 'ERROR', 'error': str(exc)}), 400
+        except OSError as exc:
+            return jsonify({'status': 'ERROR', 'error': f'阅读报告刷新失败：{exc}'}), 503
 
     @app.post("/api/libraries/<library>/versions/<version>/update-note")
     def save_version_update_note(library: str, version: str) -> Any:
@@ -2188,7 +2249,8 @@ def create_app(
                 process = jobs.get(job_id)
                 future = job_futures.get(job_id)
             managed = future is not None and not future.done()
-            status = _job_status(directory, process, managed=managed)
+            with file_lock(directory / '.reader_sync.lock'):
+                status = _job_status(directory, process, managed=managed)
             rows.append({
                 "job_id": job_id,
                 "action": str(request_data.get("action") or status.get("action") or ""),
@@ -2209,6 +2271,7 @@ def create_app(
                 "log_bytes": status.get("log_bytes", 0),
                 "quality_summary": status.get("quality_summary"),
                 "artifacts": status.get("artifacts", []),
+                "reader_sync": status.get("reader_sync"),
                 "log_url": f"/api/runs/{job_id}/log",
             })
         return jsonify({"status": "PASS", "jobs": rows})
@@ -2225,7 +2288,60 @@ def create_app(
             process = jobs.get(job_id)
             future = job_futures.get(job_id)
         managed = future is not None and not future.done()
-        return jsonify(_job_status(root, process, managed=managed) | {"job_id": job_id, "request": str(root / "request.json"), "log_url": f"/api/runs/{job_id}/log"})
+        with file_lock(root / '.reader_sync.lock'):
+            status = _job_status(root, process, managed=managed)
+        return jsonify(status | {"job_id": job_id, "request": str(root / "request.json"), "log_url": f"/api/runs/{job_id}/log"})
+
+    @app.post('/api/runs/<job_id>/retry-reader-sync')
+    def retry_reader_sync(job_id: str) -> Any:
+        try:
+            web_state = state()
+            root = job_root(web_state) / _safe_component(job_id)
+            if not root.is_dir():
+                return jsonify({'status': 'NOT_FOUND', 'error': f'运行记录不存在: {job_id}'}), 404
+            with file_lock(root / '.reader_sync.lock'):
+                recorded = json.loads((root / 'request.json').read_text(encoding='utf-8'))
+                status = json.loads((root / 'status.json').read_text(encoding='utf-8'))
+                result = json.loads((root / 'result.json').read_text(encoding='utf-8'))
+                if not all(isinstance(item, Mapping) for item in (recorded, status, result)):
+                    raise ValueError('任务记录格式无效')
+                action = recorded.get('action')
+                if action not in {'file-diff', 'semantic-review'} or status.get('action') != action:
+                    raise ValueError('此任务不支持阅读报告同步')
+                if (status.get('status') != 'COMPLETED' or status.get('return_code') != 0
+                        or result.get('exit_code') != 0 or result.get('result') != 'ok'
+                        or not isinstance(result.get('cli_result'), Mapping)):
+                    raise ValueError('只有已成功完成的任务可以重试阅读报告同步')
+                target = recorded.get('reader_target')
+                current = {
+                    'workspace': web_state['workspace'], 'catalog_path': web_state['catalog_path'],
+                    'catalog_html': web_state['catalog_html'], 'config_path': workspace_config_path(),
+                }
+                if not isinstance(target, Mapping) or any(
+                    not target.get(key) or Path(str(target[key])).resolve() != Path(str(value)).resolve()
+                    for key, value in current.items()
+                ):
+                    raise ValueError('任务原始报告工作区或配置与当前目标不一致，不能同步')
+                started_epoch = status.get('started_epoch')
+                if not isinstance(started_epoch, (int, float)):
+                    raise ValueError('任务缺少原始开始时间，不能同步')
+                try:
+                    from lib_guard.review.publication import sync_operator_result
+                    reader_sync = sync_operator_result(
+                        recorded, result['cli_result'], str(current['catalog_path']),
+                        str(current['catalog_html']), root, started_epoch=started_epoch,
+                        profile_config_path=target.get('profile_config_path') or None,
+                    )
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    reader_sync = {'status': 'FAILED', 'error': str(exc)}
+                status['reader_sync'] = reader_sync
+                _write_json(root / 'status.json', status)
+                return jsonify({'status': reader_sync['status'], 'reader_sync': reader_sync,
+                                'job_id': job_id})
+        except (ValueError, TypeError, KeyError) as exc:
+            return jsonify({'status': 'ERROR', 'error': str(exc)}), 400
+        except OSError as exc:
+            return jsonify({'status': 'ERROR', 'error': f'任务记录或报告不可读：{exc}'}), 503
 
     @app.get("/api/runs/<job_id>/log")
     def run_log(job_id: str) -> Any:

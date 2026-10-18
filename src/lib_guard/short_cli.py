@@ -1838,6 +1838,10 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
             str(new_version.get("version_id") or args.version),
             "--base-version",
             str(old_version.get("version_id") or args.base or ""),
+            "--catalog",
+            cfg["catalog"],
+            "--catalog-html-out",
+            cfg["catalog_html"],
         ]
         if bool(getattr(args, "force_large", False)) and file_type in FORCE_LARGE_FILE_DIFF_TYPES:
             command.append("--manual-large-file-opt-in")

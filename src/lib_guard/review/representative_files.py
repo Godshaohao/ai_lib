@@ -1,6 +1,7 @@
 """Human-selected file comparisons, independent of Web jobs and HTML."""
 
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 from pathlib import Path
 import shutil
@@ -34,17 +35,21 @@ def load_representative_files(root, library, version):
                 row['freshness'] = '文件状态未改变' if current == expected else '源文件已变化，需重新核查'
             except OSError:
                 row['freshness'] = '源文件不可读，需重新核查'
-    return sorted(rows, key=lambda row: row['file_type'])
+    return sorted(rows, key=lambda row: (row['file_type'], row.get('old_file', ''), row.get('new_file', '')))
 
 
-def save_representative_file(root, library, version, out_dir, *, note='', updated_by='web', expected_generation=None):
+def save_representative_file(root, library, version, out_dir, *, note='', updated_by='web', expected_generation=None,
+                             base_version_override=None, base_root_override=None, started_epoch=None):
     out = Path(out_dir)
     with file_lock(out.parent / f'.{out.name}.file_diff.lock'):
         return _save_representative_file(root, library, version, out, note=note,
-                                         updated_by=updated_by, expected_generation=expected_generation)
+                                         updated_by=updated_by, expected_generation=expected_generation,
+                                         base_version_override=base_version_override,
+                                         base_root_override=base_root_override, started_epoch=started_epoch)
 
 
-def _save_representative_file(root, library, version, out_dir, *, note, updated_by, expected_generation):
+def _save_representative_file(root, library, version, out_dir, *, note, updated_by, expected_generation,
+                              base_version_override, base_root_override, started_epoch):
     out = Path(out_dir)
     result = _read(out / 'pairwise_result.json')
     if expected_generation is not None and result.get('generated_at') != expected_generation:
@@ -62,7 +67,12 @@ def _save_representative_file(root, library, version, out_dir, *, note, updated_
     destination = index.parent / 'representative' / kind / evidence_id
     row = {
         'file_type': kind, 'old_file': result['old_file'], 'new_file': result['new_file'],
-        'base_version': result.get('base_version'), 'result': result['result'],
+        'base_version': base_version_override or result.get('base_version'), 'result': result['result'],
+        'base_raw_path': str(Path(base_root_override).resolve()) if base_root_override else '',
+        'generated_at': result.get('generated_at'),
+        'source_content_status': result.get('source_content_status', 'UNVERIFIED'),
+        'parsed_fields_status': result.get('parsed_fields_status', 'NOT_CHECKED'),
+        'content_sha256': result.get('content_sha256') or {},
         'change_count': int(result.get('change_count') or 0),
         'change_counts': semantic.get('summary', {}).get('by_type', {}),
         'changes': [
@@ -75,6 +85,7 @@ def _save_representative_file(root, library, version, out_dir, *, note, updated_
         'source_stamps': result.get('source_stamps') or {},
         'note': str(note).strip()[:1000], 'updated_by': str(updated_by).strip()[:80],
         'saved_at': datetime.now(timezone.utc).isoformat(),
+        'started_epoch': started_epoch,
         'evidence_id': evidence_id, 'evidence_dir': str(destination),
     }
     parsed_fields, unparsed_features = set(), set()
@@ -98,9 +109,14 @@ def _save_representative_file(root, library, version, out_dir, *, note, updated_
             raise ValueError('保存过程中对比产物已变化，请重新加入详情页。')
         with file_lock(index.with_name('.representative_files.lock')):
             saved = _read(index) if index.exists() else {'schema_version': 'representative_files.v1', 'files': {}}
-            saved['files'][kind] = row
+            pair = f"{kind}\0{Path(result['old_file']).resolve()}\0{Path(result['new_file']).resolve()}\0{result.get('generated_at')}"
+            key = f"{kind}:{sha256(pair.encode('utf-8')).hexdigest()[:20]}"
+            legacy = saved['files'].get(kind)
+            if legacy and legacy.get('old_file') == result['old_file'] and legacy.get('new_file') == result['new_file'] and legacy.get('generated_at') == result.get('generated_at'):
+                saved['files'].pop(kind)
+            saved['files'][key] = row
             atomic_write_json(index, saved)
     except Exception:
         shutil.rmtree(destination)
         raise
-    return next(item for item in load_representative_files(root, library, version) if item['file_type'] == kind)
+    return next(item for item in load_representative_files(root, library, version) if item['evidence_id'] == evidence_id)

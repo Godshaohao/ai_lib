@@ -1875,7 +1875,7 @@ class VersionDetailReportTest(unittest.TestCase):
 
             from lib_guard.render.version_detail_report import render_version_detail_page
 
-            with patch("lib_guard.render.version_detail_report.common.write_text", side_effect=RuntimeError("publish failed")):
+            with patch("lib_guard.atomic.atomic_write_text", side_effect=RuntimeError("publish failed")):
                 with self.assertRaises(RuntimeError):
                     render_version_detail_page(out, {"library_id": "ip/ucie", "library_name": "ucie"}, {"version_id": "v1"})
 

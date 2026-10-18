@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import sys
+import time
 
 from .common import print_json
 
@@ -65,6 +67,7 @@ def run_diff_render(args: Namespace) -> int:
 def run_file_diff(args: Namespace) -> int:
     from lib_guard.diff.file_diff import diff_pairwise_files
 
+    started_epoch = time.time()
     result = diff_pairwise_files(
         args.file_type,
         args.old,
@@ -75,5 +78,14 @@ def run_file_diff(args: Namespace) -> int:
         version_id=getattr(args, "version_id", None),
         base_version=getattr(args, "base_version", None),
     )
+    if result.get('status') in {'SAME', 'DIFF'} and getattr(args, 'catalog', None) and getattr(args, 'catalog_html_out', None):
+        try:
+            from lib_guard.review.publication import publish_file_diff
+            publish_file_diff(args.catalog, args.catalog_html_out, args.library_id, args.version_id, args.out,
+                              updated_by='cli', started_epoch=started_epoch)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f'阅读报告未同步；深度对比结果已保留，可重新刷新：{exc}', file=sys.stderr)
+    elif result.get('status') in {'SAME', 'DIFF'} and getattr(args, 'library_id', None) and getattr(args, 'version_id', None):
+        print('阅读报告未同步：请同时指定 --catalog 和 --catalog-html-out。', file=sys.stderr)
     print_json(result)
     return 0 if result.get("status") in {"SAME", "DIFF"} else 2

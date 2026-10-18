@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -137,6 +138,66 @@ class SemanticEffectiveTest(unittest.TestCase):
             self.assertEqual(delta['status'], 'CHANGED')
             self.assertEqual(delta['new_evidence']['source_version'], 'fix')
 
+    def test_lef_only_fix_missing_pin_is_checked_against_inherited_views(self):
+        from lib_guard.semantic.effective import resolve_effective_facts
+        from lib_guard.semantic.binding import bind_macros
+        from lib_guard.semantic.checks import check_bindings, compare_bindings
+        with tempfile.TemporaryDirectory() as td:
+            fixture = SemanticFixture(td)
+            fixture.version('full', complete=True)
+            fix = fixture.version('fix', views=('lef',), complete=True)
+            parser_path = Path(fix['scan']['scan_dir']) / 'parser_results/lef/result.json'
+            parser = json.loads(parser_path.read_text())
+            del parser['data']['macros']['M']['pins']['CLK']
+            write_json(parser_path, parser)
+
+            old = resolve_effective_facts(fixture.manifest(), fixture.catalog)
+            new = resolve_effective_facts(fixture.manifest([('fix', ['lef'])]), fixture.catalog)
+            sources = {fact['file_identity']['file_type']: fact['file_identity']['source_version'] for fact in new['facts']}
+            self.assertEqual(sources, {'lef': 'fix', 'liberty': 'full', 'verilog': 'full'})
+            bindings = bind_macros(new['facts'])
+            checks = {row['check_id']: row for row in check_bindings(bindings)}
+            self.assertEqual(checks['SIGNAL_PORT_SET']['status'], 'FAIL')
+            self.assertNotEqual(checks['SIGNAL_PORT_DIRECTION']['status'], 'PASS')
+            delta = next(row for row in compare_bindings(bind_macros(old['facts']), bindings)
+                         if row['check_id'] == 'LEF_PIN_DELTA' and row['attribute'] == 'pin_set')
+            self.assertEqual(delta['status'], 'CHANGED')
+            self.assertEqual(delta['new_evidence']['source_version'], 'fix')
+
+    def test_liberty_only_fix_keeps_raw_timing_change_separate_from_interface(self):
+        from lib_guard.diff.file_diff import diff_pairwise_files
+        from lib_guard.semantic.effective import resolve_effective_facts
+        from lib_guard.semantic.binding import bind_macros
+        from lib_guard.semantic.checks import check_bindings
+        with tempfile.TemporaryDirectory() as td:
+            fixture = SemanticFixture(td)
+            full = fixture.version('full', complete=True)
+            fix = fixture.version('fix', views=('liberty',), complete=True)
+            for version, value in ((full, '0.10'), (fix, '0.20')):
+                raw = Path(version['raw_path']) / 'liberty/M.lib'
+                raw.write_text('library (L) { cell (M) { pin (A) { direction : input; '
+                               'timing () { cell_rise (T) { values ("' + value + '"); } } } } }\n')
+                inventory_path = Path(version['scan']['scan_dir']) / 'file_inventory.json'
+                inventory = json.loads(inventory_path.read_text())
+                stamp = raw.stat()
+                next(row for row in inventory['files'] if row['file_type'] == 'liberty').update(
+                    size_bytes=stamp.st_size, mtime=stamp.st_mtime)
+                write_json(inventory_path, inventory)
+
+            old = resolve_effective_facts(fixture.manifest(), fixture.catalog)
+            new = resolve_effective_facts(fixture.manifest([('fix', ['liberty'])]), fixture.catalog)
+            sources = {fact['file_identity']['file_type']: fact['file_identity']['source_version'] for fact in new['facts']}
+            self.assertEqual(sources, {'lef': 'full', 'liberty': 'fix', 'verilog': 'full'})
+            checks = {row['check_id']: row for row in check_bindings(bind_macros(new['facts']))}
+            self.assertEqual(checks['SIGNAL_PORT_SET']['status'], 'PASS')
+            self.assertEqual(checks['SIGNAL_PORT_DIRECTION']['status'], 'PASS')
+            pairwise = diff_pairwise_files('liberty', Path(full['raw_path']) / 'liberty/M.lib',
+                                           Path(fix['raw_path']) / 'liberty/M.lib', Path(td) / 'pairwise')
+            self.assertEqual(pairwise['status'], 'DIFF')
+            self.assertEqual(pairwise['summary']['source_content_status'], 'DIFF')
+            self.assertEqual(pairwise['summary']['parsed_fields_status'], 'SAME')
+            self.assertTrue(pairwise['summary']['unexplained_change'])
+
     def test_order_and_tombstones_T19_T20(self):
         from lib_guard.semantic.effective import resolve_effective_facts
         with tempfile.TemporaryDirectory() as td:
@@ -180,6 +241,21 @@ class SemanticEffectiveTest(unittest.TestCase):
             write_json(meta_path, meta)
             result = resolve_effective_facts(manifest, fixture.catalog)
             self.assertTrue(all(row['fact_status'] == 'NOT_CHECKED' for row in result['files']))
+
+    def test_same_size_and_mtime_replacement_is_explicitly_not_content_verified(self):
+        from lib_guard.semantic.effective import resolve_effective_facts
+        with tempfile.TemporaryDirectory() as td:
+            fixture = SemanticFixture(td)
+            version = fixture.version('full')
+            source = Path(version['raw_path']) / 'lef/M.lef'
+            stamp = source.stat()
+            source.write_bytes(b'x' * stamp.st_size)
+            os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            result = resolve_effective_facts(fixture.manifest(), fixture.catalog)
+            lef = next(row for row in result['files'] if row['file_type'] == 'lef')
+            self.assertEqual(lef['fact_status'], 'AVAILABLE')
+            self.assertEqual(lef['evidence']['freshness'], 'METADATA_MATCH')
+            self.assertIs(lef['evidence']['content_verified'], False)
 
     def test_corrupt_manifest_and_wrong_parser_path_T24(self):
         from lib_guard.semantic.effective import resolve_effective_facts

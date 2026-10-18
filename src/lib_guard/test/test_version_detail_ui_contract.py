@@ -7,6 +7,27 @@ from unittest.mock import patch
 
 
 class VersionDetailUiContractTest(unittest.TestCase):
+    def test_conflicting_same_content_change_is_rendered_as_pending_in_file_tree(self) -> None:
+        from lib_guard.render.version_file_evidence import _evidence_records, render_version_file_evidence_section
+
+        model = {
+            'source_roots': {'current': '/raw/v2', 'base': '/raw/v1'},
+            'file_changes': [{
+                'path': 'lef/a.lef', 'change': 'unverified', 'display_change': 'UNVERIFIED',
+                'file_type': 'lef', 'review_label': '对比结论待复核',
+            }],
+            'file_diff': {'logical_path_changes': []},
+            'scan_evidence': {'inventory': {'files': [
+                {'path': 'lef/a.lef', 'abs_path': '/raw/v2/lef/a.lef', 'file_type': 'lef'},
+            ]}},
+        }
+
+        record = _evidence_records(model)[0]
+        self.assertEqual(record['change'], 'unverified')
+        html = render_version_file_evidence_section(model)
+        self.assertIn("data-tree-status='unmatched_new'", html)
+        self.assertIn('本版待核对', html)
+
     def test_file_tree_exposes_source_paths_without_guessing_missing_roots(self) -> None:
         from lib_guard.render.version_file_evidence import _evidence_records, render_version_file_evidence_section
         model = {
@@ -1304,6 +1325,8 @@ class VersionDetailUiContractTest(unittest.TestCase):
         }
         lib = {"library_id": "ip/demo", "library_name": "demo", "display_name": "demo"}
         version = {"version_id": "doc_update", "review_gate": {}}
+        from lib_guard.review.engineering import build_engineering_report
+        model['engineering_report'] = build_engineering_report(model)
         with tempfile.TemporaryDirectory() as td:
             with patch("lib_guard.render.version_detail_report.build_version_update_detail_model", return_value=model):
                 page = Path(render_version_detail_page(Path(td) / "html", lib, version))
