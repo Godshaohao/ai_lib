@@ -24,7 +24,7 @@ SCAN_STRATEGY_CONFIG_KEYS = (
     "parse_file_types",
     "parse_exclude_file_types",
 )
-DEFAULT_DISCOVER_MAX_DEPTH = "4"
+DEFAULT_DISCOVER_MAX_DEPTH = "8"
 DEFAULT_DISCOVER_MIN_VERSIONS = "1"
 DEFAULT_DISCOVER_MAX_DIRS = "5000"
 DEFAULT_DISCOVER_MAX_CANDIDATES = "200"
@@ -130,6 +130,7 @@ WEB_ACTION_SPECS = {
     "review-packet": WebActionSpec("version", "review", "审查记录包"),
     "action-file": WebActionSpec("library", "action", "动作文件", True),
     "effective-rollback": WebActionSpec("library", "effective", "当前可用版本回退", True, "即将回退当前可用版本，此操作会写入状态和审计记录。是否继续？"),
+    "effective-compare": WebActionSpec("library", "effective", "历史有效组合对比"),
 }
 WEB_MUTATING_ACTIONS = frozenset(WEB_ACTION_SPECS)
 
@@ -194,11 +195,15 @@ def canonical_view_type(file_type: str) -> str:
 
 
 def file_diff_allowed(file_type: str) -> bool:
+    if str(file_type or "").strip().lower() == "generic":
+        return True
     spec = view_type_spec(file_type)
     return bool(spec and (spec.default_file_diff or spec.evidence_mode in {"summary", "metadata"}))
 
 
 def file_diff_requires_force_large(file_type: str) -> bool:
+    if str(file_type or "").strip().lower() == "generic":
+        return True
     spec = view_type_spec(file_type)
     return bool(spec and spec.evidence_mode in {"summary", "metadata"})
 

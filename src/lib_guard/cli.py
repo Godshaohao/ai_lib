@@ -36,6 +36,7 @@ MANUAL_FILE_DIFF_TYPES = (
     set(DEFAULT_FILE_DIFF_TYPES)
     | set(SUMMARY_ONLY_TYPES)
     | set(BINARY_METADATA_ONLY_TYPES)
+    | {"generic"}
 )
 
 
@@ -427,7 +428,7 @@ def add_library_parser(subparsers: Any) -> None:
     p.add_argument("--out", required=True, help="Candidate TSV output; this should not be the stable registry")
     p.add_argument("--json-out", help="Machine discovery evidence JSON")
     p.add_argument("--html-out", help="Discovery review HTML")
-    p.add_argument("--max-depth", type=int, default=4)
+    p.add_argument("--max-depth", type=int, default=8)
     p.add_argument("--min-versions", type=int, default=int(DEFAULT_DISCOVER_MIN_VERSIONS))
     p.add_argument("--max-dirs", type=int, default=5000)
     p.add_argument("--max-candidates", type=int, default=200)
@@ -438,11 +439,13 @@ def add_library_parser(subparsers: Any) -> None:
     p.add_argument("--root", required=True)
     p.add_argument("--input", required=True, help="Candidate TSV, normally config/library_candidates/latest.tsv")
     p.add_argument("--registry", required=True, help="Stable confirmed registry TSV")
+    p.add_argument("--existing-catalog", help="Preserve libraries already in the formal library map")
     p.set_defaults(func=run_library_accept)
 
     p = sp.add_parser("add", help="Add a known library root directly to stable registry")
     p.add_argument("--root", required=True, help="RAW root")
     p.add_argument("--registry", required=True, help="Stable confirmed registry TSV")
+    p.add_argument("--existing-catalog", help="Preserve libraries already in the formal library map")
     p.add_argument("--library-id", required=True, help="Formal library id, e.g. vendor.category.library")
     p.add_argument("--library-root", required=True, help="Actual library root directory")
     p.add_argument("--display-name")

@@ -21,7 +21,7 @@ class EffectiveReleaseSetTest(unittest.TestCase):
         from lib_guard.effective.pointer import write_current_pointer
 
         effective_dir = root / "libraries" / library.replace("/", "_") / "effective" / effective_id
-        effective_dir.mkdir(parents=True)
+        effective_dir.mkdir(parents=True, exist_ok=True)
         versions = [
             {
                 "version_id": base,
@@ -83,6 +83,24 @@ class EffectiveReleaseSetTest(unittest.TestCase):
         self.assertIn("effective:E2", changed["old_target"])
         self.assertIn("effective:E3", changed["new_target"])
         self.assertNotIn("changed_files", changed)
+
+    def test_each_library_keeps_latest_confirmed_effective_until_its_own_pointer_changes(self) -> None:
+        from lib_guard.effective.release_set import build_release_set_manifest
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_current_effective(root, library="ip/libA", effective_id="E1", digest_suffix="a")
+            self._write_current_effective(root, library="ip/libB", effective_id="E2", digest_suffix="b")
+            candidate = root / "libraries" / "ip_libA" / "effective" / "E9"
+            candidate.mkdir(parents=True)
+            (candidate / "effective_manifest.json").write_text('{"effective_id":"E9"}', encoding="utf-8")
+
+            first = build_release_set_manifest(root, ["ip/libA", "ip/libB"], set_id="first")
+            self.assertEqual([row["current_effective_id"] for row in first["libraries"]], ["E1", "E2"])
+
+            self._write_current_effective(root, library="ip/libA", effective_id="E9", digest_suffix="new")
+            second = build_release_set_manifest(root, ["ip/libA", "ip/libB"], set_id="second")
+            self.assertEqual([row["current_effective_id"] for row in second["libraries"]], ["E9", "E2"])
 
     def test_release_set_compare_keeps_same_missing_current_effective_state(self) -> None:
         from lib_guard.effective.release_set import build_release_set_manifest, compare_release_sets

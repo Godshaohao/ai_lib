@@ -296,7 +296,7 @@
                 <summary>高级搜索限制</summary>
                 <p>仅影响本次搜索，不修改已登记的库。默认允许一个版本。</p>
                 <div class="command-form-grid candidate-discovery-grid">
-                  <label class="compact-field">最大层级<input id="candidate-max-depth" type="number" min="1" max="8" value="4"></label>
+                  <label class="compact-field">最大层级<input id="candidate-max-depth" type="number" min="1" max="8" value="8"></label>
                   <label class="compact-field">最少版本数<input id="candidate-min-versions" type="number" min="1" max="100" value="1"></label>
                   <label class="compact-field">最大目录数<input id="candidate-max-dirs" type="number" min="1" max="100000" value="5000"></label>
                   <label class="compact-field">最多候选数<input id="candidate-max-candidates" type="number" min="1" max="10000" value="200"></label>
@@ -461,6 +461,13 @@
           <article id="analysis-panel-file-diff" class="action-card" role="tabpanel" aria-labelledby="analysis-tab-file-diff" hidden>
             <div class="action-card-heading"><h4>深度文件对比</h4><span id="file-diff-action-state" class="status-chip status-neutral">等待对象</span></div>
             <div class="action-card-footer"><button id="open-file-diff" class="button button-secondary" type="button" disabled>选择文件对比</button></div>
+            <section class="manual-pair-section" aria-label="选择两份文件">
+              <div class="manual-pair-grid">
+                <div><label class="compact-field">旧版本<select id="manual-pair-old-version"><option value="">选择旧版本</option></select></label><label class="compact-field">旧文件<input id="manual-pair-old-path" list="manual-pair-old-options" type="search" placeholder="搜索扫描文件清单" autocomplete="off"><datalist id="manual-pair-old-options"></datalist></label></div>
+                <div><label class="compact-field">新版本<select id="manual-pair-new-version"><option value="">选择新版本</option></select></label><label class="compact-field">新文件<input id="manual-pair-new-path" list="manual-pair-new-options" type="search" placeholder="搜索同类型文件" autocomplete="off"><datalist id="manual-pair-new-options"></datalist></label></div>
+              </div>
+              <div class="manual-pair-actions"><span id="manual-pair-status" class="muted" role="status">选择版本后读取已有扫描文件清单，不重新扫描。</span><button id="manual-pair-load-all" class="button button-secondary button-small" type="button" hidden>读取剩余版本</button><label class="toggle-field"><input id="manual-pair-force-large" type="checkbox"> 允许完整读取大文件</label><button id="manual-pair-run" class="button button-primary button-small" type="button" disabled>对比所选文件</button></div>
+            </section>
             <details id="file-diff-details" class="inline-action-details">
               <summary>手动文件对比</summary>
               <section class="manual-file-diff-mode">
@@ -473,12 +480,12 @@
                 <button class="button button-secondary button-small" data-command-action="file-diff" type="button" disabled>运行文件级对比（同路径）</button>
               </section>
               <section class="manual-file-diff-mode">
-                <h5>任意两文件对比</h5>
+                <h5>绝对路径专家入口</h5>
                 <p class="command-summary">仅允许原始库根或工作区内的文件；结果仍输出 HTML 结构化 diff 和 Markdown 摘要。</p>
                 <div class="inline-action-fields explicit-file-diff-fields">
                   <label class="compact-field wide-field">旧文件绝对路径<input id="file-diff-old-file" type="text" placeholder="例如 /proj/.../old.lef"></label>
                   <label class="compact-field wide-field">新文件绝对路径<input id="file-diff-new-file" type="text" placeholder="例如 /proj/.../new.lef"></label>
-                  <label class="compact-field">文件类型<input id="file-diff-explicit-type" type="text" placeholder="例如 lef"></label>
+                  <label class="compact-field">文件类型<input id="file-diff-explicit-type" type="text" placeholder="例如 lef；未知类型填 generic"></label>
                   <label class="toggle-field"><input id="file-diff-explicit-force-large" type="checkbox"> 允许大文件完整读取</label>
                 </div>
                 <button id="run-explicit-file-diff" class="button button-secondary button-small" type="button" disabled>运行任意两文件对比</button>
@@ -665,6 +672,14 @@
               </div>
               <div class="effective-composition-scroll"><table class="effective-composition-table"><thead><tr><th scope="col">组合</th><th scope="col">顺序</th><th scope="col">角色</th><th scope="col">版本</th><th scope="col">扫描证据</th><th scope="col">操作</th></tr></thead><tbody id="effective-composition-body"><tr><td colspan="6">尚无组合，先预览处理计划。</td></tr></tbody></table></div>
             </section>
+            <details class="effective-history" aria-label="已保存有效组合"><summary>已保存组合 <span id="effective-history-count">0</span></summary>
+              <div class="effective-history-compare" aria-label="历史组合对比">
+                <label>旧组合<select id="effective-compare-old"><option value="">选择旧组合</option></select></label>
+                <label>新组合<select id="effective-compare-new"><option value="">选择新组合</option></select></label>
+                <button id="effective-compare-run" class="button button-secondary button-small" type="button" disabled>对比所选组合</button>
+              </div>
+              <div id="effective-history-list" class="effective-history-list"></div><small>每库仅有一个当前有效组合；对比历史不会改变当前有效组合。</small>
+            </details>
           </details>
           <article class="action-card action-card-workflow">
             <div class="action-card-heading"><h4>选择版本</h4><span id="workflow-status" class="status-chip status-neutral">未连接</span></div>
@@ -865,7 +880,7 @@
             <section class="settings-section" aria-labelledby="discovery-defaults-heading">
               <div class="settings-section-heading"><h4 id="discovery-defaults-heading">发现默认值</h4></div>
               <div class="settings-form-grid settings-form-grid-advanced">
-                <label class="compact-field">发现深度<input id="config-discover-max-depth" type="number" min="1" max="8" value="4"></label>
+                <label class="compact-field">发现深度<input id="config-discover-max-depth" type="number" min="1" max="8" value="8"></label>
                 <label class="compact-field">最少版本数<input id="config-discover-min-versions" type="number" min="1" max="100" value="1"><small class="field-help">默认 1，可发现只有一个版本的新库；单版本候选仍需人工确认。</small></label>
                 <label class="compact-field">最大目录数<input id="config-discover-max-dirs" type="number" min="1" max="100000" value="5000"></label>
                 <label class="compact-field">最多候选数<input id="config-discover-max-candidates" type="number" min="1" max="10000" value="200"></label>

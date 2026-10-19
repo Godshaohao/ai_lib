@@ -519,6 +519,69 @@ class LibraryRegistryTest(unittest.TestCase):
             self.assertEqual(blocked["new_library_count"], 1)
             self.assertEqual({ref.library_id for ref in refs}, {"vendor_A.pcie", "vendor_A.ucie"})
 
+    def test_incremental_candidate_accept_keeps_existing_formal_libraries(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            roots = {name: raw / "Vendor_A" / name for name in ("alpha", "beta", "gamma")}
+            for root in roots.values():
+                root.mkdir(parents=True)
+            catalog = Path(td) / "config" / "library_catalog.yml"
+            registry = Path(td) / "config" / "library_registry.tsv"
+            candidates = Path(td) / "config" / "candidates.tsv"
+            from lib_guard.library_registry import (
+                accept_candidates_to_registry, apply_list_to_catalog, read_library_list,
+                write_library_catalog,
+            )
+            from lib_guard.discovery import load_library_map
+
+            write_library_catalog(raw, [
+                {"status": "OK", "library_id": f"Vendor_A.{name}", "root_abs": str(roots[name]),
+                 "display_name": name, "vendor": "Vendor_A", "middle_path": ""}
+                for name in ("alpha", "beta")
+            ], catalog)
+            candidates.write_text(
+                "status\tlibrary_id\troot_abs\tdisplay_name\tvendor\tmiddle_path\n"
+                f"OK\tVendor_A.gamma\t{roots['gamma']}\tgamma\tVendor_A\t\n",
+                encoding="utf-8",
+            )
+
+            accept_candidates_to_registry(
+                raw, candidates_path=candidates, registry_path=registry, existing_catalog_path=catalog,
+            )
+            applied = apply_list_to_catalog(raw, list_path=registry, out_path=catalog)
+            refs = load_library_map(raw, {"library_map": str(catalog)}, catalog)
+
+            self.assertEqual(applied["status"], "PASS")
+            self.assertEqual({ref.library_id for ref in refs}, {"Vendor_A.alpha", "Vendor_A.beta", "Vendor_A.gamma"})
+            self.assertEqual(len(read_library_list(registry)), 3)
+
+    def test_incremental_manual_add_keeps_existing_formal_libraries(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            raw = Path(td) / "raw"
+            roots = {name: raw / "Vendor_A" / name for name in ("alpha", "beta", "gamma")}
+            for root in roots.values():
+                root.mkdir(parents=True)
+            catalog = Path(td) / "config" / "library_catalog.yml"
+            registry = Path(td) / "config" / "library_registry.tsv"
+            from lib_guard.library_registry import add_library_to_registry, apply_list_to_catalog, write_library_catalog
+            from lib_guard.discovery import load_library_map
+
+            write_library_catalog(raw, [
+                {"status": "OK", "library_id": f"Vendor_A.{name}", "root_abs": str(roots[name]),
+                 "display_name": name, "vendor": "Vendor_A", "middle_path": ""}
+                for name in ("alpha", "beta")
+            ], catalog)
+
+            add_library_to_registry(
+                raw, registry_path=registry, library_id="Vendor_A.gamma", root_abs=roots["gamma"],
+                existing_catalog_path=catalog,
+            )
+            applied = apply_list_to_catalog(raw, list_path=registry, out_path=catalog)
+            refs = load_library_map(raw, {"library_map": str(catalog)}, catalog)
+
+            self.assertEqual(applied["status"], "PASS")
+            self.assertEqual({ref.library_id for ref in refs}, {"Vendor_A.alpha", "Vendor_A.beta", "Vendor_A.gamma"})
+
     def test_library_accept_merges_only_approved_candidates_into_registry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             raw = Path(td) / "raw"

@@ -13,6 +13,7 @@ import zipfile
 
 
 TYPE_LABELS = {
+    "generic": "通用文件（仅字节级）",
     "lef": "LEF 物理抽象",
     "liberty": "Liberty 时序库",
     "verilog": "Verilog RTL/Netlist",
@@ -89,7 +90,7 @@ def comparison_capability(file_type: str) -> dict[str, Any]:
             "parameter_method": "解析器抽取字段 + 双栏逐行核对",
             "hash_provenance": "本次手工两两对比计算完整源文件 SHA-256；解析字段另行比较",
         }
-    if normalized in BINARY_METADATA_ONLY_TYPES:
+    if normalized in BINARY_METADATA_ONLY_TYPES | {"generic"}:
         return {
             "file_type": normalized,
             "evidence_mode": "metadata_only",
@@ -836,7 +837,7 @@ def _unsupported_metadata_parse(file_type: str, path: Path) -> dict[str, Any]:
             {
                 "severity": "warning",
                 "category": "unsupported",
-                "message": f"不支持的文件配对类型：{file_type}；当前使用元数据/哈希级证据",
+                "message": f"{file_type} 不做语义解析；当前仅使用元数据/哈希级证据",
             }
         ],
     }

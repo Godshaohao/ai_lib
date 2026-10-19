@@ -32,6 +32,7 @@ from .read_model import (
     release_stage_detail,
     list_version_rows,
     load_web_state,
+    _file_type_for_path,
 )
 from .release_actions import build_release_web_args
 from .semantic_actions import prepare_semantic_job, semantic_review_options
@@ -59,6 +60,7 @@ from lib_guard.project_config import (
     default_scan_strategy,
     file_diff_allowed,
     file_diff_requires_force_large,
+    canonical_view_type,
     web_action_catalog,
 )
 from lib_guard.review.update_notes import load_update_note, review_notes_root, save_update_note
@@ -171,6 +173,15 @@ def _browse_roots(web_state: Mapping[str, Any]) -> list[Path]:
     return roots
 
 
+def _raw_browse_roots(web_state: Mapping[str, Any]) -> list[Path]:
+    paths = web_state.get("paths") if isinstance(web_state.get("paths"), Mapping) else {}
+    raw_text = str(paths.get("raw_root") or "").strip()
+    if not raw_text:
+        return []
+    raw_root = Path(raw_text).expanduser().resolve()
+    return [raw_root] if raw_root.is_dir() else []
+
+
 def _path_is_within(path: Path, roots: list[Path]) -> bool:
     return any(path == root or root in path.parents for root in roots)
 
@@ -203,6 +214,19 @@ def _safe_existing_file_path(path_text: Any, roots: list[Path], *, label: str) -
     if not resolved.is_file():
         raise FileNotFoundError(f"{label}不存在或不是文件：{resolved}")
     return resolved
+
+
+def _manual_pair_type(old: Path, new: Path, requested: str) -> str:
+    old_type = canonical_view_type(_file_type_for_path(old.name))
+    new_type = canonical_view_type(_file_type_for_path(new.name))
+    if old_type != new_type:
+        raise ValueError("两份文件必须是同类型，不能跨视图类型对比")
+    if old_type == "unknown" and old.suffix.lower() != new.suffix.lower():
+        raise ValueError("未识别的两份文件必须具有相同后缀，才能按通用文件对比")
+    inferred = "generic" if old_type == "unknown" else old_type
+    if requested and requested not in {inferred, "generic"} and canonical_view_type(requested) != inferred:
+        raise ValueError(f"指定类型 {requested} 与实际文件类型 {inferred} 不一致")
+    return canonical_view_type(requested) if requested else inferred
 
 
 def _browse_directory(path_text: str | None, roots: list[Path]) -> dict[str, Any]:
@@ -587,6 +611,7 @@ def _job_artifact_map(job_dir: Path) -> dict[str, dict[str, Any]]:
         candidates.append(("raw_text_diff", "双栏文本对比", out_root / "raw_text_diff.html", "html"))
     candidates.extend([
         ("html", "HTML 对比报告", result.get("html"), "html"),
+        ("compare_manifest", "有效组合对比清单", result.get("compare_manifest"), "json"),
         ("markdown", "Markdown 摘要", result.get("markdown"), "markdown"),
         ("export", "导出对比结果", result.get("export"), "zip"),
         ("pairwise_result", "结构化结果 JSON", result.get("pairwise_result"), "json"),
@@ -1189,7 +1214,7 @@ def create_app(
         try:
             with ExitStack() as resources:
                 lock_fds: list[int] = []
-                if action != "semantic-review":
+                if action not in {"semantic-review", "effective-compare"}:
                     lock_fds.append(resources.enter_context(acquire_catalog_writer_lock(lock_root)))
                 slot_fd = resources.enter_context(acquire_global_slot(lock_root, _WEB_JOB_WORKERS))
                 lock_fds.append(slot_fd)
@@ -1257,6 +1282,29 @@ def create_app(
         semantic_documents = None
         if action == 'semantic-review':
             args, semantic_documents = prepare_semantic_job(web_state, find_catalog_library(web_state, library), payload, root)
+        elif action == "effective-compare":
+            library_row = find_catalog_library(web_state, library)
+            if library_row is None:
+                raise ValueError("库不存在，无法比较有效组合")
+            window = _pending_window(web_state, library_row)
+            saved = window.get("saved_combinations") or []
+            allowed = {str(row.get("effective_id") or "") for row in saved if isinstance(row, Mapping)}
+            old_id = _bounded_text(payload.get("old_effective_id"), label="旧组合", limit=180)
+            new_id = _bounded_text(payload.get("new_effective_id"), label="新组合", limit=180)
+            if not old_id or not new_id or old_id == new_id:
+                raise ValueError("请选择两个不同的已保存有效组合")
+            if old_id not in allowed or new_id not in allowed:
+                raise ValueError("组合不属于当前库的已保存历史，请刷新后重新选择")
+            effective_root = Path(str(window["path"])).parent.parent / "effective"
+            old_manifest = effective_root / old_id / "effective_manifest.json"
+            new_manifest = effective_root / new_id / "effective_manifest.json"
+            if not old_manifest.is_file() or not new_manifest.is_file():
+                raise ValueError("已保存组合清单不存在，请刷新列表后重试")
+            args = [sys.executable, "-m", "lib_guard.effective.cli", "compare",
+                    "--library", library, "--old", f"effective:{old_manifest}",
+                    "--new", f"effective:{new_manifest}", "--out-dir", str(root / "compare"),
+                    "--html", str(root / "compare" / "index.html"),
+                    "--search-root", str(web_state["catalog_html"])]
         elif action in {'release-set-plan', 'release-set-apply'}:
             from lib_guard.release.bundle import validate_release_name
             if action == 'release-set-apply' and not _payload_bool(payload, 'acknowledged'):
@@ -1341,7 +1389,7 @@ def create_app(
             discover_root_text = _bounded_text(payload.get("root"), label="发现起点", limit=1000)
             if discover_root_text:
                 discover_root = Path(discover_root_text).expanduser().resolve()
-                allowed_roots = _browse_roots(web_state)
+                allowed_roots = _raw_browse_roots(web_state)
                 if not discover_root.is_dir():
                     raise ValueError("发现起点不存在或不是目录；请填写原始库根下的目录")
                 if not _path_is_within(discover_root, allowed_roots):
@@ -1409,13 +1457,13 @@ def create_app(
             if not library_id or not root_path:
                 raise ValueError("新增库需要填写正式库名和库根目录")
             library_root = Path(root_path).expanduser().resolve()
-            browse_roots = _browse_roots(web_state)
+            browse_roots = _raw_browse_roots(web_state)
             if not library_root.is_dir():
                 raise ValueError("库根目录不存在或不是目录；请点击“浏览目录”选择")
             if not _path_is_within(library_root, browse_roots):
                 allowed = "；".join(str(item) for item in browse_roots) or "未配置"
                 raise ValueError(
-                    "库根目录不在当前允许范围内。当前可登记范围："
+                    "库根目录必须位于原始库根下。当前可登记范围："
                     f"{allowed}。请点击“浏览目录”从原始库根中选择真实库交付目录；项目代码根目录不能直接登记为库。"
                 )
             args.extend([library_id, "--root", root_path])
@@ -1434,11 +1482,7 @@ def create_app(
         elif action == "file-diff":
             explicit_old = _bounded_text(payload.get("old_file"), label="旧文件", limit=1000)
             explicit_new = _bounded_text(payload.get("new_file"), label="新文件", limit=1000)
-            file_type = _bounded_text(payload.get("type"), label="文件类型", limit=80).lower()
-            if not file_type:
-                raise ValueError("文件对比需要填写文件类型")
-            if not file_diff_allowed(file_type):
-                raise ValueError(f"不支持的文件类型：{file_type}。请使用已登记的视图类型。")
+            requested_type = _bounded_text(payload.get("type"), label="文件类型", limit=80).lower()
             force_large = _payload_bool(payload, "force_large")
             if explicit_old or explicit_new:
                 if not explicit_old or not explicit_new:
@@ -1448,6 +1492,7 @@ def create_app(
                 roots = _browse_roots(web_state)
                 old_file = _safe_existing_file_path(explicit_old, roots, label="旧文件")
                 new_file = _safe_existing_file_path(explicit_new, roots, label="新文件")
+                file_type = _manual_pair_type(old_file, new_file, requested_type)
                 if file_diff_requires_force_large(file_type) and not force_large:
                     raise ValueError(f"{file_type} 属于轻量证据类型；深度文件对比需要显式勾选 force-large。")
                 args.extend(["fd", "--old", str(old_file), "--new", str(new_file), "--type", file_type])
@@ -1460,15 +1505,23 @@ def create_app(
                 old_relpath = _bounded_text(payload.get("old_relpath"), label="旧文件相对路径", limit=500)
                 if old_relpath:
                     old_relpath = _safe_relative_path(old_relpath, label="旧文件相对路径")
-                    if base == version:
-                        raise ValueError("旧文件基准版本不能与当前版本相同")
+                    if base == version and old_relpath == relpath:
+                        raise ValueError("同一版本内请选择两份不同文件")
                     old_file = resolve_catalog_file(web_state, library, base, old_relpath, label="旧文件")
                     new_file = resolve_catalog_file(web_state, library, version, relpath, label="新文件")
+                    file_type = _manual_pair_type(old_file, new_file, requested_type)
                     if file_diff_requires_force_large(file_type) and not force_large:
                         raise ValueError(f"{file_type} 属于轻量证据类型；深度文件对比需要显式勾选 force-large。")
                     args.extend(["fd", "--old", str(old_file), "--new", str(new_file), "--type", file_type])
                 else:
+                    file_type = requested_type or canonical_view_type(_file_type_for_path(relpath))
+                    if file_type == "unknown":
+                        file_type = "generic"
+                    if file_diff_requires_force_large(file_type) and not force_large:
+                        raise ValueError(f"{file_type} 属于轻量证据类型；深度文件对比需要显式勾选 force-large。")
                     args.extend(["fd", library, version, relpath, "--base", base, "--type", file_type])
+            if not file_diff_allowed(file_type):
+                raise ValueError(f"不支持的文件类型：{file_type}")
             if force_large:
                 args.append("--force-large")
         elif action == "review-gate":
@@ -1834,7 +1887,8 @@ def create_app(
 
         try:
             web_state = state()
-            payload = _browse_directory(request.args.get("path"), _browse_roots(web_state))
+            roots = _raw_browse_roots(web_state) if request.args.get("scope") == "raw" else _browse_roots(web_state)
+            payload = _browse_directory(request.args.get("path"), roots)
         except (FileNotFoundError, NotADirectoryError) as exc:
             return jsonify({"status": "NOT_FOUND", "error": str(exc)}), 404
         except ValueError as exc:
@@ -2434,8 +2488,8 @@ def create_app(
                         raise RuntimeError("文件对比缺少基准版本")
                     if base not in version_ids:
                         raise RuntimeError(f"文件对比基准不属于当前库：{base}")
-                    if base == version:
-                        raise RuntimeError("文件对比基准不能与当前版本相同")
+                    if base == version and not payload.get("old_relpath"):
+                        raise RuntimeError("同路径文件对比的基准不能与当前版本相同")
                     payload["base"] = base
             if action in {"rel", "release-plan", "release-overwrite-preview", "release-force", "release-apply"} and not (readiness.get("release-check") or {}).get("enabled"):
                 return jsonify({"status": "BLOCKED", "error": "请先完成扫描，再进行发布检查。"}), 409
@@ -2655,6 +2709,10 @@ def create_app(
     @app.post("/api/libraries/<library>/effective-rollback")
     def effective_rollback(library: str) -> Any:
         return library_action_route("effective-rollback", library)
+
+    @app.post("/api/libraries/<library>/effective-compare")
+    def effective_compare(library: str) -> Any:
+        return library_action_route("effective-compare", library)
 
     @app.get("/artifacts/<path:artifact_path>")
     def artifact(artifact_path: str) -> Any:

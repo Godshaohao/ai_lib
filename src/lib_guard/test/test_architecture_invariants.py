@@ -83,6 +83,8 @@ class ArchitectureInvariantTest(unittest.TestCase):
                     "review-packet",
                     "action-file",
                     "effective-rollback",
+                    # Read-only history comparison writes only job artifacts.
+                    "effective-compare",
                 }
             ),
         )
@@ -131,6 +133,7 @@ class ArchitectureInvariantTest(unittest.TestCase):
                 "/api/libraries/<library>/versions/<version>/review-packet",
                 "/api/libraries/<library>/action",
                 "/api/libraries/<library>/effective-rollback",
+                "/api/libraries/<library>/effective-compare",
                 "/api/release-set/build",
                 "/api/release-set/plan",
                 "/api/release-set/apply",

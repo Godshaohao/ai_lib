@@ -47,6 +47,7 @@ VIEW_ROOT_NAMES = {
     "docs",
     "package",
 }
+VIEW_SUFFIX_ROOT_NAMES = VIEW_ROOT_NAMES - {"package"}
 
 
 REQUIRED_SCAN_FILES = [
@@ -263,6 +264,26 @@ def _unique_logical_index(
     return {logical: paths[0] for logical, paths in logical_to_paths.items() if len(paths) == 1}
 
 
+def _unique_view_suffix_index(items: Mapping[str, Mapping[str, Any]]) -> dict[tuple[str, str], str]:
+    """Index a path below a known view directory, never an arbitrary basename."""
+    groups: dict[tuple[str, str], list[str]] = {}
+    for path, item in items.items():
+        parts = str(path).replace("\\", "/").split("/")
+        view_index = next((i for i, part in enumerate(parts[:-1]) if part.lower() in VIEW_SUFFIX_ROOT_NAMES), None)
+        if view_index is None:
+            continue
+        suffix = "/".join([parts[view_index].lower(), *parts[view_index + 1:]])
+        key = (suffix, str(item.get("file_type") or "unknown").lower())
+        groups.setdefault(key, []).append(path)
+    return {key: paths[0] for key, paths in groups.items() if len(paths) == 1}
+
+
+def _view_suffix_path(path: str) -> str:
+    parts = str(path).replace("\\", "/").split("/")
+    index = next(i for i, part in enumerate(parts[:-1]) if part.lower() in VIEW_SUFFIX_ROOT_NAMES)
+    return "/".join(parts[index:])
+
+
 def _inventory_coverage(meta: Mapping[str, Any] | None, count: int) -> dict[str, Any]:
     meta = meta or {}
     fingerprint = meta.get('input_fingerprint') or {}
@@ -365,30 +386,25 @@ def _metadata_match_candidates(
 ) -> list[dict[str, Any]]:
     """Pair cheap, hashless candidates without claiming content equality.
 
-    Large views often omit full hashes by policy.  A unique basename + file
-    type + size match is useful evidence for package re-layout, but it is not
-    strong enough to call a file unchanged.  Keep it in ``unverified`` so the
+    Large views often omit full hashes by policy. A unique basename + file
+    type match is useful evidence for package re-layout, but it is not
+    strong enough to call a file modified or unchanged. Keep it in ``unverified`` so the
     review gate can remain conservative without manufacturing add/remove noise.
     """
 
-    def key(path: str, item: Mapping[str, Any]) -> tuple[str, str, int | None]:
+    def key(path: str, item: Mapping[str, Any]) -> tuple[str, str]:
         basename = Path(str(path).replace("\\", "/")).name.lower()
         file_type = str(item.get("file_type") or "unknown").lower()
-        size = item.get("size_bytes")
-        try:
-            normalized_size = int(size) if size is not None else None
-        except (TypeError, ValueError):
-            normalized_size = None
-        return basename, file_type, normalized_size
+        return basename, file_type
 
-    old_by_key: dict[tuple[str, str, int | None], list[str]] = {}
-    new_by_key: dict[tuple[str, str, int | None], list[str]] = {}
+    old_by_key: dict[tuple[str, str], list[str]] = {}
+    new_by_key: dict[tuple[str, str], list[str]] = {}
     for path, item in old_items.items():
-        if not isinstance(item, Mapping) or item.get("hash") or item.get("sha256"):
+        if not isinstance(item, Mapping):
             continue
         old_by_key.setdefault(key(path, item), []).append(path)
     for path, item in new_items.items():
-        if not isinstance(item, Mapping) or item.get("hash") or item.get("sha256"):
+        if not isinstance(item, Mapping):
             continue
         new_by_key.setdefault(key(path, item), []).append(path)
 
@@ -401,12 +417,15 @@ def _metadata_match_candidates(
         old_path, new_path = old_paths[0], new_paths[0]
         if old_path == new_path:
             continue
+        old_item, new_item = old_items[old_path], new_items[new_path]
+        same_size = old_item.get("size_bytes") == new_item.get("size_bytes")
+        hashless = not (old_item.get("hash") or old_item.get("sha256") or new_item.get("hash") or new_item.get("sha256"))
         candidates.append(
             {
                 "old": old_path,
                 "new": new_path,
-                "reason": "metadata_name_size_candidate",
-                "match_reason": "same_basename_file_type_size",
+                "reason": "metadata_name_size_candidate" if same_size and hashless else "metadata_name_candidate",
+                "match_reason": "same_basename_file_type_size" if same_size and hashless else "unique_basename_file_type",
                 "confidence": "candidate",
             }
         )
@@ -544,6 +563,35 @@ def _file_diff(
         new_files.pop(new_path, None)
         old_files[logical] = {**old_item, "path": logical, "physical_path": old_path, "logical_path": logical, "abs_path": old_item.get("abs_path")}
         new_files[logical] = {**new_item, "path": logical, "physical_path": new_path, "logical_path": logical, "abs_path": new_item.get("abs_path")}
+    old_suffix = _unique_view_suffix_index({path: physical_old_files[path] for path in raw_removed - paired_old})
+    new_suffix = _unique_view_suffix_index({path: physical_new_files[path] for path in raw_added - paired_new})
+    for suffix_key in sorted(set(old_suffix) & set(new_suffix)):
+        old_path, new_path = old_suffix[suffix_key], new_suffix[suffix_key]
+        if old_path in paired_old or new_path in paired_new:
+            continue
+        logical = _view_suffix_path(new_path)
+        if logical in old_files or logical in new_files:
+            continue
+        old_item, new_item = physical_old_files[old_path], physical_new_files[new_path]
+        comparison, reason = _compare_file_evidence(old_item, new_item)
+        paired_old.add(old_path)
+        paired_new.add(new_path)
+        logical_pairs.append({"logical_path": logical, "old": old_path, "new": new_path,
+                              "signature_changed": comparison == "changed", "comparison": comparison,
+                              "match_reason": "unique_view_suffix"})
+        if comparison == "same":
+            unchanged.append(logical)
+        elif comparison == "unverified":
+            unverified.append({"logical_path": logical, "old": old_path, "new": new_path,
+                               "reason": reason, "match_reason": "unique_view_suffix"})
+        else:
+            logical_changed.append(logical)
+            logical_path_changes.append({"logical_path": logical, "old": old_path, "new": new_path,
+                                         "match_reason": "unique_view_suffix"})
+            old_files.pop(old_path, None)
+            new_files.pop(new_path, None)
+            old_files[logical] = {**old_item, "path": logical, "physical_path": old_path, "logical_path": logical}
+            new_files[logical] = {**new_item, "path": logical, "physical_path": new_path, "logical_path": logical}
     changed = sorted(set(changed) | set(logical_changed))
     metadata_only = []
     for key in changed:

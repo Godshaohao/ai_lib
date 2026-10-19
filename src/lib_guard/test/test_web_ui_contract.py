@@ -565,6 +565,39 @@ assert.deepEqual(effectiveCompositionRows({}, {}, versions), []);
         self.assertIn('.effective-composition-scroll', styles)
         self.assertNotIn('.workflow-step > span {', styles)
 
+    def test_effective_history_and_file_tree_offer_direct_comparison_controls(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        for control in ('effective-compare-old', 'effective-compare-new', 'effective-compare-run'):
+            self.assertIn(f'id="{control}"', template)
+        self.assertIn('data-tree-pair=', script)
+        self.assertIn('assignTreeFileToPair', script)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for manual-pair selection tests')
+    def test_manual_pair_keeps_old_side_when_main_version_changes(self):
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        helper = script[script.index('  function renderManualPair()'):script.index('  async function loadManualPairFiles(')]
+        subprocess.run(['node', '-e', """
+const assert = require('node:assert/strict');
+const elements = new Map();
+const $ = id => { if (!elements.has(id)) elements.set(id, {value:'', checked:false, innerHTML:'', disabled:false}); return elements.get(id); };
+const state = {selectedLibrary:'demo', manualPairLibrary:'demo', manualPairAnchor:'demo\\nold',
+  selectedVersion:{version_id:'new'}, versions:[{version_id:'old'},{version_id:'new'}], activeAction:null,
+  manualPairCache:new Map(), manualPairLoading:new Set(), versionHasMore:false};
+const escapeHtml = value => String(value);
+const manualPairRows = () => [];
+const manualPairType = value => value;
+const manualPairSuffix = value => value;
+const loadManualPairFiles = () => {};
+const fileTypeLabel = value => value;
+$('manual-pair-old-version').value = 'old';
+$('manual-pair-new-version').value = 'old';
+""" + helper + """
+renderManualPair();
+assert.equal($('manual-pair-old-version').value, 'old');
+assert.equal($('manual-pair-new-version').value, 'old');
+"""], check=True, capture_output=True, text=True)
+
     @unittest.skipUnless(shutil.which('node'), 'Node is required for effective navigation tests')
     def test_effective_results_and_rollback_follow_current_library_state(self):
         script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()

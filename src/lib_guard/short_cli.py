@@ -30,7 +30,7 @@ from lib_guard.short_cli_config import (
 from lib_guard.user_errors import format_user_error
 
 PAIRWISE_FILE_DIFF_TYPES = set(DEFAULT_FILE_DIFF_TYPES)
-FORCE_LARGE_FILE_DIFF_TYPES = set(SUMMARY_ONLY_TYPES) | set(BINARY_METADATA_ONLY_TYPES)
+FORCE_LARGE_FILE_DIFF_TYPES = set(SUMMARY_ONLY_TYPES) | set(BINARY_METADATA_ONLY_TYPES) | {"generic"}
 MANUAL_FILE_DIFF_TYPES = PAIRWISE_FILE_DIFF_TYPES | FORCE_LARGE_FILE_DIFF_TYPES
 SHORT_COMMAND_ALIASES: dict[str, str] = {}
 LEGACY_SHORT_COMMAND_REWRITES = {
@@ -1012,6 +1012,8 @@ def _library_accept_command(cfg: dict[str, str], args: Any) -> list[str]:
         args.input or cfg["library_candidates"],
         "--registry",
         args.registry or cfg["library_registry"],
+        "--existing-catalog",
+        cfg["library_catalog"],
     ]
 
 
@@ -1023,6 +1025,8 @@ def _library_add_command(cfg: dict[str, str], args: Any) -> list[str]:
         cfg["raw_root"],
         "--registry",
         args.registry or cfg["library_registry"],
+        "--existing-catalog",
+        cfg["library_catalog"],
         "--library-id",
         args.library_id,
         "--library-root",
@@ -1666,7 +1670,8 @@ def build_cli_commands(argv: list[str], *, cwd: str | Path | None = None) -> lis
                 # policy.  The chained refresh must use the library_catalog.yml
                 # that the previous command is about to create.
                 refresh_cfg["catalog_policy"] = cfg["library_catalog"]
-                commands.append(_catalog_scan_command(refresh_cfg, args.library_id))
+                # A local refresh cannot populate libraries missing from a new catalog.json.
+                commands.append(_catalog_scan_command(refresh_cfg, args.library_id if Path(catalog).is_file() else None))
             return commands
         if args.library_cmd == "apply":
             commands = [_library_apply_command(cfg, args)]

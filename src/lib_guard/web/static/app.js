@@ -67,6 +67,10 @@
     fileChangeKind: initialRoute.get('file_change') || 'all',
     fileChangeType: initialRoute.get('file_type') || 'all',
     fileTreeFiles: [],
+    manualPairCache: new Map(),
+    manualPairLoading: new Set(),
+    manualPairLibrary: '',
+    manualPairAnchor: '',
     fileTreeRootPath: '',
     fileTreeLoading: false,
     fileTreeError: '',
@@ -674,7 +678,7 @@
     const fileRows = node.files.sort((a, b) => a.name.localeCompare(b.name)).map((file) => {
       const selected = state.selectedFileTreePaths.has(file.path);
       const detail = [fileTypeLabel(file.file_type), formatBytes(file.size_bytes), file.evidence, file.role].filter(Boolean).join(' · ');
-      return `<label class="file-tree-file ${selected ? 'selected' : ''}" title="${escapeHtml(file.path)}"><input type="checkbox" data-tree-file="${escapeHtml(file.path)}" ${selected ? 'checked' : ''}><span class="file-tree-file-name">${escapeHtml(file.name)}</span><span class="file-tree-file-meta">${escapeHtml(detail)}</span></label>`;
+      return `<div class="file-tree-file-row"><label class="file-tree-file ${selected ? 'selected' : ''}" title="${escapeHtml(file.path)}"><input type="checkbox" data-tree-file="${escapeHtml(file.path)}" ${selected ? 'checked' : ''}><span class="file-tree-file-name">${escapeHtml(file.name)}</span><span class="file-tree-file-meta">${escapeHtml(detail)}</span></label><div class="file-tree-pair-actions"><button type="button" data-tree-pair="old" data-tree-path="${escapeHtml(file.path)}" title="设为文件对比旧侧">旧</button><button type="button" data-tree-pair="new" data-tree-path="${escapeHtml(file.path)}" title="设为文件对比新侧">新</button></div></div>`;
     }).join('');
     return folders + fileRows;
   }
@@ -743,6 +747,23 @@
       input.closest('.file-tree-file')?.classList.toggle('selected', input.checked);
       updateFileTreeControls(visibleFileTreeFiles());
     }));
+    tree.querySelectorAll('[data-tree-pair]').forEach((button) => button.addEventListener('click', () => {
+      assignTreeFileToPair(button.dataset.treePair, button.dataset.treePath);
+    }));
+  }
+
+  function assignTreeFileToPair(side, path) {
+    const version = state.selectedVersion?.version_id || '';
+    if (!version || !path || !['old', 'new'].includes(side)) return;
+    const field = $(`manual-pair-${side}-version`);
+    field.value = version;
+    $(`manual-pair-${side}-path`).value = path;
+    state.manualPairCache.set(`${state.selectedLibrary}\n${version}`, {files: state.fileTreeFiles, status: 'PASS'});
+    renderManualPair();
+    if (side === 'new') {
+      activateWorkbenchCommand('file-diff');
+      $(`manual-pair-${side}-path`).focus();
+    }
   }
 
   let fileTreeRenderTimer = null;
@@ -1129,6 +1150,116 @@
     } catch (error) {
       clearActionBusy();
       showError(`任意两文件深度对比失败：${error.message}`, { action: true });
+    }
+  }
+
+  function manualPairRows(side) {
+    const version = $(`manual-pair-${side}-version`).value;
+    return state.manualPairCache.get(`${state.selectedLibrary}\n${version}`)?.files || [];
+  }
+
+  function manualPairType(value) {
+    const raw = String(value || 'unknown').toLowerCase();
+    return {lib: 'liberty', sp: 'spice', snp: 'touchstone'}[raw] || raw;
+  }
+
+  function manualPairSuffix(path) {
+    const name = String(path || '').split('/').pop();
+    return name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
+  }
+
+  function renderManualPair() {
+    const library = state.selectedLibrary || '';
+    if (state.manualPairLibrary !== library) {
+      state.manualPairLibrary = library;
+      state.manualPairCache.clear();
+      state.manualPairLoading.clear();
+      state.manualPairAnchor = '';
+      for (const side of ['old', 'new']) {
+        $(`manual-pair-${side}-version`).value = '';
+        $(`manual-pair-${side}-path`).value = '';
+      }
+    }
+    const anchor = `${library}\n${state.selectedVersion?.version_id || ''}`;
+    const changedAnchor = anchor !== state.manualPairAnchor;
+    state.manualPairAnchor = anchor;
+    for (const side of ['old', 'new']) {
+      const field = $(`manual-pair-${side}-version`);
+      const previous = field.value || (side === 'new' && changedAnchor ? state.selectedVersion?.version_id || '' : '');
+      field.innerHTML = '<option value="">选择版本</option>' + state.versions.map((row) => `<option value="${escapeHtml(row.version_id)}">${escapeHtml(row.version_id)}</option>`).join('');
+      field.value = state.versions.some((row) => row.version_id === previous) ? previous : '';
+      field.disabled = !library || Boolean(state.activeAction);
+      const version = field.value;
+      const key = `${library}\n${version}`;
+      if (version && !state.manualPairCache.has(key) && !state.manualPairLoading.has(key)) loadManualPairFiles(side, version);
+    }
+    const oldRows = manualPairRows('old');
+    const newRows = manualPairRows('new');
+    const oldPath = $('manual-pair-old-path').value.trim();
+    const newPath = $('manual-pair-new-path').value.trim();
+    const oldFile = oldRows.find((row) => row.path === oldPath);
+    const newFile = newRows.find((row) => row.path === newPath);
+    const oldType = oldFile ? manualPairType(oldFile.file_type) : '';
+    const sameType = oldFile && newFile && oldType === manualPairType(newFile.file_type)
+      && (oldType !== 'unknown' || manualPairSuffix(oldPath) === manualPairSuffix(newPath));
+    for (const side of ['old', 'new']) {
+      const input = $(`manual-pair-${side}-path`);
+      const rows = side === 'old' ? oldRows : newRows.filter((row) => !oldFile || manualPairType(row.file_type) === oldType);
+      const query = input.value.trim().toLowerCase();
+      const choices = rows.filter((row) => !query || row.path.toLowerCase().includes(query)).slice(0, 120);
+      $(`manual-pair-${side}-options`).innerHTML = choices.map((row) => `<option value="${escapeHtml(row.path)}">${escapeHtml(fileTypeLabel(row.file_type))}</option>`).join('');
+      input.disabled = !$( `manual-pair-${side}-version`).value || Boolean(state.activeAction);
+    }
+    const status = $('manual-pair-status');
+    status.textContent = !library ? '先选择库。'
+      : !state.versions.length ? '先读取版本列表。'
+      : !$('manual-pair-old-version').value || !$('manual-pair-new-version').value ? '选择旧版和新版；只读取已有扫描文件清单。'
+      : state.manualPairLoading.size ? '正在读取两侧扫描文件清单…'
+      : !oldRows.length || !newRows.length ? '所选版本缺少可用扫描清单，请先扫描对应版本。'
+      : !oldFile || !newFile ? `旧版 ${oldRows.length} 个文件 / 新版 ${newRows.length} 个文件；输入关键字选取路径。`
+      : !sameType ? '所选文件类型不同，不能执行两两对比。'
+      : oldType === 'unknown' ? '通用文件仅做完整指纹/元数据比较，须勾选完整读取。'
+      : `两侧均为 ${fileTypeLabel(oldType)}；结果生成 HTML 和 Markdown。`;
+    const forceNeeded = ['unknown', 'liberty', 'verilog', 'systemverilog', 'spef', 'db', 'gds', 'oas', 'ndm', 'layout', 'milkyway'].includes(oldType);
+    $('manual-pair-run').disabled = !sameType || Boolean(state.activeAction)
+      || (forceNeeded && !$('manual-pair-force-large').checked)
+      || ($('manual-pair-old-version').value === $('manual-pair-new-version').value && oldPath === newPath);
+    $('manual-pair-load-all').hidden = !state.versionHasMore;
+    $('manual-pair-load-all').disabled = state.versionsLoadingMore || Boolean(state.activeAction);
+  }
+
+  async function loadManualPairFiles(side, version) {
+    const library = state.selectedLibrary;
+    const key = `${library}\n${version}`;
+    state.manualPairLoading.add(key);
+    renderManualPair();
+    try {
+      const payload = await getJson(`/api/libraries/${encodeURIComponent(library)}/versions/${encodeURIComponent(version)}/file-tree`);
+      if (library !== state.selectedLibrary) return;
+      state.manualPairCache.set(key, {files: payload.status === 'PASS' ? payload.files || [] : [], status: payload.status});
+    } catch (error) {
+      if (library === state.selectedLibrary) state.manualPairCache.set(key, {files: [], status: 'ERROR'});
+    } finally {
+      state.manualPairLoading.delete(key);
+      if (library === state.selectedLibrary) renderManualPair();
+    }
+  }
+
+  async function runManualPair() {
+    if ($('manual-pair-run').disabled || !state.selectedLibrary || state.activeAction) return;
+    const oldVersion = $('manual-pair-old-version').value;
+    const newVersion = $('manual-pair-new-version').value;
+    const payload = {base: oldVersion, old_relpath: $('manual-pair-old-path').value.trim(),
+      relpath: $('manual-pair-new-path').value.trim(), force_large: $('manual-pair-force-large').checked};
+    setActionBusy('file-diff');
+    try {
+      const result = await getJson(`/api/libraries/${encodeURIComponent(state.selectedLibrary)}/versions/${encodeURIComponent(newVersion)}/file-diff`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+      });
+      await startJob(result, '所选文件深度对比', null, 'file-diff');
+    } catch (error) {
+      clearActionBusy();
+      showError(`所选文件对比失败：${error.message}`, {action: true});
     }
   }
 
@@ -1651,10 +1782,46 @@
     const rollback = $('rollback-to');
     const previous = rollback.value;
     const saved = (pendingWindow.saved_combinations || []).filter((row) => row.effective_id !== stack.current_effective_id && row.effective_id !== candidate.candidate_effective_id);
+    const history = (pendingWindow.saved_combinations || []).slice().reverse();
+    $('effective-history-count').textContent = String(history.length);
+    $('effective-history-list').innerHTML = history.length ? history.map((row) => {
+      const current = row.effective_id === stack.current_effective_id;
+      const pending = row.effective_id === candidate.candidate_effective_id && !acceptedCandidate;
+      return `<div class="effective-history-row"><code>${escapeHtml(row.effective_id)}</code><span>${current ? '当前有效' : pending ? '待确认候选' : '历史已保存'}</span></div>`;
+    }).join('') : '<span class="muted">尚无已保存组合。</span>';
+    const oldSelect = $('effective-compare-old');
+    const newSelect = $('effective-compare-new');
+    const oldSelected = oldSelect.value;
+    const newSelected = newSelect.value;
+    const options = history.map((row) => `<option value="${escapeHtml(row.effective_id)}">${escapeHtml(row.effective_id)}</option>`).join('');
+    oldSelect.innerHTML = '<option value="">选择旧组合</option>' + options;
+    newSelect.innerHTML = '<option value="">选择新组合</option>' + options;
+    const ids = new Set(history.map((row) => row.effective_id));
+    oldSelect.value = ids.has(oldSelected) ? oldSelected : '';
+    newSelect.value = ids.has(newSelected) ? newSelected : '';
+    const compareRun = $('effective-compare-run');
+    compareRun.disabled = Boolean(state.activeAction) || !oldSelect.value || !newSelect.value || oldSelect.value === newSelect.value;
     rollback.innerHTML = '<option value="">选择回退目标</option>' + saved.map((row) => `<option value="${escapeHtml(row.effective_id)}">${escapeHtml(row.effective_id)}</option>`).join('');
     if (saved.some((row) => row.effective_id === previous)) rollback.value = previous;
     rollback.disabled = !saved.length || Boolean(state.activeAction);
     renderEffectiveCompositionTable();
+  }
+
+  async function runEffectiveHistoryCompare() {
+    const oldId = $('effective-compare-old').value;
+    const newId = $('effective-compare-new').value;
+    if (!state.selectedLibrary || !oldId || !newId || oldId === newId || state.activeAction) return;
+    setActionBusy('effective-compare');
+    try {
+      const result = await getJson(`/api/libraries/${encodeURIComponent(state.selectedLibrary)}/effective-compare`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({old_effective_id: oldId, new_effective_id: newId}),
+      });
+      await startJob(result, `有效组合对比：${oldId} → ${newId}`, null, 'effective-compare', {version: ''});
+    } catch (error) {
+      clearActionBusy();
+      showError(`有效组合对比失败：${error.message}`, {action: true});
+    }
   }
 
   function renderSemanticReviewReadiness() {
@@ -2489,6 +2656,7 @@
       && Boolean(pendingWindow.candidate_effective_id)
       && pendingWindow.candidate_manifest_exists !== false;
     renderEffectiveSelection();
+    renderManualPair();
     const draft = effectiveSelectionDraft();
     document.querySelectorAll('[data-action]').forEach((button) => { button.disabled = true; button.classList.remove('is-busy'); });
     const versionCommandActions = new Set(['file-diff', 'review-gate', 'review-packet']);
@@ -2657,11 +2825,11 @@
     if ($('config-raw-root')) $('config-raw-root').value = paths.raw_root || '';
     if ($('config-release-root')) $('config-release-root').value = paths.release_root || '';
     if ($('formal-release-root') && !$('formal-release-root').value.trim()) $('formal-release-root').value = paths.release_root || '';
-    if ($('config-discover-max-depth')) $('config-discover-max-depth').value = String(discovery.max_depth || '4');
+    if ($('config-discover-max-depth')) $('config-discover-max-depth').value = String(discovery.max_depth || '8');
     if ($('config-discover-min-versions')) $('config-discover-min-versions').value = String(discovery.min_versions || '1');
     if ($('config-discover-max-dirs')) $('config-discover-max-dirs').value = String(discovery.max_dirs || '5000');
     if ($('config-discover-max-candidates')) $('config-discover-max-candidates').value = String(discovery.max_candidates || '200');
-    if ($('candidate-max-depth')) $('candidate-max-depth').value = String(discovery.max_depth || '4');
+    if ($('candidate-max-depth')) $('candidate-max-depth').value = String(discovery.max_depth || '8');
     if ($('candidate-min-versions')) $('candidate-min-versions').value = String(discovery.min_versions || '1');
     if ($('candidate-max-dirs')) $('candidate-max-dirs').value = String(discovery.max_dirs || '5000');
     if ($('candidate-max-candidates')) $('candidate-max-candidates').value = String(discovery.max_candidates || '200');
@@ -2809,7 +2977,7 @@
     state.pathBrowserError = '';
     renderPathBrowser();
     try {
-      const query = path ? `?path=${encodeURIComponent(path)}` : '';
+      const query = `?scope=raw${path ? `&path=${encodeURIComponent(path)}` : ''}`;
       const payload = await getJson(`/api/path-children${query}`);
       if (requestId !== state.pathBrowserRequestId) return;
       state.pathBrowserPath = String(payload.current_path || '');
@@ -3392,7 +3560,7 @@
     setHashTypeChecks('[data-default-force-hash-type]', settings.force_hash_file_types || '');
     setHashTypeChecks('[data-default-skip-hash-type]', settings.skip_hash_file_types || '');
     $('config-render-detail').checked = settings.render_detail !== false;
-    for (const [key, fallback] of Object.entries({max_depth: 4, min_versions: 1, max_dirs: 5000, max_candidates: 200})) {
+    for (const [key, fallback] of Object.entries({max_depth: 8, min_versions: 1, max_dirs: 5000, max_candidates: 200})) {
       $(`config-discover-${key.replaceAll('_', '-')}`).value = String(discovery[key] || fallback);
     }
   }
@@ -4204,8 +4372,8 @@
 
   async function startJob(result, label, workflowAction = null, commandAction = null, context = {}) {
     const task = {
-      id: result.job_id, label, workflowAction, commandAction, ...context,
-      library: state.selectedLibrary || '', version: state.selectedVersion?.version_id || '',
+      id: result.job_id, label, workflowAction, commandAction,
+      library: state.selectedLibrary || '', version: state.selectedVersion?.version_id || '', ...context,
       startedAt: Date.now(), status: result.status || 'QUEUED', result, terminal: false, timedOut: false,
       completedHandled: false, resolve: null, reject: null,
     };
@@ -4533,6 +4701,16 @@
   });
   $('file-diff-explicit-force-large').addEventListener('change', updateExplicitFileDiffState);
   $('run-explicit-file-diff').addEventListener('click', runExplicitFileDiff);
+  for (const side of ['old', 'new']) {
+    $(`manual-pair-${side}-version`).addEventListener('change', () => {
+      $(`manual-pair-${side}-path`).value = '';
+      renderManualPair();
+    });
+    $(`manual-pair-${side}-path`).addEventListener('input', renderManualPair);
+  }
+  $('manual-pair-force-large').addEventListener('change', renderManualPair);
+  $('manual-pair-run').addEventListener('click', runManualPair);
+  $('manual-pair-load-all').addEventListener('click', async () => { await loadAllEffectiveVersions(); renderManualPair(); });
   $('save-representative-file').addEventListener('click', saveRepresentativeFile);
   $('refresh-reader-report').addEventListener('click', refreshReaderReport);
   $('file-tree-filter').addEventListener('input', scheduleFileTreeRender);
@@ -4726,6 +4904,10 @@
   $('semantic-review-base').addEventListener('change', renderSemanticReviewReadiness);
   document.querySelectorAll('[data-workflow-action]').forEach((button) => button.addEventListener('click', () => runWorkflow(button.dataset.workflowAction)));
   $('effective-composition-query').addEventListener('input', renderEffectiveCompositionTable);
+  for (const id of ['effective-compare-old', 'effective-compare-new']) {
+    $(id).addEventListener('change', renderEffectiveStack);
+  }
+  $('effective-compare-run').addEventListener('click', runEffectiveHistoryCompare);
   $('effective-selection-load-all').addEventListener('click', loadAllEffectiveVersions);
   $('effective-composition-scope').addEventListener('change', renderEffectiveCompositionTable);
   $('effective-composition-reset').addEventListener('click', () => {

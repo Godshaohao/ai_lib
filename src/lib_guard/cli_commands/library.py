@@ -47,6 +47,7 @@ def run_library_accept(args: Namespace) -> int:
         args.root,
         candidates_path=args.input,
         registry_path=args.registry,
+        existing_catalog_path=args.existing_catalog,
     )
     print_json(result)
     return 0 if result.get("status") == "PASS" else 2
@@ -63,6 +64,7 @@ def run_library_add(args: Namespace) -> int:
         display_name=args.display_name,
         vendor=args.vendor,
         middle_path=args.middle_path,
+        existing_catalog_path=args.existing_catalog,
     )
     print_json(result)
     return 0 if result.get("status") == "PASS" else 2

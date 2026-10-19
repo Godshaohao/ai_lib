@@ -38,7 +38,7 @@ DEFAULT_IGNORE_DIRS = {
     "old",
 }
 DEFAULT_VERSION_PATTERNS = ["20*", "v*", "initial_*", "stable_*", "release_*", "final_*"]
-DEFAULT_DISCOVER_MAX_DEPTH = 4
+DEFAULT_DISCOVER_MAX_DEPTH = 8
 DEFAULT_DISCOVER_MIN_VERSIONS = 1
 DEFAULT_DISCOVER_MAX_DIRS = 5000
 DEFAULT_DISCOVER_MAX_CANDIDATES = 200
@@ -601,6 +601,33 @@ def _upsert_registry_rows(existing: list[dict[str, str]], incoming: list[dict[st
     return rows
 
 
+def _registry_with_existing_catalog(
+    raw_root: Path, registry_path: Path, existing_catalog_path: str | Path | None,
+) -> list[dict[str, str]]:
+    rows = read_library_list(registry_path) if registry_path.exists() else []
+    if not existing_catalog_path or not Path(existing_catalog_path).is_file():
+        return rows
+
+    from lib_guard.discovery import load_library_map
+
+    refs = load_library_map(raw_root, {"library_map": str(existing_catalog_path)}, existing_catalog_path)
+    known_ids = {_formal_library_identity(row)[0] for row in rows}
+    known_roots = {str(Path(row["root_abs"]).resolve()) for row in rows if row.get("root_abs")}
+    for ref in refs:
+        root = ref.root.resolve()
+        if ref.library_id in known_ids or str(root) in known_roots or not _is_under(root, raw_root):
+            continue
+        rows.append({
+            "status": "OK", "library_id": ref.library_id, "root_abs": str(root),
+            "display_name": ref.display_name or root.name,
+            "vendor": ref.vendor or root.relative_to(raw_root).parts[0],
+            "middle_path": ref.middle_path or "",
+        })
+        known_ids.add(ref.library_id)
+        known_roots.add(str(root))
+    return rows
+
+
 def add_library_to_registry(
     raw_root: str | Path,
     *,
@@ -610,6 +637,7 @@ def add_library_to_registry(
     display_name: str | None = None,
     vendor: str | None = None,
     middle_path: str | None = None,
+    existing_catalog_path: str | Path | None = None,
 ) -> dict[str, Any]:
     raw = Path(raw_root).resolve()
     root = Path(root_abs).resolve()
@@ -631,7 +659,7 @@ def add_library_to_registry(
         "middle_path": clean_middle,
     }
     registry = Path(registry_path)
-    existing = read_library_list(registry) if registry.exists() else []
+    existing = _registry_with_existing_catalog(raw, registry, existing_catalog_path)
     rows = _upsert_registry_rows(existing, [row])
     write_library_rows(registry, rows, header_note="稳定人工 library registry。请谨慎编辑；正式 catalog 只使用 OK 行。library_id 表示正式库名。")
     return {"status": "PASS", "registry": str(registry), "library_id": row["library_id"], "root_abs": str(root), "count": len(rows)}
@@ -642,6 +670,7 @@ def accept_candidates_to_registry(
     *,
     candidates_path: str | Path,
     registry_path: str | Path,
+    existing_catalog_path: str | Path | None = None,
 ) -> dict[str, Any]:
     raw = Path(raw_root).resolve()
     candidates = read_library_list(candidates_path)
@@ -665,7 +694,7 @@ def accept_candidates_to_registry(
         clean["root_abs"] = str(root)
         accepted.append(clean)
     registry = Path(registry_path)
-    existing = read_library_list(registry) if registry.exists() else []
+    existing = _registry_with_existing_catalog(raw, registry, existing_catalog_path)
     rows = _upsert_registry_rows(existing, accepted)
     write_library_rows(registry, rows, header_note="稳定人工 library registry。请谨慎编辑；正式 catalog 只使用 OK 行。library_id 表示正式库名。")
     return {"status": "PASS", "registry": str(registry), "accepted": len(accepted), "skipped": skipped, "count": len(rows)}

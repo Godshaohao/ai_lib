@@ -2711,6 +2711,95 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertEqual(pairwise_tasks["tasks"][0]["old_physical_path"], "asap7_source_package/lef/macro.lef")
             self.assertEqual(pairwise_tasks["tasks"][0]["new_physical_path"], "upstream_ae9a8ed9/lef/macro.lef")
 
+    def test_diff_pairs_unique_view_suffix_across_nested_delivery_roots(self) -> None:
+        from lib_guard.diff.scan_diff import _file_diff
+
+        with tempfile.TemporaryDirectory() as td:
+            old_scan, new_scan = Path(td) / "old", Path(td) / "new"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            for scan, path, size in (
+                (old_scan, "delivery_a/chip_a/LEF/macro.lef", 100),
+                (new_scan, "release_b/chip_b/LEF/macro.lef", 120),
+            ):
+                (scan / "file_inventory.json").write_text(json.dumps({"files": [
+                    {"path": path, "file_type": "lef", "size_bytes": size}
+                ]}), encoding="utf-8")
+            result = _file_diff(old_scan, new_scan)
+            self.assertEqual(result["added"], [])
+            self.assertEqual(result["removed"], [])
+            self.assertEqual(result["changed"], ["LEF/macro.lef"])
+            self.assertEqual(result["logical_path_changes"][0]["match_reason"], "unique_view_suffix")
+
+    def test_diff_ignores_generic_package_directory_before_view_suffix(self) -> None:
+        from lib_guard.diff.scan_diff import _file_diff
+
+        with tempfile.TemporaryDirectory() as td:
+            old_scan, new_scan = Path(td) / "old", Path(td) / "new"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            for scan, path, size in (
+                (old_scan, "delivery_a/package/LEF/macro.lef", 100),
+                (new_scan, "release_b/chip_b/LEF/macro.lef", 120),
+            ):
+                (scan / "file_inventory.json").write_text(json.dumps({"files": [
+                    {"path": path, "file_type": "lef", "size_bytes": size}
+                ]}), encoding="utf-8")
+            result = _file_diff(old_scan, new_scan)
+            self.assertEqual(result["added"], [])
+            self.assertEqual(result["removed"], [])
+            self.assertEqual(result["changed"], ["LEF/macro.lef"])
+
+    def test_diff_unique_basename_without_view_suffix_is_only_candidate(self) -> None:
+        from lib_guard.diff.scan_diff import _file_diff
+
+        with tempfile.TemporaryDirectory() as td:
+            old_scan, new_scan = Path(td) / "old", Path(td) / "new"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            for scan, path, size in (
+                (old_scan, "delivery_a/unknown/macro.dat", 100),
+                (new_scan, "release_b/other/macro.dat", 120),
+            ):
+                (scan / "file_inventory.json").write_text(json.dumps({"files": [
+                    {"path": path, "file_type": "unknown", "size_bytes": size}
+                ]}), encoding="utf-8")
+            result = _file_diff(old_scan, new_scan)
+            self.assertEqual(result["changed"], [])
+            self.assertEqual(result["added"], [])
+            self.assertEqual(result["removed"], [])
+            self.assertEqual(result["unverified"][0]["reason"], "metadata_name_candidate")
+
+    def test_diff_keeps_ambiguous_view_suffix_unpaired(self) -> None:
+        from lib_guard.diff.scan_diff import _file_diff
+
+        with tempfile.TemporaryDirectory() as td:
+            old_scan, new_scan = Path(td) / "old", Path(td) / "new"
+            old_scan.mkdir()
+            new_scan.mkdir()
+            for scan, roots in ((old_scan, ("a", "b")), (new_scan, ("c", "d"))):
+                (scan / "file_inventory.json").write_text(json.dumps({"files": [
+                    {"path": f"{root}/LEF/macro.lef", "file_type": "lef", "size_bytes": 100 if scan == old_scan else 120}
+                    for root in roots
+                ]}), encoding="utf-8")
+            result = _file_diff(old_scan, new_scan)
+            self.assertEqual(result["changed"], [])
+            self.assertEqual(result["unverified"], [])
+            self.assertEqual(len(result["added"]), 2)
+            self.assertEqual(len(result["removed"]), 2)
+
+    def test_generic_file_pair_produces_metadata_report_without_text_diff(self) -> None:
+        from lib_guard.diff.file_diff import diff_pairwise_files
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old, new = root / "old.cfg", root / "new.cfg"
+            old.write_bytes(b"old\n")
+            new.write_bytes(b"new\n")
+            result = diff_pairwise_files("generic", old, new, root / "out")
+            self.assertEqual(result["summary"]["status"], "DIFF")
+            self.assertFalse((root / "out" / "raw_text_diff.html").exists())
+
     def test_diff_reports_package_root_migration_from_logical_path_pairs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             old_scan = Path(td) / "old_scan"
@@ -3349,7 +3438,7 @@ class ScanPipelineTest(unittest.TestCase):
             self.assertIn(str(workspace / "config" / "library_candidates" / "latest.tsv"), library_discover_cmds[0])
             self.assertNotIn(str(workspace / "config" / "library.list"), library_discover_cmds[0])
             self.assertIn("--max-depth", library_discover_cmds[0])
-            self.assertIn("4", library_discover_cmds[0])
+            self.assertEqual(library_discover_cmds[0][library_discover_cmds[0].index("--max-depth") + 1], "8")
             self.assertIn("--max-candidates", library_discover_cmds[0])
             self.assertIn("200", library_discover_cmds[0])
 

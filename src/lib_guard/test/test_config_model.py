@@ -73,6 +73,7 @@ class ConfigModelTest(unittest.TestCase):
             self.assertIn("parse_exclude_file_types:", text)
             self.assertIn("render_detail: true", text)
             self.assertIn("discover_min_versions: 1", text)
+            self.assertIn("discover_max_depth: 8", text)
 
             loaded = load_config(root, config)
             self.assertEqual(loaded["config_version"], WORKSPACE_CONFIG_SCHEMA_VERSION)
@@ -98,7 +99,7 @@ class ConfigModelTest(unittest.TestCase):
         self.assertEqual(scan["hash_policy"], "smart")
         self.assertEqual(scan["parse_jobs"], "8")
         self.assertEqual(scan["render_detail"], "true")
-        self.assertEqual(discovery["max_depth"], "4")
+        self.assertEqual(discovery["max_depth"], "8")
         self.assertEqual(discovery["min_versions"], "1")
         self.assertEqual(discovery["max_dirs"], "5000")
         self.assertEqual(discovery["max_candidates"], "200")
@@ -261,6 +262,8 @@ class ConfigModelTest(unittest.TestCase):
         self.assertTrue(file_diff_allowed("lef"))
         self.assertFalse(file_diff_requires_force_large("lef"))
         self.assertFalse(file_diff_allowed("unknown"))
+        self.assertTrue(file_diff_allowed("generic"))
+        self.assertTrue(file_diff_requires_force_large("generic"))
 
 
 if __name__ == "__main__":
