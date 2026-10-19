@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from lib_guard.package.types import DOC_PACKAGE_TYPES, PARTIAL_PACKAGE_TYPES, normalize_package_type
 from lib_guard.render import catalog_render_common as common
 from lib_guard.render import product_theme as ui
 from lib_guard.view_types import VIEW_LABELS, canonical_view_type, usage_area_for_view, view_label
@@ -545,6 +546,7 @@ def render_review_report(report: Mapping[str, Any]) -> str:
         return ""
     base = _as_mapping(report.get("base_analysis"))
     delivery = _as_mapping(report.get("delivery_analysis"))
+    overlay = normalize_package_type(delivery.get("package_type")) in PARTIAL_PACKAGE_TYPES | DOC_PACKAGE_TYPES
     delta = _as_mapping(report.get("view_delta_analysis"))
     focus = _as_mapping(report.get("focus_file_analysis"))
     unknown = _as_mapping(report.get("unknown_analysis"))
@@ -581,10 +583,13 @@ def render_review_report(report: Mapping[str, Any]) -> str:
         ("状态", base.get("status")), ("基准来源", base.get("base_ref")), ("基准版本", base.get("base_version")),
         ("目标版本", base.get("target_version")), ("对比语义", base.get("comparison_semantics")), ("说明", base.get("reason")),
     ]))))
-    report_parts.append(ui.panel("交付分析", "逐项显示策略要求和对应证据；元数据登记不代表内容解析通过。", ui.table(["字段", "值"], _report_kv_rows([
+    report_parts.append(ui.panel("交付分析", (
+        "这里检查本包范围；未交付视图需从有效组合核对继承来源。" if overlay else
+        "逐项显示策略要求和对应证据；元数据登记不代表内容解析通过。"
+    ), ui.table(["字段", "值"], _report_kv_rows([
         ("状态", delivery.get("status")), ("包类型", delivery.get("package_type")), ("交付文件", delivery.get("file_count")),
         ("必需视图", f"{delivery.get('required_present') or 0} / {delivery.get('required_total') or 0}"),
-        ("缺失视图", delivery.get("missing_views")),
+        ("本包未交付视图" if overlay else "缺失视图", delivery.get("missing_views")),
         ("必需模式", delivery.get("required_modes") or "未配置"),
         ("模式覆盖", f"已确认：{delivery.get('observed_modes') or '无'}；路径提示待确认：{delivery.get('hinted_required_modes') or '无'}；缺失：{delivery.get('missing_modes') or '无'}；来源：{_delivery_source_label(delivery.get('mode_evidence_source'))}"),
         ("必需工艺角", delivery.get("required_corners") or "未配置"),

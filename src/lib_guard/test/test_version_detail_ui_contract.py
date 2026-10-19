@@ -793,12 +793,13 @@ class VersionDetailUiContractTest(unittest.TestCase):
         self.assertEqual(completeness["optional_present"], 1)
         self.assertTrue(any("LEF" in item for item in completeness["missing"]))
 
-    def test_missing_required_view_blocks_ip_user_decision(self) -> None:
+    def test_missing_required_view_remains_visible_without_becoming_release_gate(self) -> None:
         from lib_guard.render.version_review_model import build_ip_user_view_model
 
         model = build_ip_user_view_model(
             {
                 "status": "CHANGED",
+                "package_type": "FULL_PACKAGE",
                 "base_ref": "previous_effective",
                 "base_version": "v1_full",
                 "base_trust_status": "PASS",
@@ -820,12 +821,12 @@ class VersionDetailUiContractTest(unittest.TestCase):
         )
 
         self.assertEqual(model["delivery_completeness"]["status"], "MISSING")
-        self.assertEqual(model["decision"]["status"], "BLOCKED")
-        self.assertEqual(model["decision"]["label"], "不可接入")
+        self.assertEqual(model["decision"]["status"], "USAGE_REVIEW_REQUIRED")
+        self.assertEqual(model["decision"]["label"], "交付缺口待核对")
         self.assertIn("RTL 模型", model["decision"]["reason"])
         self.assertEqual(model["decision"]["next_action"]["kind"], "complete_required_view")
         self.assertIn("确认必需视图", model["decision"]["next_action"]["label"])
-        self.assertIn("补齐或确认缺失的必需视图", model["next_action"]["detail"])
+        self.assertIn("核对完整包的必需视图", model["next_action"]["detail"])
         self.assertEqual(model["pending_fact_items"][0]["kind"], "REQUIRED_VIEW_MISSING")
 
     def test_ip_view_keeps_usage_in_matrix_without_duplicate_impact_cards(self) -> None:

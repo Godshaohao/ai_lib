@@ -68,19 +68,20 @@ class WindowIntakeTest(unittest.TestCase):
             pointer = load_current_pointer(html, 'ip/ucie')
             self.assertEqual(pointer['base_full_version'], 'full1')
             self.assertEqual(pointer['accepted_updates'], ['fix1'])
-            # A second overlay on the same file remains visible as a conflict;
-            # constructing it does not replace the accepted pointer.
+            # A later patch may intentionally replace a file from an earlier patch.
             before = dict(pointer)
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(main([*common, '--include', 'fix2']), 0)
             pending = json.loads(Path(preview['window']).read_text())
-            conflicting = json.loads(Path(pending['candidate_effective']['manifest']).read_text())
-            self.assertEqual(conflicting['accepted_updates'], ['fix1', 'fix2'])
-            self.assertEqual(conflicting['effective_files']['rtl/a.v']['source_version'], 'fix2')
-            self.assertGreater(conflicting['summary']['conflict_count'], 0)
+            updated = json.loads(Path(pending['candidate_effective']['manifest']).read_text())
+            self.assertEqual(updated['accepted_updates'], ['fix1', 'fix2'])
+            self.assertEqual(updated['effective_files']['rtl/a.v']['source_version'], 'fix2')
+            self.assertEqual(updated['summary']['conflict_count'], 0)
+            self.assertTrue(any(item['type'] == 'REPEATED_REPLACEMENT' for item in updated['warnings']))
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertNotEqual(main(['window', 'accept', '--catalog', str(catalog), '--library', 'ucie', '--workdir', str(root/'work'), '--catalog-html-out', str(html), '--window-file', preview['window'], '--accepted-by', 'test_owner']), 0)
-            self.assertEqual(load_current_pointer(html, 'ip/ucie'), before)
+                self.assertEqual(main(['window', 'accept', '--catalog', str(catalog), '--library', 'ucie', '--workdir', str(root/'work'), '--catalog-html-out', str(html), '--window-file', preview['window'], '--accepted-by', 'test_owner']), 0)
+            self.assertNotEqual(load_current_pointer(html, 'ip/ucie'), before)
+            self.assertEqual(load_current_pointer(html, 'ip/ucie')['accepted_updates'], ['fix1', 'fix2'])
             self.assertFalse((root/'release_area').exists())
 
     def test_manual_composition_preserves_selected_base_order_and_reuses_scan(self):

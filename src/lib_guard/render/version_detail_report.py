@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from lib_guard.diff.file_match import default_path_match_evidence, path_match_evidence as build_path_match_evidence
+from lib_guard.package.types import DOC_PACKAGE_TYPES, PARTIAL_PACKAGE_TYPES, normalize_package_type
 from lib_guard.project_config import BINARY_METADATA_ONLY_TYPES, DEFAULT_FILE_DIFF_TYPES, SUMMARY_ONLY_TYPES
 from lib_guard.review.io import read_json
 from lib_guard.review.evidence_state import build_version_evidence_state
@@ -1857,11 +1858,19 @@ def _reader_summary(model: Mapping[str, Any], version: Mapping[str, Any]) -> str
         technical = '组合检查结果已过期，当前范围尚未确认'
     else:
         technical = '跨视图对应与组合检查尚未执行'
-    if engineering.get('delivery', {}).get('missing') or engineering.get('delivery', {}).get('contract_missing'):
-        next_action = '补齐所列必需视图，并确认目标流程需要的模式与工艺角。'
-    elif engineering.get('failures') or engineering.get('changed'):
+    package_type = normalize_package_type(model.get('package_type'))
+    delivery_gap = engineering.get('delivery', {}).get('missing') or engineering.get('delivery', {}).get('contract_missing')
+    if engineering.get('failures') or engineering.get('changed'):
         next_action = ' '.join(dict.fromkeys(item['advice'] for item in engineering.get('findings', [])
                                             if item['status'] in {'CHANGED', 'FAIL'}))[:240]
+    elif package_type == 'UNKNOWN_PACKAGE' and model.get('package_type') is not None:
+        next_action = '先确认包类型与交付范围，再核对目标有效组合及继承文件来源。'
+    elif delivery_gap:
+        next_action = (
+            '核对本包更新范围及有效组合继承文件的来源，再确认受影响接口。'
+            if package_type in PARTIAL_PACKAGE_TYPES | DOC_PACKAGE_TYPES else
+            '核对完整包必需视图和模式、工艺角的交付证据。'
+        )
     elif any('不代表整库交付齐全' in item for item in engineering.get('limitations', [])):
         next_action = '先确认该 IP 的完整交付要求，再核对本版文件变化中与使用相关的视图。'
     elif has_file_changes:
@@ -2502,9 +2511,11 @@ def _review_evidence_sidebar(model: Mapping[str, Any], version: Mapping[str, Any
                 if required_total
                 else "待确认"
             )
-            completeness_hint = f"缺失：{missing_text}"
+            overlay = normalize_package_type(model.get("package_type")) in PARTIAL_PACKAGE_TYPES | DOC_PACKAGE_TYPES
+            completeness_hint = f"本包未交付：{missing_text}" if overlay else f"缺失：{missing_text}"
+            scope_label = "本包交付范围" if overlay else "交付完整度"
             context_body += (
-                f"<div class='fact-summary-row'><b>交付完整度</b><span>{ui.esc(completeness_value)}；{ui.esc(completeness_hint)}</span></div>"
+                f"<div class='fact-summary-row'><b>{scope_label}</b><span>{ui.esc(completeness_value)}；{ui.esc(completeness_hint)}</span></div>"
             )
     evidence_rows = [
         f"<tr><td>扫描结果</td><td>{scan_badge}</td><td>文件清单和扫描摘要</td></tr>",

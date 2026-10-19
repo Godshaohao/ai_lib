@@ -7,6 +7,20 @@ from pathlib import Path
 
 
 class EffectiveManifestTest(unittest.TestCase):
+    def test_candidate_report_shows_nonblocking_replacement_evidence(self) -> None:
+        from lib_guard.render.effective_report import render_effective_report
+
+        html = render_effective_report({
+            'library_name': 'demo', 'base_full_version': 'full',
+            'summary': {'file_count': 1, 'component_count': 3},
+            'components': [], 'effective_files': {}, 'conflicts': [],
+            'warnings': [{'type': 'REPEATED_REPLACEMENT', 'file': 'rtl/a.v', 'count': 2,
+                          'message': '连续补丁多次替换同一文件'}],
+        })
+        self.assertIn('连续覆盖记录', html)
+        self.assertIn('rtl/a.v', html)
+        self.assertIn('不阻断确认', html)
+
     @staticmethod
     def _lock_catalog(*, snapshots: dict[str, str] | None = None, fingerprints: dict[str, str] | None = None) -> dict[str, object]:
         snapshots = snapshots or {}

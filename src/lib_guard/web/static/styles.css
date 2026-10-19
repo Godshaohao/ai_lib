@@ -925,6 +925,9 @@ td { color: var(--ink-soft); font-size: 12px; }
 #published-file-workbench { scroll-margin-top: 70px; }
 #published-file-workbench .published-filter-bar { margin-top: 8px; }
 .effective-selection { border-block: 1px solid var(--line); padding: 12px 0; margin: 12px 0; min-width: 0; }
+.effective-recommendation-notes { margin: 8px 0; font-size: 13px; }
+.effective-recommendation-notes summary { cursor: pointer; color: var(--ink-soft); }
+.effective-recommendation-notes ul { max-height: 160px; overflow: auto; margin: 8px 0; padding-left: 20px; }
 .effective-selection h5 { margin: 0; font-size: 13px; }
 .effective-selection-scroll { max-height: 280px; overflow: auto; margin: 8px 0 12px; }
 .effective-selection-scroll table { width: 100%; table-layout: fixed; }

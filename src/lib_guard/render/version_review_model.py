@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any, Mapping
 
+from lib_guard.package.types import DOC_PACKAGE_TYPES, PARTIAL_PACKAGE_TYPES, normalize_package_type
 from lib_guard.view_types import (
     USAGE_AREAS,
     canonical_file_type,
@@ -762,6 +763,9 @@ def _ip_next_action(
     diff_missing: bool,
     required_view_missing: bool,
     required_delivery_missing: bool = False,
+    package_type: str = "UNKNOWN_PACKAGE",
+    combination_recorded: bool = False,
+    interface_conflict: bool = False,
     first_version: bool,
     p0p1: int,
     removed: int,
@@ -784,17 +788,45 @@ def _ip_next_action(
             "label": "生成可信对比",
             "detail": "补齐当前版本相对基准版的 diff 证据，再判断变化和使用影响。",
         }
+    if interface_conflict:
+        return {
+            "kind": "review_interface_conflict",
+            "label": "核对组合接口冲突",
+            "detail": "核对完整有效组合中的单元、Pin 或端口冲突及来源文件，再确认接入影响。",
+        }
+    if package_type == "UNKNOWN_PACKAGE" and model.get("package_type") is not None:
+        return {
+            "kind": "confirm_package_type",
+            "label": "确认包类型",
+            "detail": "先确认包类型和交付范围，再核对目标有效组合；不能把本包未带的视图直接判为组合缺失。",
+        }
     if required_view_missing or required_delivery_missing:
+        if package_type in PARTIAL_PACKAGE_TYPES | DOC_PACKAGE_TYPES:
+            return {
+                "kind": "confirm_effective_scope",
+                "label": "核对有效组合",
+                "detail": (
+                    "核对候选组合清单中的继承文件来源和本次更新范围，再检查受影响接口。"
+                    if combination_recorded else
+                    "确认目标有效组合及继承文件来源，再检查本次更新范围；无需在增量包内重复交付全部视图。"
+                ),
+            }
         return {
             "kind": "complete_required_view",
             "label": "确认必需视图" if required_view_missing else "确认必需交付项",
-            "detail": "补齐或确认缺失的必需视图后，再判断版本是否可接入。" if required_view_missing and not required_delivery_missing else "补齐或确认缺失的 View、Mode、Corner 后，再判断版本是否可接入。",
+            "detail": "核对完整包的必需视图和解析证据，缺口确认前不要判定可用。" if required_view_missing and not required_delivery_missing else "核对必需 View、Mode、Corner 的交付证据，缺口确认前不要判定可用。",
         }
     if first_version:
         return {
             "kind": "review_first_version",
             "label": "核对首版交付",
             "detail": "按视图变化矩阵和文件结构核对版本自身的交付覆盖与证据等级。",
+        }
+    if package_type in PARTIAL_PACKAGE_TYPES | DOC_PACKAGE_TYPES:
+        return {
+            "kind": "confirm_effective_scope",
+            "label": "核对有效组合",
+            "detail": "核对本包更新范围和目标有效组合的继承来源，按需检查受影响接口。",
         }
     if p0p1 or removed or unknown_count:
         return {
@@ -843,8 +875,24 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
     diff_missing = status_key in {"DIFF_NOT_RUN", "NO_DIFF_SUMMARY"}
     gate_blocking, gate_attention, gate_status = _review_gate_counts(model)
     delivery_completeness = _delivery_completeness(model)
-    required_view_missing = delivery_completeness["status"] == "MISSING"
+    required_view_missing = bool(delivery_completeness.get("missing")) or delivery_completeness["status"] == "MISSING"
     delivery_requirement_missing = delivery_completeness.get("delivery_requirement_status") == "BLOCK"
+    package_type = normalize_package_type(model.get("package_type"))
+    overlay = package_type in PARTIAL_PACKAGE_TYPES | DOC_PACKAGE_TYPES
+    candidate_inventory = _as_mapping(model.get("candidate_effective_inventory"))
+    combination_recorded = bool(candidate_inventory.get("manifest") and
+                                _as_mapping(candidate_inventory.get("file_type_counts")))
+    semantic = _as_mapping(model.get("semantic_check"))
+    interface_conflict = str(semantic.get("status") or "").upper() == "CURRENT" and any(
+        str(item.get("status") or "").upper() == "FAIL" and
+        str(item.get("check_id") or "").upper() in {
+            "MACRO_BINDING", "SIGNAL_PORT_SET", "SIGNAL_PORT_DIRECTION", "PG_PORT_LEF_LIB",
+            "LEF_PIN_DELTA", "LEF_INTERFACE_DELTA", "PORT_DECLARATION_DELTA", "LIB_PORT_DELTA",
+        }
+        for group in (semantic.get("checks") or [], semantic.get("delta") or [])
+        for item in group
+        if isinstance(item, Mapping)
+    )
 
     if base_blocked:
         ip_decision = "BLOCKED"
@@ -854,15 +902,38 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         ip_decision = "BLOCKED"
         ip_label = "暂不可判断"
         main_reason = f"尚未生成相对{base_noun}的可信对比，当前不能判断版本变化。"
+    elif interface_conflict:
+        ip_decision = "USAGE_REVIEW_REQUIRED"
+        ip_label = "接口冲突待核对"
+        main_reason = "完整有效组合的技术检查发现单元、Pin 或端口接口冲突；先核对对象、来源和接入影响。"
+    elif package_type == "UNKNOWN_PACKAGE" and model.get("package_type") is not None:
+        ip_decision = "USAGE_REVIEW_REQUIRED"
+        ip_label = "包范围待确认"
+        main_reason = "包类型尚未确认；当前扫描仅说明本包交付范围，不能判断完整有效组合是否齐备。"
     elif required_view_missing or delivery_requirement_missing:
-        ip_decision = "BLOCKED"
-        ip_label = "不可接入"
+        ip_decision = "USAGE_REVIEW_REQUIRED"
+        ip_label = "组合待核对" if overlay else "交付缺口待核对"
         missing = "、".join((delivery_completeness.get("missing", []) or []) + (delivery_completeness.get("contract_missing", []) or []))
-        main_reason = f"当前交付不满足必需交付项：{missing or '未标明'}；在补齐前不可接入。"
+        if overlay:
+            main_reason = (
+                f"本包未交付 {missing or '部分必需视图'}；"
+                + ("候选组合清单已记录，继承来源及技术覆盖仍须核对。" if combination_recorded
+                   else "完整有效组合与继承来源尚未确认，不能据此判断技术可用性。")
+            )
+        else:
+            main_reason = f"完整包的必需交付项存在缺口：{missing or '未标明'}；需核对后判断技术使用条件。"
     elif first_version:
         ip_decision = "USAGE_REVIEW_REQUIRED"
         ip_label = "首版需审查"
         main_reason = "当前无可比基准版；不做变化判断，先审查版本自身 view 覆盖、文件分类和证据等级。"
+    elif overlay:
+        ip_decision = "USAGE_REVIEW_REQUIRED"
+        ip_label = "组合待核对"
+        main_reason = (
+            "当前为增量或文档交付；候选组合清单已记录，继承来源和技术覆盖仍须核对。"
+            if combination_recorded else
+            "当前为增量或文档交付；目标有效组合尚未确认，不能仅凭单包扫描判断可用性。"
+        )
     elif p0p1 or removed or unknown_count:
         ip_decision = "USAGE_REVIEW_REQUIRED"
         ip_label = "需审查后使用"
@@ -896,6 +967,9 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
         diff_missing=diff_missing,
         required_view_missing=required_view_missing,
         required_delivery_missing=delivery_requirement_missing,
+        package_type=package_type,
+        combination_recorded=combination_recorded,
+        interface_conflict=interface_conflict,
         first_version=first_version,
         p0p1=p0p1,
         removed=removed,
@@ -972,8 +1046,11 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
             0,
             {
                 "kind": "REQUIRED_VIEW_MISSING",
-                "label": "必需视图缺失",
-                "summary": f"当前交付缺少必需视图：{missing or '未标明'}；补齐前不可接入。",
+                "label": "本包未交付必需视图" if overlay else "完整包必需视图缺失",
+                "summary": (
+                    f"本包未交付：{missing or '未标明'}；需从有效组合核对继承来源，不能据此认定组合缺失。"
+                    if overlay else f"完整包缺少必需视图：{missing or '未标明'}；需核对交付要求。"
+                ),
                 "file_count": 0,
             },
         )
@@ -1010,7 +1087,11 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
             "该类别单独展示，不计入内容修改。"
         )
     else:
-        impact_summary = "未识别到视图变化；当前交付可按既有使用场景接入。"
+        scope_unconfirmed = overlay or (model.get("package_type") is not None and package_type == "UNKNOWN_PACKAGE")
+        impact_summary = (
+            "未识别到本包视图变化；完整组合使用范围仍待核对。" if scope_unconfirmed
+            else "未识别到视图变化；当前交付可按既有使用场景接入。"
+        )
     change_status = "FIRST_VERSION_REVIEW" if first_version else "UNKNOWN" if base_blocked or diff_missing else "CHANGED" if added or removed or changed or path_changed_same_content else "SAME"
     change_label = _copy(DIFF_STATUS_COPY, change_status)
     base_source = str(model.get("base_source") or "")
@@ -1018,7 +1099,6 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
     scan_status = str(scan_context.get("scan_status") or "NOT_SCANNED").upper()
     diff_status = str(_as_mapping(model.get("comparison_context")).get("diff_status") or status_key or "UNKNOWN").upper()
     delivery_view_counts = _aggregate_counts_by_view(_current_type_counts(model))
-    candidate_inventory = _as_mapping(model.get("candidate_effective_inventory"))
     candidate_manifest = str(candidate_inventory.get("manifest") or "")
     candidate_view_counts = _aggregate_counts_by_view(_as_mapping(candidate_inventory.get("file_type_counts")))
     trace_links = _as_mapping(model.get("trace_links"))
@@ -1109,9 +1189,9 @@ def build_ip_user_view_model(model: Mapping[str, Any]) -> dict[str, Any]:
             "candidate_effective_manifest": candidate_manifest,
         },
         "non_blocker_note": (
-            "首版没有变化判断；证据等级只描述检查深度，不自动代表不完整。只有缺少可信基准/对比、扫描证据不可信、必需视图缺失或明确门禁阻塞项才升级为阻塞。"
+            "首版没有变化判断；证据等级只描述检查深度。单包未交付的视图不等于有效组合缺失；正式放行另行检查。"
             if first_version
-            else "摘要级证据、元数据级证据和 P0/P1 只描述证据等级，不自动构成阻塞；只有缺少可信基准/对比、扫描证据不可信、必需视图缺失或明确门禁阻塞项才升级为阻塞。"
+            else "摘要级证据、元数据级证据和 P0/P1 只描述证据等级；单包未交付的视图不等于有效组合缺失，正式放行另行检查。"
         ),
     }
 
@@ -1365,7 +1445,13 @@ def build_review_report(model: Mapping[str, Any], ip_user_view: Mapping[str, Any
     if evidence_assessment["status"] in {"INCOMPLETE", "STALE"}:
         open_questions.append("扫描/对比证据尚未完成或已过期，需要重新生成对应事实。")
     if missing_views:
-        open_questions.append("必需视图尚未满足：" + "、".join(missing_views) + "。")
+        package_type = normalize_package_type(model.get("package_type"))
+        if package_type in PARTIAL_PACKAGE_TYPES | DOC_PACKAGE_TYPES:
+            open_questions.append("本包未交付：" + "、".join(missing_views) + "；核对有效组合的继承来源。")
+        elif package_type == "UNKNOWN_PACKAGE":
+            open_questions.append("包类型待确认；本包未交付：" + "、".join(missing_views) + "。")
+        else:
+            open_questions.append("完整包必需视图尚未满足：" + "、".join(missing_views) + "。")
     if unknown_count:
         open_questions.append(f"还有 {unknown_count} 个未知文件需要分类。")
     if not first_version and not model.get("release_notes"):

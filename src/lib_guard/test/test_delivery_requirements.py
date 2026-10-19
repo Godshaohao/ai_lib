@@ -365,6 +365,7 @@ class DeliveryRequirementsTest(unittest.TestCase):
     def test_version_detail_decision_blocks_on_required_corner_without_view_missing(self):
         model = {
             "status": "CHANGED",
+            "package_type": "FULL_PACKAGE",
             "review_mode": "baseline",
             "base_ref": "current_effective",
             "base_version": "base",
@@ -388,9 +389,10 @@ class DeliveryRequirementsTest(unittest.TestCase):
             },
         }
         result = build_ip_user_view_model(model)
-        self.assertEqual(result["decision"]["status"], "BLOCKED")
+        self.assertEqual(result["decision"]["status"], "USAGE_REVIEW_REQUIRED")
         self.assertIn("工艺角：ss_0.7v_125c", result["decision"]["reason"])
         self.assertEqual(result["next_action"]["kind"], "complete_required_view")
+        self.assertEqual(result["delivery_completeness"]["delivery_requirement_status"], "BLOCK")
 
     def test_detail_report_exposes_mode_and_corner_requirements(self):
         html = render_review_report({

@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from lib_guard.package.types import DOC_PACKAGE_TYPES, PARTIAL_PACKAGE_TYPES, normalize_package_type
 from lib_guard.view_types import canonical_file_type
 
 
@@ -370,8 +371,15 @@ def build_engineering_report(model):
     delivery = (model.get('ip_user_view_model') or {}).get('delivery_completeness') or {}
     required = int(delivery.get('required_total') or 0)
     missing_requirements = list(delivery.get('missing') or []) + list(delivery.get('contract_missing') or [])
+    package_type = normalize_package_type(model.get('package_type'))
     if missing_requirements:
-        delivery_summary = '交付缺口：' + '、'.join(str(value) for value in missing_requirements)
+        if package_type in PARTIAL_PACKAGE_TYPES | DOC_PACKAGE_TYPES:
+            delivery_summary = '本包未交付：' + '、'.join(str(value) for value in missing_requirements) + '；有效组合继承范围待核对'
+            limitations.append('单包交付检查不代表最终有效组合的视图覆盖')
+        elif package_type == 'UNKNOWN_PACKAGE':
+            delivery_summary = '包类型待确认；本包未交付：' + '、'.join(str(value) for value in missing_requirements)
+        else:
+            delivery_summary = '交付缺口：' + '、'.join(str(value) for value in missing_requirements)
     elif required:
         names = '、'.join(delivery.get('required_views') or [])
         delivery_summary = f"{names or '必需视图'} {delivery.get('required_present', 0)} / {required}"

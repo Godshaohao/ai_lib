@@ -1070,6 +1070,7 @@ class VersionDetailReportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             lib, version = _write_version_detail_lane_fixture(root)
+            version["package_type"] = "PARTIAL_UPDATE"
             version["review_gate"] = {
                 "status": "REVIEW_REQUIRED",
                 "blocking_items": [{"id": "gate.release_note", "title": "Release note missing"}],
@@ -1087,7 +1088,7 @@ class VersionDetailReportTest(unittest.TestCase):
             self.assertEqual(model["usage_decision"], "BLOCKED")
             ip_decision = model["ip_user_view_model"]["decision"]
             self.assertEqual(ip_decision["status"], "USAGE_REVIEW_REQUIRED")
-            self.assertEqual(ip_decision["label"], "需审查后使用")
+            self.assertEqual(ip_decision["label"], "组合待核对")
             self.assertIn(f">{ip_decision['label']}<", html)
             self.assertNotIn(">阻塞</span></div></header>", html)
             self.assertIn("review_gate_blocking", model["usage_decision_reasons"])

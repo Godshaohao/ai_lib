@@ -13,6 +13,111 @@ LIBRARY = "vendor_A.openroad_platform.openroad_asap7"
 
 
 class WebAppTest(unittest.TestCase):
+    def test_effective_recommendation_uses_full_catalog_not_version_page(self):
+        from lib_guard.web.app import create_app
+        with tempfile.TemporaryDirectory() as td, patch.dict('os.environ', {}, clear=True):
+            root = Path(td)
+            workspace = root / 'workspace'
+            (root / 'raw').mkdir()
+            client = create_app(cwd=root, test_config={'TESTING': True}).test_client()
+            self.assertEqual(client.post('/api/workspace/init', json={
+                'workspace': str(workspace), 'raw_root': str(root / 'raw'),
+            }).status_code, 200)
+            catalog = workspace / 'catalog/catalog.json'
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            versions = [{'version_id': '20240101_full', 'package_type': 'FULL_PACKAGE'}]
+            versions.extend({'version_id': f'2025{i + 101:04d}_fix', 'package_type': 'PARTIAL_UPDATE'} for i in range(105))
+            catalog.write_text(json.dumps({'libraries': [{'library_id': 'demo', 'library_name': 'demo', 'versions': versions}]}))
+            page = client.get('/api/libraries/demo/versions?limit=100').get_json()
+            self.assertEqual(len(page['versions']), 100)
+            self.assertNotIn('20240101_full', [row['version_id'] for row in page['versions']])
+            response = client.get('/api/libraries/demo/effective-recommendation')
+            self.assertEqual(response.status_code, 200, response.get_json())
+            choice = response.get_json()['recommendation']
+            self.assertEqual(choice['base_full'], '20240101_full')
+            self.assertEqual(len(choice['includes']), 105)
+            self.assertEqual(choice['source'], 'catalog_recommendation')
+
+    def test_effective_recommendation_explains_omitted_versions(self):
+        from lib_guard.web.app import create_app
+        with tempfile.TemporaryDirectory() as td, patch.dict('os.environ', {}, clear=True):
+            root = Path(td)
+            (root / 'raw').mkdir()
+            workspace = root / 'workspace'
+            client = create_app(cwd=root, test_config={'TESTING': True}).test_client()
+            self.assertEqual(client.post('/api/workspace/init', json={
+                'workspace': str(workspace), 'raw_root': str(root / 'raw'),
+            }).status_code, 200)
+            catalog = workspace / 'catalog/catalog.json'
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(json.dumps({'libraries': [{'library_id': 'demo', 'library_name': 'demo', 'versions': [
+                {'version_id': '20240101_full', 'package_type': 'FULL_PACKAGE'},
+                {'version_id': '20240201_fix', 'package_type': 'PARTIAL_UPDATE'},
+                {'version_id': '20250101_full', 'package_type': 'FULL_PACKAGE'},
+                {'version_id': '20250201_unknown', 'package_type': 'UNKNOWN_PACKAGE'},
+                {'version_id': '20250301_fix', 'package_type': 'PARTIAL_UPDATE'},
+            ]}]}))
+            response = client.get('/api/libraries/demo/effective-recommendation')
+            self.assertEqual(response.status_code, 200, response.get_json())
+            data = response.get_json()
+            self.assertEqual(data['recommendation']['base_full'], '20250101_full')
+            self.assertEqual(data['recommendation']['includes'], ['20250301_fix'])
+            self.assertEqual({row['version'] for row in data['excluded']},
+                             {'20240101_full', '20240201_fix', '20250201_unknown'})
+            self.assertTrue(all(row['reason'] for row in data['excluded']))
+
+    def test_web_refresh_partial_report_preserves_package_gap_without_unusable_verdict(self):
+        from lib_guard.web.app import create_app
+
+        with tempfile.TemporaryDirectory() as td, patch.dict('os.environ', {}, clear=True):
+            root = Path(td)
+            workspace = root / 'workspace'
+            raw = root / 'raw/fix_lef'
+            raw.mkdir(parents=True)
+            scan = workspace / 'scan_out/demo/fix_lef/scan_1'
+            (scan / 'summary').mkdir(parents=True)
+            (scan / 'scan_meta.json').write_text(json.dumps({'scan_id': 'scan-web-p0', 'status': 'PASS'}))
+            (scan / 'file_inventory.json').write_text(json.dumps({
+                'files': [{'path': 'LEF/M.lef', 'file_type': 'lef', 'size_bytes': 12}],
+                'file_type_counts': {'lef': 1},
+            }))
+            readiness = {'bundle_status': 'BLOCK', 'components': [{
+                'required_views': ['lef', 'liberty', 'verilog'],
+                'required_view_results': {
+                    view: {'found': view == 'lef', 'status': 'PASS' if view == 'lef' else 'BLOCK'}
+                    for view in ('lef', 'liberty', 'verilog')
+                },
+            }]}
+            readiness_path = scan / 'summary/release_readiness.json'
+            readiness_path.write_text(json.dumps(readiness))
+            client = create_app(cwd=root, test_config={'TESTING': True}).test_client()
+            self.assertEqual(client.post('/api/workspace/init', json={
+                'workspace': str(workspace), 'raw_root': str(root / 'raw'),
+            }).status_code, 200)
+            catalog = workspace / 'catalog/catalog.json'
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text(json.dumps({'libraries': [{'library_id': 'ip/demo', 'library_name': 'demo',
+                'versions': [{'version_id': 'fix_lef', 'package_type': 'PARTIAL_UPDATE',
+                              'raw_path': str(raw), 'scan': {'status': 'PASS', 'scan_dir': str(scan)}}]}]}))
+            catalog_before = catalog.read_bytes()
+            readiness_before = readiness_path.read_bytes()
+            with patch('lib_guard.web.app.subprocess.Popen') as process:
+                response = client.post('/api/libraries/demo/versions/fix_lef/refresh-reader-report')
+                self.assertEqual(response.status_code, 200, response.get_json())
+                versions = client.get('/api/libraries/demo/versions').get_json()['versions']
+                self.assertTrue(versions[0]['version_detail_exists'], (response.get_json(), versions))
+                self.assertEqual(versions[0]['change_summary'], '基准待确认')
+                self.assertEqual(versions[0]['workflow_status']['label'], '组合基准待确认')
+                page_response = client.get(versions[0]['version_detail_url'])
+                self.assertEqual(page_response.status_code, 200)
+                html = page_response.get_data(as_text=True)
+                self.assertIn('本包未交付', html)
+                self.assertNotIn('补齐前不可接入', html)
+                page_response.close()
+                process.assert_not_called()
+            self.assertEqual(catalog.read_bytes(), catalog_before)
+            self.assertEqual(readiness_path.read_bytes(), readiness_before)
+
     def test_reader_report_can_be_rebuilt_without_running_a_scan_or_check(self):
         from lib_guard.web.app import create_app
         with tempfile.TemporaryDirectory() as td, patch.dict('os.environ', {}, clear=True):

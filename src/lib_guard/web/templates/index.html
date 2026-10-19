@@ -67,6 +67,7 @@
       <nav class="library-view-tabs" role="tablist" aria-label="库工作台视图">
         <button class="primary-stage-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="version-workspace" data-stage-target="version-workspace"><strong>版本</strong></button>
         <button class="primary-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="action-workspace evidence-workspace" data-stage-target="action-workspace"><strong>分析与结果</strong></button>
+        <button class="primary-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="effective-workspace" data-stage-target="effective-workspace"><strong>有效组合</strong></button>
         <button id="workspace-settings-button" class="primary-stage-tab" type="button" role="tab" aria-selected="false" aria-controls="management-workspace" aria-expanded="false" data-stage-target="management-workspace"><strong>设置与维护</strong></button>
       </nav>
       <nav class="release-view-tabs hidden" role="tablist" aria-label="发布中心视图">
@@ -634,10 +635,10 @@
         </aside>
       </div>
 
-      <section id="release-workspace" class="panel stage-anchor hidden" aria-label="发布交付">
-        <div class="panel-heading"><div><h3>发布交付</h3></div></div>
-        <details class="release-composition-zone" aria-label="有效组合与版本接入">
-          <summary>管理有效版本 · 选择完整包与增量包</summary>
+      <section id="effective-workspace" class="panel stage-anchor hidden" aria-label="有效组合">
+        <div class="panel-heading"><div><h3>有效组合</h3><p>选择完整包和增量包生成候选；核对后才能设为当前有效。正式发布在发布中心单独执行。</p></div></div>
+        <details class="release-composition-zone" aria-label="有效组合与版本接入" open>
+          <summary>完整包与增量包</summary>
           <details id="current-effective-stack" class="effective-stack-panel" aria-label="当前有效组合" open><summary>当前有效组合</summary>
             <div class="effective-comparison-grid">
               <section class="effective-current-summary" aria-label="当前有效组合">
@@ -670,6 +671,7 @@
             <section class="effective-selection" aria-label="选择有效组合">
               <div class="action-row"><h5>版本配置与组合</h5><span id="effective-selection-count"></span><button id="effective-selection-load-all" class="button button-secondary button-small" type="button" disabled>读取全部版本</button></div>
               <p id="effective-selection-status" class="muted" aria-live="polite">未找到完整包基线</p>
+              <details id="effective-recommendation-notes" class="effective-recommendation-notes" hidden><summary>目录建议依据与未纳入版本</summary><ul id="effective-recommendation-reasons"></ul></details>
               <div class="effective-selection-scroll"><table><caption class="sr-only">完整包基线与叠加更新选择</caption><thead><tr><th>基线 / 纳入</th><th>版本</th><th>包类型</th><th>对比基准</th><th>扫描证据</th><th>修改</th></tr></thead><tbody id="effective-selection-body"></tbody></table></div>
               <h5>叠加顺序</h5><ol id="effective-selection-order" class="effective-selection-order"></ol>
             </section>
@@ -697,6 +699,9 @@
             <p id="workflow-summary" class="workflow-summary" aria-live="polite">选择库后，这里显示系统建议、计划和确认结果。</p>
           </article>
         </details>
+      </section>
+      <section id="release-workspace" class="panel stage-anchor hidden" aria-label="发布交付">
+        <div class="panel-heading"><div><h3>发布交付</h3></div></div>
         <div class="release-subview-tabs" role="tablist" aria-label="发布中心操作">
           <button type="button" role="tab" aria-selected="true" data-release-subview="single">单库发布</button>
           <button type="button" role="tab" aria-selected="false" data-release-subview="multi">多库组合</button>
@@ -932,6 +937,6 @@
       </details>
     </main>
   </div>
-  <script src="{{ url_for('static', filename='app.js', v='20261018.1') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20261019.2') }}"></script>
 </body>
 </html>

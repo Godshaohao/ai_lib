@@ -63,6 +63,7 @@ from lib_guard.project_config import (
 )
 from lib_guard.review.update_notes import load_update_note, review_notes_root, save_update_note
 from lib_guard.short_cli_config import find_config, load_config, update_config_file, write_default_config
+from lib_guard.window.resolver import resolve_review_window
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -1849,6 +1850,36 @@ def create_app(
         except (FileNotFoundError, OSError) as exc:
             return jsonify({"status": "ERROR", "error": str(exc)}), 503
         return jsonify({"status": "PASS", "libraries": list_library_rows(web_state)})
+
+    @app.get("/api/libraries/<library>/effective-recommendation")
+    def effective_recommendation(library: str) -> Any:
+        try:
+            web_state = state()
+            if find_catalog_library(web_state, library) is None:
+                return jsonify({"status": "NOT_FOUND", "error": f"库不存在: {library}"}), 404
+            window = resolve_review_window(
+                catalog_path=web_state["catalog_path"],
+                library=library,
+                workdir=web_state["workspace"],
+                catalog_html_out=web_state["catalog_html"],
+            )
+            candidate = window.get("candidate_effective") or {}
+            base = window.get("base_effective") or {}
+            if candidate.get("base_full"):
+                source = "saved_manual_selection" if candidate.get("rule") == "manual_selection" else "catalog_recommendation"
+                recommendation = {"base_full": candidate["base_full"], "includes": candidate.get("overlays", []), "source": source}
+            else:
+                recommendation = {"base_full": base.get("base_full") or "", "includes": base.get("accepted_updates") or [], "source": "current_effective" if base.get("base_full") else "needs_full_base"}
+            unknown = set(candidate.get("unknown_package_versions") or [])
+            omitted = set(candidate.get("intermediate_items") or []) | unknown
+            excluded = [
+                {"version": item["version"], "reason": "包类型未确认" if item["version"] in unknown else "早于本次最新完整包"}
+                for item in window.get("items", [])
+                if item.get("version") in omitted
+            ]
+            return jsonify({"status": "PASS", "recommendation": recommendation, "window_state": window.get("state"), "warnings": window.get("warnings", []), "excluded": excluded})
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            return jsonify({"status": "ERROR", "error": str(exc)}), 400
 
     @app.get("/api/library-candidates")
     def library_candidates() -> Any:

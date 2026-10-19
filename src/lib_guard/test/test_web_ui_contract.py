@@ -11,6 +11,19 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class WebUiContractTest(unittest.TestCase):
+    def test_effective_composition_is_a_library_stage_not_release_stage(self):
+        template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        self.assertIn('data-stage-target="effective-workspace"', template)
+        effective = template.split('id="effective-workspace"', 1)[1].split('id="release-workspace"', 1)[0]
+        self.assertIn('id="effective-selection-body"', effective)
+        self.assertIn('id="effective-recommendation-notes"', effective)
+        self.assertIn('id="accept-window-button"', effective)
+        self.assertNotIn('id="release-plan-action-button"', effective)
+        self.assertIn("'effective-workspace'", script)
+        self.assertIn("setActiveStageTab('effective-workspace')", script)
+        self.assertIn("payload.excluded", script)
+
     def test_primary_navigation_has_two_work_domains_and_contextual_views(self):
         template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
         script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
@@ -77,6 +90,35 @@ assert.deepEqual(versionPrimaryAction({package_type:'FULL_PACKAGE', task:{action
 """
         result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for version-task state tests')
+    def test_incremental_without_base_uses_server_confirmation_state(self):
+        script = (ROOT / 'src/lib_guard/web/static/app.js').read_text()
+        task = script[script.index('  function deriveVersionTask('):script.index('  function versionPrimaryAction(')]
+        action = script[script.index('  function versionPrimaryAction('):script.index('  function versionFocusActionDisabled(')]
+        harness = r"""
+const assert = require('node:assert/strict');
+const effectiveReadiness = (item, readiness) => readiness;
+""" + task + action + r"""
+for (const packageType of ['PARTIAL_UPDATE', 'HOTFIX', 'DOC_UPDATE']) {
+  const partial = {
+    package_type:packageType, scan_evidence_ready:true, scan_status:'SCANNED',
+    workflow_status:{label:'组合基准待确认'}, version_detail_url:'/detail'
+  };
+  assert.equal(deriveVersionTask(partial).state, '组合基准待确认');
+  assert.equal(versionPrimaryAction(partial).kind, 'composition');
+  assert.equal(versionPrimaryAction(partial).label, '确认完整包基准');
+}
+const full = {package_type:'FULL_PACKAGE', scan_evidence_ready:true, scan_status:'SCANNED'};
+assert.equal(deriveVersionTask(full).state, '首版事实已就绪');
+"""
+        result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("if (next.kind === 'composition')", script)
+        self.assertIn("setActiveStageTab('effective-workspace')", script)
+        self.assertIn("document.querySelector('.release-composition-zone').open = true", script)
+        facts = script[script.index('  function renderVersionFacts('):script.index('  function workflowWindowHint(')]
+        self.assertIn("task.base || '未设置对比基准'", facts)
 
     @unittest.skipUnless(shutil.which('node'), 'Node is required for running-action state tests')
     def test_version_focus_action_is_disabled_while_a_job_is_running(self):
@@ -288,7 +330,7 @@ resetFormalInventoryFilters(); assert.equal($('formal-directory-status').value,'
         helpers = script[script.index('  function effectiveSelectionKey('):script.index('  function renderEffectiveSelection(')]
         harness = """
 const assert=require('node:assert/strict');
-const state={selectedLibrary:'demo',effectiveDrafts:new Map(),versions:[{version_id:'full',package_type:'FULL_PACKAGE'},{version_id:'fix',package_type:'PARTIAL_UPDATE'}]};
+const state={selectedLibrary:'demo',effectiveDrafts:new Map(),effectiveRecommendations:new Map([['demo',{base_full:'full',includes:[],source:'catalog_recommendation'}]]),versions:[{version_id:'full',package_type:'FULL_PACKAGE'},{version_id:'fix',package_type:'PARTIAL_UPDATE'}]};
 const selectedLibraryRow=()=>({}); const $=()=>({textContent:''});
 let calls=[],failure=false;
 const setActionBusy=()=>{},getJson=async(url,opts)=>{calls.push({url,payload:JSON.parse(opts.body)});return {};};
@@ -323,7 +365,11 @@ assert.ok(calls[1].url.endsWith('/fix/override'));
         helper = script[script.index('  function effectiveSelectionKey('):script.index('  function renderEffectiveSelection(')]
         harness = """
 const assert = require('node:assert/strict');
-const state = {effectiveDrafts:new Map(), selectedLibrary:'A', versions:[]};
+const state = {effectiveDrafts:new Map(), effectiveRecommendations:new Map([
+ ['A',{base_full:'full1',includes:['doc','fix'],source:'saved_manual_selection'}],
+ ['B',{base_full:'full2',includes:[],source:'current_effective'}],
+ ['C',{base_full:'full2',includes:['fix','doc'],source:'catalog_recommendation'}],
+]), selectedLibrary:'A', versions:[]};
 const rows = [{version_id:'full1',package_type:'FULL_PACKAGE'},
  {version_id:'old',package_type:'HOTFIX'}, {version_id:'full2',package_type:'FULL_PACKAGE'},
  {version_id:'fix',package_type:'PARTIAL_UPDATE'}, {version_id:'doc',package_type:'DOC_UPDATE'},
@@ -351,8 +397,9 @@ state.selectedLibrary='B';
 assert.equal(effectiveSelectionDraft().base_full,'full2');
 state.selectedLibrary='C'; library={pending_window:{candidate_effective_stack:null}};
 assert.equal(effectiveSelectionDraft().base_full,'full2');
-assert.equal(effectiveSelectionDraft().source,'最新完整包预填');
+assert.equal(effectiveSelectionDraft().source,'目录自动建议');
 assert.deepEqual(effectiveSelectionDraft().includes,['fix','doc']);
+state.selectedLibrary='D'; assert.equal(effectiveSelectionDraft(),null);
 state.selectedLibrary='A'; assert.strictEqual(effectiveSelectionDraft(),draft);
 """
         result = subprocess.run(['node', '-e', harness], capture_output=True, text=True)
@@ -375,7 +422,7 @@ state.selectedLibrary='A'; assert.strictEqual(effectiveSelectionDraft(),draft);
         workflow = script[script.index('  function workflowRequest('):script.index('  function workflowSuccessMessage(')]
         harness = """
 const assert = require('node:assert/strict');
-const state = {selectedLibrary:'demo',activeAction:null,effectiveDrafts:new Map(),versions:[]};
+const state = {selectedLibrary:'demo',activeAction:null,effectiveDrafts:new Map(),effectiveRecommendations:new Map([['demo',{base_full:'full',includes:['doc','fix'],source:'saved_manual_selection'}]]),versions:[]};
 const library = {pending_window:{candidate_effective_stack:{base_full_version:'full',accepted_updates:['doc','fix']}}};
 const selectedLibraryRow = () => library;
 const nodes = new Map();
@@ -426,7 +473,7 @@ const startJob=async()=>{state.activeAction=null;return {return_code:outcome,res
         workflow = script[script.index('  function workflowRequest('):script.index('  function workflowSuccessMessage(')]
         harness = r"""
 const assert = require('node:assert/strict');
-const state = {selectedLibrary:'demo',activeAction:null,effectiveDrafts:new Map(),versions:[]};
+const state = {selectedLibrary:'demo',activeAction:null,effectiveDrafts:new Map(),effectiveRecommendations:new Map([['demo',{base_full:'full',includes:['fix'],source:'catalog_recommendation'}]]),versions:[]};
 const library = {current_effective_stack:{current_effective_id:'E_old',base_full_version:'full_old',accepted_updates:['fix_old']},
  pending_window:{candidate_effective_id:'E_candidate',candidate_effective_stack:{base_full_version:'full',accepted_updates:['fix']}}};
 const selectedLibraryRow = () => library;
@@ -894,7 +941,8 @@ assert.ok(releaseSetCompareHtml({libraries:[]},'').includes('没有库级对比�
     def test_workspace_content_matches_user_judgement_boundaries(self) -> None:
         template = (ROOT / 'src/lib_guard/web/templates/index.html').read_text()
         library_workspace = template.split('id="version-workspace"', 1)[1].split('id="action-workspace"', 1)[0]
-        analysis_workspace = template.split('id="action-workspace"', 1)[1].split('id="release-workspace"', 1)[0]
+        analysis_workspace = template.split('id="action-workspace"', 1)[1].split('id="effective-workspace"', 1)[0]
+        effective_workspace = template.split('id="effective-workspace"', 1)[1].split('id="release-workspace"', 1)[0]
         delivery_workspace = template.split('id="release-workspace"', 1)[1]
 
         self.assertNotIn('id="current-effective-stack"', library_workspace)
@@ -902,9 +950,10 @@ assert.ok(releaseSetCompareHtml({libraries:[]},'').includes('没有库级对比�
         self.assertNotIn('id="semantic-review-heading"', library_workspace)
         self.assertNotIn('class="object-maintenance"', library_workspace)
         self.assertIn('id="semantic-review-heading"', analysis_workspace)
-        self.assertIn('id="current-effective-stack"', delivery_workspace)
-        self.assertIn('id="effective-selection-body"', delivery_workspace)
-        self.assertIn('id="accept-window-button"', delivery_workspace)
+        self.assertIn('id="current-effective-stack"', effective_workspace)
+        self.assertIn('id="effective-selection-body"', effective_workspace)
+        self.assertIn('id="accept-window-button"', effective_workspace)
+        self.assertNotIn('id="effective-selection-body"', delivery_workspace)
         settings_workspace = template.split('id="management-workspace"', 1)[1]
         self.assertIn('class="object-maintenance"', settings_workspace)
         self.assertIn('总目录报告', template)

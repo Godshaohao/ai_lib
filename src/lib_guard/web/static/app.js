@@ -13,6 +13,7 @@
     selectedLibrary: initialRoute.get('library') || null,
     versions: [],
     effectiveDrafts: new Map(),
+    effectiveRecommendations: new Map(),
     semanticOptions: null,
     semanticOptionsLibrary: '',
     semanticOptionsLoading: false,
@@ -108,7 +109,7 @@
   const $ = (id) => document.getElementById(id);
   const JOB_TIMEOUT_MS = 30 * 60 * 1000;
   const VERSION_RENDER_BATCH = 25;
-  const STAGE_IDS = ['version-workspace', 'action-workspace', 'release-workspace', 'management-workspace', 'published-release-inspector'];
+  const STAGE_IDS = ['version-workspace', 'action-workspace', 'effective-workspace', 'release-workspace', 'management-workspace', 'published-release-inspector'];
   const requestedStage = initialRoute.get('stage') === 'evidence-workspace' ? 'action-workspace' : initialRoute.get('stage');
   const initialStage = initialRoute.get('directory') === 'published'
     ? 'published-release-inspector'
@@ -1390,17 +1391,13 @@
   function effectiveSelectionDraft() {
     if (!state.selectedLibrary) return null;
     if (!state.effectiveDrafts.has(state.selectedLibrary)) {
-      const library = selectedLibraryRow();
-      const candidate = library?.pending_window?.candidate_effective_stack;
-      const current = library?.current_effective_stack;
-      const saved = candidate?.base_full_version ? candidate : current?.base_full_version ? current : null;
-      const base = saved?.base_full_version || state.versions.find((row) => row.package_type === 'FULL_PACKAGE')?.version_id;
-      // Wait for version metadata before choosing an automatic default.
+      const recommended = state.effectiveRecommendations.get(state.selectedLibrary);
+      const base = recommended?.base_full;
       if (!base) return null;
       state.effectiveDrafts.set(state.selectedLibrary, {
         base_full: base,
-        includes: saved ? [...(saved.accepted_updates || [])] : eligibleEffectiveOverlays(state.versions, base).map((row) => row.version_id).reverse(),
-        source: saved && saved === candidate ? '已保存候选' : saved ? '当前有效组合' : '最新完整包预填',
+        includes: [...(recommended.includes || [])],
+        source: recommended.source === 'saved_manual_selection' ? '已保存人工选择' : recommended.source === 'current_effective' ? '当前有效组合' : '目录自动建议',
         dirty: false, preview: null,
       });
     }
@@ -1516,7 +1513,18 @@
     const missing = draft ? [draft.base_full, ...draft.includes].filter((id) => !state.versions.some((row) => row.version_id === id)) : [];
     $('effective-selection-status').textContent = draft
       ? `${draft.dirty ? '人工修改' : draft.source} · ${draft.base_full} · ${draft.includes.length} 个叠加更新${missing.length ? ' · 部分组成版本未读取' : ''}${draft.preview ? ' · 已预览' : ' · 待预览'}`
-      : '未找到完整包基线';
+      : state.effectiveRecommendations.get(state.selectedLibrary)?.error
+        ? `自动建议读取失败：${state.effectiveRecommendations.get(state.selectedLibrary).error}`
+        : state.effectiveRecommendations.has(state.selectedLibrary)
+          ? '没有可确认的完整包基线；请先在版本配置中确认包类型。'
+          : '正在读取完整目录的组合建议…';
+    const recommendation = state.effectiveRecommendations.get(state.selectedLibrary) || {};
+    const notes = [
+      ...(recommendation.warnings || []),
+      ...(recommendation.excluded || []).map((item) => `${item.version}：${item.reason}`),
+    ];
+    $('effective-recommendation-notes').hidden = !notes.length;
+    $('effective-recommendation-reasons').innerHTML = notes.map((note) => `<li>${escapeHtml(note)}</li>`).join('');
     $('effective-selection-load-all').disabled = busy || !state.versionHasMore;
     $('effective-selection-count').textContent = `${state.versions.length} / ${state.versionTotal} 个版本`;
   }
@@ -1534,6 +1542,19 @@
       state.versionsLoadingMore = false;
       $('effective-selection-status').textContent = `读取版本失败：${error.message}`;
     }
+  }
+
+  async function refreshEffectiveRecommendation(library, requestId) {
+    try {
+      const payload = await getJson(`/api/libraries/${encodeURIComponent(library)}/effective-recommendation`);
+      if (library !== state.selectedLibrary || requestId !== state.libraryRequestId) return;
+      state.effectiveRecommendations.set(library, {...payload.recommendation, warnings: payload.warnings || [], excluded: payload.excluded || []});
+      if (!state.effectiveDrafts.get(library)?.dirty) state.effectiveDrafts.delete(library);
+    } catch (error) {
+      if (library !== state.selectedLibrary || requestId !== state.libraryRequestId) return;
+      state.effectiveRecommendations.set(library, {error: error.message});
+    }
+    renderVersionFacts();
   }
 
   function shortDigest(value) {
@@ -2010,6 +2031,9 @@
       return { state: '需补扫', action: '补扫', kind: 'review', base, note: '扫描记录存在，但证据文件缺失或不可读取；完成补扫前不能可靠对比或进行发布检查。' };
     }
     if (!scanReady) return { state: '待扫描', action: '扫描', kind: 'review', base, note: '先生成当前版本的扫描事实。' };
+    if (item?.workflow_status?.label === '组合基准待确认') {
+      return { state: '组合基准待确认', action: '确认基准', kind: 'settings', base: '', note: '本版是增量或文档交付；先确认完整包基准，再核对有效组合。' };
+    }
     if (!base) return { state: '首版事实已就绪', action: '查看扫描结果', kind: 'open', base: '', note: '没有可比基准，当前版本只需查看扫描事实。' };
     if (!diffReady) return { state: '待对比', action: '对比', kind: 'review', base, note: `使用建议基准 ${base} 生成版本变化。` };
     return { state: '审查事实已就绪', action: '打开详情', kind: 'open', base, note: '扫描和对比事实已生成，可查看版本详情页。' };
@@ -2023,6 +2047,7 @@
     }
     const readiness = effectiveReadiness(item, item.action_readiness || {});
     const task = deriveVersionTask(item);
+    if (task.action === '确认基准') return { kind: 'composition', label: '确认完整包基准', reason: task.note };
     if (task.action === '扫描' || task.action === '补扫') {
       return readiness.scan?.enabled
         ? { kind: 'scan', label: task.action, reason: task.note }
@@ -2540,8 +2565,8 @@
     $('version-decision').textContent = reviewDecision.label;
     $('version-decision-note').textContent = reviewDecision.reason;
     $('current-processing-title').textContent = item.version_id;
-    $('current-processing-base').textContent = task.base || '无可比基准（首版）';
-    $('current-processing-base').title = task.base || '无可比基准（首版）';
+    $('current-processing-base').textContent = task.base || '未设置对比基准';
+    $('current-processing-base').title = task.base || '未设置对比基准';
     $('current-processing-state').textContent = task.state;
     $('current-processing-state').className = `status-chip ${task.state === '审查事实已就绪' ? 'status-good' : task.state === '需补扫' ? 'status-warn' : task.state === '待扫描' || task.state === '待对比' ? 'status-neutral' : 'status-neutral'}`;
     $('version-focus-target').textContent = item.version_id || '未选择版本';
@@ -3457,6 +3482,7 @@
     if (selectedChanged) resetSelectedVersionEvidence();
     renderVersions();
     renderVersionFacts();
+    if (!append) await refreshEffectiveRecommendation(libraryName, requestId);
     if (!append || selectedChanged) {
       await refreshActiveEvidenceForSelectedVersion(requestId);
       await loadUpdateNoteForSelectedVersion();
@@ -4425,6 +4451,10 @@
       if (next.kind === 'scan' || next.kind === 'compare') runAction(next.kind);
       if (next.kind === 'open') openVersionDetail();
       if (next.kind === 'settings') setActiveStageTab('management-workspace');
+      if (next.kind === 'composition') {
+        setActiveStageTab('effective-workspace');
+        document.querySelector('.release-composition-zone').open = true;
+      }
       if (next.kind === 'analysis') {
         setActiveStageTab('action-workspace');
         selectAnalysisAction('review');

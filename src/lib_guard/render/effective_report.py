@@ -248,6 +248,17 @@ def _conflicts(manifest: Mapping[str, Any]) -> str:
     """
 
 
+def _composition_warnings(manifest: Mapping[str, Any]) -> str:
+    warnings = manifest.get("warnings", []) or []
+    if not warnings:
+        return ""
+    rows = [f"<tr><td>{_long(item.get('file') or item.get('version_id') or '-')}</td><td>{esc(item.get('message'))}</td></tr>" for item in warnings]
+    return f"""<details><summary>连续覆盖记录与其他提示（{len(warnings)}）</summary>
+    <p>这些记录不阻断确认；请核对叠加顺序和最终文件来源。</p>
+    <div class="table-scroll compact-scroll"><table><thead><tr><th>文件或版本</th><th>说明</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+    </details>"""
+
+
 def _command_examples(manifest: Mapping[str, Any], preview: Mapping[str, Any] | None) -> str:
     lib = manifest.get("library_name") or manifest.get("library_id") or "ucie"
     eid = manifest.get("effective_id") or "E3"
@@ -267,14 +278,14 @@ def render_effective_report(manifest: Mapping[str, Any], release_preview: Mappin
         _kpi("有效文件", summary.get("file_count", len(manifest.get("effective_files", {}) or {})), "effective_files"),
         _kpi("组件数", summary.get("component_count", len(manifest.get("components", []) or [])), "base + updates"),
         _kpi("发布变化", preview_summary.get("delta_files", "-"), "相对上次发布变化"),
-        _kpi("冲突", len(conflicts), "scope / repeated replace"),
+        _kpi("冲突", len(conflicts), "范围不匹配或删除目标缺失"),
     ])
     html_doc = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>有效版发布预览 · {esc(manifest.get('library_name') or manifest.get('library_id'))}</title>
+<title>有效组合核对 · {esc(manifest.get('library_name') or manifest.get('library_id'))}</title>
 <style>
 :root {{ --bg:#f5f7fb; --panel:#fff; --text:#172033; --muted:#667085; --line:#d9e0ea; --blue:#2563eb; --purple:#7c3aed; --green:#0f8a5f; --orange:#c76a00; --red:#b42318; --chip:#eef2ff; }}
 * {{ box-sizing:border-box; }}
@@ -357,7 +368,7 @@ pre {{ white-space:pre-wrap; overflow:auto; margin:12px 0 0; }}
     <div class="card"><h2>更新范围热力图</h2>{_scope_heatmap(manifest)}</div>
     <div class="card"><h2>对比矩阵</h2>{_compare_matrix(manifest)}</div>
   </section>
-  <section class="card"><h2>风险与冲突</h2>{_conflicts(manifest)}</section>
+  <section class="card"><h2>风险与冲突</h2>{_conflicts(manifest)}{_composition_warnings(manifest)}</section>
   <section class="card"><h2>有效文件来源表</h2>{_effective_file_table(manifest)}</section>
   <section class="card"><h2>发布变化预览</h2>{_release_delta_table(release_preview)}</section>
   {_command_examples(manifest, release_preview)}

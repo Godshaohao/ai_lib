@@ -21,6 +21,7 @@ from lib_guard.catalog.runtime import (
 )
 from lib_guard.effective.pointer import load_current_pointer
 from lib_guard.library_registry import read_library_list, suggest_formal_library_id
+from lib_guard.package.types import package_kind
 from lib_guard.project_config import (
     BINARY_METADATA_ONLY_TYPES,
     DEFAULT_FILE_DIFF_TYPES,
@@ -28,6 +29,7 @@ from lib_guard.project_config import (
     default_discovery_strategy,
     default_scan_strategy,
 )
+from lib_guard.render.catalog_render_common import safe as report_safe
 from lib_guard.short_cli_config import load_config
 from lib_guard.window.resolver import default_window_path
 
@@ -465,7 +467,7 @@ def _release_status(version: Mapping[str, Any]) -> str:
 def _is_initial_baseline(versions: list[Mapping[str, Any]], version: Mapping[str, Any]) -> bool:
     """A first version is a fact baseline, not an unprocessed comparison."""
 
-    if _base_version(version):
+    if _base_version(version) or package_kind(version) != "FULL":
         return False
     ordered = sorted(versions, key=_sort_key)
     return bool(ordered) and ordered[0] is version
@@ -481,6 +483,8 @@ def _change_summary(
         return "初始基线"
     if scan_ready is None:
         scan_ready = scan_evidence_ready(version)
+    if not _base_version(version) and package_kind(version) in {"FIX", "DOC"}:
+        return "基准待确认"
     status = _diff_status(version).upper()
     if status in {"PENDING", "NOT_APPLICABLE"}:
         return "待生成对比"
@@ -1101,6 +1105,13 @@ def _workflow_status(
             "next_action": "生成扫描",
             "source": "catalog_runtime",
         }
+    if not _base_version(version) and package_kind(version) in {"FIX", "DOC"}:
+        return {
+            "label": "组合基准待确认",
+            "reason": "本版是增量或文档交付，尚无已确认完整包基准；不能把本包当作初始基线。",
+            "next_action": "确认完整包基准",
+            "source": "catalog_runtime",
+        }
     if is_initial_baseline:
         return {
             "label": "初始基线",
@@ -1469,9 +1480,13 @@ def list_version_rows(
     for version in sorted_versions[start:end]:
         if not isinstance(version, Mapping):
             continue
-        report_slug = str(version.get("report_slug") or library.get("report_slug") or "")
+        report_slug = str(library.get("report_slug") or report_safe(
+            library.get("typed_library_id") or library.get("library_id")
+            or library.get("formal_library_id") or library.get("library_name")
+            or library.get("display_name") or "library"
+        ))
         version_id = str(version.get("version_id") or "")
-        detail_path = catalog_html / "libraries" / report_slug / "versions" / version_id / "index.html"
+        detail_path = catalog_html / "libraries" / report_slug / "versions" / report_safe(version_id) / "index.html"
         scan = version.get("scan") or {}
         diff = version.get("diff") or {}
         current_effective = version_id == current if current else (False if pointer_invalid else bool(version.get("current_effective")))

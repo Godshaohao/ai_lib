@@ -511,11 +511,11 @@ def build_effective_manifest(
 
     for rel, count in replacement_counts.items():
         if count >= 2:
-            conflicts.append({
+            warnings.append({
                 "type": "REPEATED_REPLACEMENT",
                 "file": rel,
                 "count": count,
-                "message": "同一文件在有效组合中被多次替换，需要关注是否为连续补丁",
+                "message": "连续补丁多次替换同一文件；按叠加顺序使用最后一个版本，请核对来源",
             })
 
     file_type_summary = Counter(item.get("file_type", "other") for item in effective_files.values())

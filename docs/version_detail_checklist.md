@@ -1,5 +1,20 @@
 Status: current
 
+## 2026-10-19 P0 单包交付与 Web 验收
+
+本轮只调整版本详情页和 Web 的 IP 使用说明，不修改 ReleaseChecker、ReviewGate、RAW、Catalog、Effective Pointer 或历史快照。`release_readiness.json` 仍保留当前包的原始检查结果；单包缺少视图不等于有效组合最终缺失。
+
+| 场景 | 页面和 Web 必须给出的结论 | 验证 |
+| --- | --- | --- |
+| LEF-only PARTIAL/HOTFIX | 展示“本包未交付”的视图；无可信组合时提示核对 FULL 基准，不写“不可接入”或“初始基线” | `test_partial_delivery_projection.py`、`test_web_app.py` |
+| DOC-only | 说明本次只交付文档；技术视图由组合核查，不把单包缺视图当最终缺失 | `test_partial_delivery_projection.py` |
+| UNKNOWN_PACKAGE | 要求确认包类型和范围，不自动判定可用 | `test_partial_delivery_projection.py` |
+| FULL 缺必需视图 | 保留真实交付缺口，不误写 READY | `test_partial_delivery_projection.py` |
+| 有效组合接口冲突 | 已确认的 Macro/Pin/Port 冲突优先于单包缺口展示 | `test_partial_delivery_projection.py` |
+| Web 报告刷新 | 生成的报告链接与版本列表一致且可打开；不触发扫描，也不改写 Catalog/Readiness | `test_web_app.py` |
+
+验收边界：本轮 Web 浏览器检查的是现有 ASAP7 FULL 样本的版本列表、技术检查入口与报告下钻；增量包的报告刷新和状态文案由 Web 集成测试验证。没有把该样本的交付规则或页面截图当作内网 PARTIAL 实库验收。技术检查仍是建议性证据，不替代正式发布判断。
+
 ## 2026-10-18 工程内容与使用影响报告验收
 
 本节是当前口径。旧节中的数字和页面结构是当时的验收快照，不代表当前报告。
@@ -127,7 +142,7 @@ Gate 1/2/3 通过而 Gate 4 未执行时，只能称为“代码回归通过”�
 | IP 使用者主判断 | 已解决 | 首屏只保留一个 IP 接入主状态；正式放行状态与其分离 | `version_review_model.py`、`version_review_render.py`、`VD-P0-01` |
 | 基准版选择 | 已解决 | 显式基准版、当前有效版、上一有效版优先；相邻版本只作回退；缺失基准版不伪装为无变化 | `review/model_rules.py`、`test_version_detail_report.py` |
 | 首版本展示 | 已解决 | 无可信基准版时展示首版交付、文件和视图覆盖，不虚构对比结果 | `VD-P0-04`、`test_first_full_version_without_base_uses_scan_coverage_not_empty_diff` |
-| 交付完整度 | 已解决 | 必需视图缺失会影响 IP 主状态，并列出缺失项 | `build_ip_user_view_model()`、`VD-P0-07` |
+| 交付完整度 | 已解决 | FULL 缺必需视图影响 IP 主状态；PARTIAL/HOTFIX/DOC 的单包缺口保留为交付事实，不能直接判定最终有效组合不可用 | `build_ip_user_view_model()`、`test_partial_delivery_projection.py` |
 | 视图变化矩阵 | 已解决 | 按统一视图类型聚合新增、删除、修改、路径变化且内容相同、证据等级和使用场景；路径变化不计入内容修改 | `version_review_model.py`、`VD-P1-01` |
 | 文件结构 | 已解决 | 文件树合并到 Version Detail，支持状态、搜索、展开收起和有限滚动 | `version_file_evidence.py`、`VD-P1-03` |
 | 未知文件 | 已解决 | 未知文件数量必须能回到具体路径或证据入口 | `VD-P1-06`、`test_unknown_count_always_has_path_or_full_evidence_link` |
@@ -193,7 +208,7 @@ Gate 1/2/3 通过而 Gate 4 未执行时，只能称为“代码回归通过”�
 - 包类型是 `UNKNOWN_PACKAGE`。
 - Base 只来自相邻版本，且没有当前有效版或显式 Base。
 - Diff 证据缺失或目标不是当前 candidate。
-- 交付缺少 IP 必需 View。
+- FULL 交付缺少 IP 必需 View；PARTIAL/HOTFIX/DOC 则需核对 FULL 基准和完整组合，不能只凭单包缺口断定最终组合缺失。
 
 ## 当前验收结论
 
