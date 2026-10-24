@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -108,6 +109,32 @@ def _json_write_atomic(path: Path, data: dict[str, Any]) -> None:
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _write_latest_if_newer(latest_path: Path, latest: dict[str, Any]) -> bool:
+    """Publish monotonically so a slower older run cannot move the pointer back."""
+    def parsed_time(value: Any):
+        try:
+            timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    latest_path.parent.mkdir(parents=True, exist_ok=True)
+    with latest_path.with_name(".latest.lock").open("a+") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            current = _json_read(latest_path) if latest_path.is_file() else {}
+        except (OSError, ValueError, json.JSONDecodeError):
+            current = {}
+        current_time = parsed_time(current.get("generated_at"))
+        proposed_time = parsed_time(latest.get("generated_at"))
+        if proposed_time is None:
+            return False
+        if current_time and proposed_time and proposed_time <= current_time:
+            return False
+        _json_write_atomic(latest_path, latest)
+        return True
 
 
 def _run_formal(spec: dict[str, Any], config_dir: Path, out_dir: Path) -> dict[str, Any]:
@@ -216,6 +243,15 @@ def _run_lef_liberty(spec: dict[str, Any], config_dir: Path, out_dir: Path,
             raise ValueError("单独引用 LEF 报告时必须提供匹配当前 IP 的 lef_library_id")
         lef_report_path = _resolve(spec["lef_analysis_json"], config_dir)
         expected_source = _lef_source(_json_read(lef_report_path))
+    elif spec.get("lef_file"):
+        source_path = _resolve(spec["lef_file"], config_dir)
+        if not source_path.is_file():
+            raise ValueError(f"LEF 文件不存在：{source_path}")
+        snapshot = lef_review.analyze(source_path, source_path)
+        snapshot["analysis_mode"] = "SINGLE_FILE_SNAPSHOT"
+        lef_report_path = out_dir / "lef_liberty_check" / "lef_snapshot.json"
+        _json_write(lef_report_path, snapshot)
+        expected_source = _lef_source(snapshot)
     elif spec.get("lef_library_id") and str(spec["lef_library_id"]) != library_id:
         raise ValueError("lef_library_id 与当前 IP 不一致")
 
@@ -847,8 +883,8 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                       "xlsx_ref": f"runs/{review_record['review_id']}/ip_review.xlsx",
                       "generated_at": review_record["generated_at"]}
             latest_path = library_dir / "latest.json"
-            _json_write_atomic(latest_path, latest)
-            latest_ref = str(latest_path)
+            if _write_latest_if_newer(latest_path, latest):
+                latest_ref = str(latest_path)
         overview_rows.append({"library_id": review_record["library_id"],
                               "name": (review.get("ip") or {}).get("name") or review_record["library_id"],
                               "review_id": review_record["review_id"],

@@ -1,12 +1,73 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from lib_guard.raw_discovery import discover_raw_libraries
 from lib_guard import raw_discovery
 
 
 class RawDiscoveryTests(unittest.TestCase):
+    def test_maximum_depth_is_reported_as_partial_discovery(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "raw"
+            version = root / "Vendor_A" / "group" / "nested" / "ip" / "V01" / "LEF"
+            version.mkdir(parents=True)
+            (version / "macro.lef").touch()
+
+            with patch.object(raw_discovery, "_MAX_DEPTH", 2):
+                report = raw_discovery.discover_raw_report(root)
+
+            self.assertTrue(report["partial_discovery"])
+            self.assertIn(str(root / "Vendor_A" / "group"), report["depth_limited_paths"])
+            self.assertTrue(any("达到目录深度上限" in item for item in report["warnings"]))
+
+    def test_permission_errors_are_reported_as_incomplete_discovery(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "raw"
+            version = root / "Vendor_A" / "ip" / "V01"
+            (version / "LEF").mkdir(parents=True)
+            (version / "LEF" / "macro.lef").touch()
+            denied = version / "restricted"
+            denied.mkdir()
+            original_scandir = raw_discovery.os.scandir
+
+            def scandir_with_denial(path):
+                if Path(path) == denied:
+                    raise PermissionError("permission denied for test")
+                return original_scandir(path)
+
+            with patch("lib_guard.raw_discovery.os.scandir", side_effect=scandir_with_denial):
+                report = raw_discovery.discover_raw_report(root)
+
+            self.assertTrue(report["partial_discovery"])
+            self.assertEqual(len(report["scan_errors"]), 1)
+            self.assertEqual(report["scan_errors"][0]["path"], str(denied))
+            self.assertTrue(any("目录访问失败" in item for item in report["warnings"]))
+
+    def test_reports_incomplete_hint_sampling(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "raw"
+            version = root / "Vendor_A" / "ip" / "V01"
+            version.mkdir(parents=True)
+            (version / "first.lef").touch()
+            for index in range(raw_discovery._HINT_ENTRIES):
+                (version / f"noise_{index}.txt").touch()
+            report = raw_discovery.discover_raw_report(root)
+            self.assertTrue(report["partial_discovery"])
+            self.assertIn(str(version), report["truncated_hints"])
+
+    def test_reports_colliding_library_ids(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "raw"
+            for relative in ("Vendor_A/foo.bar/ip/V01", "Vendor_A/foo/bar/ip/V01"):
+                version = root / relative
+                version.mkdir(parents=True)
+                (version / "cell.lef").touch()
+            report = raw_discovery.discover_raw_report(root)
+            self.assertEqual(len(report["candidates"]), 2)
+            self.assertIn("Vendor_A.foo.bar.ip", report["identity_conflicts"])
+
     def test_discovers_vendor_library_and_single_version(self):
         with tempfile.TemporaryDirectory() as temp:
             raw = Path(temp) / "3rd_IP"
@@ -126,11 +187,15 @@ class RawDiscoveryTests(unittest.TestCase):
             self.assertEqual(candidate["view_types"], ["LEF", "LIB"])
             self.assertEqual(candidate["example_versions"], ["20261024_drop"])
             self.assertEqual(candidate["root_abs"], str(root / "Vendor_F" / "category" / "phy_ip"))
-            self.assertIn("Candidate snapshot", artifacts["list"].read_text(encoding="utf-8"))
-            self.assertEqual(set(artifacts), {"list", "json", "html"})
-            self.assertIn("middle_path", artifacts["list"].read_text(encoding="utf-8"))
+            self.assertEqual(set(artifacts), {"json"})
             self.assertIn('"visited_dirs"', artifacts["json"].read_text(encoding="utf-8"))
-            self.assertIn("待确认", artifacts["html"].read_text(encoding="utf-8"))
+            self.assertFalse((Path(temp) / "out" / "library.list").exists())
+            exported = raw_discovery.write_discovery_artifacts(
+                report, Path(temp) / "out", include_human=True)
+            self.assertEqual(set(exported), {"list", "json", "html"})
+            self.assertIn("Candidate snapshot", exported["list"].read_text(encoding="utf-8"))
+            self.assertIn("middle_path", exported["list"].read_text(encoding="utf-8"))
+            self.assertIn("待确认", exported["html"].read_text(encoding="utf-8"))
             after = sorted(str(path.relative_to(root)) for path in root.rglob("*"))
             self.assertEqual(after, before)
 

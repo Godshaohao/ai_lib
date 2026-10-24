@@ -89,11 +89,109 @@
   document.querySelector("[data-main-tab]")?.addEventListener("click", (event) => {
     selectTab(event.currentTarget.dataset.mainTab, "main");
   });
-  document.querySelector("[data-select-all]")?.addEventListener("change", (event) => {
-    document.querySelectorAll("[data-candidate]").forEach((checkbox) => {
-      checkbox.checked = event.currentTarget.checked;
+  const discoveryRows = [...document.querySelectorAll("[data-discovery-row]")];
+  const discoverySearch = document.querySelector("[data-discovery-search]");
+  const discoveryVendor = document.querySelector("[data-discovery-vendor]");
+  const discoveryView = document.querySelector("[data-discovery-view]");
+  const discoveryState = document.querySelector("[data-discovery-state]");
+  const discoveryCount = document.querySelector("[data-discovery-count]");
+  function applyDiscoveryFilters() {
+    const query = (discoverySearch?.value || "").trim().toLocaleLowerCase();
+    const vendor = (discoveryVendor?.value || "").toLocaleLowerCase();
+    const view = (discoveryView?.value || "").toLocaleLowerCase();
+    const state = discoveryState?.value || "";
+    let visible = 0;
+    discoveryRows.forEach((row) => {
+      const show = row.dataset.search.includes(query) && (!vendor || row.dataset.vendor === vendor) &&
+        (!view || row.dataset.views.split(",").includes(view)) && (!state || row.dataset.state === state);
+      row.hidden = !show;
+      if (show) visible += 1;
+    });
+    if (discoveryCount) discoveryCount.textContent = `显示 ${visible} / ${discoveryRows.length} 个库`;
+  }
+  [discoverySearch, discoveryVendor, discoveryView, discoveryState].forEach((control) => {
+    control?.addEventListener(control.tagName === "INPUT" ? "input" : "change", applyDiscoveryFilters);
+  });
+  applyDiscoveryFilters();
+
+  function setVisibleChecks(selector, checked) {
+    document.querySelectorAll(selector).forEach((checkbox) => {
+      if (!checkbox.disabled && !checkbox.closest("tr")?.hidden && !checkbox.closest("[data-lib-row]")?.hidden) {
+        checkbox.checked = checked;
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+  }
+  document.querySelector("[data-select-visible]")?.addEventListener("click", () =>
+    setVisibleChecks("[data-candidate]", true));
+  document.querySelector("[data-clear-visible]")?.addEventListener("click", () =>
+    setVisibleChecks("[data-candidate]", false));
+  document.querySelector("[data-check-select-all]")?.addEventListener("click", () =>
+    document.querySelectorAll('[data-review-form] input[name="checks"]').forEach((item) => {
+      item.checked = true;
+      item.dispatchEvent(new Event("change", { bubbles: true }));
+    }));
+  document.querySelector("[data-check-clear]")?.addEventListener("click", () =>
+    document.querySelectorAll('[data-review-form] input[name="checks"]').forEach((item) => {
+      item.checked = false;
+      item.dispatchEvent(new Event("change", { bubbles: true }));
+    }));
+  document.querySelectorAll("[data-fill-input]").forEach((choice) => {
+    choice.addEventListener("change", () => {
+      const input = document.querySelector(`[name="${choice.dataset.fillInput}"]`);
+      if (input && choice.value) input.value = choice.value;
     });
   });
+  const libertyInput = document.querySelector('[name="ll_liberty_files"]');
+  const libertyRows = [...document.querySelectorAll("[data-lib-row]")];
+  const libertySearch = document.querySelector("[data-lib-search]");
+  const libertyCount = document.querySelector("[data-lib-count]");
+  function syncLibertyInput() {
+    if (libertyInput) libertyInput.value = [...document.querySelectorAll("[data-lib-file]:checked")]
+      .map((item) => item.value).join("\n");
+  }
+  function applyLibertyFilter() {
+    const query = (libertySearch?.value || "").trim().toLocaleLowerCase();
+    let visible = 0;
+    libertyRows.forEach((row) => {
+      row.hidden = !row.dataset.libPath.includes(query);
+      if (!row.hidden) visible += 1;
+    });
+    if (libertyCount) libertyCount.textContent = `显示 ${visible} / ${libertyRows.length} 个文件`;
+  }
+  libertySearch?.addEventListener("input", applyLibertyFilter);
+  applyLibertyFilter();
+  document.querySelector("[data-lib-select-visible]")?.addEventListener("click", () =>
+    setVisibleChecks("[data-lib-file]", true));
+  document.querySelector("[data-lib-clear-visible]")?.addEventListener("click", () =>
+    setVisibleChecks("[data-lib-file]", false));
+  document.querySelectorAll("[data-lib-file]").forEach((choice) => {
+    choice.addEventListener("change", () => {
+      syncLibertyInput();
+    });
+  });
+  const taskBanner = document.querySelector("[data-review-task]");
+  if (taskBanner && ["QUEUED", "RUNNING"].includes(taskBanner.querySelector("[data-task-status]")?.textContent.trim())) {
+    const statusNode = taskBanner.querySelector("[data-task-status]");
+    const detailNode = taskBanner.querySelector("[data-task-detail]");
+    const poll = async () => {
+      try {
+        const response = await fetch(taskBanner.dataset.taskUrl, { headers: { Accept: "application/json" } });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const task = await response.json();
+        statusNode.textContent = task.status;
+        detailNode.textContent = task.error || (task.execution_status ? `检查结论：${task.execution_status}` : "正在等待运行结果");
+        if (["COMPLETE", "FAILED"].includes(task.status)) {
+          window.setTimeout(() => window.location.reload(), 700);
+          return;
+        }
+      } catch (error) {
+        detailNode.textContent = `状态暂不可用，稍后重试（${error.message}）`;
+      }
+      window.setTimeout(poll, 1500);
+    };
+    window.setTimeout(poll, 700);
+  }
   selectTab(document.body.dataset.activeTab || "catalog", "main");
   selectTab("config", "review");
 })();

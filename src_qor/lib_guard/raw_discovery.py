@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
 from pathlib import Path
 import re
 import json
@@ -18,8 +19,7 @@ _VIEW_SUFFIXES = {
 }
 _IGNORED_DIRS = {
     ".git", ".svn", "__pycache__", "catalog", "diff", "reports", "release_area", "scan_out",
-    "work", "tmp", "temp", "backup", "bak", "old", "_simulation", "configs", "config", "doc", "docs",
-    "script", "scripts", "source_package", "src_package",
+    "work", "tmp", "temp", "_simulation", "configs", "config",
 }
 _VIEW_DIR_NAMES = {
     "lef", "lib", "db", "gds", "oas", "cdl", "spice", "verilog", "rtl", "timing", "spef",
@@ -58,16 +58,23 @@ def _view_for_name(name: str) -> str | None:
     return _VIEW_SUFFIXES.get(Path(lowered).suffix)
 
 
-def _children(path: Path) -> list[Path]:
+def _record_access_error(errors: list[dict[str, str]] | None, path: Path, error: OSError) -> None:
+    if errors is None or any(item["path"] == str(path) for item in errors):
+        return
+    errors.append({"path": str(path), "error": str(error)})
+
+
+def _children(path: Path, errors: list[dict[str, str]] | None = None) -> list[Path]:
     try:
         return sorted((child for child in path.iterdir()
                        if child.is_dir() and not child.is_symlink() and not _ignored(child.name)),
                       key=lambda item: item.name.casefold())
-    except OSError:
+    except OSError as exc:
+        _record_access_error(errors, path, exc)
         return []
 
 
-def _view_hints(path: Path) -> set[str]:
+def _view_hints(path: Path, errors: list[dict[str, str]] | None = None) -> tuple[set[str], bool]:
     """Inspect bounded filenames only; never follows directory symlinks."""
     views: set[str] = set()
     queue: list[tuple[Path, int]] = [(path, 0)]
@@ -87,20 +94,21 @@ def _view_hints(path: Path) -> set[str]:
                         view = _view_for_name(entry.name)
                         if view:
                             views.add(view)
-        except OSError:
+        except OSError as exc:
+            _record_access_error(errors, current, exc)
             continue
-    return views
+    return views, bool(queue or visited >= _HINT_ENTRIES)
 
 
-def _is_delivery(path: Path) -> tuple[bool, set[str]]:
+def _is_delivery(path: Path, errors: list[dict[str, str]] | None = None) -> tuple[bool, set[str], bool]:
     if _ignored(path.name) or path.name.lower() in _VIEW_DIR_NAMES:
-        return False, set()
-    children = _children(path)
+        return False, set(), False
+    children = _children(path, errors)
     # A named release container is not a version when it contains release directories.
     if not _VERSION_NAME.fullmatch(path.name) and any(_VERSION_NAME.fullmatch(item.name) for item in children):
-        return False, set()
-    hints = _view_hints(path)
-    return bool(hints), hints
+        return False, set(), False
+    hints, truncated = _view_hints(path, errors)
+    return bool(hints), hints, truncated
 
 
 def _library_id(relative_parts: tuple[str, ...]) -> str:
@@ -115,6 +123,9 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
         raise FileNotFoundError(f"RAW 根目录不存在或不是目录：{root}")
 
     results: list[dict[str, Any]] = []
+    truncated_hints: list[str] = []
+    scan_errors: list[dict[str, str]] = []
+    depth_limited_paths: list[str] = []
     stack: list[tuple[Path, int]] = [(root, 0)]
     visited = 0
     while stack and visited < _MAX_DIRS:
@@ -125,10 +136,14 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
             is_top_vendor = len(relative.parts) == 1 and relative.parts[0].lower().startswith("vendor")
             if not is_top_vendor and not any(_VERSION_NAME.fullmatch(part) for part in relative.parts[:-1]):
                 deliveries = []
-                for child in _children(path):
-                    is_delivery, views = _is_delivery(child)
+                for child in _children(path, scan_errors):
+                    is_delivery, views, hints_truncated = _is_delivery(child, scan_errors)
+                    if hints_truncated:
+                        truncated_hints.append(str(child))
                     if is_delivery and views:
-                        deliveries.append({"id": child.name, "path": str(child.resolve()), "views": sorted(views)})
+                        deliveries.append({"id": child.name, "path": str(child.resolve()), "views": sorted(views),
+                                           "hints_truncated": hints_truncated,
+                                           "detection_basis": "文件名后缀与直接子目录"})
                 if deliveries:
                     parts = relative.parts
                     vendor = parts[0]
@@ -154,9 +169,17 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
                         "version_names": version_names,
                         "versions": sorted(deliveries, key=lambda item: item["id"].casefold()),
                     })
-        if depth >= _MAX_DEPTH or _ignored(path.name) or _VERSION_NAME.fullmatch(path.name):
+        if depth >= _MAX_DEPTH:
+            if not _ignored(path.name) and not _VERSION_NAME.fullmatch(path.name):
+                unvisited = [child for child in _children(path, scan_errors)
+                             if child.name.lower() not in _VIEW_DIR_NAMES
+                             and not _VERSION_NAME.fullmatch(child.name)]
+                if unvisited:
+                    depth_limited_paths.append(str(path))
             continue
-        for child in reversed(_children(path)):
+        if _ignored(path.name) or _VERSION_NAME.fullmatch(path.name):
+            continue
+        for child in reversed(_children(path, scan_errors)):
             try:
                 child.resolve().relative_to(root)
             except (OSError, ValueError):
@@ -170,6 +193,16 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
     )]
     results.sort(key=lambda item: (item["vendor"].casefold(), item["middle_path"].casefold(),
                                    item["display_name"].casefold(), item["root_abs"].casefold()))
+    id_counts = Counter(item["library_id"] for item in results)
+    identity_conflicts = sorted(key for key, count in id_counts.items() if count > 1)
+    partial = bool(stack or truncated_hints or scan_errors or depth_limited_paths)
+    warnings = []
+    if stack:
+        warnings.append(f"发现达到目录访问上限 {_MAX_DIRS}，结果可能不完整。")
+    if scan_errors:
+        warnings.append(f"有 {len(scan_errors)} 个目录访问失败，发现结果可能不完整。")
+    if depth_limited_paths:
+        warnings.append(f"有 {len(depth_limited_paths)} 个目录达到目录深度上限 {_MAX_DEPTH}，未继续检查其下级目录。")
     return {
         "raw_root": str(root),
         "start_root": str(root),
@@ -179,7 +212,12 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
         "max_candidates": None,
         "visited_dirs": visited,
         "truncated": bool(stack),
-        "warnings": [f"发现达到目录访问上限 {_MAX_DIRS}，结果可能不完整。"] if stack else [],
+        "partial_discovery": partial,
+        "truncated_hints": truncated_hints,
+        "scan_errors": scan_errors,
+        "depth_limited_paths": depth_limited_paths,
+        "identity_conflicts": identity_conflicts,
+        "warnings": warnings,
         "candidates": results,
     }
 
@@ -194,39 +232,54 @@ def discover_raw_libraries(raw_root: str | Path) -> list[dict[str, Any]]:
     return discover_raw_report(raw_root)["candidates"]
 
 
-def write_discovery_artifacts(report: dict[str, Any], output_dir: str | Path) -> dict[str, Path]:
-    """Write the same human/machine candidate artifacts as legacy Discover."""
+def write_discovery_artifacts(report: dict[str, Any], output_dir: str | Path, *,
+                              include_human: bool = False,
+                              human_formats: set[str] | None = None) -> dict[str, Path]:
+    """Persist machine facts; create human exports only when explicitly requested."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    list_path = out / "library.list"
     json_path = out / "library_discovery.json"
-    html_path = out / "library_discovery.html"
+    artifacts = {"json": json_path}
+    _atomic_write(json_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    formats = set(human_formats or ())
+    if include_human:
+        formats.update({"list", "html"})
+    unsupported = formats - {"list", "html"}
+    if unsupported:
+        raise ValueError(f"不支持的人工导出格式：{', '.join(sorted(unsupported))}")
+    if not formats:
+        return artifacts
 
     columns = ("status", "library_id", "root_abs", "display_name", "vendor", "middle_path")
-    lines = [
-        "# Candidate snapshot; REVIEW rows require operator confirmation.",
-        "# RAW directories are read-only; this file does not modify the Catalog registry.",
-        "\t".join(columns),
-    ]
-    for item in report["candidates"]:
-        lines.append("\t".join(str(item.get(column) or "") for column in columns))
-    _atomic_write(list_path, "\n".join(lines) + "\n")
-    _atomic_write(json_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    if "list" in formats:
+        list_path = out / "library.list"
+        lines = [
+            "# Candidate snapshot; REVIEW rows require operator confirmation.",
+            "# RAW directories are read-only; this file does not modify the Catalog registry.",
+            "\t".join(columns),
+        ]
+        for item in report["candidates"]:
+            lines.append("\t".join(str(item.get(column) or "") for column in columns))
+        _atomic_write(list_path, "\n".join(lines) + "\n")
+        artifacts["list"] = list_path
 
-    rows = []
-    for item in report["candidates"]:
-        rows.append("<tr>" + "".join(
-            f"<td>{escape(str(value))}</td>" for value in (
-                "待确认", item["library_id"], item["vendor"], item["middle_path"] or "—",
-                item["display_name"], item["root_abs"], item["version_count"],
-                ", ".join(item["version_names"]), "、".join(item["view_types"]),
-            )
-        ) + "</tr>")
-    _atomic_write(html_path,
-        "<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>RAW 库候选发现</title>"
-        "<h1>RAW 库候选发现</h1><p>候选仅供确认，未自动登记或修改 RAW。</p>"
-        "<table border='1' cellpadding='6'><thead><tr><th>状态</th><th>库标识</th><th>Vendor</th>"
-        "<th>中间路径</th><th>显示名</th><th>库根目录</th><th>版本数</th><th>版本</th><th>View</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></html>\n",
-    )
-    return {"list": list_path, "json": json_path, "html": html_path}
+    if "html" in formats:
+        html_path = out / "library_discovery.html"
+        rows = []
+        for item in report["candidates"]:
+            rows.append("<tr>" + "".join(
+                f"<td>{escape(str(value))}</td>" for value in (
+                    "待确认", item["library_id"], item["vendor"], item["middle_path"] or "—",
+                    item["display_name"], item["root_abs"], item["version_count"],
+                    ", ".join(item["version_names"]), "、".join(item["view_types"]),
+                )
+            ) + "</tr>")
+        _atomic_write(html_path,
+            "<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>RAW 库候选发现</title>"
+            "<h1>RAW 库候选发现</h1><p>候选仅供确认，未自动登记或修改 RAW。</p>"
+            "<table border='1' cellpadding='6'><thead><tr><th>状态</th><th>库标识</th><th>Vendor</th>"
+            "<th>中间路径</th><th>显示名</th><th>库根目录</th><th>版本数</th><th>版本</th><th>View</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></html>\n",
+        )
+        artifacts["html"] = html_path
+    return artifacts

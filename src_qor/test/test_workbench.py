@@ -1,12 +1,417 @@
 import json
 from pathlib import Path
+import re
 import tempfile
+from threading import Barrier
+import time
 import unittest
+from unittest.mock import patch
 
-from lib_guard.workbench import create_app
+from lib_guard import workbench
+from lib_guard.workbench import _acquire_library_lock, _files_for_selection, _quick_linked_checks, _release_library_lock, _update_task, create_app
 
 
 class WorkbenchTests(unittest.TestCase):
+    def test_file_selection_reports_walk_permission_errors_as_truncation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "raw"
+            root.mkdir()
+            expected = root / "part.lib"
+
+            def walk_with_error(path, followlinks=False, onerror=None):
+                onerror(PermissionError(13, "permission denied", str(root / "restricted")))
+                yield str(root), [], [expected.name]
+
+            with patch("lib_guard.workbench.os.walk", side_effect=walk_with_error):
+                files, reason = _files_for_selection(str(root), (".lib",))
+
+            self.assertEqual(files, [str(expected)])
+            self.assertEqual(reason, "ACCESS_ERROR")
+
+    def test_file_selection_preserves_permission_error_when_limit_is_hit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "raw"
+            root.mkdir()
+            names = [f"part_{index:03}.lib" for index in range(200)]
+
+            def walk_with_error_and_limit(path, followlinks=False, onerror=None):
+                onerror(PermissionError(13, "permission denied", str(root / "restricted")))
+                yield str(root), [], names
+
+            with patch("lib_guard.workbench.os.walk", side_effect=walk_with_error_and_limit):
+                files, reason = _files_for_selection(str(root), (".lib",))
+
+            self.assertEqual(len(files), 200)
+            self.assertEqual(set(reason.split("+")), {"ACCESS_ERROR", "LIMIT"})
+
+    def test_start_status_write_failure_releases_task_slot_and_library_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, checks: {}}\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            original_update = workbench._update_task
+            running_write_attempted = __import__("threading").Event()
+
+            def fail_running_write(task_path, latest_path, task):
+                if task.get("status") == "RUNNING":
+                    running_write_attempted.set()
+                    raise OSError("controlled task-state write failure")
+                return original_update(task_path, latest_path, task)
+
+            with patch("lib_guard.workbench._update_task", side_effect=fail_running_write):
+                response = client.post("/run", data={
+                    "id": "IP_A", "library_id": "vendor.ip_a", "checks": ["macro_index"],
+                    "macro_report_json": str(root / "existing.json"),
+                }, follow_redirects=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(running_write_attempted.wait(timeout=1))
+                for _ in range(100):
+                    slots = [workbench._REVIEW_TASK_SLOTS.acquire(blocking=False) for _ in range(8)]
+                    if all(slots):
+                        for _ in slots:
+                            workbench._REVIEW_TASK_SLOTS.release()
+                        break
+                    for acquired in slots:
+                        if acquired:
+                            workbench._REVIEW_TASK_SLOTS.release()
+                    time.sleep(0.01)
+
+            self.assertEqual(slots, [True] * 8)
+            lock_handle = _acquire_library_lock(root / "output", "vendor.ip_a")
+            self.assertIsNotNone(lock_handle)
+            _release_library_lock(lock_handle)
+
+    def test_library_lock_is_shared_across_workbench_instances(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            first = _acquire_library_lock(output, "vendor.ip_a")
+            try:
+                self.assertIsNotNone(first)
+                self.assertIsNone(_acquire_library_lock(output, "vendor.ip_a"))
+            finally:
+                _release_library_lock(first)
+            second = _acquire_library_lock(output, "vendor.ip_a")
+            self.assertIsNotNone(second)
+            _release_library_lock(second)
+
+    def test_quick_linked_checks_builds_macro_lef_and_liberty_inputs_from_versions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old_root, new_root = root / "raw" / "V1", root / "raw" / "V2"
+            old_lef = old_root / "LEF" / "top.lef"
+            new_lef = new_root / "LEF" / "top.lef"
+            liberty = new_root / "LIB" / "TT" / "top_tt.lib.gz"
+            for path in (old_lef, new_lef, liberty):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            ip = {"id": "IP_A", "library_id": "Vendor.IP_A", "raw_versions": [
+                {"id": "V1", "path": str(old_root)}, {"id": "V2", "path": str(new_root)}]}
+
+            checks, notes = _quick_linked_checks(ip, "V2", "V1", "", "")
+
+            self.assertEqual(set(checks), {"macro_index", "lef_review", "lef_liberty_check"})
+            self.assertEqual(checks["macro_index"]["root"], str(new_root))
+            self.assertEqual(checks["lef_review"]["old_file"], str(old_lef))
+            self.assertEqual(checks["lef_review"]["new_file"], str(new_lef))
+            self.assertEqual(checks["lef_liberty_check"]["liberty_files"], [str(liberty)])
+            self.assertIn("LEF：1 个", " ".join(notes))
+
+    def test_quick_linked_checks_supports_single_version_without_fake_lef_delta(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "raw" / "V1"
+            lef, liberty = root / "LEF" / "top.lef", root / "LIB" / "TT" / "top.lib"
+            for path in (lef, liberty):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            ip = {"id": "IP_A", "library_id": "Vendor.IP_A", "raw_versions": [
+                {"id": "V1", "path": str(root)}]}
+
+            checks, _ = _quick_linked_checks(ip, "V1", "", "", "")
+
+            self.assertEqual(set(checks), {"macro_index", "lef_liberty_check"})
+            self.assertEqual(checks["lef_liberty_check"]["lef_file"], str(lef))
+            self.assertNotIn("lef_review", checks)
+
+    def test_quick_linked_checks_does_not_guess_between_multiple_lefs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "raw" / "V1"
+            for name in ("a.lef", "b.lef"):
+                (root / "LEF" / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / "LEF" / name).touch()
+            liberty = root / "LIB" / "TT" / "top.lib"
+            liberty.parent.mkdir(parents=True)
+            liberty.touch()
+            ip = {"id": "IP_A", "library_id": "Vendor.IP_A", "raw_versions": [
+                {"id": "V1", "path": str(root)}]}
+
+            with self.assertRaisesRegex(ValueError, "多个 LEF.*明确选择"):
+                _quick_linked_checks(ip, "V1", "", "", "")
+
+    def test_quick_linked_checks_rejects_truncated_liberty_file_list(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "raw" / "V1"
+            lef = root / "LEF" / "top.lef"
+            lef.parent.mkdir(parents=True)
+            lef.touch()
+            liberty_dir = root / "LIB"
+            liberty_dir.mkdir(parents=True)
+            for index in range(201):
+                (liberty_dir / f"part_{index:03}.lib").touch()
+            ip = {"id": "IP_A", "library_id": "Vendor.IP_A", "raw_versions": [
+                {"id": "V1", "path": str(root)}]}
+
+            with self.assertRaisesRegex(ValueError, "Liberty 文件列表不完整.*超过工作台枚举上限"):
+                _quick_linked_checks(ip, "V1", "", str(lef), "")
+
+    def test_catalog_places_download_link_next_to_latest_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, name: IP A, checks: {}}\n", encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            library_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a")
+            run_dir = library_dir / "runs" / "review_20261024T000000Z_abcd1234"
+            run_dir.mkdir(parents=True)
+            (library_dir / "latest.json").write_text(
+                '{"review_id":"review_20261024T000000Z_abcd1234"}', encoding="utf-8")
+            (run_dir / "ip_review.xlsx").write_bytes(b"xlsx")
+
+            response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=catalog")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("下载 Excel".encode(), response.data)
+            self.assertIn(b"/download?library_id=vendor.ip_a", response.data)
+
+    def test_discover_page_displays_specific_partial_discovery_warnings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+            app = create_app(registry, root / "output")
+            report = {
+                "candidates": [], "partial_discovery": True, "identity_conflicts": [],
+                "warnings": ["有 2 个目录访问失败，发现结果可能不完整。",
+                             "有 1 个目录达到目录深度上限 8，未继续检查其下级目录。"],
+            }
+
+            with patch("lib_guard.workbench.discover_raw_report", return_value=report):
+                response = app.test_client().post("/discover", data={"raw_root": str(root)})
+
+            body = response.get_data(as_text=True)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("有 2 个目录访问失败", body)
+            self.assertIn("有 1 个目录达到目录深度上限 8", body)
+            self.assertNotIn("文件线索抽样或目录访问达到上限", body)
+
+    def test_excel_link_uses_latest_run_when_latest_pointer_is_not_enabled(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, name: IP A, checks: {}}\n", encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            review_id = "review_20261024T010000Z_abcd1234"
+            run_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a") / "runs" / review_id
+            run_dir.mkdir(parents=True)
+            (run_dir / "review_result.json").write_text(
+                json.dumps({"review_id": review_id, "execution_status": "INCOMPLETE", "summary": {}}), encoding="utf-8")
+            (run_dir / "ip_review.xlsx").write_bytes(b"xlsx")
+
+            response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("最近检查报告".encode(), response.data)
+            self.assertIn("下载 Excel".encode(), response.data)
+            self.assertIn(review_id.encode(), response.data)
+            self.assertIn(f"/download?library_id=vendor.ip_a&amp;review_id={review_id}".encode(), response.data)
+
+    def test_quick_linked_form_submits_auto_configured_check_inputs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            version = root / "raw" / "V1"
+            lef = version / "LEF" / "top.lef"
+            liberty = version / "LIB" / "TT" / "top.lib"
+            for path in (lef, liberty):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor.IP_A\n    raw_versions:\n"
+                f"      - {{id: V1, path: {version}}}\n    checks: {{}}\n", encoding="utf-8")
+            app = create_app(registry, root / "output")
+            client = app.test_client()
+
+            with patch("lib_guard.workbench.run", return_value=([{
+                "execution_status": "COMPLETE", "review_id": "review_test", "summary": {},
+            }], {})) as runner:
+                response = client.post("/run", data={
+                    "id": "IP_A", "library_id": "Vendor.IP_A", "quick_linked_check": "1",
+                    "quick_raw_version": "V1", "quick_target_lef": str(lef),
+                }, follow_redirects=True)
+                self.assertEqual(response.status_code, 200)
+                task_url = re.search(rb'data-task-url="([^"]+)"', response.data).group(1).decode()
+                task_url = task_url.replace("&amp;", "&")
+                for _ in range(100):
+                    task = client.get(task_url).get_json()
+                    if task["status"] in {"COMPLETE", "FAILED"}:
+                        break
+                    time.sleep(0.01)
+
+            self.assertEqual(task["status"], "COMPLETE", task)
+            submitted = runner.call_args.args[0]["ips"][0]
+            self.assertEqual(submitted["raw_version"], "V1")
+            self.assertEqual(set(submitted["checks"]), {"macro_index", "lef_liberty_check"})
+            self.assertEqual(submitted["checks"]["macro_index"]["root"], str(version.resolve()))
+            self.assertEqual(submitted["checks"]["lef_liberty_check"]["lef_file"], str(lef.resolve()))
+            self.assertEqual(submitted["checks"]["lef_liberty_check"]["liberty_files"], [str(liberty)])
+
+    def test_run_uses_post_redirect_get_so_refresh_does_not_repeat_check(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            version = root / "raw" / "V1"
+            lef = version / "LEF" / "top.lef"
+            liberty = version / "LIB" / "TT" / "top.lib"
+            for path in (lef, liberty):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor.IP_A\n    raw_versions:\n"
+                f"      - {{id: V1, path: {version}}}\n    checks: {{}}\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            with patch("lib_guard.workbench.run", return_value=([{
+                "execution_status": "COMPLETE", "review_id": "review_refresh_guard", "summary": {},
+            }], {})) as runner:
+                response = client.post("/run", data={
+                    "id": "IP_A", "library_id": "Vendor.IP_A", "quick_linked_check": "1",
+                    "quick_raw_version": "V1", "quick_target_lef": str(lef),
+                })
+                self.assertEqual(response.status_code, 303)
+                self.assertIn("tab=review", response.headers["Location"])
+                page = client.get(response.headers["Location"])
+                self.assertEqual(page.status_code, 200)
+                task_url = re.search(rb'data-task-url="([^"]+)"', page.data).group(1).decode()
+                task_url = task_url.replace("&amp;", "&")
+                for _ in range(100):
+                    task = client.get(task_url).get_json()
+                    if task["status"] in {"COMPLETE", "FAILED"}:
+                        break
+                    time.sleep(0.01)
+                client.get(response.headers["Location"])
+                self.assertEqual(runner.call_count, 1)
+
+    def test_new_queued_task_becomes_latest_without_old_worker_replacing_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_path = root / "tasks" / "task_new.json"
+            latest_path = root / "latest_attempt.json"
+            latest_path.write_text(json.dumps({"task_id": "task_old", "status": "RUNNING"}), encoding="utf-8")
+
+            _update_task(task_path, latest_path, {"task_id": "task_new", "status": "QUEUED"})
+            _update_task(root / "tasks" / "task_old.json", latest_path,
+                         {"task_id": "task_old", "status": "COMPLETE"})
+
+            latest = json.loads(latest_path.read_text(encoding="utf-8"))
+            self.assertEqual(latest["task_id"], "task_new")
+            self.assertEqual(latest["status"], "QUEUED")
+
+    def test_selected_raw_version_prefills_macro_input_without_saving(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            version = root / "raw" / "V50"
+            version.mkdir(parents=True)
+            registry = root / "registry.yml"
+            original = ("ips:\n  - id: IP_A\n    library_id: Vendor.IP_A\n"
+                        f"    raw_versions: [{{id: V50, path: {version}}}]\n"
+                        "    checks:\n      macro_index: {report_json: /old/report.json}\n")
+            registry.write_text(original, encoding="utf-8")
+            response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review&raw_version=V50")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(f'name="macro_root" value="{version}"'.encode(), response.data)
+            self.assertIn(b'name="macro_version" value="V50"', response.data)
+            self.assertIn("运行自动联动核查".encode(), response.data)
+            self.assertLess(response.data.index(b'class="quick-review"'), response.data.index(b'class="identity-details"'))
+            self.assertNotIn(b'/old/report.json', response.data)
+            self.assertEqual(registry.read_text(encoding="utf-8"), original)
+            with patch("lib_guard.workbench.run", side_effect=RuntimeError("captured")) as runner:
+                posted = create_app(registry, root / "output").test_client().post("/run", data={
+                    "id": "IP_A", "library_id": "Vendor.IP_A", "raw_version": "V50",
+                    "checks": "macro_index", "macro_root": str(version), "macro_version": "V50",
+                    "macro_library_id": "Vendor.IP_A",
+                }, follow_redirects=True)
+                self.assertEqual(posted.status_code, 200)
+                task_url = re.search(rb'data-task-url="([^"]+)"', posted.data).group(1).decode()
+                client = create_app(registry, root / "output").test_client()
+                for _ in range(100):
+                    payload = client.get(task_url).get_json()
+                    if payload["status"] in {"COMPLETE", "FAILED"}:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(payload["status"], "FAILED")
+            spec = runner.call_args.args[0]["ips"][0]["checks"]["macro_index"]
+            self.assertEqual(spec["root"], str(version))
+            self.assertNotIn("report_json", spec)
+            self.assertEqual(registry.read_text(encoding="utf-8"), original)
+
+    def test_registered_versions_offer_lef_and_liberty_file_choices(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old = root / "raw" / "V01" / "LEF" / "cell.lef"
+            new = root / "raw" / "V02" / "LEF" / "cell_new.lef"
+            lib = root / "raw" / "V02" / "LIB" / "TT" / "cell.lib.gz"
+            for path in (old, new, lib):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor.IP_A\n    raw_versions:\n"
+                f"      - {{id: V01, path: {old.parents[1]}}}\n"
+                f"      - {{id: V02, path: {new.parents[1]}}}\n"
+                "    checks: {}\n", encoding="utf-8")
+            response = create_app(registry, root / "output").test_client().get(
+                "/?ip=IP_A&tab=review&raw_version=V02&base_raw_version=V01")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(f'value="{old}"'.encode(), response.data)
+            self.assertIn(f'value="{new}"'.encode(), response.data)
+            self.assertIn(f'value="{lib}"'.encode(), response.data)
+            self.assertIn(b'data-fill-input="lef_old_file"', response.data)
+            self.assertIn(b'data-lib-file', response.data)
+
+    def test_duplicate_library_id_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: A, library_id: shared}\n  - {id: B, library_id: shared}\n", encoding="utf-8")
+            response = create_app(registry, root / "output").test_client().get("/")
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("重复 library_id".encode(), response.data)
+
+    def test_colliding_discovery_ids_cannot_be_registered(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw"
+            for relative in ("Vendor_A/foo.bar/ip/V01", "Vendor_A/foo/bar/ip/V01"):
+                path = raw / relative / "LEF"
+                path.mkdir(parents=True)
+                (path / "cell.lef").touch()
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+            response = create_app(registry, root / "output").test_client().post(
+                "/register-discovered", data={"raw_root": str(raw), "library_ids": "Vendor_A.foo.bar.ip"})
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(__import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"], [])
+
+    def test_invalid_run_does_not_change_saved_registry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            original = "ips:\n  - id: IP_A\n    library_id: Vendor.IP_A\n    checks: {}\n"
+            registry.write_text(original, encoding="utf-8")
+            response = create_app(registry, root / "output").test_client().post(
+                "/run", data={"id": "IP_A", "library_id": "Vendor.IP_A", "checks": "macro_index"})
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(registry.read_text(encoding="utf-8"), original)
+
     def test_new_ip_link_opens_blank_registration_form_without_selecting_first_ip(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -58,6 +463,51 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn(b"data-tab-group=\"main\"", response.data)
             self.assertIn(b"data-workbench-panel=\"config\"", response.data)
             self.assertIn(b"data-workbench-panel=\"history\"", response.data)
+
+    def test_catalog_distinguishes_latest_attempt_from_latest_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - {id: IP_A, library_id: vendor.ip_a, name: IP A, vendor: Vendor_A, checks: {}}\n",
+                encoding="utf-8")
+            output = root / "output"
+            from lib_guard.review_runner import _library_dir
+            library_dir = output / "libraries" / _library_dir("vendor.ip_a")
+            library_dir.mkdir(parents=True)
+            (library_dir / "latest.json").write_text(
+                '{"review_id":"review_good","execution_status":"COMPLETE"}', encoding="utf-8")
+            (library_dir / "latest_attempt.json").write_text(
+                '{"task_id":"task_123","status":"FAILED","execution_status":"FAILED"}', encoding="utf-8")
+
+            response = create_app(registry, output).test_client().get("/?ip=IP_A&tab=catalog")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("最近尝试".encode(), response.data)
+            self.assertIn("最近成功".encode(), response.data)
+            self.assertIn(b"task_123", response.data)
+            self.assertIn(b"review_good", response.data)
+
+    def test_task_status_and_check_conclusion_are_labeled_separately(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - {id: IP_A, library_id: vendor.ip_a, name: IP A, checks: {}}\n",
+                encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            library_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a")
+            library_dir.mkdir(parents=True)
+            (library_dir / "latest_attempt.json").write_text(
+                json.dumps({"task_id": "task_incomplete", "library_id": "vendor.ip_a",
+                            "status": "COMPLETE", "execution_status": "INCOMPLETE"}), encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("任务状态".encode(), response.data)
+            self.assertIn("检查结论：INCOMPLETE".encode(), response.data)
+            self.assertNotIn("最近一次尝试".encode(), response.data)
 
     def test_sidebar_exposes_vendor_library_raw_and_formal_versions_with_filters(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -174,18 +624,173 @@ class WorkbenchTests(unittest.TestCase):
                                        "checks": ["macro_index"], "macro_report_json": str(report),
                                        "publish_latest": "on"})
 
-            response = client.post("/run", data={"id": "IP_A", "library_id": "vendor.ip_a", "name": "IP A",
-                                               "checks": ["macro_index"], "macro_report_json": str(report),
-                                               "publish_latest": "on"})
+            with patch("lib_guard.review_runner.export_review_excel",
+                       side_effect=lambda model, path, scope_note: Path(path).write_bytes(b"xlsx")):
+                response = client.post("/run", data={"id": "IP_A", "library_id": "vendor.ip_a", "name": "IP A",
+                                                   "checks": ["macro_index"], "macro_report_json": str(report),
+                                                   "publish_latest": "on"}, follow_redirects=True)
 
-            self.assertEqual(response.status_code, 200)
-            self.assertIn(b"COMPLETE", response.data)
+                self.assertEqual(response.status_code, 200)
+                task_match = re.search(rb'data-task-url="([^"]+)"', response.data)
+                self.assertIsNotNone(task_match)
+                task_url = task_match.group(1).decode().replace("&amp;", "&")
+                for _ in range(100):
+                    status = client.get(task_url)
+                    payload = status.get_json()
+                    if payload["status"] in {"COMPLETE", "FAILED"}:
+                        break
+                    time.sleep(0.01)
+            self.assertEqual(payload["status"], "COMPLETE", payload)
             result = next((root / "output" / "libraries").rglob("review_result.json"))
             review_id = json.loads(result.read_text(encoding="utf-8"))["review_id"]
             download = client.get("/download", query_string={"library_id": "vendor.ip_a", "review_id": review_id})
             self.assertEqual(download.status_code, 200)
             self.assertEqual(download.mimetype, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             download.close()
+
+    def test_failed_attempt_is_visible_without_replacing_last_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, checks: {}}\n", encoding="utf-8")
+            output = root / "output"
+            from lib_guard.review_runner import _library_dir
+            library_dir = output / "libraries" / _library_dir("vendor.ip_a")
+            library_dir.mkdir(parents=True)
+            success_pointer = '{"review_id":"review_old","execution_status":"COMPLETE"}\n'
+            (library_dir / "latest.json").write_text(success_pointer, encoding="utf-8")
+            app = create_app(registry, output)
+            client = app.test_client()
+            with patch("lib_guard.workbench.run", side_effect=RuntimeError("controlled failure")):
+                response = client.post("/run", data={
+                    "id": "IP_A", "library_id": "vendor.ip_a", "checks": ["macro_index"],
+                    "macro_report_json": str(root / "existing.json"),
+                }, follow_redirects=True)
+                task_match = re.search(rb'data-task-url="([^"]+)"', response.data)
+                self.assertIsNotNone(task_match)
+                task_url = task_match.group(1).decode().replace("&amp;", "&")
+                task_id = re.search(r"task_([0-9a-f]{32})", task_url).group(0)
+                for _ in range(100):
+                    payload = client.get(task_url).get_json()
+                    if payload["status"] in {"COMPLETE", "FAILED"}:
+                        break
+                    time.sleep(0.01)
+            self.assertEqual(payload["status"], "FAILED")
+            self.assertEqual(payload["error"], "controlled failure")
+            self.assertEqual((library_dir / "latest.json").read_text(encoding="utf-8"), success_pointer)
+            latest_attempt = json.loads((library_dir / "latest_attempt.json").read_text(encoding="utf-8"))
+            self.assertEqual(latest_attempt["task_id"], task_id)
+            self.assertEqual(latest_attempt["status"], "FAILED")
+
+    def test_two_review_jobs_can_run_concurrently(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - {id: IP_A, library_id: vendor.ip_a, checks: {}}\n"
+                "  - {id: IP_B, library_id: vendor.ip_b, checks: {}}\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            barrier = Barrier(2)
+
+            def concurrent_run(config, output):
+                barrier.wait(timeout=3)
+                entry = config["ips"][0]
+                return ([{"review_id": f"review_{entry['id']}", "execution_status": "COMPLETE", "summary": {}}], {})
+
+            task_urls = []
+            with patch("lib_guard.workbench.run", side_effect=concurrent_run):
+                for ip_id, library_id in (("IP_A", "vendor.ip_a"), ("IP_B", "vendor.ip_b")):
+                    response = client.post("/run", data={
+                        "id": ip_id, "library_id": library_id, "checks": ["macro_index"],
+                        "macro_report_json": str(root / "existing.json"),
+                    }, follow_redirects=True)
+                    self.assertEqual(response.status_code, 200)
+                    task_urls.append(re.search(rb'data-task-url="([^"]+)"', response.data).group(1).decode())
+                tasks = []
+                for task_url in task_urls:
+                    for _ in range(100):
+                        task = client.get(task_url).get_json()
+                        if task["status"] in {"COMPLETE", "FAILED"}:
+                            break
+                        time.sleep(0.01)
+                    tasks.append(task)
+            self.assertEqual([task["status"] for task in tasks], ["COMPLETE", "COMPLETE"])
+
+    def test_same_ip_cannot_run_concurrent_jobs_that_race_latest_pointer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, checks: {}}\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            started = __import__("threading").Event()
+            release = __import__("threading").Event()
+
+            def slow_run(config, output):
+                started.set()
+                release.wait(timeout=3)
+                return ([{"review_id": "review_one", "execution_status": "COMPLETE", "summary": {}}], {})
+
+            with patch("lib_guard.workbench.run", side_effect=slow_run):
+                first = client.post("/run", data={
+                    "id": "IP_A", "library_id": "vendor.ip_a", "checks": ["macro_index"],
+                    "macro_report_json": str(root / "existing.json"), "publish_latest": "on",
+                }, follow_redirects=True)
+                self.assertEqual(first.status_code, 200)
+                self.assertTrue(started.wait(timeout=1))
+                second = client.post("/run", data={
+                    "id": "IP_A", "library_id": "vendor.ip_a", "checks": ["macro_index"],
+                    "macro_report_json": str(root / "existing.json"), "publish_latest": "on",
+                })
+                release.set()
+                task_url = re.search(rb'data-task-url="([^"]+)"', first.data).group(1).decode()
+                for _ in range(100):
+                    task = client.get(task_url).get_json()
+                    if task["status"] in {"COMPLETE", "FAILED"}:
+                        break
+                    time.sleep(0.01)
+
+            self.assertEqual(second.status_code, 409)
+            self.assertIn("该 IP 已有检查任务正在".encode(), second.data)
+
+    def test_review_queue_rejects_submission_when_bounded_capacity_is_full(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            with patch("lib_guard.workbench._REVIEW_TASK_SLOTS.acquire", return_value=False):
+                response = client.post("/run", data={
+                    "id": "IP_A", "library_id": "vendor.ip_a", "checks": ["macro_index"],
+                    "macro_report_json": str(root / "existing.json"),
+                })
+            self.assertEqual(response.status_code, 429)
+            self.assertIn("队列已满".encode(), response.data)
+            self.assertFalse((root / "output" / "libraries").exists())
+
+    def test_task_from_previous_workbench_process_becomes_interrupted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+            output = root / "output"
+            from lib_guard.review_runner import _library_dir
+            library_dir = output / "libraries" / _library_dir("vendor.ip_a")
+            task_id = "task_" + "a" * 32
+            task_path = library_dir / "tasks" / f"{task_id}.json"
+            old_task = {"task_id": task_id, "library_id": "vendor.ip_a", "status": "RUNNING",
+                        "execution_status": "PENDING", "worker_session": "previous-process"}
+            task_path.parent.mkdir(parents=True)
+            task_path.write_text(json.dumps(old_task), encoding="utf-8")
+            (library_dir / "latest_attempt.json").write_text(json.dumps(old_task), encoding="utf-8")
+
+            response = create_app(registry, output).test_client().get(
+                f"/tasks/{task_id}?library_id=vendor.ip_a")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["status"], "INTERRUPTED")
+            self.assertIn("进程重启", payload["error"])
+            self.assertEqual(json.loads(task_path.read_text(encoding="utf-8"))["status"], "INTERRUPTED")
 
     def test_unknown_ip_cannot_download_artifact(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -212,8 +817,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
             self.assertIn("缺少所需路径".encode(), response.data)
             saved = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
-            self.assertEqual(saved["ips"][0]["id"], "IP_A")
-            self.assertIn("macro_index", saved["ips"][0]["checks"])
+            self.assertEqual(saved["ips"], [])
 
     def test_browser_cannot_save_unsupported_governance_check(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -250,10 +854,17 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn("分组路径".encode(), response.data)
             self.assertIn(b"library_discovery.json", response.data)
             self.assertEqual(__import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"], [])
-            for artifact in ("library.list", "library_discovery.json", "library_discovery.html"):
+            self.assertTrue((root / "output" / "discovery" / "library_discovery.json").exists())
+            self.assertFalse((root / "output" / "discovery" / "library.list").exists())
+            for artifact in ("library_discovery.json", "library_discovery.html"):
                 downloaded = app.test_client().get(f"/discovery-artifact/{artifact}")
                 self.assertEqual(downloaded.status_code, 200)
                 downloaded.close()
+                if artifact.endswith(".html"):
+                    self.assertFalse((root / "output" / "discovery" / "library.list").exists())
+            listed = app.test_client().get("/discovery-artifact/library.list")
+            self.assertEqual(listed.status_code, 200)
+            listed.close()
 
     def test_register_discovered_library_persists_all_versions_and_refresh_keeps_checks(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -292,6 +903,85 @@ class WorkbenchTests(unittest.TestCase):
             updated = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
             self.assertEqual([item["id"] for item in updated["raw_versions"]], ["V01", "V02", "V03"])
             self.assertEqual(updated["checks"]["macro_index"]["root"], "/kept/input")
+
+    def test_discovery_supports_single_row_registration_and_catalog_edit_remove_actions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw"
+            version = raw / "Vendor_A" / "phy_ip" / "V01" / "LEF"
+            version.mkdir(parents=True)
+            (version / "phy.lef").touch()
+            lib = raw / "Vendor_A" / "phy_ip" / "V01" / "LIB" / "TT" / "phy.lib"
+            lib.parent.mkdir(parents=True)
+            lib.touch()
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+
+            discovered = client.post("/discover", data={"raw_root": str(raw)})
+            self.assertEqual(discovered.status_code, 200)
+            self.assertIn("未登记".encode(), discovered.data)
+            self.assertIn(b'name="register_one"', discovered.data)
+            self.assertIn("全选当前结果".encode(), discovered.data)
+            self.assertNotIn("库候选".encode(), discovered.data)
+
+            registered = client.post("/register-discovered", data={
+                "raw_root": str(raw), "register_one": "Vendor_A.phy_ip"
+            })
+            self.assertEqual(registered.status_code, 200)
+            data = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
+            self.assertEqual([entry["library_id"] for entry in data["ips"]], ["Vendor_A.phy_ip"])
+            entry_id = data["ips"][0]["id"]
+            refreshed_view = client.post("/discover", data={"raw_root": str(raw)})
+            self.assertIn("已登记".encode(), refreshed_view.data)
+            self.assertIn("更新登记".encode(), refreshed_view.data)
+            catalog = client.get("/")
+            self.assertIn("修改登记".encode(), catalog.data)
+            self.assertIn("移除登记".encode(), catalog.data)
+            review = client.get(f"/?ip={entry_id}&tab=review&raw_version=V01")
+            self.assertIn(b"data-check-select-all", review.data)
+            self.assertIn(b"data-lib-search", review.data)
+
+            edited = client.post("/save", data={
+                "id": entry_id, "library_id": "Vendor_A.phy_ip", "name": "renamed display",
+                "vendor": "Vendor_A", "middle_path": "group/subgroup", "library_name": "phy_ip",
+            })
+            self.assertEqual(edited.status_code, 200)
+            saved = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
+            self.assertEqual(saved["name"], "renamed display")
+            self.assertEqual(saved["middle_path"], "group/subgroup")
+            self.assertEqual(saved["raw_versions"][0]["path"], str(raw / "Vendor_A" / "phy_ip" / "V01"))
+
+            history = root / "output" / "libraries" / "Vendor_A.phy_ip" / "runs" / "old"
+            history.mkdir(parents=True)
+            marker = history / "review_result.json"
+            marker.write_text("{}", encoding="utf-8")
+            removed = client.post("/unregister", data={"id": entry_id})
+            self.assertEqual(removed.status_code, 200)
+            self.assertEqual(__import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"], [])
+            self.assertTrue((raw / "Vendor_A" / "phy_ip" / "V01" / "LEF" / "phy.lef").exists())
+            self.assertTrue(marker.exists())
+
+    def test_discovery_filter_and_multiselect_controls_are_scoped(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw"
+            version = raw / "Vendor_A" / "phy_ip" / "V01" / "LEF"
+            version.mkdir(parents=True)
+            (version / "phy.lef").touch()
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            response = client.post("/discover", data={"raw_root": str(raw)})
+            self.assertEqual(response.status_code, 200)
+            for control in (b"data-discovery-search", b"data-discovery-vendor",
+                            b"data-discovery-view", b"data-discovery-state",
+                            b"data-select-visible", b"data-clear-visible"):
+                self.assertIn(control, response.data)
+            script = client.get("/static/workbench.js")
+            self.assertIn(b"data-select-visible", script.data)
+            self.assertIn(b"data-lib-search", script.data)
+            script.close()
 
     def test_register_discovered_keeps_middle_path_as_catalog_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -424,11 +1114,29 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn(b'class="sidebar-version formal-version"', response.data)
             latest_path = next(output.glob("formal_nl/*/latest.json"))
             latest = json.loads(latest_path.read_text(encoding="utf-8"))
+            browse_pointer = latest_path.read_bytes()
             report_path = Path(latest["report_json"])
             self.assertTrue(report_path.is_file())
             self.assertTrue(report_path.is_relative_to(output))
             report_json = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual(report_json["inventories"]["lib_NL2.5_3"]["view_counts"]["lef"], 2)
+            self.assertEqual(latest["discovery_status"], "DISCOVERED")
+            self.assertEqual(latest["report_status"], "INCOMPLETE")
+            self.assertFalse((latest_path.parent / "latest_check.json").exists())
+            stage_response = client.post("/formal-nl", data={"id": "IP_A", "formal_nl_root": str(formal_root),
+                                                             "formal_stage": "lib_NL2.5_3"})
+            self.assertEqual(stage_response.status_code, 200, stage_response.get_data(as_text=True))
+            self.assertEqual(latest_path.read_bytes(), browse_pointer)
+            stage_reports = [json.loads(path.read_text(encoding="utf-8"))
+                             for path in (latest_path.parent / "runs").glob("*/formal_nl.json")]
+            stage_report = next(item for item in stage_reports if item["formal_scope"] == "SINGLE_STAGE")
+            self.assertEqual(stage_report["report_status"], "COMPLETE")
+            check_pointer = latest_path.parent / "latest_check.json"
+            self.assertEqual(check_pointer.exists(), stage_report["report_status"] == "COMPLETE")
+            review = client.get("/?ip=IP_A&tab=review&formal_stage=lib_NL2.5_3")
+            self.assertEqual(review.status_code, 200)
+            self.assertIn(b'name="formal_stage" value="lib_NL2.5_3"', review.data)
+            self.assertIn(json.loads(check_pointer.read_text(encoding="utf-8"))["report_json"].encode(), review.data)
             for link, target in symlinks:
                 self.assertTrue(link.is_symlink())
                 self.assertEqual(link.resolve(), target)

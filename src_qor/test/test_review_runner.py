@@ -5,7 +5,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 from unittest.mock import patch
 
-from lib_guard.review_runner import _qa_rows, _review_summary, build_workbook_model, run, run_review
+from lib_guard.review_runner import _qa_rows, _review_summary, _write_latest_if_newer, build_workbook_model, run, run_review
 from lib_guard.lef_liberty_check import analyze_many
 from lib_guard.export_review_excel import export_review_excel
 
@@ -46,6 +46,26 @@ def review(ip_id, macro_name, source_path):
 
 
 class ReviewRunnerTests(unittest.TestCase):
+    def test_latest_pointer_never_moves_back_to_an_older_result(self):
+        with tempfile.TemporaryDirectory() as temp:
+            latest = Path(temp) / "latest.json"
+            newer = {"review_id": "review_new", "generated_at": "2026-10-24T12:00:00+00:00"}
+            older = {"review_id": "review_old", "generated_at": "2026-10-24T11:00:00+00:00"}
+
+            self.assertTrue(_write_latest_if_newer(latest, newer))
+            self.assertFalse(_write_latest_if_newer(latest, older))
+            self.assertEqual(__import__("json").loads(latest.read_text())["review_id"], "review_new")
+
+    def test_latest_pointer_rejects_result_without_valid_generated_time(self):
+        with tempfile.TemporaryDirectory() as temp:
+            latest = Path(temp) / "latest.json"
+            current = {"review_id": "review_new", "generated_at": "2026-10-24T12:00:00+00:00"}
+            unordered = {"review_id": "review_unordered"}
+
+            self.assertTrue(_write_latest_if_newer(latest, current))
+            self.assertFalse(_write_latest_if_newer(latest, unordered))
+            self.assertEqual(__import__("json").loads(latest.read_text())["review_id"], "review_new")
+
     def test_summary_counts_unmatched_macro_objects_and_broken_links_by_kind(self):
         item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
         item["checks"]["formal_nl"]["result"]["broken_links"] = ["/formal/LEF/broken.lef"]
@@ -318,8 +338,43 @@ class ReviewRunnerTests(unittest.TestCase):
 
             result = run_review(config, root / "output")[0]
 
-            self.assertEqual(result["checks"]["lef_liberty_check"]["status"], "COMPLETE")
+            self.assertEqual(result["checks"]["lef_liberty_check"]["status"], "COMPLETE",
+                             result["checks"]["lef_liberty_check"])
             self.assertTrue((Path(result["run_dir"]) / "evidence" / "lef_review" / "lef_analysis.json").is_file())
+
+    def test_runner_builds_target_lef_snapshot_for_single_version_linked_check(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lef_path = root / "raw" / "V1" / "LEF" / "top.lef"
+            liberty_path = root / "raw" / "V1" / "LIB" / "TT" / "top.lib"
+            lef_path.parent.mkdir(parents=True)
+            liberty_path.parent.mkdir(parents=True)
+            lef_path.write_text("MACRO TOP\nEND TOP\n", encoding="utf-8")
+            liberty_path.write_text("library (TT) {}", encoding="utf-8")
+            snapshot = {
+                "schema_version": "lef_analysis.v1",
+                "sources": {"new": {"path": str(lef_path), "sha256": "a" * 64}},
+                "extraction": {"new": {"data": {"macros": {}}}},
+                "statistics": {"new": {"macro_count": 0}},
+            }
+            config = {"_config_path": str(root / "config.yml"), "ips": [{
+                "id": "IP_A", "library_id": "vendor.ip_a", "raw_version": "V1",
+                "checks": {"lef_liberty_check": {"lef_file": str(lef_path),
+                                                    "liberty_files": [str(liberty_path)]}},
+            }]}
+            cross_view = {"schema_version": "lef_liberty_batch.v1", "lef_source": snapshot["sources"]["new"],
+                          "files": [], "summary": {"liberty_file_count": 1}}
+
+            with patch("lib_guard.review_runner.lef_review.analyze", return_value=snapshot) as lef_analyze, \
+                    patch("lib_guard.review_runner.lef_liberty_check.analyze_many", return_value=cross_view) as check, \
+                    patch("lib_guard.review_runner.lef_liberty_check.render_markdown", return_value="test report"):
+                result = run_review(config, root / "output")[0]
+
+            self.assertEqual(result["checks"]["lef_liberty_check"]["status"], "COMPLETE",
+                             result["checks"]["lef_liberty_check"])
+            lef_analyze.assert_called_once_with(lef_path.resolve(), lef_path.resolve())
+            self.assertTrue((Path(result["run_dir"]) / "evidence" / "lef_liberty_check" / "lef_snapshot.json").is_file())
+            self.assertEqual(check.call_args.args[1], [liberty_path.resolve()])
 
     def test_runner_rejects_cross_view_report_from_another_lef_source(self):
         with tempfile.TemporaryDirectory() as temp:
