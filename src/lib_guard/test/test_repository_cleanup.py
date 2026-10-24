@@ -297,6 +297,7 @@ class RepositoryCleanupTest(unittest.TestCase):
             "web_console_checklist.md",
             "web_workspace_checklist.md",
             "release_result_checklist.md",
+            "quality_check_matrix_20261023.md",
         }
         actual = {path.name for path in (ROOT / "docs").glob("*.md")}
         self.assertEqual(expected, actual)
@@ -308,6 +309,7 @@ class RepositoryCleanupTest(unittest.TestCase):
         self.assertIn("version_detail_evaluation.md", index)
         self.assertIn("artifact_output_checklist.md", index)
         self.assertIn("web_console_checklist.md", index)
+        self.assertIn("quality_check_matrix_20261023.md", index)
 
     def test_current_tests_are_not_v5_named(self) -> None:
         stale = sorted((ROOT / "src" / "lib_guard" / "test").glob("test_v5_*.py"))

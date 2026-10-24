@@ -24,6 +24,7 @@ CLI 参考负责命令契约，配置参考负责可修改项，数据契约负�
 - [Web 控制台验收清单](web_console_checklist.md)
 - [Web 工作区与阻塞检查](web_workspace_checklist.md)
 - [发布结果核查清单](release_result_checklist.md)
+- [第三方 IP 入库与正式 NL 目录检查矩阵](quality_check_matrix_20261023.md)
 - [CLI 参考](cli_reference.md)
 - [配置参考](config_reference.md)
 - [数据契约](data_contract.md)

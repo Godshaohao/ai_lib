@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IP 工程检查工作台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='workbench.css', v='20261024.2') }}">
+  <script src="{{ url_for('static', filename='workbench.js', v='20261024.2') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到工作区</a>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('ip_review.index', ip=selected.id if selected else '') }}" aria-label="IP 工程检查首页">
+      <span class="brand-mark">IP</span><span><strong>工程检查</strong><small>本机工作台</small></span>
+    </a>
+    <div class="topbar-status"><span class="status-dot"></span>独立服务 · 配置保存在 IP 清单</div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="ip-rail" aria-label="IP 清单">
+      <div class="rail-head"><div><h1>检查对象</h1><p>{{ ips|length }} 个 IP</p></div><a class="icon-button" href="{{ url_for('ip_review.index', new=1) }}" title="登记 IP" aria-label="登记 IP">＋</a></div>
+      <label class="search-box"><span aria-hidden="true">⌕</span><input type="search" data-ip-search placeholder="筛选 IP" aria-label="筛选 IP"></label>
+      <nav class="ip-list" data-ip-list>
+        {% for ip in ips %}
+        <a class="ip-item {{ 'is-selected' if selected and ip.id == selected.id else '' }}" data-ip-name="{{ (ip.name or ip.id)|lower }} {{ ip.library_id|lower }}" href="{{ url_for('ip_review.index', ip=ip.id) }}" {{ 'aria-current=page' if selected and ip.id == selected.id else '' }}>
+          <span class="ip-item-mark">{{ (ip.name or ip.id)[:1]|upper }}</span><span class="ip-item-copy"><strong>{{ ip.name or ip.id }}</strong><small>{{ ip.library_id }}</small></span>
+        </a>
+        {% else %}<p class="empty-state">还没有 IP。使用右侧表单登记第一个检查对象。</p>{% endfor %}
+      </nav>
+      <div class="rail-foot"><span class="status-dot"></span>仅监听本机回环地址</div>
+    </aside>
+
+    <main id="main" class="main-area" tabindex="-1">
+      <div class="page-heading">
+        <div><p class="eyebrow">IP REVIEW</p><h2>{{ selected.name or '登记 IP' }}</h2><p class="subheading">配置并运行所需检查；每个 IP 的结果独立保存。</p></div>
+        {% if latest.review_id %}<div class="latest-chip"><span>最近成功</span><strong>{{ latest.review_id }}</strong></div>{% else %}<div class="latest-chip is-empty"><span>运行状态</span><strong>尚无成功记录</strong></div>{% endif %}
+      </div>
+
+      {% if message %}<div class="notice" role="status">{{ message }}</div>{% endif %}
+      {% if error %}<div class="notice is-error" role="alert">{{ error }}</div>{% endif %}
+
+      <nav class="view-tabs" role="tablist" aria-label="IP 工作区">
+        <button type="button" role="tab" id="tab-config" aria-controls="panel-config" aria-selected="true" data-workbench-tab="config">检查配置</button>
+        <button type="button" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="false" data-workbench-tab="history">运行记录 <span>{{ history|length }}</span></button>
+      </nav>
+
+      <section id="panel-config" class="tab-panel" role="tabpanel" aria-labelledby="tab-config" data-workbench-panel="config">
+        {% if run_record %}<section class="result-strip"><div><span class="eyebrow">本次运行</span><strong>{{ run_record.execution_status }}</strong><small>{{ run_record.review_id }}</small></div><a class="button button-secondary" href="{{ url_for('ip_review.download', library_id=run_record.ip.library_id, review_id=run_record.review_id) }}">下载 Excel</a></section>{% endif %}
+        <section class="panel config-panel">
+          <div class="panel-head"><div><h3>检查内容</h3><p>勾选要运行的检查，再填写对应输入。未勾选的检查不会执行。</p></div></div>
+          <form method="post" action="{{ url_for('ip_review.run_selected') }}" data-review-form>
+            <div class="identity-grid">
+              <label>IP 标识<input name="id" value="{{ selected.id or '' }}" required></label>
+              <label>库标识<input name="library_id" value="{{ selected.library_id or '' }}" required></label>
+              <label>显示名称<input name="name" value="{{ selected.name or '' }}"></label>
+              <label>RAW 版本<input name="raw_version" value="{{ selected.raw_version or '' }}" placeholder="可留空"></label>
+              <label>正式阶段<input name="formal_stage" value="{{ selected.formal_stage or '' }}" placeholder="可留空"></label>
+              <label class="check-option latest-option"><input type="checkbox" name="publish_latest" {{ 'checked' if selected.publish_latest else '' }}><span><strong>运行成功后更新最近记录</strong><small>失败时保留上次成功记录</small></span></label>
+            </div>
+
+            {% set saved_checks = selected.get('checks', {}) %}
+            <div class="check-list">
+              <details class="check-card" data-check-card {{ 'open' if saved_checks.get('formal_nl') is not none else '' }}>
+                <summary><input type="checkbox" name="checks" value="formal_nl" {{ 'checked' if saved_checks.get('formal_nl') is not none else '' }}><span class="check-card-title"><strong>正式目录盘点</strong><small>统计正式 NL 链接、RAW 来源和 View 文件分布</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
+                {% set spec = saved_checks.get('formal_nl', {}) %}<div class="check-fields"><label>盘点配置文件<input name="formal_config" value="{{ spec.get('config','') }}" placeholder="/path/to/formal_nl.yml"></label><label>已有盘点报告<input name="formal_report_json" value="{{ spec.get('report_json','') }}" placeholder="可复用现有 JSON"></label></div>
+              </details>
+              <details class="check-card" data-check-card {{ 'open' if saved_checks.get('macro_index') is not none else '' }}>
+                <summary><input type="checkbox" name="checks" value="macro_index" {{ 'checked' if saved_checks.get('macro_index') is not none else '' }}><span class="check-card-title"><strong>Macro / View 文件索引</strong><small>按 Macro 汇总 LEF、Liberty、Verilog 等文件证据</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
+                {% set spec = saved_checks.get('macro_index', {}) %}<div class="check-fields"><label>RAW 或文件根目录<input name="macro_root" value="{{ spec.get('root','') }}"></label><label>已有索引报告<input name="macro_report_json" value="{{ spec.get('report_json','') }}"></label><label>已有 FileMap<input name="macro_filemap_json" value="{{ spec.get('filemap_json','') }}"></label><label>Parser Facts<input name="macro_parser_facts_json" value="{{ spec.get('parser_facts_json','') }}"></label><label>来源版本<input name="macro_version" value="{{ spec.get('version','') }}"></label><label>库标识覆盖<input name="macro_library_id" value="{{ spec.get('library_id','') }}"></label></div>
+              </details>
+              <details class="check-card" data-check-card {{ 'open' if saved_checks.get('lef_review') is not none else '' }}>
+                <summary><input type="checkbox" name="checks" value="lef_review" {{ 'checked' if saved_checks.get('lef_review') is not none else '' }}><span class="check-card-title"><strong>LEF 双文件核查</strong><small>对比两份 LEF 的 Macro、Pin、尺寸与几何事实</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
+                {% set spec = saved_checks.get('lef_review', {}) %}<div class="check-fields"><label>基准 LEF<input name="lef_old_file" value="{{ spec.get('old_file','') }}"></label><label>目标 LEF<input name="lef_new_file" value="{{ spec.get('new_file','') }}"></label><label>已有核查报告<input name="lef_report_json" value="{{ spec.get('report_json','') }}"></label></div>
+              </details>
+              <details class="check-card" data-check-card {{ 'open' if saved_checks.get('lef_liberty_check') is not none else '' }}>
+                <summary><input type="checkbox" name="checks" value="lef_liberty_check" {{ 'checked' if saved_checks.get('lef_liberty_check') is not none else '' }}><span class="check-card-title"><strong>LEF–Liberty 接口核查</strong><small>逐个 Liberty 文件核对 Cell 与 LEF Macro、Pin 及电源脚</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
+                {% set spec = saved_checks.get('lef_liberty_check', {}) %}<div class="check-fields"><label class="span-two">Liberty 文件（每行一个）<textarea name="ll_liberty_files">{{ '\n'.join(spec.get('liberty_files', [])) }}</textarea></label><label>已有联动报告<input name="ll_report_json" value="{{ spec.get('report_json','') }}"></label><label>LEF 核查报告 JSON<input name="ll_lef_analysis_json" value="{{ spec.get('lef_analysis_json','') }}"></label><label>LEF 所属库标识<input name="ll_lef_library_id" value="{{ spec.get('lef_library_id','') }}"></label><label class="check-option"><input type="checkbox" name="ll_include_matching_cells" {{ 'checked' if spec.get('include_matching_cells', True) else '' }}><span><strong>Excel 导出匹配 Cell 明细</strong></span></label></div>
+                <p class="check-footnote">也可以同时勾选 LEF 双文件核查，自动复用本次 LEF 结果。</p>
+              </details>
+            </div>
+            <div class="form-actions"><button class="button button-primary" type="submit">运行所选检查</button><button class="button button-secondary" type="submit" formaction="{{ url_for('ip_review.save') }}">保存配置</button><span>同步执行；检查耗时取决于输入文件规模。</span></div>
+          </form>
+        </section>
+      </section>
+
+      <section id="panel-history" class="tab-panel" role="tabpanel" aria-labelledby="tab-history" data-workbench-panel="history" hidden>
+        <section class="panel history-panel"><div class="panel-head"><div><h3>运行记录</h3><p>只显示当前 IP 的最近 10 次结果；不同 IP 不合并。</p></div></div>
+          {% if history %}<div class="table-wrap"><table><thead><tr><th>生成时间</th><th>执行状态</th><th>检查项</th><th>已确认变化</th><th>不一致</th><th>待核实</th><th></th></tr></thead><tbody>{% for record in history %}<tr><td>{{ record.generated_at or '' }}</td><td><span class="result-state">{{ record.execution_status }}</span></td><td>{{ record.requested_checks|join('、') }}</td><td>{{ record.summary.confirmed_changes or 0 }}</td><td>{{ record.summary.confirmed_mismatches or 0 }}</td><td>{{ record.summary.unverified or 0 }}</td><td><a class="table-link" href="{{ record.workbook_url }}">下载 Excel</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-history"><span class="empty-mark">—</span><strong>暂无运行记录</strong><p>运行检查后，结果和单 IP Excel 会出现在这里。</p><button type="button" class="button button-secondary" data-open-config>配置检查</button></div>{% endif %}
+        </section>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

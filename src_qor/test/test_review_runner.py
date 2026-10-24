@@ -3,8 +3,9 @@ import unittest
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
+from unittest.mock import patch
 
-from lib_guard.review_runner import build_workbook_model, run, run_review
+from lib_guard.review_runner import _qa_rows, _review_summary, build_workbook_model, run, run_review
 from lib_guard.lef_liberty_check import analyze_many
 from lib_guard.export_review_excel import export_review_excel
 
@@ -45,6 +46,76 @@ def review(ip_id, macro_name, source_path):
 
 
 class ReviewRunnerTests(unittest.TestCase):
+    def test_summary_counts_unmatched_macro_objects_and_broken_links_by_kind(self):
+        item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
+        item["checks"]["formal_nl"]["result"]["broken_links"] = ["/formal/LEF/broken.lef"]
+        item["checks"]["macro_index"]["result"]["macro_index"]["unmatched_objects"] = {
+            "liberty": [{"name": f"CELL_{index}", "file": "/raw/a/lib/a.lib"} for index in range(3)]
+        }
+
+        summary = _review_summary(item)
+
+        self.assertEqual(summary["counts"]["MISMATCH"]["affected_objects"], 1)
+        self.assertEqual(summary["counts"]["UNVERIFIED"]["affected_objects"], 3)
+        self.assertEqual(summary["counts"]["UNVERIFIED"]["finding_records"], 1)
+
+    def test_failed_formal_check_does_not_answer_inventory_is_empty(self):
+        item = {"ip": {"id": "IP_A"}, "checks": {"formal_nl": {
+            "selected": True, "status": "FAILED", "error": "Permission denied", "result": {}
+        }}}
+
+        rows = _qa_rows(item)
+
+        self.assertEqual(len(rows), 1)
+        self.assertIn("未生成", rows[0]["回答"])
+        self.assertNotIn("清单为空", rows[0]["回答"])
+
+    def test_run_records_mixed_explicit_raw_versions_without_merging_them(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            report = root / "macro.json"
+            report.write_text(__import__("json").dumps({
+                "filemap": {"context": {"source": "/raw/V1"}, "files": [
+                    {"view": "lef", "source_path": "/raw/V1/LEF/a.lef", "source_version": "V1"}
+                ]},
+                "macro_index": {"baseline": {"macro_count": 1}, "macros": {"A": {}}},
+            }), encoding="utf-8")
+            config = {"_config_path": str(root / "config.yml"), "ips": [{
+                "id": "IP_A", "library_id": "vendor/ip_a", "raw_version": "V2",
+                "checks": {"macro_index": {"report_json": str(report)}}
+            }]}
+
+            result = run_review(config, root / "output")[0]
+
+            self.assertEqual(result["context_alignment"], "MIXED_EXPLICIT")
+            identity = result["checks"]["macro_index"]["input_identity"]
+            self.assertEqual(identity["source_versions"], ["V1"])
+            self.assertEqual(result["context"]["target_raw_versions"], ["V2"])
+
+            run(config, root / "published")
+            record = __import__("json").loads(next((root / "published").rglob("review_result.json")).read_text())
+            self.assertEqual(record["context_alignment"], "MIXED_EXPLICIT")
+            self.assertEqual(record["checks"]["macro_index"]["input_identity"]["source_versions"], ["V1"])
+
+    def test_failed_workbook_export_does_not_publish_result_or_replace_latest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            report = root / "macro.json"
+            report.write_text('{"status":"COMPLETE","macro_index":{"macros":{}}}', encoding="utf-8")
+            config = {"ips": [{"id": "IP_A", "library_id": "vendor/ip_a", "publish_latest": True,
+                               "checks": {"macro_index": {"report_json": str(report)}}}]}
+            run(config, root / "output")
+            latest_path = next((root / "output" / "libraries").glob("*/latest.json"))
+            old_latest = __import__("json").loads(latest_path.read_text(encoding="utf-8"))
+
+            with patch("lib_guard.review_runner.export_review_excel", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    run(config, root / "output")
+
+            self.assertEqual(__import__("json").loads(latest_path.read_text(encoding="utf-8")), old_latest)
+            records = list(latest_path.parent.glob("runs/*/review_result.json"))
+            self.assertEqual(len(records), 1)
+
     def test_run_writes_one_workbook_per_library_id_and_preserves_ip_identity(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -77,7 +148,8 @@ class ReviewRunnerTests(unittest.TestCase):
                 with zipfile.ZipFile(result_file.parent / "ip_review.xlsx") as archive:
                     workbook = ET.fromstring(archive.read("xl/workbook.xml"))
                     self.assertEqual([item.attrib["name"] for item in workbook.findall(".//{*}sheet")],
-                                     ["00-概览", "01-检查项", "02-问答", "03-关注项", "04-MacroView"])
+                                     ["00-概览", "01-工程检查", "02-执行记录", "03-问答", "04-关注项",
+                                      "05-MacroView", "06-MacroView文件"])
             self.assertFalse((root / "output" / "ai_lib_IP检查结果.xlsx").exists())
             self.assertFalse(any((root / "output" / "libraries").glob("*/latest.json")))
             self.assertTrue((root / "output" / "ip_checks" / "index.html").is_file())
@@ -106,6 +178,25 @@ class ReviewRunnerTests(unittest.TestCase):
             latest_after_failure = __import__("json").loads(pointer.read_text(encoding="utf-8"))
             self.assertEqual(latest_after_failure["review_id"], previous_review_id)
 
+    def test_persistent_overview_keeps_registered_ips_when_running_a_subset(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            report = root / "macro.json"
+            report.write_text('{"status":"COMPLETE","macro_index":{"macros":{}}}', encoding="utf-8")
+            ip_a = {"id": "IP_A", "library_id": "vendor/ip_a", "publish_latest": True,
+                    "checks": {"macro_index": {"report_json": str(report)}}}
+            ip_b = {"id": "IP_B", "library_id": "vendor/ip_b", "publish_latest": True,
+                    "checks": {"macro_index": {"report_json": str(report)}}}
+            output = root / "output"
+            run({"ips": [ip_a, ip_b]}, output)
+
+            run({"ips": [ip_a], "registry_ips": [ip_a, ip_b]}, output)
+
+            page = (output / "ip_checks" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("IP_A", page)
+            self.assertIn("IP_B", page)
+            self.assertIn("最近成功", page)
+
     def test_duplicate_library_id_in_one_run_is_rejected_to_prevent_mixing_contexts(self):
         with tempfile.TemporaryDirectory() as temp:
             report = Path(temp) / "macro.json"
@@ -125,23 +216,44 @@ class ReviewRunnerTests(unittest.TestCase):
             review("IP_B", "MACRO_B", "/raw/b/LEF/a.lef"),
         ])
 
-        ip_ids = {row["IP"] for row in model["04-MacroView"]}
+        ip_ids = {row["IP"] for row in model["05-MacroView"]}
         self.assertEqual(ip_ids, {"IP_A", "IP_B"})
-        self.assertEqual({row["Macro"] for row in model["04-MacroView"]}, {"MACRO_A", "MACRO_B"})
-        self.assertEqual({row["来源路径"] for row in model["05-正式文件"]}, {"/raw/a/LEF/a.lef", "/raw/b/LEF/a.lef"})
-        self.assertTrue(any("观察到" in row["回答"] for row in model["02-问答"]))
-        self.assertFalse(any("必需" in row["回答"] for row in model["02-问答"]))
-        self.assertNotIn("07-Liberty角", model)
-        self.assertNotIn("08-Liberty单元", model)
+        self.assertEqual({row["Macro"] for row in model["05-MacroView"]}, {"MACRO_A", "MACRO_B"})
+        self.assertEqual({row["来源路径"] for row in model["07-正式文件"]}, {"/raw/a/LEF/a.lef", "/raw/b/LEF/a.lef"})
+        self.assertTrue(any("观察到" in row["回答"] for row in model["03-问答"]))
+        self.assertFalse(any("必需" in row["回答"] for row in model["03-问答"]))
+        self.assertNotIn("09-Liberty角", model)
+        self.assertNotIn("10-Liberty单元", model)
+
+    def test_macro_file_mapping_and_ten_engineering_topics_are_filterable_rows(self):
+        item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
+        item["checks"]["macro_index"]["result"]["macro_index"]["macros"]["MACRO_A"]["liberty"] = [
+            {"view": "liberty", "file": "lib/tt.lib.gz", "source_path": "/raw/V2/lib/tt.lib.gz",
+             "source_version": "V2", "corner": "TT", "evidence": "PARSED_OBJECT", "match_basis": "EXACT_OBJECT_NAME"}
+        ]
+
+        model = build_workbook_model([item])
+
+        self.assertEqual(len(model["06-MacroView文件"]), 2)
+        liberty_row = next(row for row in model["06-MacroView文件"] if row["View"] == "Liberty")
+        self.assertEqual((liberty_row["来源版本"], liberty_row["Corner/线索"], liberty_row["状态"]),
+                         ("V2", "TT", "PARSED_OBJECT"))
+        checklist = model["01-工程检查"]
+        self.assertEqual(len(checklist), 10)
+        self.assertEqual(checklist[0]["工程检查主题"], "RAW 版本与文件盘点")
+        self.assertEqual(checklist[-1]["工程检查主题"], "文档更新 Delta")
+        self.assertIn("工程覆盖", checklist[0])
+        self.assertIn("本次执行", checklist[0])
 
     def test_only_selected_checks_add_details_and_questions(self):
         item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
         item["checks"].pop("formal_nl")
         model = build_workbook_model([item])
 
-        self.assertEqual(list(model), ["00-概览", "01-检查项", "02-问答", "03-关注项", "04-MacroView"])
-        self.assertEqual(len(model["02-问答"]), 1)
-        self.assertIn("Macro", model["02-问答"][0]["问题"])
+        self.assertEqual(list(model), ["00-概览", "01-工程检查", "02-执行记录", "03-问答", "04-关注项",
+                                       "05-MacroView", "06-MacroView文件"])
+        self.assertEqual(len(model["03-问答"]), 1)
+        self.assertIn("Macro", model["03-问答"][0]["问题"])
 
     def test_failed_check_is_isolated_to_its_ip(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -1,6 +1,6 @@
 # ai_lib IP Review Tools
 
-`src_qor` contains standalone IP library review scripts and a per-IP report runner. It is separate from the legacy Catalog/Web workflow and does not run or expose the old Scan or Diff commands.
+`src_qor` contains standalone IP library review scripts, a per-IP report runner, and an independent local review workbench. The workbench owns its Flask app, templates, CSS, and JavaScript; it does not mount into or import the legacy Catalog/Web application and does not run or expose the old Scan or Diff commands.
 
 ## Scope
 
@@ -17,7 +17,7 @@ These are evidence checks, not a release gate. `COMPLETE` means the selected scr
 
 ## Install and run
 
-Requires Python 3.11 or newer.
+Requires Python 3.11 or newer. `Flask` is needed only for the local workbench; CLI report generation needs PyYAML and XlsxWriter.
 
 ```bash
 python3 -m venv .venv
@@ -28,11 +28,21 @@ PYTHONPATH=src_qor python -m lib_guard.review_runner \
   --out-dir work/ip_review_run
 ```
 
+Start the local workbench with a persistent IP registry:
+
+```bash
+PYTHONPATH=src_qor python -m lib_guard.workbench \
+  --registry src_qor/configs/ip_registry.example.yml \
+  --out-dir work/ip_review
+```
+
+Open `http://127.0.0.1:5078/`. The left rail selects/searches IPs; the main area switches between check configuration and that IP's run history. Check inputs expand only when selected. The workbench binds to loopback, saves IP/check inputs back to the YAML registry, and invokes the same runner used by the CLI. A run is synchronous in the current version: the browser request waits for the selected checks to finish. It does not accept shell commands, modify formal NL links, or change release decisions.
+
 The example config uses placeholder absolute paths. Replace them with paths readable by the host running the checks. Relative paths in YAML are resolved from the YAML file's directory.
 
 ## Configure checks
 
-Each `ips[]` entry represents one IP context. Keep different IPs in separate entries with unique `library_id` values. The output contains a separate immutable review record, evidence directory, and Excel workbook per IP; the HTML index is navigation only and does not combine IP findings.
+Each `ips[]` entry represents one IP context. Keep different IPs in separate entries with unique `id` and `library_id` values. The workbench registry is the persistent IP roster; `latest.json` is updated only when explicitly enabled and every selected check completes. The output contains a separate review record, evidence directory, and Excel workbook per IP; the HTML index keeps all registered IPs visible and does not combine IP findings.
 
 `checks` is an allowlist for the current run. Omit a check to leave it `NOT_RUN`. For example, a LEF-only review can omit all other checks. When both `lef_review` and `lef_liberty_check` are selected, the runner executes LEF first regardless of YAML order and binds the Liberty report to that LEF's path and SHA-256. To reuse LEF evidence by itself, provide `lef_analysis_json` and a matching `lef_library_id`.
 
@@ -49,7 +59,9 @@ work/ip_review_run/
       evidence/                          # selected check snapshots and reports
 ```
 
-History is retained by unique `review_id`. `latest.json` is written only when that IP sets `publish_latest: true` and every selected check completes. A failed run does not replace a previous latest pointer. The formal NL tracker reads its configured paths and writes reports under the run output; it does not write to the formal release tree.
+History is retained by unique `review_id`. `review_result.json` is written only after the workbook has been exported and verified; `latest.json` is atomically updated only when that IP sets `publish_latest: true` and every selected check completes. A failed run does not replace a previous latest pointer. The formal NL tracker reads its configured paths and writes reports under the run output; it does not write to the formal release tree.
+
+Each check result records its input identity. If explicit source versions differ from the IP's declared RAW version, the record is labeled `MIXED_EXPLICIT`; results remain separately scoped and are not silently merged. `COMPLETE` describes execution only. The ten-item engineering checklist separates selected evidence coverage from task execution and does not turn unselected or partially supported checks into passes.
 
 ## Tests
 
@@ -57,4 +69,4 @@ History is retained by unique `review_id`. `latest.json` is written only when th
 PYTHONPATH=src_qor python3 -m unittest discover -s src_qor/test -v
 ```
 
-Tests cover IP isolation, selected-check reporting, explicit latest behavior, LEF/Liberty evidence binding, workbook sheets, and HTML report links.
+Tests cover IP isolation, selected-check reporting, failed-check QA, finding counts by stable kind/object count, explicit input identity, atomic report publication, the ten engineering topics, vertical Macro-View file mappings, persistent registry overview, local workbench asset isolation and save/run/download behavior, LEF/Liberty evidence binding, workbook sheets, and HTML report links.

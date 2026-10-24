@@ -1,0 +1,29 @@
+# Read-only raw IP + formal NL link report. Paths are examples; replace for each run.
+library:
+  id: vendor_A.ucie
+  # Parent of this IP's directly named raw version directories.
+  # Required when formal lib_NL*/IP contains view/file links instead of an IP-named directory link.
+  # File links are attributed to this IP only when their resolved targets fall under this root.
+  root: /path/to/raw/vendor_A.ucie
+  ip_directory_name: vendor_A.ucie
+  # Optional: use confirmed package_type/previous_effective_version from Catalog
+  # to build a read-only cumulative candidate file map.
+  catalog: /path/to/work/catalog/catalog.json
+
+formal_nl:
+  # Point to the one stage being audited; for example /path/to/lib_NL2.5_3/IP.
+  # The 2.5_3 suffix identifies the stage. Latest/next-latest are inferred separately
+  # from the raw version directory names directly under library.root.
+  root: /path/to/lib_NL2.5_3/IP
+
+filemap:
+  # Defaults to the highest RAW directory name. Override only to inspect another version.
+  candidate_version: ""
+  # Optional explicit removals; absence in a partial package never deletes an inherited file.
+  explicit_deletions: {}
+  # Optional explicit whole-View resend, e.g. V12: [lef]. Do not infer from update_scope.
+  explicit_resets: {}
+
+output:
+  report_json: ./effective_file_tracker/formal_nl_ip_links.json
+  report_md: ./effective_file_tracker/formal_nl_ip_links.md

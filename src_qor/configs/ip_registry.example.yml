@@ -1,0 +1,21 @@
+# Persistent per-IP registry for the local review workbench.
+# Paths are read by the machine running the workbench. Relative paths resolve
+# from this YAML file's directory.
+ips:
+  - id: example_ip
+    library_id: vendor.example_ip
+    name: Example IP
+    raw_version: raw_version_id
+    formal_stage: lib_NL2.5_3
+    publish_latest: true
+    checks:
+      # Select only the checks with real inputs. Remove or leave empty to skip.
+      macro_index:
+        root: /path/to/raw/example_ip/version
+        version: raw_version_id
+        library_id: vendor.example_ip
+
+      # Two explicit LEF paths are required for this comparison.
+      # lef_review:
+      #   old_file: /path/to/old/example.lef
+      #   new_file: /path/to/new/example.lef

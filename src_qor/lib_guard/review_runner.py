@@ -28,15 +28,30 @@ CHECK_NAMES = {"formal_nl", "macro_index", "lef_review", "lef_liberty_check"}
 VIEW_NAMES = ("lef", "liberty", "gds", "cdl", "db", "verilog")
 SHEET_HEADERS = {
     "00-概览": ["IP", "库标识", "RAW版本", "正式阶段", "已选检查", "执行完成项", "执行失败项", "正式可见文件", "Macro数", "报告结论"],
-    "01-检查项": ["IP", "检查", "执行状态", "结果摘要", "范围说明", "输入范围", "报告路径"],
-    "02-问答": ["IP", "问题", "回答", "证据范围", "来源报告"],
-    "03-关注项": ["IP", "类别", "对象", "发现", "状态", "建议核对", "证据路径"],
-    "04-MacroView": ["IP", "RAW版本", "Macro", "LEF", "Liberty", "GDS", "CDL", "DB", "Verilog", "基准状态", "证据说明"],
-    "05-正式文件": ["IP", "正式阶段", "相对路径", "View", "来源RAW版本", "来源路径", "正式路径", "盘点状态"],
-    "06-LEF宏": ["IP", "LEF文件", "Macro", "类别", "Site", "宽度", "高度", "单位", "Pin数", "电源Pin", "地Pin", "OBS几何数", "解析范围"],
-    "07-Liberty角": ["IP", "Liberty文件", "Library", "工艺角线索", "RC角线索", "PVT", "Cell数", "同名Cell", "LEF有而本文件无", "本文件有而LEF无", "信号Pin对照", "信号Pin差异", "电源/地脚对照", "电源/地脚差异", "证据不足Cell数", "角标说明"],
-    "08-Liberty单元": ["IP", "Liberty文件", "Corner线索", "Cell", "LEF同名", "信号Pin数", "PG Pin数", "接口状态", "证据路径"],
+    "01-工程检查": ["序号", "工程检查主题", "工程覆盖", "本次执行", "本次证据", "范围或缺口"],
+    "02-执行记录": ["IP", "检查", "执行状态", "上下文关系", "结果摘要", "范围说明", "输入身份", "输入范围", "报告路径"],
+    "03-问答": ["IP", "问题", "回答", "证据范围", "来源报告"],
+    "04-关注项": ["IP", "类别", "类型", "对象", "数量", "发现", "状态", "建议核对", "证据路径"],
+    "05-MacroView": ["IP", "RAW版本", "Macro", "LEF", "Liberty", "GDS", "CDL", "DB", "Verilog", "基准状态", "证据说明"],
+    "06-MacroView文件": ["IP", "RAW版本", "Macro", "View", "Corner/线索", "来源版本", "文件名", "关联证据", "状态", "来源路径"],
+    "07-正式文件": ["IP", "正式阶段", "相对路径", "View", "来源RAW版本", "来源路径", "正式路径", "盘点状态"],
+    "08-LEF宏": ["IP", "LEF文件", "Macro", "类别", "Site", "宽度", "高度", "单位", "Pin数", "电源Pin", "地Pin", "OBS几何数", "解析范围"],
+    "09-Liberty角": ["IP", "Liberty文件", "Library", "工艺角线索", "RC角线索", "PVT", "Cell数", "同名Cell", "LEF有而本文件无", "本文件有而LEF无", "信号Pin对照", "信号Pin差异", "电源/地脚对照", "电源/地脚差异", "证据不足Cell数", "角标说明"],
+    "10-Liberty单元": ["IP", "Liberty文件", "Corner线索", "Cell", "LEF同名", "信号Pin数", "PG Pin数", "接口状态", "证据路径"],
 }
+
+ENGINEERING_CHECKLIST = (
+    ("RAW 版本与文件盘点", ("formal_nl", "macro_index"), "单次目录或选定版本盘点，不代表完整历史。"),
+    ("文件更新与清单 Delta", ("formal_nl", "lef_review"), "正式来源路径或指定 LEF 对比；不等于全视图内容 Delta。"),
+    ("正式文件及 RAW 来源", ("formal_nl",), "只读路径、链接和来源盘点，不作发布放行判断。"),
+    ("Macro 清单、来源与更新", ("macro_index",), "选定 FileMap 的对象与文件关联，不代表多版本演进已覆盖。"),
+    ("Macro 六类文件映射", ("macro_index",), "名称/解析证据映射；候选关联不是已确认齐套。"),
+    ("Signoff Corner 覆盖", ("lef_liberty_check",), "仅显示所选 Liberty 的角标线索；没有期望角集合时不判断齐套。"),
+    ("LEF 物理属性 Delta", ("lef_review",), "限指定 LEF 对及当前 Parser 支持字段。"),
+    ("接口与跨 View 一致性", ("macro_index", "lef_liberty_check"), "限已选择输入和当前解析字段；不推断未绑定视图。"),
+    ("其他 View 内部对象", ("macro_index",), "按已支持解析器提取；GDS/DB 仍为路径/文件名证据。"),
+    ("文档更新 Delta", (), "当前四个检查器没有执行 DOC 正文比较。"),
+)
 
 
 def _load_config(path: str | Path) -> dict[str, Any]:
@@ -84,6 +99,15 @@ def _json_read(path: Path) -> dict[str, Any]:
 def _json_write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _json_write_atomic(path: Path, data: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        _json_write(temporary, data)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _run_formal(spec: dict[str, Any], config_dir: Path, out_dir: Path) -> dict[str, Any]:
@@ -283,18 +307,21 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                 check_results[name] = {"selected": True, "status": status,
                                        "result_status": result_status, "result": result,
                                        "report_path": report_path, "result_ref": f"evidence/{name}.json",
-                                       "input_spec": dict(spec)}
+                                       "input_spec": dict(spec),
+                                       "input_identity": _input_identity(name, spec, result)}
             except Exception as exc:
                 check_results[name] = {"selected": True, "status": "FAILED", "result_status": "FAILED",
                                        "error": str(exc), "result": {}, "report_path": "", "result_ref": "",
-                                       "input_spec": dict(spec)}
+                                       "input_spec": dict(spec),
+                                       "input_identity": _input_identity(name, spec, {})}
         context = {"type": str(ip.get("context_type") or "LIBRARY_REVIEW"),
                    "formal_stage": ip.get("formal_stage"),
                    "formal_snapshot_id": ip.get("formal_snapshot_id"),
                    "target_raw_versions": [str(ip.get("raw_version"))] if ip.get("raw_version") else []}
         reviews.append({"ip": {**ip, "id": ip_id, "library_id": library_id},
                         "review_id": review_id, "generated_at": datetime.now(timezone.utc).isoformat(),
-                        "context": context, "requested_checks": [name for name, item in check_results.items()
+                        "context": context, "context_alignment": _context_alignment(check_results, ip.get("raw_version")),
+                        "requested_checks": [name for name, item in check_results.items()
                                                                     if item.get("selected")],
                         "checks": check_results, "run_dir": str(run_dir),
                         "library_dir": str(run_dir.parents[1])})
@@ -303,6 +330,77 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
 
 def _check_result(review: dict[str, Any], name: str) -> dict[str, Any]:
     return (review.get("checks") or {}).get(name) or {}
+
+
+def _input_identity(name: str, spec: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    sources: list[dict[str, Any]] = []
+
+    def add(role: str, path: Any = None, version: Any = None, sha256: Any = None, stage: Any = None) -> None:
+        if not any((path, version, sha256, stage)):
+            return
+        sources.append({key: str(value) for key, value in {
+            "role": role, "path": path, "version": version, "sha256": sha256, "stage": stage,
+        }.items() if value not in (None, "")})
+
+    if name == "formal_nl":
+        add("formal_nl_config", spec.get("config"))
+        add("formal_nl_report", spec.get("report_json"))
+        add("formal_nl_root", result.get("formal_nl_root"), stage=spec.get("stage"))
+        versions, stages = set(), set()
+        for stage_name, inventory in (result.get("inventories") or {}).items():
+            stages.add(str(stage_name))
+            for item in inventory.get("files") or []:
+                if item.get("raw_version"):
+                    versions.add(str(item["raw_version"]))
+        for version in sorted(versions):
+            add("formal_raw_source", version=version)
+        for stage in sorted(stages):
+            add("formal_stage", stage=stage)
+    elif name == "macro_index":
+        add("filemap", spec.get("filemap_json") or spec.get("root"), version=spec.get("version"))
+        result_map = result.get("filemap") or {}
+        add("filemap_context", (result_map.get("context") or {}).get("source"))
+        versions = {str(item.get("source_version")) for item in result_map.get("files", [])
+                    if item.get("source_version")}
+        for version in sorted(versions):
+            add("macro_source", version=version)
+        add("macro_report", spec.get("report_json"))
+    elif name == "lef_review":
+        for side, source in (result.get("sources") or {}).items():
+            add(f"lef_{side}", source.get("path"), sha256=source.get("sha256"))
+        if not sources:
+            add("lef_old", spec.get("old_file"))
+            add("lef_new", spec.get("new_file"))
+        add("lef_report", spec.get("report_json"))
+    elif name == "lef_liberty_check":
+        lef_source = result.get("lef_source") or {}
+        add("bound_lef", lef_source.get("path"), sha256=lef_source.get("sha256"))
+        if not lef_source:
+            add("lef_report", spec.get("lef_analysis_json"))
+        files = result.get("files") or []
+        for item in files:
+            add("liberty", item.get("liberty_source"))
+        if not files:
+            for path in spec.get("liberty_files") or []:
+                add("liberty", path)
+        add("cross_view_report", spec.get("report_json"))
+    versions = sorted({source["version"] for source in sources if source.get("version")})
+    stages = sorted({source["stage"] for source in sources if source.get("stage")})
+    return {"check": name, "sources": sources, "source_versions": versions, "formal_stages": stages}
+
+
+def _context_alignment(checks: dict[str, dict[str, Any]], target_version: Any = None) -> str:
+    selected = [item.get("input_identity") or {} for item in checks.values() if item.get("selected")]
+    version_sets = [set(identity.get("source_versions") or []) for identity in selected]
+    explicit = [versions for versions in version_sets if versions]
+    if not explicit or len(explicit) != len(version_sets):
+        return "INDEPENDENT"
+    all_versions = set().union(*explicit)
+    if target_version and all_versions != {str(target_version)}:
+        return "MIXED_EXPLICIT"
+    if len(all_versions) > 1:
+        return "MIXED_EXPLICIT"
+    return "ALIGNED_EXPLICIT"
 
 
 def _result(review: dict[str, Any], name: str) -> dict[str, Any]:
@@ -375,6 +473,50 @@ def _macro_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
                 for item in entries
             ) or "未关联"
         rows.append(row)
+    return rows
+
+
+def _macro_file_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
+    result = _result(review, "macro_index")
+    index = result.get("macro_index") or result
+    ip = review.get("ip") or {}
+    rows = []
+    for macro_name, mappings in (index.get("macros") or {}).items():
+        for view in VIEW_NAMES:
+            for item in mappings.get(view) or []:
+                source_path = item.get("source_path", "")
+                rows.append({"IP": ip.get("name") or ip.get("id"),
+                             "RAW版本": ip.get("raw_version") or item.get("source_version", ""),
+                             "Macro": macro_name, "View": "Liberty" if view == "liberty" else view.upper(),
+                             "Corner/线索": item.get("corner") or "未确认",
+                             "来源版本": item.get("source_version") or "未标注",
+                             "文件名": item.get("file") or Path(source_path).name,
+                             "关联证据": item.get("match_basis") or item.get("evidence") or "未说明",
+                             "状态": item.get("evidence") or "未确认", "来源路径": source_path})
+    return rows
+
+
+def _engineering_check_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = review.get("checks") or {}
+    rows = []
+    for number, (topic, supporting_checks, limitation) in enumerate(ENGINEERING_CHECKLIST, 1):
+        selected = [(name, checks[name]) for name in supporting_checks if name in checks and checks[name].get("selected")]
+        if not selected:
+            coverage, execution, evidence = "未检查", "未选择相关检查", ""
+        else:
+            failed = [(name, item) for name, item in selected if item.get("status") != "COMPLETE"]
+            if failed:
+                coverage = "结果不可用"
+                execution = "；".join(f"{name}：{item.get('status')}" for name, item in failed)
+            else:
+                coverage = "部分覆盖"
+                execution = "；".join(f"{name}：执行完成" for name, _ in selected)
+            evidence = "；".join(
+                f"{name}：{_check_summary(name, item)[0]}" for name, item in selected
+                if item.get("status") == "COMPLETE")
+        rows.append({"序号": number, "工程检查主题": topic, "工程覆盖": coverage,
+                     "本次执行": execution, "本次证据": evidence,
+                     "范围或缺口": limitation})
     return rows
 
 
@@ -455,51 +597,66 @@ def _finding_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     ip = review.get("ip") or {}
     label = ip.get("name") or ip.get("id")
     rows = []
+    kind_labels = {"CHANGED": "已确认变化", "MISMATCH": "已确认不一致",
+                   "UNVERIFIED": "待核实", "SCOPE_INFO": "范围说明"}
 
-    def add(category: str, object_name: str, finding: str, status: str, action: str, evidence: str = "") -> None:
-        rows.append({"IP": label, "类别": category, "对象": object_name, "发现": finding,
-                     "状态": status, "建议核对": action, "证据路径": evidence})
+    def add(category: str, object_name: str, finding: str, status: str, action: str,
+            evidence: str = "", *, kind: str, count: int = 1) -> None:
+        count = max(0, int(count))
+        rows.append({"IP": label, "category": category, "kind": kind, "object": object_name,
+                     "count": count, "message": finding, "status": status, "action": action,
+                     "evidence": evidence, "IP": label, "类别": category, "类型": kind_labels[kind],
+                     "对象": object_name, "数量": count, "发现": finding, "状态": status,
+                     "建议核对": action, "证据路径": evidence})
 
-    formal = _result(review, "formal_nl")
+    formal = (_result(review, "formal_nl") if _check_result(review, "formal_nl").get("status") == "COMPLETE" else {})
     for item in formal.get("broken_links") or []:
-        add("正式链接", item, "正式链接目标不可读或不存在", "需处理", "确认源路径和链接权限", formal.get("formal_nl_root", ""))
+        add("正式链接", item, "正式链接目标不可读或不存在", "需处理", "确认源路径和链接权限",
+            formal.get("formal_nl_root", ""), kind="MISMATCH")
     for item in formal.get("ambiguous_versions") or []:
-        add("正式来源", item.get("nl_version", ""), "同一阶段发现多个来源目标", "待确认", "人工确认应使用的来源", formal.get("formal_nl_root", ""))
-    macro_result = _result(review, "macro_index")
+        add("正式来源", item.get("nl_version", ""), "同一阶段发现多个来源目标", "待确认",
+            "人工确认应使用的来源", formal.get("formal_nl_root", ""), kind="UNVERIFIED")
+    macro_result = (_result(review, "macro_index") if _check_result(review, "macro_index").get("status") == "COMPLETE" else {})
     index = macro_result.get("macro_index") or macro_result
     for item in index.get("unmatched_files") or []:
         add("Macro/View映射", item.get("file", ""), str(item.get("reason", "文件未能关联解析事实")), "证据不足",
-            "确认文件是否被支持的解析器覆盖", item.get("file", ""))
+            "确认文件是否被支持的解析器覆盖", item.get("file", ""), kind="UNVERIFIED")
     for view, objects in (index.get("unmatched_objects") or {}).items():
         if objects:
             sample_names = ", ".join(str(item.get("name", "")) for item in objects[:5])
             add("Macro/View名称映射", view.upper(),
                 f"{len(objects)} 个解析对象未与 LEF Macro 精确同名关联；示例：{sample_names}", "关联待确认",
-                "名称差异不等于缺交付；按需确认别名或对象层级", objects[0].get("file", ""))
-    lef = _result(review, "lef_review")
+                "名称差异不等于缺交付；按需确认别名或对象层级", objects[0].get("file", ""),
+                kind="UNVERIFIED", count=len(objects))
+    lef = (_result(review, "lef_review") if _check_result(review, "lef_review").get("status") == "COMPLETE" else {})
     comp = lef.get("comparison") or {}
     names = comp.get("macro_names") or {}
     for field, values in (("新增Macro", names.get("added")), ("移除Macro", names.get("removed"))):
         for name in values or []:
-            add("LEF变化", name, field, "已提取差异", "核对该 Macro 的接入影响", (lef.get("sources") or {}).get("new", {}).get("path", ""))
+            add("LEF变化", name, field, "已提取差异", "核对该 Macro 的接入影响",
+                (lef.get("sources") or {}).get("new", {}).get("path", ""), kind="CHANGED")
     for change in comp.get("changes") or []:
         add("LEF字段变化", change.get("macro", ""),
             f"{change.get('field')}: {change.get('old')} → {change.get('new')}", "已提取差异",
-            "结合对象用途核对变化", (lef.get("sources") or {}).get("new", {}).get("path", ""))
+            "结合对象用途核对变化", (lef.get("sources") or {}).get("new", {}).get("path", ""), kind="CHANGED")
     for field in comp.get("unverified") or []:
         add("LEF证据范围", field, "该字段未得到完整解析覆盖", "证据不足", "确认是否需要补充针对性解析",
-            (lef.get("sources") or {}).get("new", {}).get("path", ""))
-    for file_result in (_result(review, "lef_liberty_check").get("files") or []):
+            (lef.get("sources") or {}).get("new", {}).get("path", ""), kind="UNVERIFIED")
+    ll_result = (_result(review, "lef_liberty_check")
+                 if _check_result(review, "lef_liberty_check").get("status") == "COMPLETE" else {})
+    for file_result in (ll_result.get("files") or []):
         summary = file_result.get("summary") or {}
         if summary.get("mismatch_cell_count"):
             add("LEF-Liberty接口", Path(file_result.get("liberty_source", "")).name,
                 f"发现 {summary['mismatch_cell_count']} 个接口不一致 Cell", "已确认差异",
-                "查看 Liberty 单元明细中的 Pin 差异", file_result.get("liberty_source", ""))
+                "查看 Liberty 单元明细中的 Pin 差异", file_result.get("liberty_source", ""),
+                kind="MISMATCH", count=summary["mismatch_cell_count"])
         if summary.get("unverified_cell_count"):
             add("LEF-Liberty证据", Path(file_result.get("liberty_source", "")).name,
                 f"{summary['unverified_cell_count']} 个同名 Cell 证据不足", "证据不足",
-                "检查解析覆盖与受限语法", file_result.get("liberty_source", ""))
-    ll = _result(review, "lef_liberty_check")
+                "检查解析覆盖与受限语法", file_result.get("liberty_source", ""),
+                kind="UNVERIFIED", count=summary["unverified_cell_count"])
+    ll = ll_result
     gap_files = [item for item in ll.get("files", [])
                  if (item.get("summary") or {}).get("lef_only_macro_count")]
     if gap_files:
@@ -507,7 +664,8 @@ def _finding_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
         add("Liberty文件范围", f"{len(gap_files)} 个文件",
             f"所选文件单独未包含 {', '.join(str(value) for value in counts)} 个 LEF Macro 名称；这是输入文件范围差异，不直接表示交付缺失。",
             "范围说明", "若要统计该角的 Cell 并集，请选择同一用途/角的完整 Liberty 文件集合",
-        "详见 07-Liberty角 的逐文件路径")
+            "详见 09-Liberty角 的逐文件路径", kind="SCOPE_INFO",
+            count=sum((item.get("summary") or {}).get("lef_only_macro_count", 0) for item in gap_files))
     return rows
 
 
@@ -515,10 +673,25 @@ def _qa_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     ip = review.get("ip") or {}
     label = ip.get("name") or ip.get("id")
     rows = []
+    qa_questions = {
+        "formal_nl": "正式目录观察到哪些文件类型和数量？",
+        "macro_index": "解析并建立了多少个 LEF Macro 索引？",
+        "lef_review": "两份指定 LEF 有哪些已确认变化？",
+        "lef_liberty_check": "指定 Liberty 与 LEF 的接口核对结果是什么？",
+    }
+    for check_name, question in qa_questions.items():
+        item = _check_result(review, check_name)
+        if item.get("selected") and item.get("status") != "COMPLETE":
+            execution = "执行失败" if item.get("status") == "FAILED" else "结果不完整"
+            detail = item.get("error") or item.get("result_status") or "检查未生成完整结果"
+            rows.append({"IP": label, "问题": question,
+                         "回答": f"未生成工程结论：{execution}（{detail}）。",
+                         "证据范围": "不得将缺少结果解释为数量为零、无差异或检查通过。",
+                         "来源报告": item.get("report_path", "")})
     formal = _result(review, "formal_nl")
     formal_check = _check_result(review, "formal_nl")
     stage, inventory = _formal_inventory(formal, ip.get("formal_stage"))
-    if formal_check:
+    if formal_check.get("selected") and formal_check.get("status") == "COMPLETE":
         counts = inventory.get("view_counts") or {}
         rows.append({"IP": label, "问题": "正式目录观察到哪些文件类型和数量？",
                      "回答": "观察到：" + ("；".join(f"{name} {count} 个" for name, count in sorted(counts.items())) or "当前清单为空"),
@@ -528,14 +701,14 @@ def _qa_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     macro_result = _result(review, "macro_index")
     index = macro_result.get("macro_index") or macro_result
     baseline = index.get("baseline") or {}
-    if macro_check:
+    if macro_check.get("selected") and macro_check.get("status") == "COMPLETE":
         rows.append({"IP": label, "问题": "解析并建立了多少个 LEF Macro 索引？",
                      "回答": f"{baseline.get('macro_count', len(index.get('macros') or {}))} 个；LEF 基线状态：{baseline.get('status', '未知')}。",
                      "证据范围": "索引覆盖见 Macro-View 表；文件名/名称关联不代表文件内容确认或交付齐套。",
                      "来源报告": macro_check.get("report_path", "")})
     lef_check = _check_result(review, "lef_review")
     lef = _result(review, "lef_review")
-    if lef_check:
+    if lef_check.get("selected") and lef_check.get("status") == "COMPLETE":
         comp = lef.get("comparison") or {}
         names = comp.get("macro_names") or {}
         content = comp.get("content") or {}
@@ -544,7 +717,7 @@ def _qa_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
                      "证据范围": "仅限所选的旧/新 LEF 文件及当前 Parser 覆盖字段。", "来源报告": lef_check.get("report_path", "")})
     ll_check = _check_result(review, "lef_liberty_check")
     ll = _result(review, "lef_liberty_check")
-    if ll_check:
+    if ll_check.get("selected") and ll_check.get("status") == "COMPLETE":
         summary = ll.get("summary") or {}
         corners = ", ".join(summary.get("recognized_corners") or []) or "未识别"
         scope_gap_files = summary.get("files_with_scope_gaps", "未统计")
@@ -562,15 +735,15 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
     """Flatten independently-scoped IP results into human-reviewable sheet rows."""
     selected_names = {name for review in reviews for name, item in (review.get("checks") or {}).items()
                       if item.get("selected")}
-    sheet_names = ["00-概览", "01-检查项", "02-问答", "03-关注项"]
+    sheet_names = ["00-概览", "01-工程检查", "02-执行记录", "03-问答", "04-关注项"]
     if "macro_index" in selected_names:
-        sheet_names.append("04-MacroView")
+        sheet_names.extend(["05-MacroView", "06-MacroView文件"])
     if "formal_nl" in selected_names:
-        sheet_names.append("05-正式文件")
+        sheet_names.append("07-正式文件")
     if "lef_review" in selected_names:
-        sheet_names.append("06-LEF宏")
+        sheet_names.append("08-LEF宏")
     if "lef_liberty_check" in selected_names:
-        sheet_names.extend(["07-Liberty角", "08-Liberty单元"])
+        sheet_names.extend(["09-Liberty角", "10-Liberty单元"])
     model = {name: [] for name in sheet_names}
     for review in reviews:
         ip = review.get("ip") or {}
@@ -592,22 +765,27 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
             summary, scope = _check_summary(name, item)
             execution = {"COMPLETE": "执行完成", "INCOMPLETE": "结果不完整", "FAILED": "执行失败"}.get(
                 item.get("status"), "状态未知")
-            model["01-检查项"].append({"IP": label, "检查": name, "执行状态": execution,
+            identity = item.get("input_identity") or {}
+            model["02-执行记录"].append({"IP": label, "检查": name, "执行状态": execution,
+                                      "上下文关系": review.get("context_alignment", "INDEPENDENT"),
                                       "结果摘要": summary, "范围说明": scope,
+                                      "输入身份": json.dumps(identity, ensure_ascii=False),
                                       "输入范围": json.dumps({key: value for key, value in item.get("input_spec", {}).items() if key != "enabled"}, ensure_ascii=False),
                                       "报告路径": item.get("report_path", "")})
-        model["02-问答"].extend(_qa_rows(review))
-        model["03-关注项"].extend(_finding_rows(review))
+        model["01-工程检查"].extend(_engineering_check_rows(review))
+        model["03-问答"].extend(_qa_rows(review))
+        model["04-关注项"].extend(_finding_rows(review))
         if _check_result(review, "macro_index").get("selected"):
-            model["04-MacroView"].extend(_macro_rows(review))
+            model["05-MacroView"].extend(_macro_rows(review))
+            model["06-MacroView文件"].extend(_macro_file_rows(review))
         if _check_result(review, "formal_nl").get("selected"):
-            model["05-正式文件"].extend(_formal_rows(review))
+            model["07-正式文件"].extend(_formal_rows(review))
         if _check_result(review, "lef_review").get("selected"):
-            model["06-LEF宏"].extend(_lef_rows(review))
+            model["08-LEF宏"].extend(_lef_rows(review))
         if _check_result(review, "lef_liberty_check").get("selected"):
             corners, cells = _liberty_rows(review)
-            model["07-Liberty角"].extend(corners)
-            model["08-Liberty单元"].extend(cells)
+            model["09-Liberty角"].extend(corners)
+            model["10-Liberty单元"].extend(cells)
     return model
 
 
@@ -636,20 +814,31 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                                        "result_status": item.get("result_status"),
                                        "result_ref": item.get("result_ref") or None,
                                        "report_path": item.get("report_path") or None,
+                                       "input_identity": item.get("input_identity") or {},
                                        "error": item.get("error")}
         review_record = {"schema_version": "review_result.v1",
                          "library_id": (review.get("ip") or {}).get("library_id"),
                          "review_id": review.get("review_id"), "generated_at": review.get("generated_at"),
-                         "context": review.get("context"), "requested_checks": requested,
+                         "context": review.get("context"),
+                         "context_alignment": review.get("context_alignment", "INDEPENDENT"),
+                         "requested_checks": requested,
                          "execution_status": "COMPLETE" if complete else ("FAILED" if any(
                              item.get("status") == "FAILED" for item in checks.values()) else "INCOMPLETE"),
                          "checks": serialized_checks,
                          "summary": _review_summary(review),
                          "reports": {"xlsx": "ip_review.xlsx"}}
-        _json_write(run_dir / "review_result.json", review_record)
         scope_note = (f"IP：{review_record['library_id']}；Review：{review_record['review_id']}；"
                       "仅汇总本 IP、本次选择的检查。未选择不代表通过。")
-        export_review_excel(model, run_dir / "ip_review.xlsx", scope_note=scope_note)
+        workbook_path = run_dir / "ip_review.xlsx"
+        workbook_tmp = run_dir / f".ip_review.{review_record['review_id']}.tmp.xlsx"
+        try:
+            export_review_excel(model, workbook_tmp, scope_note=scope_note)
+            if not workbook_tmp.is_file() or workbook_tmp.stat().st_size == 0:
+                raise OSError("Excel 导出未产生有效工作簿")
+            workbook_tmp.replace(workbook_path)
+        finally:
+            workbook_tmp.unlink(missing_ok=True)
+        _json_write_atomic(run_dir / "review_result.json", review_record)
         latest_ref = None
         if (review.get("ip") or {}).get("publish_latest") and complete:
             latest = {"schema_version": "review_latest.v1", "library_id": review_record["library_id"],
@@ -658,9 +847,7 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                       "xlsx_ref": f"runs/{review_record['review_id']}/ip_review.xlsx",
                       "generated_at": review_record["generated_at"]}
             latest_path = library_dir / "latest.json"
-            temporary = latest_path.with_suffix(".json.tmp")
-            _json_write(temporary, latest)
-            temporary.replace(latest_path)
+            _json_write_atomic(latest_path, latest)
             latest_ref = str(latest_path)
         overview_rows.append({"library_id": review_record["library_id"],
                               "name": (review.get("ip") or {}).get("name") or review_record["library_id"],
@@ -672,18 +859,65 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
         review["review_result_path"] = str(run_dir / "review_result.json")
         review["xlsx_path"] = str(run_dir / "ip_review.xlsx")
         review["latest_path"] = latest_ref or ""
+    overview_rows = _overview_rows_for_registry(config, output, overview_rows)
     overview_path = output / "ip_checks" / "index.html"
     overview_path.parent.mkdir(parents=True, exist_ok=True)
     overview_path.write_text(render_overview(overview_rows), encoding="utf-8")
     return reviews, dict(row_counts)
 
 
-def _review_summary(review: dict[str, Any]) -> dict[str, int]:
+def _overview_rows_for_registry(config: dict[str, Any], output: Path,
+                                current_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    current_by_library = {str(item.get("library_id")): item for item in current_rows}
+    registry = config.get("registry_ips") or config.get("ips") or []
+    rows = []
+    for index, ip in enumerate(registry):
+        library_id = str(ip.get("library_id") or ip.get("id") or ip.get("name") or f"IP_{index + 1}")
+        library_dir = output / "libraries" / _library_dir(library_id)
+        latest_path = library_dir / "latest.json"
+        latest_result = {}
+        if latest_path.is_file():
+            pointer = _json_read(latest_path)
+            result_path = library_dir / str(pointer.get("review_result_ref") or "")
+            if result_path.is_file():
+                latest_result = _json_read(result_path)
+        current = current_by_library.get(library_id) or {}
+        latest_workbook = library_dir / str((latest_result.get("reports") or {}).get("xlsx") or "")
+        if latest_result and latest_result.get("review_id"):
+            latest_workbook = library_dir / "runs" / str(latest_result["review_id"]) / "ip_review.xlsx"
+        latest_href = ("../" + latest_workbook.relative_to(output).as_posix()
+                       if latest_workbook.is_file() else "")
+        rows.append({
+            **current,
+            "library_id": library_id,
+            "name": ip.get("name") or ip.get("id") or library_id,
+            "requested_checks": current.get("requested_checks") or [
+                name for name, spec in (ip.get("checks") or {}).items()
+                if isinstance(spec, dict) and spec.get("enabled", True)],
+            "execution_status": current.get("execution_status") or latest_result.get("execution_status") or "NOT_RUN",
+            "summary": current.get("summary") or latest_result.get("summary") or {},
+            "latest_summary": latest_result.get("summary") or {},
+            "latest_review_id": latest_result.get("review_id") or "",
+            "xlsx_href": current.get("xlsx_href") or latest_href,
+            "latest_xlsx_href": latest_href,
+            "latest": bool(latest_result),
+        })
+    return rows
+
+
+def _review_summary(review: dict[str, Any]) -> dict[str, Any]:
     findings = _finding_rows(review)
-    return {"confirmed_changes": sum(item.get("状态") == "已提取差异" for item in findings),
-            "confirmed_mismatches": sum(item.get("状态") == "已确认差异" for item in findings),
-            "unverified": sum(item.get("状态") == "证据不足" for item in findings),
-            "scope_notes": sum(item.get("状态") == "范围说明" for item in findings)}
+    counts = {}
+    for kind in ("CHANGED", "MISMATCH", "UNVERIFIED", "SCOPE_INFO"):
+        selected = [item for item in findings if item.get("kind") == kind]
+        counts[kind] = {"finding_records": len(selected),
+                        "affected_objects": sum(item.get("count", 0) for item in selected)}
+    return {"counts": counts, "finding_records": len(findings),
+            "affected_objects": sum(item.get("count", 0) for item in findings),
+            "confirmed_changes": counts["CHANGED"]["affected_objects"],
+            "confirmed_mismatches": counts["MISMATCH"]["affected_objects"],
+            "unverified": counts["UNVERIFIED"]["affected_objects"],
+            "scope_notes": counts["SCOPE_INFO"]["affected_objects"]}
 
 
 def main(argv: list[str] | None = None) -> int:

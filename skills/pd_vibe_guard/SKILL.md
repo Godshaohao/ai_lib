@@ -52,6 +52,14 @@ When a route below says to use a child check, read and apply the matching local 
 - `skills/algorithm_grill/SKILL.md`
 - `skills/implementation_ponytail/SKILL.md`
 
+### Step 0: Outcome Challenge
+When a proposal grows reports, rules, UI, or architecture without a verified user decision,
+read `../../.agents/skills/outcome-guard/SKILL.md` and run one value check.
+Use its scope decision as input to the relevant checks below, not as a replacement.
+Skip this step for narrow, well-specified fixes and ordinary verification.
+Do not invoke Step 0 again from Outcome Guard or recursively chain the skills.
+Low usage alone never justifies removing Release, signoff, or audit safeguards.
+
 ### Step 1: Requirement Clarity
 If target user, scenario, judgement, data, or next action is unclear:
 
