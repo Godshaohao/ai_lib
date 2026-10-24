@@ -99,7 +99,9 @@ def discover_formal_ip_links(
                     continue
                 if not target.is_dir() or not _is_within_ip_target(target, name):
                     continue
-                version = _version_from_path(target)
+                # The formal stage is encoded by the link's location, not by
+                # the RAW target, which may belong to an unrelated source version.
+                version = _version_from_path(entry)
                 if version is None:
                     continue
                 version_name, version_key = version

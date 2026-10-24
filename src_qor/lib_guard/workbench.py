@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import ipaddress
 import json
 from pathlib import Path
@@ -17,8 +18,11 @@ except ImportError:  # pragma: no cover - exercised only in intentionally minima
     yaml = None
 
 from flask import Blueprint, Flask, abort, render_template, request, send_file, url_for
+from werkzeug.exceptions import HTTPException
 
 from .review_runner import CHECK_NAMES, _json_read, _library_dir, run
+from .raw_discovery import discover_raw_report, write_discovery_artifacts
+from .effective_file_tracker import run as run_formal_nl
 
 
 def _read_registry(path: Path) -> dict[str, Any]:
@@ -48,8 +52,30 @@ def _write_registry(path: Path, data: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _write_json(path: Path, data: dict[str, Any]) -> None:
+    payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        temporary.write_text(payload, encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _text(form: Any, key: str) -> str:
     return str(form.get(key, "")).strip()
+
+
+def _resolve_registry_path(value: str, registry_file: Path) -> str:
+    path = Path(value).expanduser()
+    return str((path if path.is_absolute() else registry_file.parent / path).resolve())
+
+
+def _version_sort_key(value: str) -> tuple[tuple[int, Any], ...]:
+    """Natural sort for sidebar labels only; this does not establish release order."""
+    return tuple((0, int(part)) if part.isdigit() else (1, part.casefold())
+                 for part in re.split(r"(\d+)", value))
 
 
 def _entry_from_form(form: Any, previous: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -89,6 +115,10 @@ def _entry_from_form(form: Any, previous: dict[str, Any] | None = None) -> dict[
         entry["checks"][check_name] = spec
     if previous:
         entry["context_type"] = previous.get("context_type", "LIBRARY_REVIEW")
+        for key in ("vendor", "middle_path", "library_name", "raw_root", "raw_versions", "formal_nl_root",
+                    "formal_nl_stages", "formal_nl_scan_at", "formal_nl_report_status"):
+            if key in previous:
+                entry[key] = previous[key]
     return entry
 
 
@@ -136,6 +166,45 @@ def _history(output: Path, library_id: str) -> tuple[dict[str, Any], list[dict[s
     return latest, records[:10]
 
 
+def _formal_nl_latest(output: Path, library_id: str) -> dict[str, Any]:
+    formal_dir = output / "formal_nl" / _library_dir(library_id)
+    latest_path = formal_dir / "latest.json"
+    if not latest_path.is_file():
+        return {}
+    try:
+        latest = _json_read(latest_path)
+        report_path = Path(str(latest.get("report_json") or "")).resolve()
+        if not report_path.is_relative_to(output.resolve()) or not report_path.is_file():
+            return {}
+        report = _json_read(report_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    stages = []
+    for match in report.get("matches") or []:
+        stage = str(match.get("nl_version") or "")
+        inventory = (report.get("inventories") or {}).get(stage) or {}
+        filename_coverage = (report.get("filename_coverage") or {}).get(stage) or {}
+        classification = {
+            "LATEST": "目录名排序靠前",
+            "SECOND_LATEST": "目录名排序第二",
+            "OLDER": "其他正式阶段",
+            "SELECTED_STAGE": "指定阶段",
+        }.get(str(match.get("classification") or ""), "已发现")
+        corner_rows = []
+        for view, counts in (filename_coverage.get("corner_counts") or {}).items():
+            for label, count in counts.items():
+                corner_rows.append({"view": view, "label": label, "count": count})
+        stages.append({**match, "stage": stage, "classification_label": classification,
+                       "inventory": inventory,
+                       "corner_rows": corner_rows})
+    latest["report"] = report
+    latest["stages"] = stages
+    latest["ambiguous_versions"] = report.get("ambiguous_versions") or []
+    latest["broken_links"] = report.get("broken_links") or []
+    latest["formal_sources"] = report.get("formal_sources") or {}
+    return latest
+
+
 def _is_loopback_request() -> bool:
     remote = request.remote_addr
     if remote:
@@ -154,14 +223,39 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
     blueprint = Blueprint("ip_review", __name__, template_folder="templates")
 
     def page(selected_id: str = "", message: str = "", error: str = "", run_record: dict[str, Any] | None = None,
-             new_ip: bool = False):
+             new_ip: bool = False, discovered: list[dict[str, Any]] | None = None,
+             raw_root: str = "", active_tab: str = "catalog", discovery_artifacts: bool = False):
         registry = _read_registry(registry_file)
         ips = registry.get("ips") or []
+        sidebar_ips = []
+        for source_ip in ips:
+            sidebar_ip = dict(source_ip)
+            sidebar_ip["sidebar_raw_versions"] = sorted(
+                list(source_ip.get("raw_versions") or []),
+                key=lambda item: _version_sort_key(str(item.get("id") or "")),
+            )
+            sidebar_ip["sidebar_formal_stages"] = sorted(
+                [str(stage) for stage in source_ip.get("formal_nl_stages") or []],
+                key=_version_sort_key,
+            )
+            sidebar_ips.append(sidebar_ip)
         selected = {} if new_ip else next((item for item in ips if item.get("id") == selected_id), ips[0] if ips else {})
+        vendors = sorted({str(item.get("vendor") or "未指定 Vendor") for item in ips}, key=str.casefold)
         latest, records = _history(output, str(selected.get("library_id") or "")) if selected else ({}, [])
-        return render_template("workbench.html", ips=ips, selected=selected, latest=latest,
+        raw_root = raw_root or str(registry.get("raw_root") or "")
+        if raw_root:
+            raw_root = _resolve_registry_path(raw_root, registry_file)
+        formal_nl = _formal_nl_latest(output, str(selected.get("library_id") or "")) if selected else {}
+        environment_label = (
+            "模拟数据 · 不可用于 EDA 或发布"
+            if registry.get("environment") == "SIMULATION"
+            else "独立服务 · 配置保存在 IP 清单"
+        )
+        return render_template("workbench.html", ips=ips, sidebar_ips=sidebar_ips, selected=selected, latest=latest,
                                history=records, message=message, error=error, run_record=run_record,
-                               checks=sorted(CHECK_NAMES))
+                               checks=sorted(CHECK_NAMES), discovered=discovered or [], raw_root=raw_root,
+                               active_tab=active_tab, discovery_artifacts=discovery_artifacts,
+                               environment_label=environment_label, formal_nl=formal_nl, vendors=vendors)
 
     @blueprint.get("/")
     def index():
@@ -169,10 +263,12 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             registry = _read_registry(registry_file)
             requested = request.args.get("ip", "")
             ids = {str(item.get("id")) for item in registry.get("ips", [])}
-            return page(requested if requested in ids else "", new_ip=request.args.get("new") == "1")
+            return page(requested if requested in ids else "", new_ip=request.args.get("new") == "1",
+                        active_tab=request.args.get("tab", "catalog"))
         except Exception as exc:
-            return render_template("workbench.html", ips=[], selected={}, latest={}, history=[],
-                                   message="", error=str(exc), run_record=None, checks=sorted(CHECK_NAMES)), 400
+            return render_template("workbench.html", ips=[], sidebar_ips=[], selected={}, latest={}, history=[],
+                                   message="", error=str(exc), run_record=None, checks=sorted(CHECK_NAMES),
+                                   vendors=[]), 400
 
     @blueprint.post("/save")
     def save():
@@ -184,9 +280,155 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             entry = _entry_from_form(request.form, previous)
             _save_entry(registry, entry)
             _write_registry(registry_file, registry)
-            return page(entry["id"], message="IP 配置已保存。")
+            return page(entry["id"], message="IP 配置已保存。", active_tab="review")
         except Exception as exc:
             return page(_text(request.form, "id"), error=str(exc)), 400
+
+    @blueprint.post("/discover")
+    def discover():
+        if not _is_loopback_request():
+            abort(403)
+        raw_root = _text(request.form, "raw_root")
+        try:
+            raw_root = _resolve_registry_path(raw_root, registry_file)
+            report = discover_raw_report(raw_root)
+            candidates = report["candidates"]
+            write_discovery_artifacts(report, output / "discovery")
+            message = f"发现 {len(candidates)} 个库候选；状态均为待确认，尚未登记。"
+            if report["truncated"]:
+                message += " 扫描达到目录上限，结果可能不完整。"
+            return page(message=message, discovered=candidates, raw_root=raw_root,
+                        active_tab="discover", discovery_artifacts=True)
+        except Exception as exc:
+            return page(error=str(exc), raw_root=raw_root, active_tab="discover"), 400
+
+    @blueprint.post("/register-discovered")
+    def register_discovered():
+        if not _is_loopback_request():
+            abort(403)
+        raw_root = _text(request.form, "raw_root")
+        try:
+            raw_root = _resolve_registry_path(raw_root, registry_file)
+            candidates = discover_raw_report(raw_root)["candidates"]
+            selected_ids = set(request.form.getlist("library_ids"))
+            by_id = {item["library_id"]: item for item in candidates}
+            missing = selected_ids - by_id.keys()
+            if missing:
+                raise ValueError(f"候选库已变化或不属于该 RAW 根目录：{', '.join(sorted(missing))}")
+            if not selected_ids:
+                raise ValueError("请至少勾选一个库")
+            registry = _read_registry(registry_file)
+            registry["raw_root"] = raw_root
+            ips = registry.setdefault("ips", [])
+            for library_id in sorted(selected_ids):
+                candidate = by_id[library_id]
+                entry = next((item for item in ips if item.get("library_id") == library_id), None)
+                if entry is None:
+                    entry = {"id": library_id, "library_id": library_id,
+                             "name": candidate["library_name"], "checks": {}}
+                    ips.append(entry)
+                entry.update({"vendor": candidate["vendor"], "middle_path": candidate["middle_path"],
+                              "library_name": candidate["library_name"],
+                              "raw_root": candidate["root"], "raw_versions": candidate["versions"]})
+            _write_registry(registry_file, registry)
+            first_id = sorted(selected_ids)[0]
+            return page(first_id, message=f"已登记 {len(selected_ids)} 个库及其 RAW 版本。", active_tab="catalog")
+        except Exception as exc:
+            return page(error=str(exc), raw_root=raw_root, active_tab="discover"), 400
+
+    @blueprint.get("/discovery-artifact/<artifact_name>")
+    def discovery_artifact(artifact_name: str):
+        artifact_names = {
+            "library.list": "library.list",
+            "library_discovery.json": "library_discovery.json",
+            "library_discovery.html": "library_discovery.html",
+        }
+        filename = artifact_names.get(artifact_name)
+        if not filename:
+            abort(404)
+        artifact_path = output / "discovery" / filename
+        if not artifact_path.is_file():
+            abort(404)
+        return send_file(artifact_path, as_attachment=artifact_name.endswith(".json") or artifact_name.endswith(".list"))
+
+    @blueprint.post("/formal-nl")
+    def scan_formal_nl():
+        if not _is_loopback_request():
+            abort(403)
+        ip_id = _text(request.form, "id")
+        formal_root_input = _text(request.form, "formal_nl_root")
+        try:
+            registry = _read_registry(registry_file)
+            entry = next((item for item in registry.get("ips", []) if item.get("id") == ip_id), None)
+            if entry is None:
+                abort(404)
+            if not formal_root_input:
+                raise ValueError("请填写正式 NL 根目录")
+            formal_root = _resolve_registry_path(formal_root_input, registry_file)
+            entry["formal_nl_root"] = formal_root
+            _write_registry(registry_file, registry)
+            if not Path(formal_root).is_dir():
+                raise NotADirectoryError(f"正式 NL 根目录不存在或不是目录：{formal_root}")
+            library_id = str(entry.get("library_id") or entry.get("id") or "")
+            ip_name = str(entry.get("library_name") or entry.get("name") or entry.get("id") or "").strip()
+            if not ip_name:
+                raise ValueError("当前 IP 缺少正式目录匹配名称")
+            run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8]
+            run_dir = output / "formal_nl" / _library_dir(library_id) / "runs" / run_id
+            run_dir.mkdir(parents=True, exist_ok=False)
+            report_json = run_dir / "formal_nl.json"
+            report_md = run_dir / "formal_nl.md"
+            config_path = run_dir / "formal_nl_config.yml"
+            config = {
+                "library": {"id": library_id, "root": str(entry.get("raw_root") or ""),
+                            "ip_directory_name": ip_name},
+                "formal_nl": {"root": formal_root},
+                "output": {"report_json": str(report_json), "report_md": str(report_md)},
+            }
+            if yaml is None:
+                raise RuntimeError("运行正式 NL 盘点需要 PyYAML")
+            config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            report = run_formal_nl(config_path)
+            if not report_json.is_file() or not report_md.is_file():
+                raise RuntimeError("正式 NL 脚本未生成预期报告")
+            latest = {"generated_at": datetime.now(timezone.utc).isoformat(),
+                      "report_status": report.get("report_status", "INCOMPLETE"),
+                      "report_json": str(report_json), "report_md": str(report_md)}
+            _write_json(run_dir.parent.parent / "latest.json", latest)
+            entry["formal_nl_stages"] = [str(item.get("nl_version")) for item in report.get("matches", [])
+                                         if item.get("nl_version")]
+            entry["formal_nl_scan_at"] = latest["generated_at"]
+            entry["formal_nl_report_status"] = latest["report_status"]
+            _write_registry(registry_file, registry)
+            return page(ip_id, message="正式 NL 只读盘点已完成；结果不代表交付放行。",
+                        active_tab="formal-nl")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            message = str(exc)
+            latest = _formal_nl_latest(output, str(next((item.get("library_id") for item in _read_registry(registry_file).get("ips", []) if item.get("id") == ip_id), "")))
+            if latest:
+                message += "；上次成功盘点仍保留。"
+            return page(ip_id, error=message, active_tab="formal-nl"), 400
+
+    @blueprint.get("/formal-report/<kind>")
+    def formal_report(kind: str):
+        if kind not in {"json", "md"}:
+            abort(404)
+        registry = _read_registry(registry_file)
+        ip_id = request.args.get("id", "")
+        entry = next((item for item in registry.get("ips", []) if item.get("id") == ip_id), None)
+        if entry is None:
+            abort(404)
+        formal_dir = output / "formal_nl" / _library_dir(str(entry.get("library_id") or entry.get("id") or ""))
+        latest_path = formal_dir / "latest.json"
+        if not latest_path.is_file():
+            abort(404)
+        latest = _json_read(latest_path)
+        report_path = Path(str(latest.get(f"report_{kind}") or "")).resolve()
+        if not report_path.is_relative_to(output.resolve()) or not report_path.is_file():
+            abort(404)
+        return send_file(report_path, as_attachment=True, download_name=report_path.name)
 
     @blueprint.post("/run")
     def run_selected():
@@ -201,7 +443,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             _validate_for_run(entry)
             reviews, _ = run({"_config_path": str(registry_file), "ips": [entry],
                               "registry_ips": registry.get("ips") or []}, output)
-            return page(entry["id"], message="本次选择的检查已运行。", run_record=reviews[0])
+            return page(entry["id"], message="本次选择的检查已运行。", run_record=reviews[0], active_tab="review")
         except Exception as exc:
             return page(_text(request.form, "id"), error=str(exc)), 400
 

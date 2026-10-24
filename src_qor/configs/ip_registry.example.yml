@@ -1,6 +1,7 @@
 # Persistent per-IP registry for the local review workbench.
 # Paths are read by the machine running the workbench. Relative paths resolve
 # from this YAML file's directory.
+raw_root: ../../../3rd_IP
 ips:
   - id: example_ip
     library_id: vendor.example_ip

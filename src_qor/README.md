@@ -32,11 +32,20 @@ Start the local workbench with a persistent IP registry:
 
 ```bash
 PYTHONPATH=src_qor python -m lib_guard.workbench \
-  --registry src_qor/configs/ip_registry.example.yml \
-  --out-dir work/ip_review
+  --registry ../3rd_IP/configs/ip_registry.simulation.yml \
+  --out-dir work/ip_review_simulation \
+  --port 5084
 ```
 
-Open `http://127.0.0.1:5078/`. The left rail selects/searches IPs; the main area switches between check configuration and that IP's run history. Check inputs expand only when selected. The workbench binds to loopback, saves IP/check inputs back to the YAML registry, and invokes the same runner used by the CLI. A run is synchronous in the current version: the browser request waits for the selected checks to finish. It does not accept shell commands, modify formal NL links, or change release decisions.
+This command opens the multi-Vendor/multi-version Catalog simulation from the main `3rd_IP` tree. `SIMULATION_*` marker files are not valid IP data. Use `src_qor/configs/ip_registry.example.yml` only when creating a separate real registry.
+
+Open the port selected with `--port` (the simulation command above uses `http://127.0.0.1:5084/`). The standalone workbench has separate tabs for the registered library/version overview, RAW discovery, read-only Formal NL inventory, and engineering checks (with nested configuration/history tabs). RAW discovery follows the previous Catalog/Discover model: it recursively finds library roots whose direct children are delivery/version directories, retaining the relative `Vendor / middle_path / Library / Version` hierarchy. It accepts one-version libraries and summarizes view types from filenames only.
+
+Formal NL inventory is per IP and read-only. Enter the formal NL root and run a scan to list matching `lib_NL*` stages, IP link targets, visible file counts by View, filename-based Liberty/DB Corner clues, and the associated RAW source paths where resolvable. Stage order is inferred from the formal directory names and is a browsing aid, not an accepted Effective pointer. The inventory does not read file contents, validate required views or semantic correctness, change links, or approve release. JSON and Markdown snapshots are stored under `<out-dir>/formal_nl/<library-id>/runs/`; the last successful snapshot remains available if a later refresh fails.
+
+Each Discover run writes the legacy-style candidate artifacts under `<out-dir>/discovery/`: `library.list` (editable review snapshot), `library_discovery.json` (candidate data and traversal statistics), and `library_discovery.html` (human-readable candidate table). The workbench exposes links to these artifacts. A candidate enters the Catalog overview only after explicit registration; registration updates the YAML registry with Vendor/group/library/version metadata. Discover and registration do not rename, move, copy, parse, or link files under the RAW root. Therefore `3rd_IP` retains its source hierarchy; the Catalog hierarchy is a view of the registry, not a physical reorganization.
+
+The left rail searches registered libraries grouped by Vendor. Each registered library keeps the complete `raw_versions` list and absolute paths; no version is automatically declared newest. Check inputs expand only when selected. The workbench binds to loopback, saves library/check inputs back to the YAML registry, and invokes the same runner used by the CLI. A run is synchronous in the current version: the browser request waits for the selected checks to finish. It does not accept shell commands, modify formal NL links, or change release decisions.
 
 The example config uses placeholder absolute paths. Replace them with paths readable by the host running the checks. Relative paths in YAML are resolved from the YAML file's directory.
 

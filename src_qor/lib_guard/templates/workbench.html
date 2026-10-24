@@ -4,28 +4,48 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IP 工程检查工作台</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='workbench.css', v='20261024.2') }}">
-  <script src="{{ url_for('static', filename='workbench.js', v='20261024.2') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='workbench.css', v='20261024.7') }}">
+  <script src="{{ url_for('static', filename='workbench.js', v='20261024.7') }}" defer></script>
 </head>
-<body>
+<body data-active-tab="{{ active_tab }}">
   <a class="skip-link" href="#main">跳到工作区</a>
   <header class="topbar">
     <a class="brand" href="{{ url_for('ip_review.index', ip=selected.id if selected else '') }}" aria-label="IP 工程检查首页">
       <span class="brand-mark">IP</span><span><strong>工程检查</strong><small>本机工作台</small></span>
     </a>
-    <div class="topbar-status"><span class="status-dot"></span>独立服务 · 配置保存在 IP 清单</div>
+    <div class="topbar-status"><span class="status-dot"></span>{{ environment_label|default('独立服务 · 配置保存在 IP 清单') }}</div>
   </header>
 
   <div class="app-shell">
-    <aside class="ip-rail" aria-label="IP 清单">
-      <div class="rail-head"><div><h1>检查对象</h1><p>{{ ips|length }} 个 IP</p></div><a class="icon-button" href="{{ url_for('ip_review.index', new=1) }}" title="登记 IP" aria-label="登记 IP">＋</a></div>
-      <label class="search-box"><span aria-hidden="true">⌕</span><input type="search" data-ip-search placeholder="筛选 IP" aria-label="筛选 IP"></label>
+    <aside class="ip-rail" aria-label="已登记库">
+      <div class="rail-head"><div><h1>库与版本</h1><p>{{ ips|length }} 个库 · RAW / 正式 NL</p></div><a class="icon-button" href="{{ url_for('ip_review.index', tab='discover') }}" title="发现 RAW 库" aria-label="发现 RAW 库">＋</a></div>
+      <div class="rail-filters">
+        <label class="search-box"><span aria-hidden="true">⌕</span><input type="search" data-ip-search placeholder="搜索 Vendor、库或版本" aria-label="搜索 Vendor、库或版本"></label>
+        <div class="sidebar-scopes" role="group" aria-label="目录类型筛选">
+          <button type="button" data-sidebar-scope="all" aria-pressed="true">全部</button>
+          <button type="button" data-sidebar-scope="raw" aria-pressed="false">RAW</button>
+          <button type="button" data-sidebar-scope="formal" aria-pressed="false">正式 NL</button>
+        </div>
+        <label class="vendor-filter">Vendor<select data-vendor-filter aria-label="筛选 Vendor"><option value="">全部 Vendor</option>{% for vendor in vendors %}<option value="{{ vendor|lower }}">{{ vendor }}</option>{% endfor %}</select></label>
+        <div class="sidebar-result-count" data-sidebar-count>{{ ips|length }} 个库</div>
+      </div>
       <nav class="ip-list" data-ip-list>
-        {% for ip in ips %}
-        <a class="ip-item {{ 'is-selected' if selected and ip.id == selected.id else '' }}" data-ip-name="{{ (ip.name or ip.id)|lower }} {{ ip.library_id|lower }}" href="{{ url_for('ip_review.index', ip=ip.id) }}" {{ 'aria-current=page' if selected and ip.id == selected.id else '' }}>
-          <span class="ip-item-mark">{{ (ip.name or ip.id)[:1]|upper }}</span><span class="ip-item-copy"><strong>{{ ip.name or ip.id }}</strong><small>{{ ip.library_id }}</small></span>
-        </a>
-        {% else %}<p class="empty-state">还没有 IP。使用右侧表单登记第一个检查对象。</p>{% endfor %}
+        {% for vendor, vendor_ips in sidebar_ips|groupby('vendor') %}
+        <div class="vendor-label" data-vendor-heading data-vendor-name="{{ (vendor or '未指定 Vendor')|lower }}">{{ vendor or '未指定 Vendor' }}</div>
+        {% for ip in vendor_ips %}
+          {% set raw_versions = ip.sidebar_raw_versions or [] %}{% set formal_stages = ip.sidebar_formal_stages or [] %}
+          {% set sidebar_search = [ip.name or ip.id, ip.id, ip.library_id, ip.vendor or '未指定 Vendor', ip.middle_path or ''] + (raw_versions|map(attribute='id')|list) + formal_stages %}
+          <div class="ip-entry" data-ip-entry data-ip-name="{{ sidebar_search|join(' ')|lower }}" data-ip-vendor="{{ (ip.vendor or '未指定 Vendor')|lower }}" data-has-raw="{{ 'true' if raw_versions else 'false' }}" data-has-formal="{{ 'true' if ip.formal_nl_root or formal_stages else 'false' }}">
+          <a class="ip-item {{ 'is-selected' if selected and ip.id == selected.id else '' }}" href="{{ url_for('ip_review.index', ip=ip.id, tab='catalog') }}" {{ 'aria-current=page' if selected and ip.id == selected.id else '' }}>
+            <span class="ip-item-mark">{{ (ip.name or ip.id)[:1]|upper }}</span><span class="ip-item-copy"><strong>{{ ip.library_name or ip.name or ip.id }}</strong><small>{{ ip.vendor or '未指定 Vendor' }}{% if ip.middle_path %} / {{ ip.middle_path }}{% endif %} · RAW {{ raw_versions|length }} / 正式 {{ formal_stages|length }}</small></span>
+          </a>
+          <div class="ip-version-tree">
+            <div class="ip-version-group" data-source-kind="raw"><span class="source-label">RAW</span><div>{% if raw_versions|length > 1 %}<details class="sidebar-version-details"><summary>排序最新版本：{{ raw_versions[-1].id }}（共 {{ raw_versions|length }}）</summary><div class="sidebar-version-list">{% for version in raw_versions %}<a class="sidebar-version" href="{{ url_for('ip_review.index', ip=ip.id, tab='catalog') }}" title="{{ version.path or '' }}">{{ version.id }}</a>{% endfor %}</div></details>{% elif raw_versions %}<a class="sidebar-version" href="{{ url_for('ip_review.index', ip=ip.id, tab='catalog') }}" title="{{ raw_versions[0].path or '' }}">{{ raw_versions[0].id }}</a>{% else %}<span class="sidebar-empty">未登记</span>{% endif %}</div></div>
+            <div class="ip-version-group" data-source-kind="formal"><span class="source-label formal-source-label">正式 NL</span><div>{% if formal_stages|length > 1 %}<details class="sidebar-version-details"><summary>排序最新阶段：{{ formal_stages[-1] }}（共 {{ formal_stages|length }}）</summary><div class="sidebar-version-list">{% for stage in formal_stages %}<a class="sidebar-version formal-version" href="{{ url_for('ip_review.index', ip=ip.id, tab='formal-nl') }}" title="正式目录阶段；排序不代表有效版">{{ stage }}</a>{% endfor %}</div></details>{% elif formal_stages %}<a class="sidebar-version formal-version" href="{{ url_for('ip_review.index', ip=ip.id, tab='formal-nl') }}" title="正式目录阶段；排序不代表有效版">{{ formal_stages[0] }}</a>{% else %}<span class="sidebar-empty">{{ '已配置，待盘点' if ip.formal_nl_root else '未配置' }}</span>{% endif %}</div></div>
+          </div>
+          </div>
+        {% endfor %}
+        {% else %}<p class="empty-state">尚无已登记库。到“RAW 发现”选择目录并登记。</p>{% endfor %}
       </nav>
       <div class="rail-foot"><span class="status-dot"></span>仅监听本机回环地址</div>
     </aside>
@@ -39,12 +59,75 @@
       {% if message %}<div class="notice" role="status">{{ message }}</div>{% endif %}
       {% if error %}<div class="notice is-error" role="alert">{{ error }}</div>{% endif %}
 
-      <nav class="view-tabs" role="tablist" aria-label="IP 工作区">
-        <button type="button" role="tab" id="tab-config" aria-controls="panel-config" aria-selected="true" data-workbench-tab="config">检查配置</button>
-        <button type="button" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="false" data-workbench-tab="history">运行记录 <span>{{ history|length }}</span></button>
+      <nav class="view-tabs primary-tabs" role="tablist" aria-label="工作台功能">
+        <button type="button" role="tab" aria-selected="false" data-workbench-tab="catalog" data-tab-group="main">库与版本</button>
+        <button type="button" role="tab" aria-selected="false" data-workbench-tab="discover" data-tab-group="main">RAW 发现</button>
+        <button type="button" role="tab" aria-selected="false" data-workbench-tab="formal-nl" data-tab-group="main">正式 NL</button>
+        <button type="button" role="tab" aria-selected="false" data-workbench-tab="review" data-tab-group="main">检查工作区</button>
       </nav>
 
-      <section id="panel-config" class="tab-panel" role="tabpanel" aria-labelledby="tab-config" data-workbench-panel="config">
+      <section class="tab-panel" role="tabpanel" data-workbench-panel="catalog" data-tab-group="main">
+        <section class="panel catalog-panel">
+          <div class="panel-head"><div><h3>RAW 库登记总览</h3><p>按旧 Catalog / Discover 口径展示 Vendor、分组路径、库、交付版本和视图；版本排序只作目录参考，不代表已确认的新旧关系。</p></div><span class="summary-count">{{ ips|length }} 个库</span></div>
+          {% if ips %}<div class="table-wrap"><table><thead><tr><th>Vendor</th><th>分组路径</th><th>库</th><th>RAW 版本</th><th>版本数</th><th>视图</th><th>库路径</th><th></th></tr></thead><tbody>
+          {% for ip in ips %}<tr><td>{{ ip.vendor or '未指定' }}</td><td>{{ ip.middle_path or '—' }}</td><td><strong>{{ ip.library_name or ip.name or ip.id }}</strong><small class="cell-sub">{{ ip.library_id }}</small></td><td>{% for version in ip.raw_versions or [] %}<span class="version-chip">{{ version.id }}</span>{% else %}<span class="muted">未发现版本</span>{% endfor %}</td><td>{{ ip.raw_versions|length }}</td><td>{% set view_set = [] %}{% for version in ip.raw_versions or [] %}{% for view in version.views or [] %}{% if view not in view_set %}{% set _ = view_set.append(view) %}{% endif %}{% endfor %}{% endfor %}{{ view_set|join(' · ') or '—' }}</td><td class="path-cell"><code>{{ ip.raw_root or '—' }}</code></td><td><a class="table-link" href="{{ url_for('ip_review.index', ip=ip.id, tab='review') }}">检查</a></td></tr>
+          {% if ip.raw_versions %}<tr class="version-detail-row"><td colspan="8"><details><summary>查看 {{ ip.raw_versions|length }} 个版本路径与视图</summary><div class="version-list">{% for version in ip.raw_versions %}<div><strong>{{ version.id }}</strong><span>{{ version.views|join(' · ') or '无识别视图' }}</span><code>{{ version.path }}</code></div>{% endfor %}</div></details></td></tr>{% endif %}
+          {% endfor %}</tbody></table></div>{% else %}<div class="empty-history"><strong>还没有登记 RAW 库</strong><p>从“RAW 发现”输入 RAW 根目录，预览后选择要登记的库。</p><button type="button" class="button button-primary" data-main-tab="discover">发现 RAW 库</button></div>{% endif %}
+        </section>
+      </section>
+
+      <section class="tab-panel" role="tabpanel" data-workbench-panel="discover" data-tab-group="main" hidden>
+        <section class="panel discover-panel"><div class="panel-head"><div><h3>发现 RAW 库与版本</h3><p>递归识别直接包含交付版本的库根目录，保留 Vendor 与中间分组路径；仅按文件名统计视图，不读取内容、不复制、不创建链接。</p></div></div>
+          <form method="post" action="{{ url_for('ip_review.discover') }}" class="discover-form"><label>RAW 根目录<input name="raw_root" value="{{ raw_root }}" required placeholder="例如 /path/to/3rd_IP"></label><button class="button button-primary" type="submit">扫描并预览</button></form>
+          {% if discovered %}<form method="post" action="{{ url_for('ip_review.register_discovered') }}" class="candidate-form"><input type="hidden" name="raw_root" value="{{ raw_root }}"><div class="candidate-head"><div><strong>发现 {{ discovered|length }} 个库候选</strong><span>候选默认“待确认”；勾选登记后才进入 Catalog，不会修改 RAW。</span>{% if discovery_artifacts %}<nav class="artifact-links" aria-label="Discover 报告"><a href="{{ url_for('ip_review.discovery_artifact', artifact_name='library_discovery.html') }}" target="_blank" rel="noreferrer">预览候选报告</a><a href="{{ url_for('ip_review.discovery_artifact', artifact_name='library_discovery.json') }}">JSON</a><a href="{{ url_for('ip_review.discovery_artifact', artifact_name='library.list') }}">library.list</a></nav>{% endif %}</div><label class="select-all"><input type="checkbox" data-select-all>全选</label></div>
+            <div class="table-wrap"><table><thead><tr><th></th><th>状态</th><th>Vendor</th><th>分组路径</th><th>库</th><th>版本</th><th>版本数</th><th>视图类型</th><th>库根路径</th></tr></thead><tbody>
+            {% for candidate in discovered %}<tr><td><input type="checkbox" name="library_ids" value="{{ candidate.library_id }}" data-candidate></td><td>待确认</td><td>{{ candidate.vendor }}</td><td>{{ candidate.middle_path or '—' }}</td><td><strong>{{ candidate.display_name }}</strong><small class="cell-sub">{{ candidate.library_id }}</small></td><td>{% for version in candidate.versions %}<span class="version-chip">{{ version.id }}</span>{% endfor %}</td><td>{{ candidate.version_count }}</td><td>{{ candidate.view_types|join(' · ') }}</td><td class="path-cell"><code>{{ candidate.root_abs }}</code></td></tr>{% endfor %}
+            </tbody></table></div><div class="form-actions"><button class="button button-primary" type="submit">登记所选库和版本</button><span>登记只更新工作台 YAML，不改 RAW 原目录。</span></div>
+          </form>{% elif request.method == 'POST' and not error %}<div class="empty-history compact-empty"><strong>没有发现可登记的库</strong><p>请确认所选路径下存在库根目录，且库根目录的直接子目录是包含可识别视图文件的交付版本。</p></div>{% endif %}
+        </section>
+      </section>
+
+      <section class="tab-panel" role="tabpanel" data-workbench-panel="formal-nl" data-tab-group="main" hidden>
+        {% if selected %}
+        <section class="panel formal-panel">
+          <div class="panel-head"><div><h3>正式 NL 目录盘点</h3><p>只读路径盘点：读取正式目录中的链接和可见文件名，帮助比较正式阶段间的组成与来源；不读取内容、不修改链接、不判断发布放行。</p></div></div>
+          <form method="post" action="{{ url_for('ip_review.scan_formal_nl') }}" class="discover-form">
+            <input type="hidden" name="id" value="{{ selected.id }}">
+            <label>正式 NL 根目录<input name="formal_nl_root" value="{{ selected.formal_nl_root or '' }}" required placeholder="例如 /proj/release/NL"></label>
+            <button class="button button-primary" type="submit">只读盘点</button>
+          </form>
+          {% if formal_nl.report %}
+          <div class="formal-result-head">
+            <div><strong>最近一次盘点</strong><span>{{ formal_nl.generated_at }} · 状态：{{ formal_nl.report_status }}</span></div>
+            <nav class="artifact-links" aria-label="正式 NL 报告下载">
+              <a href="{{ url_for('ip_review.formal_report', kind='md', id=selected.id) }}">阅读报告 Markdown</a>
+              <a href="{{ url_for('ip_review.formal_report', kind='json', id=selected.id) }}">完整数据 JSON</a>
+            </nav>
+          </div>
+          <div class="formal-caveat"><strong>阅读口径</strong>阶段排序来自正式路径中的 `lib_NL*` 名称；文件类型依据链接目标路径/文件名识别；Corner 为文件名线索，不代表库内条件已验证。RAW 来源无法唯一对应时会单独标出。</div>
+          {% if formal_nl.stages %}
+          <div class="table-wrap"><table class="formal-table"><thead><tr><th>正式阶段</th><th>目录顺序</th><th>IP 链接</th><th>解析目标</th><th>文件数</th><th>类型统计</th><th>Corner 文件名线索</th></tr></thead><tbody>
+            {% for stage in formal_nl.stages %}
+            <tr><td><strong>{{ stage.stage }}</strong></td><td>{{ stage.classification_label }}</td><td class="path-cell"><code>{{ stage.link_path or stage.formal_ip_path or '—' }}</code></td><td class="path-cell"><code>{{ stage.target_path or stage.resolved_target or '—' }}</code></td><td>{{ stage.file_count or stage.inventory.file_count or '—' }}</td><td>{% for view, count in (stage.inventory.view_counts or {}).items() %}<span class="version-chip">{{ view }} {{ count }}</span>{% else %}<span class="muted">未识别</span>{% endfor %}</td><td>{% for corner in stage.corner_rows %}<span class="version-chip">{{ corner.view }} · {{ corner.label }} {{ corner.count }}</span>{% else %}<span class="muted">无可识别线索</span>{% endfor %}</td></tr>
+            {% if stage.inventory.files %}<tr class="formal-detail-row"><td colspan="7"><details><summary>查看 {{ stage.inventory.files|length }} 个文件及其链接来源</summary><div class="table-wrap formal-file-wrap"><table><thead><tr><th>类型</th><th>正式相对路径</th><th>RAW 来源路径</th></tr></thead><tbody>{% for file in stage.inventory.files %}<tr><td>{{ file.view or 'other' }}</td><td class="path-cell"><code>{{ file.published_path or file.relative_path or file.path or '—' }}</code></td><td class="path-cell"><code>{{ file.source_path or file.target_path or '—' }}</code></td></tr>{% endfor %}</tbody></table></div></details></td></tr>{% endif %}
+            {% endfor %}
+          </tbody></table></div>
+          {% else %}<div class="empty-history compact-empty"><strong>没有找到与当前 IP 匹配的正式阶段</strong><p>请核对正式 NL 根目录、IP 名称以及目录软链接布局。</p></div>{% endif %}
+          {% if formal_nl.broken_links %}<section class="formal-exceptions"><h4>失效链接（{{ formal_nl.broken_links|length }}）</h4><ul>{% for item in formal_nl.broken_links %}<li><code>{{ item.path or item.link_path or item }}</code></li>{% endfor %}</ul></section>{% endif %}
+          {% if formal_nl.ambiguous_versions %}<section class="formal-exceptions"><h4>来源不唯一（{{ formal_nl.ambiguous_versions|length }}）</h4><p>未自动选择 RAW 版本；详情见报告。</p></section>{% endif %}
+          {% else %}
+          <div class="empty-history compact-empty"><strong>尚无正式 NL 盘点结果</strong><p>填写该 IP 在正式目录中的根路径，然后执行只读盘点。结果按 IP 独立保存。</p></div>
+          {% endif %}
+        </section>
+        {% else %}<section class="panel"><div class="empty-history"><strong>先登记或选择一个 IP</strong><p>正式 NL 盘点需要按 IP 名称查找正式目录链接。</p><a class="button button-primary" href="{{ url_for('ip_review.index', tab='discover') }}">发现 RAW 库</a></div></section>{% endif %}
+      </section>
+
+      <section class="tab-panel" role="tabpanel" data-workbench-panel="review" data-tab-group="main" hidden>
+        <nav class="view-tabs review-tabs" role="tablist" aria-label="检查工作区">
+          <button type="button" role="tab" id="tab-config" aria-controls="panel-config" aria-selected="true" data-workbench-tab="config" data-tab-group="review">检查配置</button>
+          <button type="button" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="false" data-workbench-tab="history" data-tab-group="review">运行记录 <span>{{ history|length }}</span></button>
+        </nav>
+      <section id="panel-config" class="tab-panel" role="tabpanel" aria-labelledby="tab-config" data-workbench-panel="config" data-tab-group="review">
         {% if run_record %}<section class="result-strip"><div><span class="eyebrow">本次运行</span><strong>{{ run_record.execution_status }}</strong><small>{{ run_record.review_id }}</small></div><a class="button button-secondary" href="{{ url_for('ip_review.download', library_id=run_record.ip.library_id, review_id=run_record.review_id) }}">下载 Excel</a></section>{% endif %}
         <section class="panel config-panel">
           <div class="panel-head"><div><h3>检查内容</h3><p>勾选要运行的检查，再填写对应输入。未勾选的检查不会执行。</p></div></div>
@@ -83,10 +166,11 @@
         </section>
       </section>
 
-      <section id="panel-history" class="tab-panel" role="tabpanel" aria-labelledby="tab-history" data-workbench-panel="history" hidden>
+      <section id="panel-history" class="tab-panel" role="tabpanel" aria-labelledby="tab-history" data-workbench-panel="history" data-tab-group="review" hidden>
         <section class="panel history-panel"><div class="panel-head"><div><h3>运行记录</h3><p>只显示当前 IP 的最近 10 次结果；不同 IP 不合并。</p></div></div>
           {% if history %}<div class="table-wrap"><table><thead><tr><th>生成时间</th><th>执行状态</th><th>检查项</th><th>已确认变化</th><th>不一致</th><th>待核实</th><th></th></tr></thead><tbody>{% for record in history %}<tr><td>{{ record.generated_at or '' }}</td><td><span class="result-state">{{ record.execution_status }}</span></td><td>{{ record.requested_checks|join('、') }}</td><td>{{ record.summary.confirmed_changes or 0 }}</td><td>{{ record.summary.confirmed_mismatches or 0 }}</td><td>{{ record.summary.unverified or 0 }}</td><td><a class="table-link" href="{{ record.workbook_url }}">下载 Excel</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-history"><span class="empty-mark">—</span><strong>暂无运行记录</strong><p>运行检查后，结果和单 IP Excel 会出现在这里。</p><button type="button" class="button button-secondary" data-open-config>配置检查</button></div>{% endif %}
         </section>
+      </section>
       </section>
     </main>
   </div>
