@@ -1,0 +1,30 @@
+# Each entry is one IP. Use unique library_id values to keep reports isolated.
+# Replace the paths below with paths readable from the machine running the checks.
+ips:
+  - id: example_ip
+    library_id: vendor.example_ip
+    name: Example IP
+    raw_version: raw_version_id
+    formal_stage: lib_NL2.5_3
+    publish_latest: false
+    checks:
+      # Read-only formal-directory inventory and RAW-origin/path analysis.
+      formal_nl:
+        config: /path/to/formal_nl_audit.yml
+
+      # Macro-to-View index. The selected root is traversed to build its FileMap.
+      macro_index:
+        root: /path/to/raw/example_ip/version
+        version: raw_version_id
+        library_id: vendor.example_ip
+
+      # LEF pair comparison. Remove this block when no baseline is available.
+      lef_review:
+        old_file: /path/to/old/example.lef
+        new_file: /path/to/new/example.lef
+
+      # If lef_review is selected above, its new LEF is bound automatically.
+      # Otherwise provide lef_analysis_json and a matching lef_library_id.
+      lef_liberty_check:
+        liberty_files:
+          - /path/to/corner/example_tt.lib.gz
