@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - exercised only in intentionally minima
 from flask import Blueprint, Flask, abort, redirect, render_template, request, send_file, url_for
 from werkzeug.exceptions import HTTPException
 
-from .review_runner import CHECK_NAMES, _json_read, _library_dir, run
+from .review_runner import CHECK_NAMES, _json_read, _latest_complete_run, _library_dir, run
 from .raw_discovery import discover_raw_report, write_discovery_artifacts
 from .effective_file_tracker import run as run_formal_nl
 
@@ -362,12 +362,22 @@ def _update_task(task_path: Path, latest_attempt_path: Path, task: dict[str, Any
     _write_json(task_path, task)
 
 
+def _task_event(task: dict[str, Any], phase: str, message: str) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    events = list(task.get("events") or [])
+    events.append({"at": now, "message": message})
+    return {**task, "phase": phase, "progress_message": message, "updated_at": now,
+            "events": events[-12:]}
+
+
 def _interrupt_stale_task(task_path: Path, latest_attempt_path: Path, task: dict[str, Any]) -> dict[str, Any]:
     if task.get("status") not in {"QUEUED", "RUNNING"} or task.get("worker_session") == _WORKBENCH_SESSION_ID:
         return task
-    interrupted = {**task, "status": "INTERRUPTED", "execution_status": "INTERRUPTED",
-                   "finished_at": datetime.now(timezone.utc).isoformat(),
-                   "error": "工作台进程重启，任务未自动恢复；请确认输入后重新提交。"}
+    interrupted = _task_event(
+        {**task, "status": "INTERRUPTED", "execution_status": "INTERRUPTED",
+         "finished_at": datetime.now(timezone.utc).isoformat(),
+         "error": "工作台进程重启，任务未自动恢复；请确认输入后重新提交。"},
+        "已中断", "工作台进程重启，任务未自动恢复。请确认输入后重新提交。")
     _update_task(task_path, latest_attempt_path, interrupted)
     return interrupted
 
@@ -452,6 +462,24 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             sidebar_ip.setdefault("vendor", "未指定 Vendor")
             library_id = str(source_ip.get("library_id") or source_ip.get("id") or "")
             latest_success, _ = _history(output, library_id) if library_id else ({}, [])
+            latest_complete, _ = _latest_complete_run(
+                output / "libraries" / _library_dir(library_id)) if library_id else ({}, None)
+            if latest_success.get("execution_status") != "COMPLETE":
+                latest_success = latest_complete
+            if library_id:
+                library_dir = output / "libraries" / _library_dir(library_id)
+                workbook_pointer_path = library_dir / "latest_workbook.json"
+                if workbook_pointer_path.is_file():
+                    try:
+                        workbook_review_id = str(_json_read(workbook_pointer_path).get("review_id") or "")
+                        if re.fullmatch(r"review_[A-Za-z0-9_-]+", workbook_review_id):
+                            workbook_result_path = library_dir / "runs" / workbook_review_id / "review_result.json"
+                            if workbook_result_path.is_file():
+                                workbook_result = _json_read(workbook_result_path)
+                                if workbook_result.get("execution_status") == "COMPLETE":
+                                    latest_success = workbook_result
+                    except (OSError, ValueError, json.JSONDecodeError):
+                        pass
             _, attempt_path = _task_paths(output, library_id, "") if library_id else (Path(), Path())
             try:
                 latest_attempt = _json_read(attempt_path) if attempt_path.is_file() else {}
@@ -463,6 +491,12 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             catalog_ip = dict(source_ip)
             catalog_ip["latest_success"] = latest_success
             catalog_ip["latest_attempt"] = latest_attempt
+            if library_id:
+                stable_workbook = output / "libraries" / _library_dir(library_id) / "latest.xlsx"
+                catalog_ip["latest_excel_url"] = (
+                    url_for("ip_review.review_artifact",
+                            artifact=f"libraries/{_library_dir(library_id)}/latest.xlsx")
+                    if stable_workbook.is_file() else "")
             catalog_ips.append(catalog_ip)
             sidebar_ip["sidebar_raw_versions"] = sorted(
                 list(source_ip.get("raw_versions") or []),
@@ -550,12 +584,23 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         )
         library_id = str(selected.get("library_id") or "") if selected else ""
         library_dir = output / "libraries" / _library_dir(library_id) if library_id else None
-        workbook_review_id = next((
-            str(record.get("review_id") or "") for record in records
-            if record.get("review_id")
-            and library_dir is not None
-            and (library_dir / "runs" / str(record["review_id"]) / "ip_review.xlsx").is_file()
-        ), "")
+        workbook_review_id = ""
+        workbook_pointer_path = library_dir / "latest_workbook.json" if library_dir else None
+        if workbook_pointer_path is not None and workbook_pointer_path.is_file():
+            try:
+                pointer_id = str(_json_read(workbook_pointer_path).get("review_id") or "")
+            except (OSError, ValueError, json.JSONDecodeError):
+                pointer_id = ""
+            if (re.fullmatch(r"review_[A-Za-z0-9_-]+", pointer_id)
+                    and (library_dir / "runs" / pointer_id / "ip_review.xlsx").is_file()):
+                workbook_review_id = pointer_id
+        if not workbook_review_id:
+            workbook_review_id = next((
+                str(record.get("review_id") or "") for record in records
+                if record.get("review_id") and record.get("execution_status") == "COMPLETE"
+                and library_dir is not None
+                and (library_dir / "runs" / str(record["review_id"]) / "ip_review.xlsx").is_file()
+            ), "")
         if not workbook_review_id and latest.get("review_id") and library_dir is not None:
             pointer_workbook = library_dir / "runs" / str(latest["review_id"]) / "ip_review.xlsx"
             if pointer_workbook.is_file():
@@ -566,8 +611,29 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                 (record for record in records if str(record.get("review_id") or "") == workbook_review_id),
                 {"review_id": workbook_review_id},
             )
-        latest_workbook_url = (url_for("ip_review.download", library_id=library_id,
-                                       review_id=workbook_review_id) if workbook_review_id else "")
+        stable_workbook = library_dir / "latest.xlsx" if library_dir else None
+        stable_workbook_url = (
+            url_for("ip_review.review_artifact", artifact=f"libraries/{_library_dir(library_id)}/latest.xlsx")
+            if stable_workbook is not None and (stable_workbook.is_file() or workbook_review_id) else "")
+        if selected:
+            selected = dict(selected)
+            selected["latest_excel_url"] = stable_workbook_url
+        latest_workbook_url = (
+            stable_workbook_url if stable_workbook_url else
+            (url_for("ip_review.download", library_id=library_id, review_id=workbook_review_id)
+             if workbook_review_id else "")
+        )
+        task_review_id = str((run_record or latest_attempt).get("review_id") or "")
+        task_workbook_url = ""
+        if task_review_id and re.fullmatch(r"review_[A-Za-z0-9_-]+", task_review_id) and library_dir is not None:
+            task_workbook_path = library_dir / "runs" / task_review_id / "ip_review.xlsx"
+            if task_workbook_path.is_file():
+                task_workbook_url = url_for(
+                    "ip_review.review_artifact",
+                    artifact=f"libraries/{_library_dir(library_id)}/runs/{task_review_id}/ip_review.xlsx")
+        review_overview_path = output / "ip_checks" / "index.html"
+        review_overview_url = (url_for("ip_review.review_artifact", artifact="ip_checks/index.html")
+                               if review_overview_path.is_file() else "")
         return render_template("workbench.html", ips=catalog_ips, sidebar_ips=sidebar_ips, selected=selected, latest=latest_display,
                                history=records, latest_attempt=latest_attempt,
                                message=message, error=error, run_record=run_record,
@@ -582,6 +648,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                default_target_lef=default_target_lef, default_base_lef=default_base_lef,
                                quick_checks=quick_checks, quick_notes=quick_notes,
                                latest_workbook_url=latest_workbook_url,
+                               task_workbook_url=task_workbook_url,
+                               review_overview_url=review_overview_url,
                                file_choices_limited=bool(file_choice_reasons),
                                file_choices_notice=file_choices_notice)
 
@@ -874,14 +942,24 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                     _interrupt_stale_task(stale_task_path, latest_attempt_path, latest_attempt)
                 task_id = f"task_{uuid4().hex}"
                 task_path, latest_attempt_path = _task_paths(output, library_id, task_id)
-                task = {"task_id": task_id, "library_id": library_id, "ip_id": entry["id"],
-                        "status": "QUEUED", "execution_status": "PENDING",
-                        "worker_session": _WORKBENCH_SESSION_ID,
-                        "submitted_at": datetime.now(timezone.utc).isoformat(), "requested_checks": sorted(entry["checks"])}
+                task = _task_event({
+                    "task_id": task_id, "library_id": library_id, "ip_id": entry["id"],
+                    "status": "QUEUED", "execution_status": "PENDING",
+                    "worker_session": _WORKBENCH_SESSION_ID,
+                    "submitted_at": datetime.now(timezone.utc).isoformat(),
+                    "requested_checks": sorted(entry["checks"]),
+                }, "排队中", "任务已登记，等待后台执行资源。")
                 _update_task(task_path, latest_attempt_path, task)
 
             def execute(lock_handle=library_lock) -> None:
-                running = {**task, "status": "RUNNING", "started_at": datetime.now(timezone.utc).isoformat()}
+                check_labels = {
+                    "formal_nl": "正式目录盘点", "macro_index": "Macro / View 文件索引",
+                    "lef_review": "LEF 双文件核查", "lef_liberty_check": "LEF–Liberty 接口核查",
+                }
+                running = _task_event({
+                    **task, "status": "RUNNING", "started_at": datetime.now(timezone.utc).isoformat(),
+                }, "执行检查", "正在执行：" + "、".join(
+                    check_labels.get(name, name) for name in task["requested_checks"]))
                 try:
                     _update_task(task_path, latest_attempt_path, running)
                     reviews, _ = run({"_config_path": str(registry_file), "ips": [entry],
@@ -889,13 +967,18 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                     if not reviews:
                         raise RuntimeError("检查 Runner 未返回结果")
                     review = reviews[0]
-                    finished = {**running, "status": "COMPLETE", "execution_status": review.get("execution_status", "INCOMPLETE"),
-                                "finished_at": datetime.now(timezone.utc).isoformat(),
-                                "review_id": review.get("review_id"), "summary": review.get("summary", {})}
+                    conclusion = review.get("execution_status", "INCOMPLETE")
+                    finished = _task_event({
+                        **running, "status": "COMPLETE", "execution_status": conclusion,
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                        "review_id": review.get("review_id"), "summary": review.get("summary", {}),
+                    }, "已完成", f"检查完成：{conclusion}。报告 {review.get('review_id') or '已生成'}。")
                     _update_task(task_path, latest_attempt_path, finished)
                 except Exception as exc:
-                    failed = {**running, "status": "FAILED", "execution_status": "FAILED",
-                              "finished_at": datetime.now(timezone.utc).isoformat(), "error": str(exc)}
+                    failed = _task_event({
+                        **running, "status": "FAILED", "execution_status": "FAILED",
+                        "finished_at": datetime.now(timezone.utc).isoformat(), "error": str(exc),
+                    }, "已失败", f"任务失败：{exc}")
                     _update_task(task_path, latest_attempt_path, failed)
                 finally:
                     _REVIEW_TASK_SLOTS.release()
@@ -944,7 +1027,56 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         workbook_path = result_path.parent / "ip_review.xlsx"
         if not result_path.is_file() or not workbook_path.is_file():
             abort(404)
-        return send_file(workbook_path, as_attachment=True, download_name=f"{library_id.replace('/', '_')}_{review_id}.xlsx")
+        safe_library_name = re.sub(r"[^A-Za-z0-9._-]+", "_", library_id).strip("._-") or "library"
+        return send_file(workbook_path, as_attachment=True,
+                         download_name=f"{safe_library_name}_{review_id}.xlsx")
+
+    @blueprint.get("/review-reports/<path:artifact>")
+    def review_artifact(artifact: str):
+        registry = _read_registry(registry_file)
+        allowed_libraries = {
+            _library_dir(str(item.get("library_id") or item.get("id") or "")):
+            str(item.get("library_id") or item.get("id") or "")
+            for item in registry.get("ips", [])
+        }
+        relative = Path(artifact)
+        if relative.is_absolute() or ".." in relative.parts:
+            abort(404)
+        if relative.as_posix() == "ip_checks/index.html":
+            target = output / relative
+            if not target.is_file():
+                abort(404)
+            try:
+                target.resolve().relative_to(output)
+            except ValueError:
+                abort(404)
+            return send_file(target, mimetype="text/html", as_attachment=False)
+        parts = relative.parts
+        if len(parts) < 3 or parts[0] != "libraries" or parts[1] not in allowed_libraries:
+            abort(404)
+        library_id = allowed_libraries[parts[1]]
+        if parts[2:] == ("latest.xlsx",):
+            target = output / relative
+            safe_library_name = re.sub(r"[^A-Za-z0-9._-]+", "_", library_id).strip("._-") or "library"
+            download_name = f"{safe_library_name}_latest.xlsx"
+            if not target.is_file():
+                _, legacy_workbook = _latest_complete_run(output / "libraries" / parts[1])
+                if legacy_workbook is None:
+                    abort(404)
+                target = legacy_workbook
+        elif len(parts) == 5 and parts[2] == "runs" and re.fullmatch(r"review_[A-Za-z0-9_-]+", parts[3]) and parts[4] == "ip_review.xlsx":
+            target = output / relative
+            safe_library_name = re.sub(r"[^A-Za-z0-9._-]+", "_", library_id).strip("._-") or "library"
+            download_name = f"{safe_library_name}_{parts[3]}.xlsx"
+        else:
+            abort(404)
+        try:
+            target.resolve().relative_to(output)
+        except ValueError:
+            abort(404)
+        if not target.is_file():
+            abort(404)
+        return send_file(target, as_attachment=True, download_name=download_name)
 
     @blueprint.get("/health")
     def health():

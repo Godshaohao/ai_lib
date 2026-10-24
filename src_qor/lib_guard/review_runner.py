@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import shutil
 import sys
 from typing import Any
 from uuid import uuid4
@@ -85,6 +87,29 @@ def _library_dir(library_id: str) -> str:
     return f"{slug}__{suffix}"
 
 
+def _latest_complete_run(library_dir: Path) -> tuple[dict[str, Any], Path | None]:
+    """Find the newest completed run that still has its workbook artifact."""
+    runs_dir = library_dir / "runs"
+    candidates: list[tuple[str, dict[str, Any], Path]] = []
+    if not runs_dir.is_dir():
+        return {}, None
+    for result_path in runs_dir.glob("review_*/review_result.json"):
+        try:
+            result = _json_read(result_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        review_id = str(result.get("review_id") or result_path.parent.name)
+        workbook = result_path.parent / "ip_review.xlsx"
+        if (result.get("execution_status") == "COMPLETE"
+                and re.fullmatch(r"review_[A-Za-z0-9_-]+", review_id)
+                and workbook.is_file()):
+            candidates.append((str(result.get("generated_at") or review_id), result, workbook))
+    if not candidates:
+        return {}, None
+    _, result, workbook = max(candidates, key=lambda item: (item[0], item[1].get("review_id", "")))
+    return result, workbook
+
+
 def _new_review_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"review_{timestamp}_{uuid4().hex[:8]}"
@@ -135,6 +160,46 @@ def _write_latest_if_newer(latest_path: Path, latest: dict[str, Any]) -> bool:
             return False
         _json_write_atomic(latest_path, latest)
         return True
+
+
+def _publish_latest_workbook(workbook_path: Path, library_dir: Path,
+                             review_id: str, generated_at: str) -> bool:
+    """Atomically update the per-library workbook without letting late older runs win."""
+    def parsed_time(value: Any):
+        try:
+            timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    proposed_time = parsed_time(generated_at)
+    if proposed_time is None:
+        return False
+    library_dir.mkdir(parents=True, exist_ok=True)
+    pointer_path = library_dir / "latest_workbook.json"
+    temporary = library_dir / f".latest.{review_id}.tmp.xlsx"
+    with (library_dir / ".latest.lock").open("a+") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                current = _json_read(pointer_path) if pointer_path.is_file() else {}
+            except (OSError, ValueError, json.JSONDecodeError):
+                current = {}
+            current_time = parsed_time(current.get("generated_at"))
+            if current_time and proposed_time <= current_time:
+                return False
+            shutil.copyfile(workbook_path, temporary)
+            if not temporary.is_file() or temporary.stat().st_size == 0:
+                raise OSError("最新 Excel 临时文件为空")
+            os.replace(temporary, library_dir / "latest.xlsx")
+            _json_write_atomic(pointer_path, {
+                "schema_version": "workbook_latest.v1",
+                "review_id": review_id,
+                "generated_at": generated_at,
+            })
+            return True
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def _run_formal(spec: dict[str, Any], config_dir: Path, out_dir: Path) -> dict[str, Any]:
@@ -875,6 +940,10 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
         finally:
             workbook_tmp.unlink(missing_ok=True)
         _json_write_atomic(run_dir / "review_result.json", review_record)
+        latest_xlsx_ref = ""
+        if complete and _publish_latest_workbook(workbook_path, library_dir, review_record["review_id"],
+                                                 review_record["generated_at"]):
+            latest_xlsx_ref = "latest.xlsx"
         latest_ref = None
         if (review.get("ip") or {}).get("publish_latest") and complete:
             latest = {"schema_version": "review_latest.v1", "library_id": review_record["library_id"],
@@ -891,6 +960,9 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                               "execution_status": review_record["execution_status"],
                               "requested_checks": requested, "summary": review_record["summary"],
                               "xlsx_href": "../" + (run_dir / "ip_review.xlsx").relative_to(output).as_posix(),
+                              "current_xlsx_href": "../" + (run_dir / "ip_review.xlsx").relative_to(output).as_posix(),
+                              "latest_xlsx_href": "../" + (library_dir / "latest.xlsx").relative_to(output).as_posix()
+                              if latest_xlsx_ref else "",
                               "latest": bool(latest_ref)})
         review["review_result_path"] = str(run_dir / "review_result.json")
         review["xlsx_path"] = str(run_dir / "ip_review.xlsx")
@@ -912,31 +984,64 @@ def _overview_rows_for_registry(config: dict[str, Any], output: Path,
         library_dir = output / "libraries" / _library_dir(library_id)
         latest_path = library_dir / "latest.json"
         latest_result = {}
+        workbook_pointer_path = library_dir / "latest_workbook.json"
+        if workbook_pointer_path.is_file():
+            pointer = _json_read(workbook_pointer_path)
+            workbook_review_id = str(pointer.get("review_id") or "")
+            if re.fullmatch(r"review_[A-Za-z0-9_-]+", workbook_review_id):
+                workbook_result_path = library_dir / "runs" / workbook_review_id / "review_result.json"
+                if workbook_result_path.is_file():
+                    candidate_result = _json_read(workbook_result_path)
+                    if candidate_result.get("execution_status") == "COMPLETE":
+                        latest_result = candidate_result
         if latest_path.is_file():
             pointer = _json_read(latest_path)
             result_path = library_dir / str(pointer.get("review_result_ref") or "")
-            if result_path.is_file():
+            if not latest_result and result_path.is_file():
                 latest_result = _json_read(result_path)
+        if latest_result.get("execution_status") != "COMPLETE":
+            latest_result, _ = _latest_complete_run(library_dir)
         current = current_by_library.get(library_id) or {}
         latest_workbook = library_dir / str((latest_result.get("reports") or {}).get("xlsx") or "")
         if latest_result and latest_result.get("review_id"):
             latest_workbook = library_dir / "runs" / str(latest_result["review_id"]) / "ip_review.xlsx"
         latest_href = ("../" + latest_workbook.relative_to(output).as_posix()
                        if latest_workbook.is_file() else "")
+        stable_workbook = library_dir / "latest.xlsx"
+        stable_href = ("../" + stable_workbook.relative_to(output).as_posix()
+                       if stable_workbook.is_file() or latest_href else "")
+        current_review_id = str(current.get("review_id") or "")
+        latest_review_id = str(latest_result.get("review_id") or "")
+        current_workbook_href = current.get("current_xlsx_href") or current.get("xlsx_href") or ""
+        if current_review_id and current_review_id == latest_review_id:
+            current_workbook_href = ""
+        raw_versions = list(ip.get("raw_versions") or [])
+        version_view_set = []
+        for version in raw_versions:
+            for view in version.get("views") or []:
+                if view not in version_view_set:
+                    version_view_set.append(view)
         rows.append({
             **current,
             "library_id": library_id,
             "name": ip.get("name") or ip.get("id") or library_id,
-            "requested_checks": current.get("requested_checks") or [
+            "requested_checks": current.get("requested_checks") or latest_result.get("requested_checks") or [
                 name for name, spec in (ip.get("checks") or {}).items()
                 if isinstance(spec, dict) and spec.get("enabled", True)],
             "execution_status": current.get("execution_status") or latest_result.get("execution_status") or "NOT_RUN",
             "summary": current.get("summary") or latest_result.get("summary") or {},
             "latest_summary": latest_result.get("summary") or {},
             "latest_review_id": latest_result.get("review_id") or "",
+            "vendor": ip.get("vendor") or "",
+            "middle_path": ip.get("middle_path") or "",
+            "raw_root": ip.get("raw_root") or "",
+            "raw_versions": raw_versions,
+            "version_count": len(raw_versions),
+            "view_types": version_view_set,
             "xlsx_href": current.get("xlsx_href") or latest_href,
-            "latest_xlsx_href": latest_href,
-            "latest": bool(latest_result),
+            "current_xlsx_href": current_workbook_href,
+            "latest_xlsx_href": current.get("latest_xlsx_href") or stable_href or latest_href,
+            "latest": bool(stable_href),
         })
     return rows
 

@@ -175,13 +175,92 @@ class WorkbenchTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             (library_dir / "latest.json").write_text(
                 '{"review_id":"review_20261024T000000Z_abcd1234"}', encoding="utf-8")
+            (library_dir / "latest_workbook.json").write_text(json.dumps({
+                "review_id": "review_20261024T000000Z_abcd1234",
+                "generated_at": "2026-10-24T00:00:00+00:00",
+            }), encoding="utf-8")
+            (run_dir / "review_result.json").write_text(json.dumps({
+                "review_id": "review_20261024T000000Z_abcd1234", "execution_status": "COMPLETE",
+                "summary": {},
+            }), encoding="utf-8")
             (run_dir / "ip_review.xlsx").write_bytes(b"xlsx")
+            (library_dir / "latest.xlsx").write_bytes(b"stable xlsx")
+            report_dir = root / "output" / "ip_checks"
+            report_dir.mkdir(parents=True)
+            (report_dir / "index.html").write_text("<h1>IP 检查总览</h1>", encoding="utf-8")
 
-            response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=catalog")
+            client = create_app(registry, root / "output").test_client()
+            response = client.get("/?ip=IP_A&tab=catalog")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("下载 Excel".encode(), response.data)
-            self.assertIn(b"/download?library_id=vendor.ip_a", response.data)
+            self.assertIn("最新 Excel".encode(), response.data)
+            self.assertIn(b"/review-reports/libraries/", response.data)
+            self.assertIn("检查结果 HTML".encode(), response.data)
+            html = client.get("/review-reports/ip_checks/index.html")
+            self.assertEqual(html.status_code, 200)
+            self.assertIn("IP 检查总览".encode(), html.data)
+            html.close()
+            response.close()
+
+    def test_review_overview_relative_latest_workbook_link_is_served_from_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, checks: {}}\n", encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            library_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a")
+            library_dir.mkdir(parents=True)
+            (library_dir / "latest.xlsx").write_bytes(b"workbook")
+            reports = root / "output" / "ip_checks"
+            reports.mkdir(parents=True)
+            (reports / "index.html").write_text(
+                f'<a href="../libraries/{library_dir.name}/latest.xlsx">最新 Excel</a>', encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+
+            overview = client.get("/review-reports/ip_checks/index.html")
+            workbook = client.get(f"/review-reports/libraries/{library_dir.name}/latest.xlsx")
+            unknown = client.get("/review-reports/libraries/not-registered/latest.xlsx")
+
+            self.assertEqual(overview.status_code, 200)
+            self.assertEqual(workbook.status_code, 200)
+            self.assertEqual(workbook.data, b"workbook")
+            self.assertIn("vendor.ip_a_latest.xlsx", workbook.headers.get("Content-Disposition", ""))
+            self.assertEqual(unknown.status_code, 404)
+            overview.close()
+            workbook.close()
+            unknown.close()
+
+    def test_latest_excel_display_stays_on_last_complete_run_after_newer_incomplete_run(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, checks: {}}\n", encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            library_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a")
+            good_id = "review_20261024T010000Z_aaaaaaaa"
+            bad_id = "review_20261024T020000Z_bbbbbbbb"
+            for review_id, status in ((good_id, "COMPLETE"), (bad_id, "INCOMPLETE")):
+                run_dir = library_dir / "runs" / review_id
+                run_dir.mkdir(parents=True)
+                (run_dir / "ip_review.xlsx").write_bytes(review_id.encode())
+                (run_dir / "review_result.json").write_text(json.dumps({
+                    "review_id": review_id, "execution_status": status, "generated_at": review_id,
+                    "summary": {},
+                }), encoding="utf-8")
+            (library_dir / "latest_workbook.json").write_text(json.dumps({
+                "review_id": good_id, "generated_at": "2026-10-24T01:00:00+00:00",
+            }), encoding="utf-8")
+            (library_dir / "latest.xlsx").write_bytes(b"stable")
+            (library_dir / "latest.json").write_text(json.dumps({"review_id": bad_id}), encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=catalog")
+            body = response.get_data(as_text=True)
+            heading = re.search(r'<div class="latest-chip">(.*?)</div>', body, re.S).group(1)
+
+            self.assertIn(good_id, heading)
+            self.assertNotIn(bad_id, heading)
+            self.assertIn("最新 Excel", heading)
+            response.close()
 
     def test_discover_page_displays_specific_partial_discovery_warnings(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -204,7 +283,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn("有 1 个目录达到目录深度上限 8", body)
             self.assertNotIn("文件线索抽样或目录访问达到上限", body)
 
-    def test_excel_link_uses_latest_run_when_latest_pointer_is_not_enabled(self):
+    def test_excel_link_uses_latest_complete_run_when_latest_pointer_is_not_enabled(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             registry = root / "registry.yml"
@@ -214,16 +293,43 @@ class WorkbenchTests(unittest.TestCase):
             run_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a") / "runs" / review_id
             run_dir.mkdir(parents=True)
             (run_dir / "review_result.json").write_text(
-                json.dumps({"review_id": review_id, "execution_status": "INCOMPLETE", "summary": {}}), encoding="utf-8")
+                json.dumps({"review_id": review_id, "execution_status": "COMPLETE", "summary": {}}), encoding="utf-8")
             (run_dir / "ip_review.xlsx").write_bytes(b"xlsx")
 
             response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review")
 
             self.assertEqual(response.status_code, 200)
             self.assertIn("最近检查报告".encode(), response.data)
-            self.assertIn("下载 Excel".encode(), response.data)
+            self.assertIn("最新 Excel".encode(), response.data)
             self.assertIn(review_id.encode(), response.data)
             self.assertIn(f"/download?library_id=vendor.ip_a&amp;review_id={review_id}".encode(), response.data)
+
+    def test_legacy_complete_run_is_exposed_through_stable_latest_excel_route(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, name: IP A, vendor: V, checks: {}}\n", encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            library_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a")
+            run_dir = library_dir / "runs" / "review_20261024T010000Z_abcd1234"
+            run_dir.mkdir(parents=True)
+            (run_dir / "review_result.json").write_text(json.dumps({
+                "review_id": "review_20261024T010000Z_abcd1234",
+                "execution_status": "COMPLETE", "generated_at": "2026-10-24T01:00:00Z", "summary": {},
+            }), encoding="utf-8")
+            (run_dir / "ip_review.xlsx").write_bytes(b"legacy workbook")
+
+            client = create_app(registry, root / "output").test_client()
+            page = client.get("/?ip=IP_A&tab=catalog")
+            workbook = client.get(f"/review-reports/libraries/{library_dir.name}/latest.xlsx")
+
+            self.assertIn(b"COMPLETE", page.data)
+            self.assertIn(b"/review-reports/libraries/", page.data)
+            self.assertEqual(workbook.status_code, 200)
+            self.assertEqual(workbook.data, b"legacy workbook")
+            self.assertIn("vendor.ip_a_latest.xlsx", workbook.headers.get("Content-Disposition", ""))
+            page.close()
+            workbook.close()
 
     def test_quick_linked_form_submits_auto_configured_check_inputs(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -297,6 +403,8 @@ class WorkbenchTests(unittest.TestCase):
                     if task["status"] in {"COMPLETE", "FAILED"}:
                         break
                     time.sleep(0.01)
+                self.assertEqual(task["phase"], "已完成")
+                self.assertTrue(any("检查完成" in event["message"] for event in task["events"]))
                 client.get(response.headers["Location"])
                 self.assertEqual(runner.call_count, 1)
 
@@ -500,14 +608,95 @@ class WorkbenchTests(unittest.TestCase):
             library_dir.mkdir(parents=True)
             (library_dir / "latest_attempt.json").write_text(
                 json.dumps({"task_id": "task_incomplete", "library_id": "vendor.ip_a",
-                            "status": "COMPLETE", "execution_status": "INCOMPLETE"}), encoding="utf-8")
+                            "status": "COMPLETE", "execution_status": "INCOMPLETE",
+                            "worker_session": workbench._WORKBENCH_SESSION_ID}), encoding="utf-8")
 
             response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("任务状态".encode(), response.data)
+            self.assertIn("运行状态".encode(), response.data)
             self.assertIn("检查结论：INCOMPLETE".encode(), response.data)
             self.assertNotIn("最近一次尝试".encode(), response.data)
+
+    def test_task_window_is_visible_on_other_workbench_tabs_with_phase_and_dynamics(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - {id: IP_A, library_id: vendor.ip_a, name: IP A, checks: {}}\n",
+                encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            library_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a")
+            library_dir.mkdir(parents=True)
+            task = {
+                "task_id": "task_" + "a" * 32, "library_id": "vendor.ip_a", "ip_id": "IP_A",
+                "status": "RUNNING", "execution_status": "PENDING", "phase": "执行检查",
+                "worker_session": workbench._WORKBENCH_SESSION_ID,
+                "progress_message": "正在执行：Macro / View 文件索引",
+                "submitted_at": "2026-10-24T10:00:00+00:00", "started_at": "2026-10-24T10:00:01+00:00",
+                "requested_checks": ["macro_index"],
+                "events": [{"at": "2026-10-24T10:00:01+00:00", "message": "开始执行：Macro / View 文件索引"}],
+            }
+            (library_dir / "latest_attempt.json").write_text(json.dumps(task), encoding="utf-8")
+            response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=catalog")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'data-runtime-window', response.data)
+            self.assertIn(b'data-task-stage', response.data)
+            self.assertIn("执行检查".encode(), response.data)
+            self.assertIn("运行动态".encode(), response.data)
+            self.assertIn("正在执行：Macro / View 文件索引".encode(), response.data)
+            self.assertIn("data-task-started-at".encode(), response.data)
+
+    def test_task_window_shows_legacy_failure_without_empty_dynamics(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, name: IP A, checks: {}}\n", encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            library_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a")
+            library_dir.mkdir(parents=True)
+            (library_dir / "latest_attempt.json").write_text(json.dumps({
+                "task_id": "task_legacy", "library_id": "vendor.ip_a", "ip_id": "IP_A",
+                "status": "FAILED", "execution_status": "FAILED",
+                "error": "导出 Excel 需要 XlsxWriter",
+                "submitted_at": "2026-10-24T10:00:00+00:00",
+                "finished_at": "2026-10-24T10:00:02+00:00",
+            }), encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=catalog")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("阶段：已失败".encode(), response.data)
+            self.assertIn("导出 Excel 需要 XlsxWriter".encode(), response.data)
+            self.assertNotIn("暂无运行动态".encode(), response.data)
+
+    def test_task_status_api_reports_real_phase_and_event_updates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            library_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a")
+            task_id = "task_" + "b" * 32
+            task_path = library_dir / "tasks" / f"{task_id}.json"
+            task_path.parent.mkdir(parents=True)
+            task_path.write_text(json.dumps({
+                "task_id": task_id, "library_id": "vendor.ip_a", "status": "RUNNING",
+                "execution_status": "PENDING", "phase": "执行检查",
+                "worker_session": workbench._WORKBENCH_SESSION_ID,
+                "progress_message": "正在执行：LEF 双文件核查",
+                "events": [{"at": "2026-10-24T10:00:01+00:00", "message": "开始执行：LEF 双文件核查"}],
+            }), encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get(
+                f"/tasks/{task_id}?library_id=vendor.ip_a")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["phase"], "执行检查")
+            self.assertEqual(payload["progress_message"], "正在执行：LEF 双文件核查")
+            self.assertEqual(payload["events"][0]["message"], "开始执行：LEF 双文件核查")
 
     def test_sidebar_exposes_vendor_library_raw_and_formal_versions_with_filters(self):
         with tempfile.TemporaryDirectory() as temp:

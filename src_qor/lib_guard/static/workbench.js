@@ -171,26 +171,75 @@
     });
   });
   const taskBanner = document.querySelector("[data-review-task]");
-  if (taskBanner && ["QUEUED", "RUNNING"].includes(taskBanner.querySelector("[data-task-status]")?.textContent.trim())) {
+  if (taskBanner) {
     const statusNode = taskBanner.querySelector("[data-task-status]");
-    const detailNode = taskBanner.querySelector("[data-task-detail]");
+    const messageNode = taskBanner.querySelector("[data-task-message]");
+    const stageNode = taskBanner.querySelector("[data-task-stage]");
+    const elapsedNode = taskBanner.querySelector("[data-task-elapsed]");
+    const progressNode = taskBanner.querySelector("[data-task-progress]");
+    const eventList = taskBanner.querySelector("[data-task-events]");
+    const eventCount = taskBanner.querySelector("[data-task-event-count]");
+    const statusLabels = { QUEUED: "排队中", RUNNING: "运行中", COMPLETE: "已完成", FAILED: "失败", INTERRUPTED: "已中断" };
+    const renderElapsed = (task) => {
+      const start = Date.parse(task.started_at || taskBanner.dataset.taskStartedAt || task.submitted_at || taskBanner.dataset.taskSubmittedAt);
+      const end = Date.parse(task.finished_at || taskBanner.dataset.taskFinishedAt) || Date.now();
+      if (elapsedNode && Number.isFinite(start)) elapsedNode.textContent = `用时：${Math.max(0, (end - start) / 1000).toFixed(1)} 秒`;
+    };
+    const renderEvents = (events = []) => {
+      if (!eventList) return;
+      const rows = events.slice(-12);
+      eventList.replaceChildren();
+      rows.forEach((event) => {
+        const row = document.createElement("li");
+        const time = document.createElement("time");
+        const text = document.createElement("span");
+        const parsed = Date.parse(event.at || "");
+        time.textContent = Number.isFinite(parsed) ? new Date(parsed).toLocaleTimeString() : "";
+        text.textContent = event.message || "";
+        row.append(time, text);
+        eventList.append(row);
+      });
+      if (eventCount) eventCount.textContent = `${rows.length} 条`;
+    };
+    const renderTask = (task) => {
+      const status = String(task.status || "");
+      statusNode.textContent = statusLabels[status] || status;
+      messageNode.textContent = task.error || task.progress_message ||
+        (task.execution_status && task.execution_status !== "PENDING" ? `检查结论：${task.execution_status}` : "等待任务状态");
+      stageNode.textContent = `阶段：${task.phase || (status === "QUEUED" ? "排队中" : "状态待更新")}`;
+      taskBanner.classList.toggle("is-running", ["QUEUED", "RUNNING"].includes(status));
+      taskBanner.classList.toggle("is-failed", ["FAILED", "INTERRUPTED"].includes(status));
+      taskBanner.classList.toggle("is-finished", status === "COMPLETE");
+      progressNode?.classList.toggle("is-indeterminate", status === "RUNNING");
+      renderElapsed(task);
+      renderEvents(task.events || []);
+    };
+    renderElapsed({});
+    const initiallyActive = ["排队中", "运行中", "QUEUED", "RUNNING"].includes(statusNode.textContent.trim());
+    if (initiallyActive) window.setInterval(() => renderElapsed({}), 1000);
+    if (!initiallyActive) {
+      renderEvents([...eventList.querySelectorAll("li")].map((row) => ({
+        at: row.querySelector("time")?.textContent,
+        message: row.querySelector("span")?.textContent,
+      })));
+    } else {
     const poll = async () => {
       try {
         const response = await fetch(taskBanner.dataset.taskUrl, { headers: { Accept: "application/json" } });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const task = await response.json();
-        statusNode.textContent = task.status;
-        detailNode.textContent = task.error || (task.execution_status ? `检查结论：${task.execution_status}` : "正在等待运行结果");
+        renderTask(task);
         if (["COMPLETE", "FAILED"].includes(task.status)) {
           window.setTimeout(() => window.location.reload(), 700);
           return;
         }
       } catch (error) {
-        detailNode.textContent = `状态暂不可用，稍后重试（${error.message}）`;
+        messageNode.textContent = `状态暂不可用，稍后重试（${error.message}）`;
       }
       window.setTimeout(poll, 1500);
     };
     window.setTimeout(poll, 700);
+    }
   }
   selectTab(document.body.dataset.activeTab || "catalog", "main");
   selectTab("config", "review");

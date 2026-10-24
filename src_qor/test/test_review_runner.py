@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 import zipfile
@@ -5,7 +6,9 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 from unittest.mock import patch
 
-from lib_guard.review_runner import _qa_rows, _review_summary, _write_latest_if_newer, build_workbook_model, run, run_review
+from lib_guard.review_runner import (_publish_latest_workbook, _qa_rows, _review_summary,
+                                    _write_latest_if_newer, build_workbook_model, run, run_review)
+from lib_guard.ip_check_overview import render_overview
 from lib_guard.lef_liberty_check import analyze_many
 from lib_guard.export_review_excel import export_review_excel
 
@@ -46,6 +49,25 @@ def review(ip_id, macro_name, source_path):
 
 
 class ReviewRunnerTests(unittest.TestCase):
+    def test_overview_shows_one_excel_link_when_latest_and_last_run_are_same(self):
+        page = render_overview([{
+            "library_id": "vendor.ip_a", "name": "IP A", "execution_status": "COMPLETE",
+            "xlsx_href": "../libraries/ip_a/runs/review_x/ip_review.xlsx",
+            "latest_xlsx_href": "../libraries/ip_a/latest.xlsx",
+        }])
+
+        self.assertIn("最新 Excel", page)
+        self.assertNotIn("本次 Excel", page)
+
+    def test_overview_keeps_excel_entry_only_in_catalog_table(self):
+        page = render_overview([{
+            "library_id": "vendor.ip_a", "name": "IP A", "execution_status": "COMPLETE",
+            "latest_xlsx_href": "../libraries/ip_a/latest.xlsx",
+            "summary": {"counts": {}},
+        }])
+
+        self.assertEqual(page.count("latest.xlsx"), 1)
+
     def test_latest_pointer_never_moves_back_to_an_older_result(self):
         with tempfile.TemporaryDirectory() as temp:
             latest = Path(temp) / "latest.json"
@@ -65,6 +87,24 @@ class ReviewRunnerTests(unittest.TestCase):
             self.assertTrue(_write_latest_if_newer(latest, current))
             self.assertFalse(_write_latest_if_newer(latest, unordered))
             self.assertEqual(__import__("json").loads(latest.read_text())["review_id"], "review_new")
+
+    def test_stable_workbook_does_not_regress_when_an_older_task_finishes_late(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            library_dir = root / "library"
+            old_book = root / "old.xlsx"
+            new_book = root / "new.xlsx"
+            old_book.write_bytes(b"old")
+            new_book.write_bytes(b"new")
+
+            self.assertTrue(_publish_latest_workbook(new_book, library_dir, "review_new",
+                                                     "2026-10-24T12:00:00+00:00"))
+            self.assertFalse(_publish_latest_workbook(old_book, library_dir, "review_old",
+                                                      "2026-10-24T11:00:00+00:00"))
+
+            self.assertEqual((library_dir / "latest.xlsx").read_bytes(), b"new")
+            pointer = __import__("json").loads((library_dir / "latest_workbook.json").read_text())
+            self.assertEqual(pointer["review_id"], "review_new")
 
     def test_summary_counts_unmatched_macro_objects_and_broken_links_by_kind(self):
         item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
@@ -161,6 +201,7 @@ class ReviewRunnerTests(unittest.TestCase):
             self.assertEqual({item["library_id"] for item in result_data}, {"vendor/ip_a", "vendor/ip_b"})
             for result_file in result_files:
                 self.assertTrue((result_file.parent / "ip_review.xlsx").is_file())
+                self.assertTrue((result_file.parent.parent.parent / "latest.xlsx").is_file())
                 record = __import__("json").loads(result_file.read_text(encoding="utf-8"))
                 self.assertEqual(record["execution_status"], "COMPLETE")
                 self.assertEqual(record["requested_checks"], ["macro_index"])
@@ -216,6 +257,81 @@ class ReviewRunnerTests(unittest.TestCase):
             self.assertIn("IP_A", page)
             self.assertIn("IP_B", page)
             self.assertIn("最近成功", page)
+
+    def test_overview_includes_catalog_context_and_stable_latest_workbook_link(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            report = root / "macro.json"
+            report.write_text('{"status":"COMPLETE","macro_index":{"macros":{}}}', encoding="utf-8")
+            ip = {
+                "id": "IP_A", "library_id": "vendor/ip_a", "name": "IP A", "vendor": "Vendor X",
+                "middle_path": "memory/sram", "raw_root": "/raw/Vendor_X/IP_A",
+                "raw_versions": [{"id": "V1", "path": "/raw/Vendor_X/IP_A/V1", "views": ["LEF", "LIB"]},
+                                 {"id": "V2", "path": "/raw/Vendor_X/IP_A/V2", "views": ["LEF", "GDS"]}],
+                "checks": {"macro_index": {"report_json": str(report)}},
+            }
+
+            with patch("lib_guard.review_runner.export_review_excel",
+                       side_effect=lambda model, path, scope_note="": Path(path).write_bytes(b"test workbook")):
+                run({"ips": [ip], "registry_ips": [ip]}, root / "output")
+
+            page = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("Vendor X", page)
+            self.assertIn("memory/sram", page)
+            self.assertIn("V1", page)
+            self.assertIn("V2", page)
+            self.assertIn("LEF", page)
+            self.assertIn("GDS", page)
+            self.assertIn("../libraries/", page)
+            self.assertIn("latest.xlsx", page)
+
+    def test_overview_recovers_latest_complete_legacy_run_without_latest_pointers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ip = {"id": "IP_A", "library_id": "vendor.ip_a", "name": "IP A",
+                  "vendor": "Vendor X", "raw_root": "/raw/IP_A", "raw_versions": []}
+            from lib_guard.review_runner import _library_dir
+            library_dir = root / "output" / "libraries" / _library_dir("vendor.ip_a")
+            run_id = "review_20261024T010000Z_abcd1234"
+            run_dir = library_dir / "runs" / run_id
+            run_dir.mkdir(parents=True)
+            (run_dir / "review_result.json").write_text(json.dumps({
+                "review_id": run_id, "library_id": "vendor.ip_a", "execution_status": "COMPLETE",
+                "generated_at": "2026-10-24T01:00:00Z", "summary": {"counts": {}},
+            }), encoding="utf-8")
+            (run_dir / "ip_review.xlsx").write_bytes(b"legacy workbook")
+
+            run({"ips": [], "registry_ips": [ip]}, root / "output")
+
+            page = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("Vendor X", page)
+            self.assertIn("IP A", page)
+            self.assertIn("本次所选检查已完成", page)
+            self.assertIn("latest.xlsx", page)
+
+    def test_incomplete_run_preserves_previous_stable_workbook(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            complete_report = root / "complete.json"
+            complete_report.write_text('{"status":"COMPLETE","macro_index":{"macros":{}}}', encoding="utf-8")
+            ip = {"id": "IP_A", "library_id": "vendor/ip_a",
+                  "checks": {"macro_index": {"report_json": str(complete_report)}}}
+            output = root / "output"
+            with patch("lib_guard.review_runner.export_review_excel",
+                       side_effect=lambda model, path, scope_note="": Path(path).write_bytes(b"first workbook")):
+                run({"ips": [ip]}, output)
+            stable_path = next((output / "libraries").glob("*/latest.xlsx"))
+            previous = stable_path.read_bytes()
+
+            incomplete_report = root / "incomplete.json"
+            incomplete_report.write_text('{"status":"FAILED","macro_index":{"macros":{}}}', encoding="utf-8")
+            ip["checks"]["macro_index"]["report_json"] = str(incomplete_report)
+            with patch("lib_guard.review_runner.export_review_excel",
+                       side_effect=lambda model, path, scope_note="": Path(path).write_bytes(b"second workbook")):
+                run({"ips": [ip]}, output)
+
+            self.assertEqual(previous, b"first workbook")
+            self.assertEqual(stable_path.read_bytes(), previous)
 
     def test_duplicate_library_id_in_one_run_is_rejected_to_prevent_mixing_contexts(self):
         with tempfile.TemporaryDirectory() as temp:
