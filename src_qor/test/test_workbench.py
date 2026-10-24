@@ -193,7 +193,7 @@ class WorkbenchTests(unittest.TestCase):
             response = client.get("/?ip=IP_A&tab=catalog")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("最新 Excel".encode(), response.data)
+            self.assertIn("最近完整 Excel".encode(), response.data)
             self.assertIn(b"/review-reports/libraries/", response.data)
             self.assertIn("检查结果 HTML".encode(), response.data)
             html = client.get("/review-reports/ip_checks/index.html")
@@ -259,7 +259,7 @@ class WorkbenchTests(unittest.TestCase):
 
             self.assertIn(good_id, heading)
             self.assertNotIn(bad_id, heading)
-            self.assertIn("最新 Excel", heading)
+            self.assertIn("最近完整 Excel", heading)
             response.close()
 
     def test_discover_page_displays_specific_partial_discovery_warnings(self):
@@ -299,8 +299,8 @@ class WorkbenchTests(unittest.TestCase):
             response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("最近检查报告".encode(), response.data)
-            self.assertIn("最新 Excel".encode(), response.data)
+            self.assertIn("最近完整检查报告".encode(), response.data)
+            self.assertIn("最近完整 Excel".encode(), response.data)
             self.assertIn(review_id.encode(), response.data)
             self.assertIn(f"/download?library_id=vendor.ip_a&amp;review_id={review_id}".encode(), response.data)
 
@@ -592,7 +592,7 @@ class WorkbenchTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertIn("最近尝试".encode(), response.data)
-            self.assertIn("最近成功".encode(), response.data)
+            self.assertIn("最近完整报告".encode(), response.data)
             self.assertIn(b"task_123", response.data)
             self.assertIn(b"review_good", response.data)
 
@@ -608,14 +608,16 @@ class WorkbenchTests(unittest.TestCase):
             library_dir.mkdir(parents=True)
             (library_dir / "latest_attempt.json").write_text(
                 json.dumps({"task_id": "task_incomplete", "library_id": "vendor.ip_a",
-                            "status": "COMPLETE", "execution_status": "INCOMPLETE",
+                            "status": "COMPLETE", "execution_status": "COMPLETE",
+                            "quality_status": "REVIEW_REQUIRED",
                             "worker_session": workbench._WORKBENCH_SESSION_ID}), encoding="utf-8")
 
             response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review")
 
             self.assertEqual(response.status_code, 200)
             self.assertIn("运行状态".encode(), response.data)
-            self.assertIn("检查结论：INCOMPLETE".encode(), response.data)
+            self.assertIn("任务执行：COMPLETE；质量判断：存在待核实项".encode(), response.data)
+            self.assertIn("不等同正式发布放行".encode(), response.data)
             self.assertNotIn("最近一次尝试".encode(), response.data)
 
     def test_task_window_is_visible_on_other_workbench_tabs_with_phase_and_dynamics(self):

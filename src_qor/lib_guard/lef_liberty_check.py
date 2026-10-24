@@ -15,7 +15,7 @@ OUTPUT_MD = 'lef_liberty_check.md'
 LIBERTY_PARSER_VERSION = 'standalone-interface-2'
 _POWER_TYPES = {'primary_power', 'backup_power', 'internal_power'}
 _GROUND_TYPES = {'primary_ground', 'backup_ground', 'internal_ground'}
-_PROCESS_CORNER_RE = re.compile(r'(?:^|[_.-])(FFPG|SSPG|TTNOMINAL|TT|SS|FF|SF|FS)(?=$|[_.-])', re.IGNORECASE)
+_PROCESS_CORNER_RE = re.compile(r'(?:^|[_.-])(FFPG|SSPG|TTNOMINAL|FAST|SLOW|TYP|TT|SS|FF|SF|FS)(?=$|[_.-])', re.IGNORECASE)
 _RC_CORNER_RE = re.compile(r'(?:^|[_.-])(SIGRCMIN|SIGRCMAX)(?=$|[_.-])', re.IGNORECASE)
 _RE_ATTR = re.compile(r'^\s*([A-Za-z_][\w]*)\s*:\s*([^;]+)\s*;')
 _STREAM_MARKER = re.compile(r'[{};"/\\*\n]')
@@ -326,17 +326,45 @@ def _lef_pins(macro: dict) -> tuple[dict[str, dict], dict[str, dict], dict[str, 
     return signals, power, ground
 
 
+_BUS_MEMBER_RANGE = re.compile(r"^(?P<base>.*)\[(?P<first>-?\d+):(?P<last>-?\d+)\]$")
+_MAX_EXPANDED_BUS_WIDTH = 65536
+
+
+def _expand_liberty_signal_pins(pins: dict[str, dict]) -> tuple[dict[str, dict], list[dict], list[str]]:
+    expanded: dict[str, dict] = {}
+    ranges: list[dict] = []
+    unexpanded: list[str] = []
+    for raw_name, pin in pins.items():
+        match = _BUS_MEMBER_RANGE.fullmatch(str(raw_name))
+        if match is None:
+            expanded.setdefault(str(raw_name), pin)
+            continue
+        first, last = int(match.group("first")), int(match.group("last"))
+        width = abs(first - last) + 1
+        if width > _MAX_EXPANDED_BUS_WIDTH:
+            unexpanded.append(str(raw_name))
+            continue
+        members = [f"{match.group('base')}[{index}]" for index in range(min(first, last), max(first, last) + 1)]
+        ranges.append({"source": str(raw_name), "members": members})
+        for member in members:
+            expanded.setdefault(member, pin)
+    return expanded, ranges, unexpanded
+
+
 def _compare_cell(macro_name: str, macro: dict, library_name: str, cell: dict,
                   lef_ports_complete: bool, liberty_ports_complete: bool,
                   liberty_pg_complete: bool) -> dict:
     lef_signals, lef_power, lef_ground = _lef_pins(macro)
-    liberty_pins = cell.get('pins') or {}
+    raw_liberty_pins = cell.get('pins') or {}
+    liberty_pins, expanded_bus_ranges, unexpanded_bus_ranges = _expand_liberty_signal_pins(raw_liberty_pins)
     liberty_pg_pins = cell.get('pg_pins') or {}
-    signal_result = {'missing_in_liberty': [], 'extra_in_liberty': [], 'direction_mismatch': []}
-    pg_result = {'missing_in_liberty': [], 'extra_in_liberty': [], 'wrong_type': [], 'unverified_type': []}
-    unverified = []
+    signal_result = {'missing_in_liberty': [], 'extra_in_liberty': [], 'direction_mismatch': [],
+                     'expanded_bus_ranges': expanded_bus_ranges}
+    pg_result = {'missing_in_liberty': [], 'extra_in_liberty': [], 'wrong_type': [], 'unverified_type': [],
+                 'name_alias_candidates': []}
+    unverified = [f'Liberty 总线范围过大，未展开核对：{name}' for name in unexpanded_bus_ranges]
 
-    if lef_ports_complete and liberty_ports_complete:
+    if lef_ports_complete and liberty_ports_complete and not unexpanded_bus_ranges:
         signal_names = set(lef_signals)
         liberty_signal_names = set(liberty_pins)
         signal_result['missing_in_liberty'] = sorted(signal_names - liberty_signal_names)
@@ -350,14 +378,29 @@ def _compare_cell(macro_name: str, macro: dict, library_name: str, cell: dict,
                 signal_result['direction_mismatch'].append({
                     'pin': pin_name, 'lef': lef_direction, 'liberty': liberty_direction,
                 })
-    else:
+    elif not (lef_ports_complete and liberty_ports_complete):
         unverified.append('信号 Pin 清单解析覆盖不完整')
 
     if lef_ports_complete and liberty_pg_complete:
         expected_pg = {**{name: ('POWER', pin) for name, pin in lef_power.items()},
                        **{name: ('GROUND', pin) for name, pin in lef_ground.items()}}
+        lef_by_alias = {}
+        liberty_by_alias = {}
+        for name in expected_pg:
+            if name.endswith('!') and name not in liberty_pg_pins:
+                lef_by_alias.setdefault(name[:-1], []).append(name)
+        for name in liberty_pg_pins:
+            if not name.endswith('!'):
+                liberty_by_alias.setdefault(name, []).append(name)
+        alias_names = {}
+        for alias, lef_names in lef_by_alias.items():
+            liberty_names = liberty_by_alias.get(alias, [])
+            if len(lef_names) == len(liberty_names) == 1:
+                alias_names[lef_names[0]] = liberty_names[0]
+        matched_liberty_pg_names = set(expected_pg)
         for pin_name, (lef_use, _) in expected_pg.items():
-            liberty_pg = liberty_pg_pins.get(pin_name)
+            liberty_name = pin_name if pin_name in liberty_pg_pins else alias_names.get(pin_name)
+            liberty_pg = liberty_pg_pins.get(liberty_name) if liberty_name else None
             if liberty_pg is None:
                 if pin_name in liberty_pins:
                     pg_result['wrong_type'].append({
@@ -366,6 +409,13 @@ def _compare_cell(macro_name: str, macro: dict, library_name: str, cell: dict,
                 else:
                     pg_result['missing_in_liberty'].append(pin_name)
                 continue
+            matched_liberty_pg_names.add(liberty_name)
+            if liberty_name != pin_name:
+                pg_result['name_alias_candidates'].append({
+                    'lef': pin_name, 'liberty': liberty_name, 'lef_use': lef_use,
+                    'liberty_pg_type': liberty_pg.get('pg_type'),
+                })
+                unverified.append(f'电源/地脚名称待确认：LEF {pin_name} 与 Liberty {liberty_name}')
             pg_type = str(liberty_pg.get('pg_type') or '').lower()
             expected = _POWER_TYPES if lef_use == 'POWER' else _GROUND_TYPES
             opposite = _GROUND_TYPES if lef_use == 'POWER' else _POWER_TYPES
@@ -378,11 +428,11 @@ def _compare_cell(macro_name: str, macro: dict, library_name: str, cell: dict,
             elif pg_type not in expected:
                 pg_result['unverified_type'].append(pin_name)
         liberty_pg_names = set(liberty_pg_pins)
-        pg_result['extra_in_liberty'] = sorted(liberty_pg_names - set(expected_pg))
+        pg_result['extra_in_liberty'] = sorted(liberty_pg_names - matched_liberty_pg_names)
     else:
         unverified.append('电源脚解析覆盖不完整')
 
-    has_mismatch = any(signal_result[key] for key in signal_result) or any(
+    has_mismatch = any(signal_result[key] for key in ('missing_in_liberty', 'extra_in_liberty', 'direction_mismatch')) or any(
         pg_result[key] for key in ('missing_in_liberty', 'extra_in_liberty', 'wrong_type'))
     status = 'MISMATCH' if has_mismatch else ('UNVERIFIED' if unverified or pg_result['unverified_type'] else 'MATCH')
     return {

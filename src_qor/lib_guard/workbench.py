@@ -968,11 +968,16 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                         raise RuntimeError("检查 Runner 未返回结果")
                     review = reviews[0]
                     conclusion = review.get("execution_status", "INCOMPLETE")
+                    quality = (review.get("summary") or {}).get("quality_assessment") or {}
+                    quality_label = quality.get("label") or "未形成质量结论"
                     finished = _task_event({
                         **running, "status": "COMPLETE", "execution_status": conclusion,
+                        "quality_status": quality.get("status", "NOT_ASSESSED"),
+                        "summary": review.get("summary", {}),
                         "finished_at": datetime.now(timezone.utc).isoformat(),
-                        "review_id": review.get("review_id"), "summary": review.get("summary", {}),
-                    }, "已完成", f"检查完成：{conclusion}。报告 {review.get('review_id') or '已生成'}。")
+                        "review_id": review.get("review_id"),
+                    }, "已完成", f"检查完成；任务执行：{conclusion}；质量判断：{quality_label}。"
+                       f"{quality.get('boundary') or '不等同于正式发布放行。'} 报告 {review.get('review_id') or '已生成'}。")
                     _update_task(task_path, latest_attempt_path, finished)
                 except Exception as exc:
                     failed = _task_event({

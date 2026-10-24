@@ -65,8 +65,8 @@ Each `ips[]` entry represents one IP context. Keep different IPs in separate ent
 work/ip_review_run/
   ip_checks/index.html                  # IP navigation; no merged findings
   libraries/<library-id>/
-    latest.json                         # only when explicitly enabled and successful
-    latest.xlsx                         # stable per-IP workbook; updated after complete export
+    latest.json                         # explicitly selected Review pointer, if enabled
+    latest.xlsx                         # most recent fully completed per-IP workbook
     latest_workbook.json                # points to the run represented by latest.xlsx
     latest_attempt.json                # most recently submitted task, including failure
     tasks/<task-id>.json                # durable task status
@@ -76,7 +76,7 @@ work/ip_review_run/
       evidence/                          # selected check snapshots and reports
 ```
 
-History is retained by unique `review_id`. `review_result.json` is written only after the workbook has been exported and verified. Every fully completed run atomically refreshes that IP's stable `latest.xlsx`; incomplete runs preserve the previous workbook. The workbench exposes the stable workbook and `ip_checks/index.html` without auto-downloading either. `latest.json` keeps its separate existing behavior: it is atomically updated only when that IP sets `publish_latest: true` and every selected check completes. A failed run does not replace either latest pointer; its task remains visible through `latest_attempt.json` and the task record. The formal NL tracker reads its configured paths and writes reports under the run output; it does not write to the formal release tree.
+History is retained by unique `review_id`. `review_result.json` is written only after the workbook has been exported and verified. Every fully completed run atomically refreshes that IP's stable `latest.xlsx`; incomplete runs preserve the previous workbook. The workbench calls this the most recent complete check report and exposes it with `ip_checks/index.html` without auto-downloading either. `latest.json` is a different pointer: the explicitly selected Review, updated only when that IP sets `publish_latest: true` and every selected check completes. A failed run does not replace either pointer; its task remains visible through `latest_attempt.json` and the task record. Workbook evidence links are relative to the corresponding `runs/<review-id>/` directory; absolute source paths remain in the evidence JSON. The formal NL tracker reads its configured paths and writes reports under the run output; it does not write to the formal release tree.
 
 Each check result records its input identity. If explicit source versions differ from the IP's declared RAW version, the record is labeled `MIXED_EXPLICIT`; results remain separately scoped and are not silently merged. `COMPLETE` describes execution only. The ten-item engineering checklist separates selected evidence coverage from task execution and does not turn unselected or partially supported checks into passes.
 
