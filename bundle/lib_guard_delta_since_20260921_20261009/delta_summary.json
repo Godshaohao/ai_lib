@@ -1,0 +1,113 @@
+{
+  "baseline_latest_bundle": "lib_guard_delta_since_20260914_20260921",
+  "baseline_chain": [
+    "lib_guard_core_code_20260908",
+    "lib_guard_delta_since_20260908_20260911",
+    "lib_guard_delta_since_20260911_20260914",
+    "lib_guard_delta_since_20260914_20260921"
+  ],
+  "comparison": "sha256 against cumulative restored core baseline",
+  "file_count": 17,
+  "part_count": 1,
+  "modified": [
+    "src/lib_guard/cli.py",
+    "src/lib_guard/cli_commands/catalog.py",
+    "src/lib_guard/project_config.py",
+    "src/lib_guard/release/bundle.py",
+    "src/lib_guard/release/linker.py",
+    "src/lib_guard/release/postcheck.py",
+    "src/lib_guard/short_cli.py",
+    "src/lib_guard/short_cli_config.py",
+    "src/lib_guard/web/app.py",
+    "src/lib_guard/web/read_model.py",
+    "src/lib_guard/web/static/app.js",
+    "src/lib_guard/web/static/styles.css",
+    "src/lib_guard/web/templates/index.html"
+  ],
+  "added": [
+    "src/lib_guard/cli_commands/release_library.py",
+    "src/lib_guard/release/library_index.py",
+    "src/lib_guard/release/set_publish.py",
+    "src/lib_guard/web/release_actions.py"
+  ],
+  "deleted": [],
+  "excluded": [
+    "docs",
+    "tests",
+    "work",
+    "examples",
+    "cache",
+    "browser test scripts"
+  ],
+  "restore_verified": true,
+  "files": [
+    {
+      "path": "src/lib_guard/cli.py",
+      "sha256": "05100bd29bba75a7ccfa274d5bbe91c88fa4832defb38958f9ff0460fd5f765e"
+    },
+    {
+      "path": "src/lib_guard/cli_commands/catalog.py",
+      "sha256": "c660c47ba07f2f97cba32cfec963fb312c320f4946c456f4417d9adcfc9bf5c0"
+    },
+    {
+      "path": "src/lib_guard/cli_commands/release_library.py",
+      "sha256": "2491bf9c1c6f43069afc91e2b5b543af82dc646e02cfed692d5863f15cdd0f6f"
+    },
+    {
+      "path": "src/lib_guard/project_config.py",
+      "sha256": "dfb5cc0b7287b08de043f5fc130ed4c20637ce9b4e5955c9b87ff50a26f94e91"
+    },
+    {
+      "path": "src/lib_guard/release/bundle.py",
+      "sha256": "59052be3c0fa66543587d02d6aa134202f59ad666bb1fc87c8dd2912f66d445f"
+    },
+    {
+      "path": "src/lib_guard/release/library_index.py",
+      "sha256": "8d9c0ccef950f6954b5e0830bd267ed158d10edd06efa41c4a1ddb3a79ca4e59"
+    },
+    {
+      "path": "src/lib_guard/release/linker.py",
+      "sha256": "ebe2d0981c76fce7908e6cea2c047b049c72ab373288e3cda9b1e5beccf95ba8"
+    },
+    {
+      "path": "src/lib_guard/release/postcheck.py",
+      "sha256": "63b10f181f5fc1fe75db12515f331f8407a426bffbc911da92ea3c4b3f41b023"
+    },
+    {
+      "path": "src/lib_guard/release/set_publish.py",
+      "sha256": "eccb6282c0bf5e101e08843c4f6e163ea81ea2bf1199ef6bfb3f44073fde538f"
+    },
+    {
+      "path": "src/lib_guard/short_cli.py",
+      "sha256": "c464ff6be472a4cefbea975fb5970a232e8708118a0884f22554553df98c1a80"
+    },
+    {
+      "path": "src/lib_guard/short_cli_config.py",
+      "sha256": "9773ff0f54f5ebeb2f209b26aedeb88a6243f9ade1123c9092bf6d874177bc87"
+    },
+    {
+      "path": "src/lib_guard/web/app.py",
+      "sha256": "572dce87b06ad5171595f444c2422d7bb47322a324f9f22b01e7181630d0fbaf"
+    },
+    {
+      "path": "src/lib_guard/web/read_model.py",
+      "sha256": "e9d92f78a0540b588252b92a60e2761724265330246d738914bd2f6e2bb66080"
+    },
+    {
+      "path": "src/lib_guard/web/release_actions.py",
+      "sha256": "f414cf3171a215bb6cc23fafe0ed3e16fefa5afb9e6dc1ffd22f81216cb264da"
+    },
+    {
+      "path": "src/lib_guard/web/static/app.js",
+      "sha256": "5496d5a8dda43763276bafc45483f8f66aa39f136f1cf107b379aed53dd94a68"
+    },
+    {
+      "path": "src/lib_guard/web/static/styles.css",
+      "sha256": "7a5abd65a4aea8f8f0d7ce72ca00364f08cf91837bac50b344e8668cfae070d4"
+    },
+    {
+      "path": "src/lib_guard/web/templates/index.html",
+      "sha256": "f5e815065ba6ed1f0b14874b37f835aeff85a11c0566db4931dc9debb6351f7a"
+    }
+  ]
+}

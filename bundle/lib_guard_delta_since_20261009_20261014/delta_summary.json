@@ -1,0 +1,450 @@
+{
+  "baseline_latest_bundle": "lib_guard_delta_20261009_registry_permissions",
+  "baseline_chain": [
+    "lib_guard_core_code_20260908",
+    "lib_guard_delta_since_20260908_20260911",
+    "lib_guard_delta_since_20260911_20260914",
+    "lib_guard_delta_since_20260914_20260921",
+    "lib_guard_delta_since_20260921_20261009",
+    "lib_guard_delta_20261009_followup",
+    "lib_guard_delta_20261009_workspace_reconnect",
+    "lib_guard_delta_20261009_partial_release",
+    "lib_guard_delta_20261009_registry_permissions"
+  ],
+  "baseline_parts": [
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part001-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part002-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part003-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part004-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part005-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part006-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part007-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part008-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part009-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part010-of011.json",
+    "bundle/lib_guard_core_code_20260908/lib_guard_core_code_20260908.part011-of011.json",
+    "bundle/lib_guard_delta_since_20260908_20260911/lib_guard_delta_since_20260908_20260911.part001-of003.json",
+    "bundle/lib_guard_delta_since_20260908_20260911/lib_guard_delta_since_20260908_20260911.part002-of003.json",
+    "bundle/lib_guard_delta_since_20260908_20260911/lib_guard_delta_since_20260908_20260911.part003-of003.json",
+    "bundle/lib_guard_delta_since_20260911_20260914/lib_guard_delta_since_20260911_20260914.part001-of008.json",
+    "bundle/lib_guard_delta_since_20260911_20260914/lib_guard_delta_since_20260911_20260914.part002-of008.json",
+    "bundle/lib_guard_delta_since_20260911_20260914/lib_guard_delta_since_20260911_20260914.part003-of008.json",
+    "bundle/lib_guard_delta_since_20260911_20260914/lib_guard_delta_since_20260911_20260914.part004-of008.json",
+    "bundle/lib_guard_delta_since_20260911_20260914/lib_guard_delta_since_20260911_20260914.part005-of008.json",
+    "bundle/lib_guard_delta_since_20260911_20260914/lib_guard_delta_since_20260911_20260914.part006-of008.json",
+    "bundle/lib_guard_delta_since_20260911_20260914/lib_guard_delta_since_20260911_20260914.part007-of008.json",
+    "bundle/lib_guard_delta_since_20260911_20260914/lib_guard_delta_since_20260911_20260914.part008-of008.json",
+    "bundle/lib_guard_delta_since_20260914_20260921/lib_guard_delta_since_20260914_20260921.part001-of006.json",
+    "bundle/lib_guard_delta_since_20260914_20260921/lib_guard_delta_since_20260914_20260921.part002-of006.json",
+    "bundle/lib_guard_delta_since_20260914_20260921/lib_guard_delta_since_20260914_20260921.part003-of006.json",
+    "bundle/lib_guard_delta_since_20260914_20260921/lib_guard_delta_since_20260914_20260921.part004-of006.json",
+    "bundle/lib_guard_delta_since_20260914_20260921/lib_guard_delta_since_20260914_20260921.part005-of006.json",
+    "bundle/lib_guard_delta_since_20260914_20260921/lib_guard_delta_since_20260914_20260921.part006-of006.json",
+    "bundle/lib_guard_delta_since_20260921_20261009/lib_guard_delta_since_20260921_20261009.json",
+    "bundle/lib_guard_delta_20261009_followup/lib_guard_delta_20261009_followup.json",
+    "bundle/lib_guard_delta_20261009_workspace_reconnect/lib_guard_delta_20261009_workspace_reconnect.json",
+    "bundle/lib_guard_delta_20261009_partial_release/lib_guard_delta_20261009_partial_release.json",
+    "bundle/lib_guard_delta_20261009_registry_permissions/lib_guard_delta_20261009_registry_permissions.json"
+  ],
+  "excluded": [
+    "test/",
+    "tests/",
+    "test_*",
+    "work/",
+    "cache/",
+    "old bundles"
+  ],
+  "file_count": 48,
+  "code_count": 30,
+  "documentation_count": 18,
+  "part_count": 1,
+  "deleted": [],
+  "files": [
+    {
+      "path": "docs/basic_tutorial.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "74f2215ad627b908b798fcccc7017a7e1675026fcfb35559583859aa5d0f7f48",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-12-effective-workbench-usability.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "cb6eb152adaf6202e3c1057ff51adcd5128d9ae99be7be657940c3c94ecbca1e",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-12-effective-workspace-ui.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "12a1b885fad84af1f258733ffb9c02b719758a1106dbfcd46ec6cc05b50c1da7",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-12-static-report-layout.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "a2a97cf547805a00f954ecb682b2f071f11d2062bdcb3de33dee0b64e746664d",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-12-web-information-reduction.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "94b76fbe76033715287d5b1921e32b64635da7d83e368e4fee602f1f1790cdf4",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-effective-table-editing.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "512f929d41b853470fc0abee6b41d611ecac2444e0084acb2b40992fdaf2562d",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-formal-directory-integration.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "de94983cddd4b1308693fc6396ad75e851b6e6a8e833d888b2f13b087af45d84",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-formal-directory-inventory.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "1bdc4452619419ab0f1e479a01dea143d7aa456eecdbbc1bac46bb6a396caf94",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-lib-db-correspondence.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "f5252914b2ec70613c6dbd82898434a224f88b84b652f3693cfc9d9c6b2b9443",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-library-overview-discovery.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "1ed0afeaaca0f5cbafc82ba617e8b26254e6d1ca973c0fb05dd3155e43dc8106",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-manual-effective-selection.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "43e9335fd9163eacd223ab52b58d2b115396178d98002edbb472c3a891b1ada9",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-reader-version-report.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "a7492b059215cbf98e1527df7a697f6d8aa02a879990ef10564cdc762b7e81bd",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-release-payload-layout.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "9138ad31f5b73cfeaab73dc4a62cdbae209068b7cfdfed0e79e9350e902416ca",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-representative-file-review-validation.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "9390dd613d660f6fc257b648989b433d16606046026dbd251d89ecbf98fe1b45",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-representative-file-review.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "ce473ae8d924341f11999a918bd0f96157eaba50c580e42eace87aa85aebaac0",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-13-web-startup-hardening.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "d4109d366bca2cb6bd7d3022b1cb67ea3111b7cc8c838e2d1461311e105be2ce",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-14-inventory-diff-deep-link.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "65400f3b700a6d1d17bf030bc34d767fb0d0862b6de754058d15a90dfc850171",
+      "mode": "0o664"
+    },
+    {
+      "path": "docs/version_detail_checklist.md",
+      "kind": "documentation",
+      "change": "not_in_previous_bundles",
+      "comparison": "git_change_and_post_bundle_mtime_no_doc_snapshot",
+      "sha256": "3fc683e6ce0ceaa886803672bcf785518a7ea463f0466069777e25921f70de5c",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/diff/file_diff.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "7638b3938d79fde252d26c738ac7765a379c81249658d4faca98180c3a732b18",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/diff/scan_diff.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "cef4fc2e8609d87c02ffe8702f75301c26d258569c21952b2c9946d35f1d7f30",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/project_config.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "eb628ae4819182bd223cc9221ac7cc3afc8612a1669e8c33067ad496b3322ba6",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/release/bundle.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "e77911645c1031b6d1d445a2035ae35ee1015c19c6e0f07f033a4c4e6f28fb20",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/release/inventory.py",
+      "kind": "code",
+      "change": "not_in_previous_bundles",
+      "comparison": "new_code_not_in_previous_bundles",
+      "sha256": "29a5b5c63c1b114204144447ad04d4418fadb73bc9168de2a345c5cf57c97776",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/release/linker.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "56409dfaf02b22f1d078db8462b80b3204beb0b82fccc8a234f09196713e0bad",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/release/result.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "09fef11e94dab43d14dba08e2680fbcd711a3fb38caee719d6f9058c85c10ba7",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/render/catalog_report.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "d58e032a7ca98c8cc57577570f83e3a1da048ea7ded114afbd22e0dada31c5ba",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/render/catalog_workspace_report.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "b2f26e12b1c9b48f51c4def958af4ff3807a934087c20937b043fae7fd535fe9",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/render/html_report.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "7b7d0beeae7fb1ed21f54571d04ae48932e382bc1f8f06a09c639102f85a302d",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/render/product_theme.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "fc493b0c72de5d12bd1786e36b0164eb07b6dffb6ecea77da69050fc7591fbd9",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/render/version_detail_report.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "c265de067b827baddd54316c0357671c28f35dc8bd05ad9e5adf8e2e46b4ad04",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/render/version_file_checks.py",
+      "kind": "code",
+      "change": "not_in_previous_bundles",
+      "comparison": "new_code_not_in_previous_bundles",
+      "sha256": "ec6dd1b0c34522a62bf5acd00931b838c9b2a98dc9c99399a42e84c01fd18ab5",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/render/version_file_evidence.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "c055875798863c708965dadf538a2fac2af526e3a635e6cdc7ecb24521c97a2c",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/render/version_review_model.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "983cd5816a8b5e3c2d88bd42f36d03b471e3cabf8b476367f4dabcce5ad3fccd",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/render/version_review_render.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "fa1bbaf0992bf28be6e57eb53d618eba8ef8652883a960527e0ca908727cc5dd",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/review/representative_files.py",
+      "kind": "code",
+      "change": "not_in_previous_bundles",
+      "comparison": "new_code_not_in_previous_bundles",
+      "sha256": "0e7925875316bca15dc6b9a85c234a4d23d72f057ad8d9dac5a6373857377e6e",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/scan/artifacts.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "d44e8618d333f5a3bccddf05148015ef8bdf85f7146aa4d3b0c42c96347cfb8f",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/scan/evidence_export.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "bb217d25f927a329d1f62658f4fc5c069e69171b89741e1d01d6996fc68ed2ed",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/scan/inventory.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "c78208ba2539e5a34988e1fc677e7aeb964450c911336c5c800611268de2a3b6",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/scan/scanner.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "b998a7bd0533d49d5db63eee71dcfa43a73154522afbba846a1112310abfdfc9",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/short_cli.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "517bb78a1c9670eefc6abf98bde1d593c0506b06c17dd26dd5523afcdd55a995",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/view_types.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "452e4e9db87f3c2e91c2b8444b5829d5acc78e88729a6c74b3c319510fdfef2a",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/web/app.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "39baf8dfad9bb0224e19e886dc9ffcaa152b540c00ddaa515cbd024c483ca339",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/web/read_model.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "04ded067375bcdebbb1f706b40822a414482ff4e8e82f3cc6b9774e12c762475",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/web/static/app.js",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "d531997b567484ab7f0fae14602a2a98735bb4226b7a984cc2dd1f77a127fe03",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/web/static/styles.css",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "f2dc71946f47b7ee688de7413feab0eaa72328429cb6db7c2699cffde11a9921",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/web/templates/index.html",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "cd271f014b1e79eeea14a693b06b29ae089e4110b0255afe0ec30b9813584ceb",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/window/cli.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "4cc4517660e6064dde2003749ad5ee028214411a0d0465ae1de59ecab85ac91b",
+      "mode": "0o664"
+    },
+    {
+      "path": "src/lib_guard/window/resolver.py",
+      "kind": "code",
+      "change": "modified",
+      "comparison": "cumulative_bundle_sha256_and_mode",
+      "sha256": "419a54f7645f3398f4d082581546f4e42c081ba9d64abea97e5a6c194ed04539",
+      "mode": "0o664"
+    }
+  ],
+  "restore_verified": true,
+  "documentation_note": "No complete documentation snapshot in previous code bundles; newly included docs use Git changes and post-last-bundle mtime, not a historical content diff."
+}

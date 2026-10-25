@@ -1,0 +1,460 @@
+{
+  "schema_version": "lef_liberty_batch.v1",
+  "lef_analysis": "/tmp/ai_lib_formal_script_check_es3ct8fp/libraries/SRAM22.sram22_512x32m4w8__e05eeb195216/runs/review_20261024T123609Z_91f3fe4c/evidence/lef_review/lef_analysis.json",
+  "lef_source": {
+    "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LEF/sram22_512x32m4w8.lef",
+    "size_bytes": 139555,
+    "sha256": "09ccad5be8a496091763dfc2656e008ab7169f94f8ae797503794a4117fad56b"
+  },
+  "lef_inventory": {
+    "macro_count": 1,
+    "pin_count": 83,
+    "layer_count": 2,
+    "used_layer_count": 2,
+    "pin_rect_count": 2217,
+    "obs_rect_count": 2,
+    "pin_use_counts": {
+      "GROUND": 1,
+      "POWER": 1,
+      "未提供": 81
+    },
+    "pin_direction_counts": {
+      "INOUT": 2,
+      "INPUT": 49,
+      "OUTPUT": 32
+    },
+    "class_counts": {
+      "BLOCK": 1
+    },
+    "site_counts": {
+      "未提供": 1
+    },
+    "used_layers": [
+      "met1",
+      "met2"
+    ],
+    "size_range_um": {
+      "macro_count": 1,
+      "width": [
+        443.28,
+        443.28
+      ],
+      "height": [
+        448.72,
+        448.72
+      ]
+    }
+  },
+  "summary": {
+    "liberty_file_count": 3,
+    "files_with_mismatches": 0,
+    "files_with_unverified": 0,
+    "files_with_scope_gaps": 0,
+    "recognized_corners": [
+      "FF",
+      "SS",
+      "TT"
+    ],
+    "recognized_corner_count": 3,
+    "corner_file_counts": {
+      "FF": 1,
+      "SS": 1,
+      "TT": 1
+    },
+    "process_corner_file_counts": {
+      "FF": 1,
+      "SS": 1,
+      "TT": 1
+    },
+    "rc_corner_file_counts": {},
+    "files_with_unknown_process_corner": 0,
+    "files_with_unknown_rc_corner": 3,
+    "files_with_corner_label_conflict": 0,
+    "files_with_unknown_corner": 0,
+    "files_with_incomplete_signal_pin_coverage": 0,
+    "files_with_incomplete_power_ground_coverage": 0,
+    "identical_scope_gap_groups": 0,
+    "files_in_identical_scope_gap_groups": 0,
+    "signal_pin_checked_count": 243,
+    "signal_pin_mismatch_count": 0,
+    "power_ground_checked_count": 6,
+    "power_ground_issue_count": 0
+  },
+  "scope_gap_groups": [],
+  "set_coverage": {
+    "scope": "按已识别的工艺角/RC 角分组，禁止跨组补齐；未识别角标单列为一组",
+    "coverage_complete": true,
+    "groups": [
+      {
+        "process_corner": "FF",
+        "rc_corner": "未识别",
+        "context_status": "LABEL_BASED",
+        "scope": "仅本次传入且归入此标签组的 Liberty 文件；标签是文件名/Library 名线索，不是人工确认",
+        "liberty_files": [
+          "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LIB/NLDM/sram22_512x32m4w8_ff_n40C_1v95.lib"
+        ],
+        "liberty_file_count": 1,
+        "lef_macro_count": 1,
+        "liberty_union_cell_count": 1,
+        "matched_macro_count": 1,
+        "lef_only_macro_count": 0,
+        "liberty_only_cell_count": 0,
+        "lef_only_macros": [],
+        "liberty_only_cells": [],
+        "coverage_complete": true
+      },
+      {
+        "process_corner": "SS",
+        "rc_corner": "未识别",
+        "context_status": "LABEL_BASED",
+        "scope": "仅本次传入且归入此标签组的 Liberty 文件；标签是文件名/Library 名线索，不是人工确认",
+        "liberty_files": [
+          "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LIB/NLDM/sram22_512x32m4w8_ss_100C_1v60.lib"
+        ],
+        "liberty_file_count": 1,
+        "lef_macro_count": 1,
+        "liberty_union_cell_count": 1,
+        "matched_macro_count": 1,
+        "lef_only_macro_count": 0,
+        "liberty_only_cell_count": 0,
+        "lef_only_macros": [],
+        "liberty_only_cells": [],
+        "coverage_complete": true
+      },
+      {
+        "process_corner": "TT",
+        "rc_corner": "未识别",
+        "context_status": "LABEL_BASED",
+        "scope": "仅本次传入且归入此标签组的 Liberty 文件；标签是文件名/Library 名线索，不是人工确认",
+        "liberty_files": [
+          "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LIB/NLDM/sram22_512x32m4w8_tt_025C_1v80.lib"
+        ],
+        "liberty_file_count": 1,
+        "lef_macro_count": 1,
+        "liberty_union_cell_count": 1,
+        "matched_macro_count": 1,
+        "lef_only_macro_count": 0,
+        "liberty_only_cell_count": 0,
+        "lef_only_macros": [],
+        "liberty_only_cells": [],
+        "coverage_complete": true
+      }
+    ]
+  },
+  "set_coverages": [
+    {
+      "process_corner": "FF",
+      "rc_corner": "未识别",
+      "context_status": "LABEL_BASED",
+      "scope": "仅本次传入且归入此标签组的 Liberty 文件；标签是文件名/Library 名线索，不是人工确认",
+      "liberty_files": [
+        "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LIB/NLDM/sram22_512x32m4w8_ff_n40C_1v95.lib"
+      ],
+      "liberty_file_count": 1,
+      "lef_macro_count": 1,
+      "liberty_union_cell_count": 1,
+      "matched_macro_count": 1,
+      "lef_only_macro_count": 0,
+      "liberty_only_cell_count": 0,
+      "lef_only_macros": [],
+      "liberty_only_cells": [],
+      "coverage_complete": true
+    },
+    {
+      "process_corner": "SS",
+      "rc_corner": "未识别",
+      "context_status": "LABEL_BASED",
+      "scope": "仅本次传入且归入此标签组的 Liberty 文件；标签是文件名/Library 名线索，不是人工确认",
+      "liberty_files": [
+        "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LIB/NLDM/sram22_512x32m4w8_ss_100C_1v60.lib"
+      ],
+      "liberty_file_count": 1,
+      "lef_macro_count": 1,
+      "liberty_union_cell_count": 1,
+      "matched_macro_count": 1,
+      "lef_only_macro_count": 0,
+      "liberty_only_cell_count": 0,
+      "lef_only_macros": [],
+      "liberty_only_cells": [],
+      "coverage_complete": true
+    },
+    {
+      "process_corner": "TT",
+      "rc_corner": "未识别",
+      "context_status": "LABEL_BASED",
+      "scope": "仅本次传入且归入此标签组的 Liberty 文件；标签是文件名/Library 名线索，不是人工确认",
+      "liberty_files": [
+        "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LIB/NLDM/sram22_512x32m4w8_tt_025C_1v80.lib"
+      ],
+      "liberty_file_count": 1,
+      "lef_macro_count": 1,
+      "liberty_union_cell_count": 1,
+      "matched_macro_count": 1,
+      "lef_only_macro_count": 0,
+      "liberty_only_cell_count": 0,
+      "lef_only_macros": [],
+      "liberty_only_cells": [],
+      "coverage_complete": true
+    }
+  ],
+  "files": [
+    {
+      "schema_version": "lef_liberty_check.v1",
+      "lef_analysis": "/tmp/ai_lib_formal_script_check_es3ct8fp/libraries/SRAM22.sram22_512x32m4w8__e05eeb195216/runs/review_20261024T123609Z_91f3fe4c/evidence/lef_review/lef_analysis.json",
+      "lef_source": {
+        "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LEF/sram22_512x32m4w8.lef",
+        "size_bytes": 139555,
+        "sha256": "09ccad5be8a496091763dfc2656e008ab7169f94f8ae797503794a4117fad56b"
+      },
+      "liberty_source": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LIB/NLDM/sram22_512x32m4w8_ff_n40C_1v95.lib",
+      "library_names": [
+        "sram22_512x32m4w8"
+      ],
+      "corner_axes": {
+        "process_corner": "FF",
+        "process_corner_candidates": [
+          "FF"
+        ],
+        "rc_corner": null,
+        "rc_corner_candidates": [],
+        "conflict": false
+      },
+      "corner_labels": [
+        "FF"
+      ],
+      "operating_conditions": {
+        "sram22_512x32m4w8": {
+          "PVT_1P95V_-40C": {
+            "name": "PVT_1P95V_-40C",
+            "process": "1",
+            "temperature": "-40",
+            "voltage": "1.95"
+          }
+        }
+      },
+      "liberty_inventory": {
+        "cell_count": 1,
+        "signal_pin_count": 81,
+        "pg_pin_count": 2,
+        "cell_names": [
+          "sram22_512x32m4w8"
+        ]
+      },
+      "liberty_parser_version": "standalone-interface-2",
+      "liberty_coverage": {
+        "schema_version": "semantic_parser_coverage.v1",
+        "validated": true,
+        "validation_scope": "supported_interface_extraction_only",
+        "basis": "抽取器支持范围内的接口事实已读取；不代表完整 Liberty 语法或全部语义验证",
+        "validation_note": "已识别 Library、Cell 与至少一个 Pin/PG Pin；时序表格等未纳入本核查。",
+        "port_set": "PRESENT",
+        "pg_port_set": "PRESENT"
+      },
+      "summary": {
+        "lef_macro_count": 1,
+        "liberty_cell_count": 1,
+        "matched_macro_count": 1,
+        "lef_only_macro_count": 0,
+        "liberty_only_cell_count": 0,
+        "mismatch_cell_count": 0,
+        "unverified_cell_count": 0,
+        "signal_pin_checked_count": 81,
+        "signal_pin_missing_count": 0,
+        "signal_pin_extra_count": 0,
+        "signal_pin_direction_mismatch_count": 0,
+        "power_ground_checked_count": 2,
+        "lef_power_pin_count": 1,
+        "liberty_power_pin_count": 1,
+        "lef_ground_pin_count": 1,
+        "liberty_ground_pin_count": 1,
+        "power_ground_missing_count": 0,
+        "power_ground_extra_count": 0,
+        "power_ground_wrong_type_count": 0,
+        "power_ground_unverified_type_count": 0,
+        "signal_pin_coverage_complete": true,
+        "power_ground_coverage_complete": true
+      },
+      "comparison": {
+        "lef_only_macros": [],
+        "liberty_only_cells": [],
+        "lef_name_coverage_complete": true,
+        "liberty_cell_coverage_complete": true
+      },
+      "cells": [],
+      "matching_cell_details_omitted": true,
+      "liberty_parse_limitations": []
+    },
+    {
+      "schema_version": "lef_liberty_check.v1",
+      "lef_analysis": "/tmp/ai_lib_formal_script_check_es3ct8fp/libraries/SRAM22.sram22_512x32m4w8__e05eeb195216/runs/review_20261024T123609Z_91f3fe4c/evidence/lef_review/lef_analysis.json",
+      "lef_source": {
+        "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LEF/sram22_512x32m4w8.lef",
+        "size_bytes": 139555,
+        "sha256": "09ccad5be8a496091763dfc2656e008ab7169f94f8ae797503794a4117fad56b"
+      },
+      "liberty_source": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LIB/NLDM/sram22_512x32m4w8_ss_100C_1v60.lib",
+      "library_names": [
+        "sram22_512x32m4w8"
+      ],
+      "corner_axes": {
+        "process_corner": "SS",
+        "process_corner_candidates": [
+          "SS"
+        ],
+        "rc_corner": null,
+        "rc_corner_candidates": [],
+        "conflict": false
+      },
+      "corner_labels": [
+        "SS"
+      ],
+      "operating_conditions": {
+        "sram22_512x32m4w8": {
+          "PVT_1P6V_100C": {
+            "name": "PVT_1P6V_100C",
+            "process": "1",
+            "temperature": "100",
+            "voltage": "1.6"
+          }
+        }
+      },
+      "liberty_inventory": {
+        "cell_count": 1,
+        "signal_pin_count": 81,
+        "pg_pin_count": 2,
+        "cell_names": [
+          "sram22_512x32m4w8"
+        ]
+      },
+      "liberty_parser_version": "standalone-interface-2",
+      "liberty_coverage": {
+        "schema_version": "semantic_parser_coverage.v1",
+        "validated": true,
+        "validation_scope": "supported_interface_extraction_only",
+        "basis": "抽取器支持范围内的接口事实已读取；不代表完整 Liberty 语法或全部语义验证",
+        "validation_note": "已识别 Library、Cell 与至少一个 Pin/PG Pin；时序表格等未纳入本核查。",
+        "port_set": "PRESENT",
+        "pg_port_set": "PRESENT"
+      },
+      "summary": {
+        "lef_macro_count": 1,
+        "liberty_cell_count": 1,
+        "matched_macro_count": 1,
+        "lef_only_macro_count": 0,
+        "liberty_only_cell_count": 0,
+        "mismatch_cell_count": 0,
+        "unverified_cell_count": 0,
+        "signal_pin_checked_count": 81,
+        "signal_pin_missing_count": 0,
+        "signal_pin_extra_count": 0,
+        "signal_pin_direction_mismatch_count": 0,
+        "power_ground_checked_count": 2,
+        "lef_power_pin_count": 1,
+        "liberty_power_pin_count": 1,
+        "lef_ground_pin_count": 1,
+        "liberty_ground_pin_count": 1,
+        "power_ground_missing_count": 0,
+        "power_ground_extra_count": 0,
+        "power_ground_wrong_type_count": 0,
+        "power_ground_unverified_type_count": 0,
+        "signal_pin_coverage_complete": true,
+        "power_ground_coverage_complete": true
+      },
+      "comparison": {
+        "lef_only_macros": [],
+        "liberty_only_cells": [],
+        "lef_name_coverage_complete": true,
+        "liberty_cell_coverage_complete": true
+      },
+      "cells": [],
+      "matching_cell_details_omitted": true,
+      "liberty_parse_limitations": []
+    },
+    {
+      "schema_version": "lef_liberty_check.v1",
+      "lef_analysis": "/tmp/ai_lib_formal_script_check_es3ct8fp/libraries/SRAM22.sram22_512x32m4w8__e05eeb195216/runs/review_20261024T123609Z_91f3fe4c/evidence/lef_review/lef_analysis.json",
+      "lef_source": {
+        "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LEF/sram22_512x32m4w8.lef",
+        "size_bytes": 139555,
+        "sha256": "09ccad5be8a496091763dfc2656e008ab7169f94f8ae797503794a4117fad56b"
+      },
+      "liberty_source": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8/20260924_de0a9a7/LIB/NLDM/sram22_512x32m4w8_tt_025C_1v80.lib",
+      "library_names": [
+        "sram22_512x32m4w8"
+      ],
+      "corner_axes": {
+        "process_corner": "TT",
+        "process_corner_candidates": [
+          "TT"
+        ],
+        "rc_corner": null,
+        "rc_corner_candidates": [],
+        "conflict": false
+      },
+      "corner_labels": [
+        "TT"
+      ],
+      "operating_conditions": {
+        "sram22_512x32m4w8": {
+          "PVT_1P8V_25C": {
+            "name": "PVT_1P8V_25C",
+            "process": "1",
+            "temperature": "25",
+            "voltage": "1.8"
+          }
+        }
+      },
+      "liberty_inventory": {
+        "cell_count": 1,
+        "signal_pin_count": 81,
+        "pg_pin_count": 2,
+        "cell_names": [
+          "sram22_512x32m4w8"
+        ]
+      },
+      "liberty_parser_version": "standalone-interface-2",
+      "liberty_coverage": {
+        "schema_version": "semantic_parser_coverage.v1",
+        "validated": true,
+        "validation_scope": "supported_interface_extraction_only",
+        "basis": "抽取器支持范围内的接口事实已读取；不代表完整 Liberty 语法或全部语义验证",
+        "validation_note": "已识别 Library、Cell 与至少一个 Pin/PG Pin；时序表格等未纳入本核查。",
+        "port_set": "PRESENT",
+        "pg_port_set": "PRESENT"
+      },
+      "summary": {
+        "lef_macro_count": 1,
+        "liberty_cell_count": 1,
+        "matched_macro_count": 1,
+        "lef_only_macro_count": 0,
+        "liberty_only_cell_count": 0,
+        "mismatch_cell_count": 0,
+        "unverified_cell_count": 0,
+        "signal_pin_checked_count": 81,
+        "signal_pin_missing_count": 0,
+        "signal_pin_extra_count": 0,
+        "signal_pin_direction_mismatch_count": 0,
+        "power_ground_checked_count": 2,
+        "lef_power_pin_count": 1,
+        "liberty_power_pin_count": 1,
+        "lef_ground_pin_count": 1,
+        "liberty_ground_pin_count": 1,
+        "power_ground_missing_count": 0,
+        "power_ground_extra_count": 0,
+        "power_ground_wrong_type_count": 0,
+        "power_ground_unverified_type_count": 0,
+        "signal_pin_coverage_complete": true,
+        "power_ground_coverage_complete": true
+      },
+      "comparison": {
+        "lef_only_macros": [],
+        "liberty_only_cells": [],
+        "lef_name_coverage_complete": true,
+        "liberty_cell_coverage_complete": true
+      },
+      "cells": [],
+      "matching_cell_details_omitted": true,
+      "liberty_parse_limitations": []
+    }
+  ]
+}

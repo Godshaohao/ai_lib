@@ -1,0 +1,191 @@
+{
+  "schema_version": "review_result.v1",
+  "library_id": "IHP.sg13g2_stdcell",
+  "review_id": "review_20261024T164723Z_d91a0632",
+  "generated_at": "2026-10-24T16:47:25.366465+00:00",
+  "context": {
+    "type": "LIBRARY_REVIEW",
+    "formal_stage": "lib_NL2.5_3",
+    "formal_snapshot_id": null,
+    "target_raw_versions": [
+      "20260311_5cccb161"
+    ]
+  },
+  "context_alignment": "INDEPENDENT",
+  "requested_checks": [
+    "lef_review",
+    "formal_nl",
+    "macro_index",
+    "lef_liberty_check"
+  ],
+  "execution_status": "COMPLETE",
+  "quality_status": "ISSUES_FOUND",
+  "checks": {
+    "formal_nl": {
+      "execution_status": "COMPLETE",
+      "result_status": "COMPLETE",
+      "result_ref": "evidence/formal_nl.json",
+      "report_path": "/home/polaris/proj/mx/ai_lib/repo/src_qor/test-results/formal_nl_20261024/libraries/IHP.sg13g2_stdcell__4e6f52ba1f04/runs/review_20261024T164723Z_d91a0632/evidence/formal_nl/formal_nl.json",
+      "input_identity": {
+        "check": "formal_nl",
+        "sources": [
+          {
+            "role": "formal_nl_config",
+            "path": "/tmp/ai_lib_formal_rebuild_c9y0r0e3/IHP.sg13g2_stdcell__4e6f52ba1f04.yml"
+          },
+          {
+            "role": "formal_nl_root",
+            "path": "/home/polaris/proj/mx/ai_lib/lib_NL2.5_3/IP"
+          },
+          {
+            "role": "formal_raw_source",
+            "version": "20260311_5cccb161"
+          },
+          {
+            "role": "formal_stage",
+            "stage": "lib_NL2.5_3"
+          }
+        ],
+        "source_versions": [
+          "20260311_5cccb161"
+        ],
+        "formal_stages": [
+          "lib_NL2.5_3"
+        ]
+      },
+      "error": null
+    },
+    "lef_liberty_check": {
+      "execution_status": "COMPLETE",
+      "result_status": "COMPLETE",
+      "result_ref": "evidence/lef_liberty_check.json",
+      "report_path": "/home/polaris/proj/mx/ai_lib/repo/src_qor/test-results/formal_nl_20261024/libraries/IHP.sg13g2_stdcell__4e6f52ba1f04/runs/review_20261024T164723Z_d91a0632/evidence/lef_liberty_check/lef_liberty_check.json",
+      "input_identity": {
+        "check": "lef_liberty_check",
+        "sources": [
+          {
+            "role": "bound_lef",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161/LEF/sg13g2_stdcell.lef",
+            "sha256": "c9bbc02d0c2cba3b15cd89a208750d25de882f02a2927ae78ba6422109fb01d0"
+          },
+          {
+            "role": "liberty",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161/LIB/NLDM/sg13g2_stdcell_fast_1p32V_m40C.lib"
+          },
+          {
+            "role": "liberty",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161/LIB/NLDM/sg13g2_stdcell_fast_1p65V_m40C.lib"
+          },
+          {
+            "role": "liberty",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161/LIB/NLDM/sg13g2_stdcell_slow_1p08V_125C.lib"
+          },
+          {
+            "role": "liberty",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161/LIB/NLDM/sg13g2_stdcell_slow_1p35V_125C.lib"
+          },
+          {
+            "role": "liberty",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161/LIB/NLDM/sg13g2_stdcell_typ_1p20V_25C.lib"
+          },
+          {
+            "role": "liberty",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161/LIB/NLDM/sg13g2_stdcell_typ_1p50V_25C.lib"
+          }
+        ],
+        "source_versions": [],
+        "formal_stages": []
+      },
+      "error": null
+    },
+    "lef_review": {
+      "execution_status": "COMPLETE",
+      "result_status": "COMPLETE",
+      "result_ref": "evidence/lef_review.json",
+      "report_path": "/home/polaris/proj/mx/ai_lib/repo/src_qor/test-results/formal_nl_20261024/libraries/IHP.sg13g2_stdcell__4e6f52ba1f04/runs/review_20261024T164723Z_d91a0632/evidence/lef_review/lef_analysis.json",
+      "input_identity": {
+        "check": "lef_review",
+        "sources": [
+          {
+            "role": "lef_old",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20230628_2db4084d/LEF/sg13g2_stdcell.lef",
+            "sha256": "b9b89bb4ad36f846ada6b31606cde6e7b73473ca2fda7494861552cb37d759c4"
+          },
+          {
+            "role": "lef_new",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161/LEF/sg13g2_stdcell.lef",
+            "sha256": "c9bbc02d0c2cba3b15cd89a208750d25de882f02a2927ae78ba6422109fb01d0"
+          }
+        ],
+        "source_versions": [],
+        "formal_stages": []
+      },
+      "error": null
+    },
+    "macro_index": {
+      "execution_status": "COMPLETE",
+      "result_status": "COMPLETE",
+      "result_ref": "evidence/macro_index.json",
+      "report_path": "/home/polaris/proj/mx/ai_lib/repo/src_qor/test-results/formal_nl_20261024/libraries/IHP.sg13g2_stdcell__4e6f52ba1f04/runs/review_20261024T164723Z_d91a0632/evidence/macro_index.json",
+      "input_identity": {
+        "check": "macro_index",
+        "sources": [
+          {
+            "role": "filemap",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161",
+            "version": "20260311_5cccb161"
+          },
+          {
+            "role": "filemap_context",
+            "path": "/home/polaris/proj/mx/ai_lib/3rd_IP/IHP/sg13g2_stdcell/20260311_5cccb161"
+          },
+          {
+            "role": "macro_source",
+            "version": "20260311_5cccb161"
+          }
+        ],
+        "source_versions": [
+          "20260311_5cccb161"
+        ],
+        "formal_stages": []
+      },
+      "error": null
+    }
+  },
+  "summary": {
+    "counts": {
+      "CHANGED": {
+        "finding_records": 33,
+        "affected_objects": 33
+      },
+      "MISMATCH": {
+        "finding_records": 2,
+        "affected_objects": 504
+      },
+      "UNVERIFIED": {
+        "finding_records": 5,
+        "affected_objects": 5
+      },
+      "SCOPE_INFO": {
+        "finding_records": 0,
+        "affected_objects": 0
+      }
+    },
+    "finding_records": 40,
+    "affected_objects": 542,
+    "confirmed_changes": 33,
+    "confirmed_mismatches": 504,
+    "unverified": 5,
+    "scope_notes": 0,
+    "quality_assessment": {
+      "status": "ISSUES_FOUND",
+      "label": "发现已确认不一致",
+      "not_run_checks": [],
+      "boundary": "仅评价本次已选检查与输入范围；本次未运行：无。不等同于 IP 全面质量通过或正式发布放行。",
+      "incomplete_check_count": 0
+    }
+  },
+  "reports": {
+    "xlsx": "ip_review.xlsx"
+  }
+}

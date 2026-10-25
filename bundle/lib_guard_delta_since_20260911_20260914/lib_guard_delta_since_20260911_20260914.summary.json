@@ -1,0 +1,100 @@
+{
+  "name": "lib_guard_delta_since_20260911_20260914",
+  "generated_at": "2026-09-14T11:37:13+08:00",
+  "previous_incremental_bundle": "bundle/lib_guard_delta_since_20260908_20260911",
+  "current_bundle_dir": "bundle/lib_guard_delta_since_20260911_20260914",
+  "bundle_parts": 8,
+  "file_count": 33,
+  "verification": {
+    "bundle_path_set_matches_expected": true,
+    "bundle_internal_sha256_ok": true,
+    "restore_to_tmp_sha256_ok": true,
+    "restore_check_dir": "/tmp/lib_guard_delta_restore_check"
+  },
+  "update_groups": {
+    "web_console_and_ui": [
+      "src/lib_guard/web/app.py",
+      "src/lib_guard/web/read_model.py",
+      "src/lib_guard/web/static/app.js",
+      "src/lib_guard/web/static/styles.css",
+      "src/lib_guard/web/templates/index.html"
+    ],
+    "version_detail_and_render": [
+      "src/lib_guard/render/catalog_render_common.py",
+      "src/lib_guard/render/version_detail_report.py"
+    ],
+    "effective_release_set_and_runtime": [
+      "src/lib_guard/effective/release_set.py",
+      "src/lib_guard/catalog/runtime.py"
+    ],
+    "review_notes_and_concurrency": [
+      "src/lib_guard/review/update_notes.py",
+      "src/lib_guard/review/overrides.py"
+    ],
+    "cli_and_config": [
+      "scripts/lg.csh",
+      "src/lib_guard/short_cli.py",
+      "src/lib_guard/project_config.py",
+      "src/lib_guard/window/cli.py",
+      "src/lib_guard/cli_commands/catalog.py"
+    ],
+    "library_scan_diff": [
+      "src/lib_guard/library_registry.py",
+      "src/lib_guard/diff/file_diff.py"
+    ],
+    "docs": [
+      "docs/architecture.md"
+    ],
+    "tests": [
+      "src/lib_guard/test/test_architecture_invariants.py",
+      "src/lib_guard/test/test_config_model.py",
+      "src/lib_guard/test/test_effective_release_set.py",
+      "src/lib_guard/test/test_library_registry.py",
+      "src/lib_guard/test/test_multiversion_hardening.py",
+      "src/lib_guard/test/test_render_impact.py",
+      "src/lib_guard/test/test_review_overrides_concurrency.py",
+      "src/lib_guard/test/test_scan_pipeline.py",
+      "src/lib_guard/test/test_short_cli_command_surface.py",
+      "src/lib_guard/test/test_update_notes.py",
+      "src/lib_guard/test/test_version_detail_report.py",
+      "src/lib_guard/test/test_web_app.py",
+      "src/lib_guard/test/test_web_read_model.py",
+      "src/lib_guard/test/test_web_ui_contract.py"
+    ]
+  },
+  "files": [
+    "docs/architecture.md",
+    "scripts/lg.csh",
+    "src/lib_guard/catalog/runtime.py",
+    "src/lib_guard/cli_commands/catalog.py",
+    "src/lib_guard/diff/file_diff.py",
+    "src/lib_guard/effective/release_set.py",
+    "src/lib_guard/library_registry.py",
+    "src/lib_guard/project_config.py",
+    "src/lib_guard/render/catalog_render_common.py",
+    "src/lib_guard/render/version_detail_report.py",
+    "src/lib_guard/review/overrides.py",
+    "src/lib_guard/review/update_notes.py",
+    "src/lib_guard/short_cli.py",
+    "src/lib_guard/test/test_architecture_invariants.py",
+    "src/lib_guard/test/test_config_model.py",
+    "src/lib_guard/test/test_effective_release_set.py",
+    "src/lib_guard/test/test_library_registry.py",
+    "src/lib_guard/test/test_multiversion_hardening.py",
+    "src/lib_guard/test/test_render_impact.py",
+    "src/lib_guard/test/test_review_overrides_concurrency.py",
+    "src/lib_guard/test/test_scan_pipeline.py",
+    "src/lib_guard/test/test_short_cli_command_surface.py",
+    "src/lib_guard/test/test_update_notes.py",
+    "src/lib_guard/test/test_version_detail_report.py",
+    "src/lib_guard/test/test_web_app.py",
+    "src/lib_guard/test/test_web_read_model.py",
+    "src/lib_guard/test/test_web_ui_contract.py",
+    "src/lib_guard/web/app.py",
+    "src/lib_guard/web/read_model.py",
+    "src/lib_guard/web/static/app.js",
+    "src/lib_guard/web/static/styles.css",
+    "src/lib_guard/web/templates/index.html",
+    "src/lib_guard/window/cli.py"
+  ]
+}

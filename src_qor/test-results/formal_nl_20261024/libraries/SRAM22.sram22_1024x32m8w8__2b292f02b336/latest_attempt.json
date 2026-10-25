@@ -1,0 +1,49 @@
+{
+  "task_id": "review_20261024T164723Z_d91a0632",
+  "review_id": "review_20261024T164723Z_d91a0632",
+  "library_id": "SRAM22.sram22_1024x32m8w8",
+  "status": "COMPLETE",
+  "execution_status": "COMPLETE",
+  "requested_checks": [
+    "lef_review",
+    "formal_nl",
+    "macro_index",
+    "lef_liberty_check"
+  ],
+  "submitted_at": "2026-10-24T16:47:23.848871+00:00",
+  "started_at": "2026-10-24T16:47:23.848871+00:00",
+  "finished_at": "2026-10-24T16:47:25.610033+00:00",
+  "summary": {
+    "counts": {
+      "CHANGED": {
+        "finding_records": 2,
+        "affected_objects": 2
+      },
+      "MISMATCH": {
+        "finding_records": 0,
+        "affected_objects": 0
+      },
+      "UNVERIFIED": {
+        "finding_records": 0,
+        "affected_objects": 0
+      },
+      "SCOPE_INFO": {
+        "finding_records": 0,
+        "affected_objects": 0
+      }
+    },
+    "finding_records": 2,
+    "affected_objects": 2,
+    "confirmed_changes": 2,
+    "confirmed_mismatches": 0,
+    "unverified": 0,
+    "scope_notes": 0,
+    "quality_assessment": {
+      "status": "CHANGES_FOUND",
+      "label": "发现已确认变化",
+      "not_run_checks": [],
+      "boundary": "仅评价本次已选检查与输入范围；本次未运行：无。不等同于 IP 全面质量通过或正式发布放行。",
+      "incomplete_check_count": 0
+    }
+  }
+}

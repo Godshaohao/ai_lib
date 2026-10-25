@@ -1,0 +1,9 @@
+library:
+  id: SRAM22.sram22_512x32m4w8
+  root: /home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_512x32m4w8
+  ip_directory_name: sram22_512x32m4w8
+formal_nl:
+  root: /home/polaris/proj/mx/ai_lib/lib_NL2.5_3/IP
+output:
+  report_json: /home/polaris/proj/mx/ai_lib/repo/src_qor/test-results/formal_nl_20261024/libraries/SRAM22.sram22_512x32m4w8__e05eeb195216/runs/review_20261024T152224Z_c9d32e36/evidence/formal_nl/formal_nl.json
+  report_md: /home/polaris/proj/mx/ai_lib/repo/src_qor/test-results/formal_nl_20261024/libraries/SRAM22.sram22_512x32m4w8__e05eeb195216/runs/review_20261024T152224Z_c9d32e36/evidence/formal_nl/formal_nl.md
