@@ -1,10 +1,17 @@
-# ai_lib / lib_guard
+# ai_lib
 
-`lib_guard` 是面向 IC library / IP 交付的 catalog 驱动审查工具。它负责发现
-raw delivery、扫描版本、生成结构化更新证据、渲染 HTML，并在 release 前准备
-可追溯证据。
+本仓库保留两条独立流程：
 
-## 当前主流程
+- [IP 工程检查工作台](src_qor/README.md)（`src_qor/`）：按 IP 选择正式 NL 盘点、
+  Macro/View 索引、LEF 对比和 LEF-Liberty 接口检查；每个 IP 生成独立 Excel，
+  HTML 提供多 IP 导航。检查执行完成不等于质量通过或正式放行。
+- 既有 Catalog/Release 流程（`src/lib_guard/`）：管理库版本、Scan/Diff、
+  Effective 及发布证据。其命令和状态不作为 `src_qor` 检查的隐式输入。
+
+以下是既有 Catalog/Release 流程的使用说明；新 IP 检查的配置、启动和输出
+路径以 [src_qor/README.md](src_qor/README.md) 为准。
+
+## Catalog/Release 流程
 
 ```text
 库目录 -> 版本审查 -> Release
@@ -20,7 +27,7 @@ raw delivery、扫描版本、生成结构化更新证据、渲染 HTML，并在
 日常使用优先走短命令：`scripts/lg.csh`、`scripts/lg.ps1`、`scripts/lg.cmd`。
 底层 `python -m lib_guard.cli` 入口保留给自动化、调试和测试。
 
-## 最短入口
+## Catalog/Release 最短入口
 
 ```csh
 setenv PROJ /path/to/ai_lib/repo
@@ -60,6 +67,8 @@ scripts/                 Thin user-facing wrappers
 examples/                Copyable action/file examples
 src/lib_guard/           Product source
 src/lib_guard/test/      Active automated tests
+src_qor/                 Independent IP check scripts and workbench
+src_qor/test/            IP check automated tests
 tests/                   Integration fixtures and repository-level notes
 work/                    Generated local output, not source of truth
 ```
@@ -70,6 +79,8 @@ current repository path. Current behavior is defined by the docs listed below.
 ## Documentation
 
 - [Documentation index](docs/index.md)
+- [IP check workbench](src_qor/README.md)
+- [Generated report publication policy](docs/public_artifact_policy.md)
 - [基础教程](docs/basic_tutorial.md)
 - [CLI 参考](docs/cli_reference.md)
 - [配置参考](docs/config_reference.md)

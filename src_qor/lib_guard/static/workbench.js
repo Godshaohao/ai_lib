@@ -310,8 +310,11 @@
   const formalLibraryCount = document.querySelector("[data-formal-library-count]");
   const formalFileSearch = document.querySelector("[data-formal-file-search]");
   const formalViewFilter = document.querySelector("[data-formal-view-filter]");
-  const formalFileRows = [...document.querySelectorAll("[data-formal-file-row]")];
+  const formalFilesDisclosure = document.querySelector("[data-formal-files]");
+  const formalFileContent = document.querySelector("[data-formal-file-content]");
   const formalFileCount = document.querySelector("[data-formal-file-count]");
+  let formalFileRows = [...document.querySelectorAll("[data-formal-file-row]")];
+  let formalFilesLoaded = formalFileRows.length > 0;
   function filterFormalInventory() {
     const libraryQuery = (formalLibrarySearch?.value || "").trim().toLocaleLowerCase();
     let visibleLibraries = 0;
@@ -330,6 +333,63 @@
     });
     if (formalFileCount) formalFileCount.textContent = `${visibleFiles} 条`;
   }
+  function textCell(row, value, className = "") {
+    const cell = document.createElement("td");
+    if (className) cell.className = className;
+    const text = document.createElement(className === "path-cell" ? "code" : "span");
+    text.textContent = value || "—";
+    cell.append(text);
+    return cell;
+  }
+  function renderFormalFiles(files) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "table-wrap formal-overview-file-wrap";
+    const table = document.createElement("table");
+    const head = document.createElement("thead");
+    const heading = document.createElement("tr");
+    ["阶段", "来源 IP", "RAW 版本", "View", "正式路径", "RAW 来源路径"].forEach((value) => {
+      const cell = document.createElement("th");
+      cell.textContent = value;
+      heading.append(cell);
+    });
+    head.append(heading);
+    const body = document.createElement("tbody");
+    files.forEach((file) => {
+      const row = document.createElement("tr");
+      row.dataset.formalFileRow = "";
+      row.dataset.view = file.view || "other";
+      row.dataset.search = [file.stage, file.vendor, file.middle_path, file.library_name,
+        file.raw_version, file.relative_path, file.published_path, file.source_path]
+        .join(" ").toLocaleLowerCase();
+      row.append(
+        textCell(row, file.stage),
+        textCell(row, [file.vendor, file.middle_path, file.library_name].filter(Boolean).join(" / ")),
+        textCell(row, file.raw_version),
+        textCell(row, String(file.view || "other").toUpperCase()),
+        textCell(row, file.published_path, "path-cell"),
+        textCell(row, file.source_path, "path-cell"),
+      );
+      body.append(row);
+    });
+    table.append(head, body);
+    wrapper.append(table);
+    formalFileContent.replaceChildren(wrapper);
+    formalFileRows = [...formalFileContent.querySelectorAll("[data-formal-file-row]")];
+    formalFilesLoaded = true;
+    filterFormalInventory();
+  }
+  formalFilesDisclosure?.addEventListener("toggle", async () => {
+    if (!formalFilesDisclosure.open || formalFilesLoaded) return;
+    formalFileContent.textContent = "正在读取已保存的正式目录快照…";
+    try {
+      const response = await fetch(formalFilesDisclosure.dataset.filesUrl, { headers: { Accept: "application/json" } });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `读取失败 (${response.status})`);
+      renderFormalFiles(payload.files || []);
+    } catch (error) {
+      formalFileContent.textContent = `${error.message} 请刷新正式目录后重试。`;
+    }
+  });
   formalLibrarySearch?.addEventListener("input", filterFormalInventory);
   formalFileSearch?.addEventListener("input", filterFormalInventory);
   formalViewFilter?.addEventListener("change", filterFormalInventory);

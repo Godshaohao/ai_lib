@@ -163,6 +163,25 @@ class IpCheckOverviewTests(unittest.TestCase):
         self.assertIn("/raw/V02/LEF/a.lef", html)
         self.assertIn("打开 Excel", html)
 
+    def test_overview_exposes_primary_finding_and_review_provenance_in_details(self):
+        row = overview_row()
+        row["last_complete"]["source_revision"] = {
+            "commit": "0123456789abcdef", "working_tree_dirty": True,
+        }
+        row["last_complete"]["input_scope"] = {
+            "checks": [{"name": "lef_liberty_check"}], "target_raw_versions": ["V02"],
+            "formal_stage": "lib_NL2.5_3", "source_count": 4,
+        }
+        row["last_complete"]["summary"]["primary_findings"] = [
+            {"kind": "MISMATCH", "category": "LEF-Liberty接口", "label": "PG脚缺失", "count": 12},
+        ]
+
+        html = render_overview([row])
+
+        self.assertIn("主要发现：LEF-Liberty接口：PG脚缺失 (12)", html)
+        self.assertIn("源提交：0123456789abcdef（生成时工作区有未提交修改）", html)
+        self.assertIn("输入范围：</strong>检查 lef_liberty_check；RAW V02", html)
+
     def test_many_raw_versions_are_counted_in_row_and_listed_only_in_collapsed_details(self):
         row = overview_row()
         versions = [f"RAW_V{index:02d}" for index in range(1, 51)]

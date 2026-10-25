@@ -173,6 +173,21 @@ def render_overview(reviews: list[dict[str, Any]], *, simulation: bool = False) 
                 f"<li><code>{escape(str(path))}</code></li>" for path in paths
             ) + "</ul>")
         detail_parts.append(f"<small>Review ID：{escape(complete_id or '未记录')}</small>")
+        revision = complete.get("source_revision") or {}
+        revision_label = str(revision.get("commit") or "未记录")
+        if revision.get("working_tree_dirty") is True:
+            revision_label += "（生成时工作区有未提交修改）"
+        elif revision.get("working_tree_dirty") is None:
+            revision_label += "（工作区状态未知）"
+        detail_parts.append(f"<small>源提交：{escape(revision_label)}</small>")
+        input_scope = complete.get("input_scope") or {}
+        if input_scope:
+            scope_checks = "、".join(str(item.get("name") or "") for item in input_scope.get("checks") or []) or "无"
+            scope_versions = "、".join(str(value) for value in input_scope.get("target_raw_versions") or []) or "未记录"
+            scope_stage = str(input_scope.get("formal_stage") or "未指定")
+            detail_parts.append(
+                f"<p><strong>输入范围：</strong>检查 {escape(scope_checks)}；RAW {escape(scope_versions)}；"
+                f"正式阶段 {escape(scope_stage)}；来源 {int(input_scope.get('source_count') or 0)} 项。</p>")
         path_detail = '<details><summary>查看完整范围、路径与 Review 标识</summary>' + "".join(detail_parts) + "</details>"
         complete_markup = (f'<strong>{escape(complete_time or "时间未记录")}</strong>'
                            f'<small>{escape(scope)}</small>{path_detail}' if has_complete else "尚无完整检查报告")
@@ -180,10 +195,18 @@ def render_overview(reviews: list[dict[str, Any]], *, simulation: bool = False) 
         def show_count(value: int | None) -> str:
             return str(value) if value is not None else "未确认"
 
+        primary_markup = ""
+        primary_findings = summary.get("primary_findings") or []
+        if primary_findings:
+            primary_text = "；".join(
+                f"{str(item.get('category') or '发现')}：{str(item.get('label') or '—')} ({int(item.get('count') or 0)})"
+                for item in primary_findings[:2])
+            primary_markup = f'<small class="primary-finding">主要发现：{escape(primary_text)}</small>'
         findings_markup = (
             f'<span class="finding changed">变化 {show_count(counts["CHANGED"])}</span>'
             f'<span class="finding mismatch">不一致 {show_count(counts["MISMATCH"])}</span>'
             f'<span class="finding unverified">待核实 {show_count(counts["UNVERIFIED"])}</span>'
+            f'{primary_markup}'
         )
         quality_markup = (f'<span class="quality-badge quality-{quality.lower()}">{escape(quality_label)}</span>'
                           '<small>仅代表该完整报告的已选范围，不是发布放行结论</small>')
@@ -248,7 +271,7 @@ button{{cursor:pointer;font-weight:600}}.result-count{{align-self:center;color:v
 td small{{display:block;margin-top:4px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}}.status-badge,.quality-badge{{display:inline-block;border-radius:3px;padding:3px 7px;font-size:12px;font-weight:700;white-space:nowrap}}
 .status-complete{{color:#175d3d;background:#e7f4eb}}.status-failed,.quality-mismatch{{color:#8a2f2a;background:#fbe9e7}}.status-running,.status-queued,.status-pending{{color:#705000;background:#fff2ce}}.status-incomplete,.status-interrupted,.status-not_run,.quality-unverified,.quality-summary_incomplete{{color:#795300;background:#fff3d7}}.quality-changed{{color:#285b78;background:#e8f2f8}}.quality-no_findings{{color:#216947;background:#e7f4eb}}.quality-no_report{{color:#5d6970;background:#eef1f2}}
 .coverage{{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}}.check-chip{{display:inline-block;font-size:11px;border-radius:3px;padding:2px 5px;background:#eef1f2;color:#58666c;white-space:nowrap}}.check-chip.complete{{background:#e7f4eb;color:#216947}}.check-chip.failed,.check-chip.incomplete{{background:#fbe9e7;color:#8a2f2a}}.check-chip.not-selected{{background:#f0f2f3;color:#6b777d}}
-.findings{{display:flex;flex-direction:column;gap:5px;font-variant-numeric:tabular-nums}}.finding{{white-space:nowrap}}.finding.changed{{color:#285b78}}.finding.mismatch{{color:#8a2f2a;font-weight:700}}.finding.unverified{{color:#795300}}.excel-link{{display:inline-block;background:var(--teal);color:#fff;text-decoration:none;border-radius:4px;padding:8px 11px;font-weight:700;white-space:nowrap}}.excel-link:hover{{background:#06696b}}.muted{{color:var(--muted)}}details{{margin-top:5px}}summary{{cursor:pointer;color:#146e70;font-weight:600;font-size:12px}}details ul{{max-height:170px;overflow:auto;padding-left:18px;margin:8px 0}}code{{font:12px/1.4 ui-monospace,monospace;overflow-wrap:anywhere}}.empty{{padding:28px;color:var(--muted);text-align:center}}
+.findings{{display:flex;flex-direction:column;gap:5px;font-variant-numeric:tabular-nums}}.finding{{white-space:nowrap}}.finding.changed{{color:#285b78}}.finding.mismatch{{color:#8a2f2a;font-weight:700}}.finding.unverified{{color:#795300}}.primary-finding{{max-width:380px;color:var(--ink);font-size:12px;white-space:normal}}.excel-link{{display:inline-block;background:var(--teal);color:#fff;text-decoration:none;border-radius:4px;padding:8px 11px;font-weight:700;white-space:nowrap}}.excel-link:hover{{background:#06696b}}.muted{{color:var(--muted)}}details{{margin-top:5px}}summary{{cursor:pointer;color:#146e70;font-weight:600;font-size:12px}}details ul{{max-height:170px;overflow:auto;padding-left:18px;margin:8px 0}}code{{font:12px/1.4 ui-monospace,monospace;overflow-wrap:anywhere}}.empty{{padding:28px;color:var(--muted);text-align:center}}
 @media(max-width:900px){{main{{padding:20px 16px}}header{{display:block}}.generated{{display:block;margin-top:8px}}.metrics{{grid-template-columns:repeat(2,1fr)}}.metric:nth-child(2){{border-right:0}}.metric:nth-child(-n+2){{border-bottom:1px solid var(--line)}}.filters{{grid-template-columns:1fr 1fr}}}}
 </style>
 </head>

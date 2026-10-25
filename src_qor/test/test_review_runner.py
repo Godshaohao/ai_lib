@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -7,6 +8,7 @@ from xml.etree import ElementTree as ET
 from unittest.mock import patch
 
 from lib_guard.review_runner import (_finding_rows, _publish_latest_workbook, _qa_rows, _review_summary,
+                                    _source_revision,
                                     _write_latest_if_newer, build_workbook_model, run, run_review)
 from lib_guard.ip_check_overview import render_overview
 from lib_guard.lef_liberty_check import _compare_cell, _corner_axes, analyze_many
@@ -49,6 +51,16 @@ def review(ip_id, macro_name, source_path):
 
 
 class ReviewRunnerTests(unittest.TestCase):
+    def test_source_revision_marks_untracked_workspace_files_dirty(self):
+        with patch("lib_guard.review_runner.subprocess.run", side_effect=[
+                subprocess.CompletedProcess([], 0, "0123456789abcdef\n", ""),
+                subprocess.CompletedProcess([], 0, "?? new_runtime_module.py\n", "")]) as run_command:
+            revision = _source_revision()
+
+        self.assertEqual(revision["commit"], "0123456789abcdef")
+        self.assertTrue(revision["working_tree_dirty"])
+        self.assertNotIn("--untracked-files=no", run_command.call_args_list[1].args[0])
+
     def test_fast_slow_typ_are_reported_as_filename_corner_clues(self):
         expected = {
             "fast": "FAST",
@@ -84,6 +96,44 @@ class ReviewRunnerTests(unittest.TestCase):
         self.assertEqual({row["对象"]: row["数量"] for row in groups},
                          {"PG脚缺失": 492, "信号Pin多出 + PG脚缺失": 12})
         self.assertIn("VDD", groups[0]["发现"])
+        self.assertEqual({item["count"] for item in _review_summary(item)["primary_findings"]}, {492, 12})
+
+    def test_review_json_excel_and_html_record_shared_provenance_and_scope(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "macro.json"
+            source.write_text(json.dumps({"status": "COMPLETE", "macro_index": {
+                "baseline": {"status": "LEF_PARSED", "macro_count": 1}, "macros": {},
+                "unmatched_files": [], "unmatched_objects": {},
+            }}), encoding="utf-8")
+            captured = {}
+
+            def export(model, path, *, scope_note):
+                captured["overview"] = model["00-概览"][0]
+                captured["scope_note"] = scope_note
+                Path(path).write_bytes(b"test workbook")
+
+            with patch("lib_guard.review_runner._source_revision", return_value={
+                "commit": "0123456789abcdef", "working_tree_dirty": True,
+            }), patch("lib_guard.review_runner.export_review_excel", side_effect=export):
+                run({"ips": [{"id": "IP_A", "library_id": "Vendor.IP_A", "raw_version": "V20",
+                               "formal_stage": "lib_NL2.5_3", "checks": {
+                                   "macro_index": {"report_json": str(source)},
+                               }}]}, root / "output")
+
+            record_path = next((root / "output" / "libraries").rglob("review_result.json"))
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(record["source_revision"]["commit"], "0123456789abcdef")
+            self.assertTrue(record["source_revision"]["working_tree_dirty"])
+            self.assertEqual(record["input_scope"]["target_raw_versions"], ["V20"])
+            self.assertEqual(record["input_scope"]["formal_stage"], "lib_NL2.5_3")
+            self.assertEqual(captured["overview"]["源提交"], "0123456789abcdef")
+            self.assertEqual(captured["overview"]["工作区有改动"], "是")
+            self.assertIn("RAW：V20", captured["overview"]["输入范围"])
+            self.assertIn("源提交：0123456789abcdef（工作区有改动）", captured["scope_note"])
+            page = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("0123456789abcdef", page)
+            self.assertIn("RAW V20", page)
 
     def test_mismatch_takes_precedence_over_unverified_in_quality_label(self):
         item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
@@ -260,6 +310,147 @@ class ReviewRunnerTests(unittest.TestCase):
         changed = next(row for row in qa if "哪些 Macro" in row["问题"])
         self.assertIn("CELL_B", changed["回答"])
         self.assertIn("MACRO_A", changed["回答"])
+
+    def test_lef_rect_findings_use_compact_counts_and_archive_evidence(self):
+        rects_old = [{"port_index": 0, "layer": "met2", "x1": i, "y1": 0,
+                      "x2": i + 1, "y2": 1} for i in range(600)]
+        rects_new = rects_old + [{"port_index": 0, "layer": "met2", "x1": 700,
+                                  "y1": 0, "x2": 701, "y2": 1}]
+        obs_old = [{"layer": "met3", "x1": i, "y1": 2, "x2": i + 1,
+                    "y2": 3} for i in range(24)]
+        obs_new = obs_old + [{"layer": "met3", "x1": 40, "y1": 2,
+                              "x2": 41, "y2": 3}]
+        item = {"ip": {"id": "IP_A"}, "checks": {"lef_review": {
+            "selected": True, "status": "COMPLETE", "result_ref": "evidence/lef_review.json",
+            "result": {"comparison": {"changes": [
+                {"macro": "MACRO_A", "field": "pins.VDD.rects",
+                 "old": rects_old, "new": rects_new},
+                {"macro": "MACRO_A", "field": "obs", "old": obs_old, "new": obs_new},
+            ]}},
+        }}}
+
+        rows = _finding_rows(item)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([row["kind"] for row in rows], ["CHANGED", "CHANGED"])
+        self.assertEqual([row["evidence"] for row in rows], [
+            "evidence/lef_review.json", "evidence/lef_review.json"])
+        pin = rows[0]
+        self.assertIn("MACRO_A", pin["object"])
+        self.assertIn("VDD", pin["object"])
+        self.assertIn("Pin RECT", pin["message"])
+        self.assertIn("600", pin["message"])
+        self.assertIn("601", pin["message"])
+        self.assertIn("物理区域等价性未验证", pin["message"])
+        self.assertLess(len(pin["message"]), 300)
+        self.assertNotIn("x1", pin["message"])
+        self.assertIn("OBS", rows[1]["message"])
+        self.assertIn("24", rows[1]["message"])
+        self.assertIn("25", rows[1]["message"])
+        self.assertLess(len(rows[1]["message"]), 300)
+
+    def test_lef_regular_field_change_keeps_specific_old_and_new_values(self):
+        item = {"ip": {"id": "IP_A"}, "checks": {"lef_review": {
+            "selected": True, "status": "COMPLETE", "result_ref": "evidence/lef_review.json",
+            "result": {"comparison": {"changes": [{"macro": "MACRO_A", "field": "size",
+                "old": {"x": 1.0, "y": 2.0}, "new": {"x": 3.0, "y": 2.0}}]}},
+        }}}
+
+        finding = _finding_rows(item)[0]
+
+        self.assertIn("size:", finding["message"])
+        self.assertIn("'x': 1.0", finding["message"])
+        self.assertIn("'x': 3.0", finding["message"])
+        self.assertEqual(finding["evidence"], "evidence/lef_review.json")
+
+    def test_lef_unrecognized_geometry_does_not_infer_record_counts(self):
+        item = {"ip": {"id": "IP_A"}, "checks": {"lef_review": {
+            "selected": True, "status": "COMPLETE", "result_ref": "evidence/lef_review.json",
+            "result": {"comparison": {"changes": [
+                {"macro": "MACRO_A", "field": "pins.VDD.rects",
+                 "old": {"rects": 4}, "new": "unknown"},
+                {"macro": "MACRO_A", "field": "obs",
+                 "old": [{"layer": "M2", "x1": 0}], "new": [{"layer": "M2"}]},
+            ]}},
+        }}}
+
+        rows = _finding_rows(item)
+
+        self.assertEqual(len(rows), 2)
+        for row in rows:
+            self.assertIn("结构化详情见证据", row["message"])
+            self.assertIn("未验证", row["message"])
+            self.assertNotIn("旧 1 条", row["message"])
+            self.assertNotIn("旧 4 条", row["message"])
+            self.assertEqual(row["evidence"], "evidence/lef_review.json")
+
+    def test_not_run_qa_uses_review_result_request_and_execution_records(self):
+        item = {"ip": {"id": "IP_A"}, "requested_checks": ["lef_review"],
+                "review_result_ref": "review_result.json",
+                "checks": {"lef_review": {"selected": False, "status": "NOT_RUN"}},
+                "review_result": {"requested_checks": ["lef_review"], "checks": {
+                    "lef_review": {"execution_status": "FAILED"},
+                    "formal_nl": {"execution_status": "NOT_RUN"},
+                    "macro_index": {"execution_status": "NOT_RUN"},
+                    "lef_liberty_check": {"execution_status": "NOT_RUN"},
+                }}}
+
+        row = next(row for row in _qa_rows(item)
+                   if row["问题"] == "本次有哪些检查没有运行？")
+
+        self.assertIn("正式目录盘点", row["回答"])
+        self.assertIn("Macro / View 文件索引", row["回答"])
+        self.assertIn("LEF–Liberty 接口核查", row["回答"])
+        self.assertNotIn("LEF 双文件核查", row["回答"])
+        self.assertEqual(row["来源报告"], "review_result.json")
+
+    def test_run_workbook_qa_points_to_its_review_result(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
+            output = root / "output"
+            library_dir = output / "libraries" / "ip_a"
+            run_dir = library_dir / "runs" / "review_qa"
+            run_dir.mkdir(parents=True)
+            item.update({"review_id": "review_qa", "generated_at": "2026-10-25T00:00:00+00:00",
+                         "run_dir": str(run_dir), "library_dir": str(library_dir),
+                         "requested_checks": ["formal_nl", "macro_index"]})
+            captured = {}
+
+            def fake_export(model, path, **_kwargs):
+                captured["qa"] = model["03-问答"]
+                Path(path).write_bytes(b"xlsx")
+
+            with patch("lib_guard.review_runner.run_review", return_value=[item]), \
+                    patch("lib_guard.review_runner.export_review_excel", side_effect=fake_export):
+                run({"ips": []}, output)
+
+            row = next(row for row in captured["qa"]
+                       if row["问题"] == "本次有哪些检查没有运行？")
+            self.assertEqual(row["来源报告"], "review_result.json")
+
+    def test_no_lef_changes_produces_no_change_findings(self):
+        item = {"ip": {"id": "IP_A"}, "checks": {"lef_review": {
+            "selected": True, "status": "COMPLETE", "result_ref": "evidence/lef_review.json",
+            "result": {"comparison": {"macro_names": {"added": [], "removed": []},
+                                        "changes": [], "unverified": []}},
+        }}}
+
+        self.assertEqual(_finding_rows(item), [])
+
+        all_match = {"ip": {"id": "IP_A"}, "checks": {"lef_liberty_check": {
+            "selected": True, "status": "COMPLETE", "result_ref": "evidence/lef_liberty_check.json",
+            "result": {"files": [{"liberty_source": "/raw/a.lib",
+                "summary": {"mismatch_cell_count": 0, "unverified_cell_count": 0},
+                "cells": [{"macro": "MACRO_A", "status": "MATCH",
+                    "signal_pins": {"missing_in_liberty": [], "extra_in_liberty": [],
+                                    "direction_mismatch": []},
+                    "power_ground": {"missing_in_liberty": [], "extra_in_liberty": [],
+                                     "wrong_type": [], "unverified_type": []}}]}],
+                "summary": {"liberty_file_count": 1}},
+        }}}
+
+        self.assertEqual(_finding_rows(all_match), [])
 
     def test_overview_distinguishes_failed_attempt_from_last_complete_result(self):
         page = render_overview([{
@@ -547,14 +738,47 @@ class ReviewRunnerTests(unittest.TestCase):
             run(config, root / "output")
             latest_path = next((root / "output" / "libraries").glob("*/latest.json"))
             old_latest = __import__("json").loads(latest_path.read_text(encoding="utf-8"))
+            library_dir = latest_path.parent
+            latest_workbook_path = library_dir / "latest.xlsx"
+            workbook_pointer_path = library_dir / "latest_workbook.json"
+            old_workbook = latest_workbook_path.read_bytes()
+            old_workbook_pointer = __import__("json").loads(workbook_pointer_path.read_text(encoding="utf-8"))
 
             with patch("lib_guard.review_runner.export_review_excel", side_effect=OSError("disk full")):
                 with self.assertRaisesRegex(OSError, "disk full"):
                     run(config, root / "output")
 
             self.assertEqual(__import__("json").loads(latest_path.read_text(encoding="utf-8")), old_latest)
+            self.assertEqual(latest_workbook_path.read_bytes(), old_workbook)
+            self.assertEqual(__import__("json").loads(workbook_pointer_path.read_text(encoding="utf-8")),
+                             old_workbook_pointer)
             records = list(latest_path.parent.glob("runs/*/review_result.json"))
             self.assertEqual(len(records), 1)
+
+    def test_lef_review_only_workbook_has_only_relevant_sheets_and_relative_evidence(self):
+        item = {"ip": {"id": "IP_A"}, "checks": {"lef_review": {
+            "selected": True, "status": "COMPLETE", "result_ref": "evidence/lef_review.json",
+            "result": {"sources": {"old": {"path": "/old/a.lef"},
+                                    "new": {"path": "/new/a.lef"}},
+                       "comparison": {"macro_names": {"added": [], "removed": []},
+                                      "changes": [{"macro": "MACRO_A", "field": "size",
+                                                   "old": {"x": 1, "y": 2},
+                                                   "new": {"x": 2, "y": 2}}]},
+                       "extraction": {"new": {"data": {"macros": {}}}}},
+        }}}
+
+        model = build_workbook_model([item])
+
+        self.assertEqual(list(model), ["00-概览", "01-工程检查", "02-执行记录",
+                                       "03-问答", "04-关注项", "08-LEF宏"])
+        self.assertEqual(model["04-关注项"][0]["证据路径"], "evidence/lef_review.json")
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "lef_only.xlsx"
+            export_review_excel(model, output)
+            with zipfile.ZipFile(output) as archive:
+                workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+            names = [sheet.attrib["name"] for sheet in workbook.findall(".//{*}sheet")]
+        self.assertEqual(names, list(model))
 
     def test_run_writes_one_workbook_per_library_id_and_preserves_ip_identity(self):
         with tempfile.TemporaryDirectory() as temp:

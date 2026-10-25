@@ -6,6 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+MAX_CELL_TEXT_LENGTH = 32767
+
 
 def _cell_value(value: Any) -> Any:
     if isinstance(value, (dict, list, tuple, set)):
@@ -17,6 +19,14 @@ def _cell_value(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
+
+
+def _validate_cell_text(value: Any, sheet: str, row: int, column: int) -> None:
+    if isinstance(value, str) and len(value) > MAX_CELL_TEXT_LENGTH:
+        raise ValueError(
+            f"Excel 单元格文本超限：Sheet={sheet[:31]}，行={row}，列={column}，"
+            f"实际长度={len(value)}，限制={MAX_CELL_TEXT_LENGTH}"
+        )
 
 
 def export_review_excel(
@@ -31,6 +41,29 @@ def export_review_excel(
     except ImportError as exc:
         raise RuntimeError("导出 Excel 需要 XlsxWriter；请安装 src_qor/requirements.txt") from exc
 
+    from .review_runner import SHEET_HEADERS
+
+    prepared_sheets = []
+    note_value = _cell_value(scope_note)
+    for sheet_name, records in sheets.items():
+        sheet_label = sheet_name[:31]
+        if not isinstance(records, list):
+            raise ValueError(f"{sheet_label}: 表数据必须是列表")
+        raw_headers = SHEET_HEADERS.get(sheet_name) or (list(records[0]) if records else ["结果"])
+        if len(raw_headers) != len(set(raw_headers)):
+            raise ValueError(f"{sheet_label}: 列名重复")
+        headers = [_cell_value(header) for header in raw_headers]
+        rows = [[_cell_value(record.get(header)) for header in raw_headers] for record in records]
+
+        _validate_cell_text(_cell_value(sheet_name), sheet_label, 1, 1)
+        _validate_cell_text(note_value, sheet_label, 2, 1)
+        for column, header in enumerate(headers, start=1):
+            _validate_cell_text(header, sheet_label, 4, column)
+        for row_index, values in enumerate(rows, start=5):
+            for column, value in enumerate(values, start=1):
+                _validate_cell_text(value, sheet_label, row_index, column)
+        prepared_sheets.append((sheet_name, records, headers, rows))
+
     destination = Path(output_path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     workbook = xlsxwriter.Workbook(str(destination), {"strings_to_formulas": False, "strings_to_urls": False})
@@ -41,21 +74,14 @@ def export_review_excel(
     number_fmt = workbook.add_format({"num_format": "0", "valign": "top"})
     header_fmt = workbook.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#315A76", "text_wrap": True, "valign": "vcenter"})
 
-    for sheet_name, records in sheets.items():
-        if not isinstance(records, list):
-            raise ValueError(f"{sheet_name}: 表数据必须是列表")
-        from .review_runner import SHEET_HEADERS
-        headers = SHEET_HEADERS.get(sheet_name) or (list(records[0]) if records else ["结果"])
-        if len(headers) != len(set(headers)):
-            raise ValueError(f"{sheet_name}: 列名重复")
+    for sheet_name, records, headers, rows in prepared_sheets:
         sheet = workbook.add_worksheet(sheet_name[:31])
         sheet.hide_gridlines(2)
-        sheet.merge_range(0, 0, 0, len(headers) - 1, sheet_name, title_fmt)
+        sheet.merge_range(0, 0, 0, len(headers) - 1, _cell_value(sheet_name), title_fmt)
         sheet.set_row(0, 28)
-        sheet.merge_range(1, 0, 1, len(headers) - 1, scope_note, note_fmt)
+        sheet.merge_range(1, 0, 1, len(headers) - 1, note_value, note_fmt)
         sheet.set_row(1, 34)
         first_data_row = 3
-        rows = [[_cell_value(record.get(header)) for header in headers] for record in records]
         column_widths = []
         for column, header in enumerate(headers):
             values = [str(row[column]) for row in rows if row[column] not in (None, "")]

@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import subprocess
 from typing import Any
 from uuid import uuid4
 
@@ -36,7 +37,7 @@ CHECK_LABELS = {
 }
 VIEW_NAMES = ("lef", "liberty", "gds", "cdl", "db", "verilog")
 SHEET_HEADERS = {
-    "00-概览": ["IP", "库标识", "RAW版本", "正式阶段", "已选检查", "执行完成项", "执行失败项", "质量判断", "正式可见文件", "Macro数", "报告结论"],
+    "00-概览": ["IP", "库标识", "RAW版本", "正式阶段", "已选检查", "执行完成项", "执行失败项", "质量判断", "正式可见文件", "Macro数", "报告结论", "报告生成时间", "源提交", "工作区有改动", "输入范围"],
     "01-工程检查": ["序号", "工程检查主题", "工程覆盖", "本次执行", "本次证据", "范围或缺口"],
     "02-执行记录": ["IP", "检查", "执行状态", "上下文关系", "结果摘要", "范围说明", "输入身份", "输入范围", "报告路径"],
     "03-问答": ["IP", "问题", "回答", "证据范围", "来源报告"],
@@ -826,18 +827,63 @@ def _finding_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
                     kind="UNVERIFIED", count=len(objects))
     lef = (_result(review, "lef_review") if _check_result(review, "lef_review").get("status") == "COMPLETE" else {})
     comp = lef.get("comparison") or {}
+    lef_evidence = _check_result(review, "lef_review").get("result_ref") or ""
     names = comp.get("macro_names") or {}
     for field, values in (("新增Macro", names.get("added")), ("移除Macro", names.get("removed"))):
         for name in values or []:
             add("LEF变化", name, field, "已提取差异", "核对该 Macro 的接入影响",
-                (lef.get("sources") or {}).get("new", {}).get("path", ""), kind="CHANGED")
+                lef_evidence, kind="CHANGED")
+
+    def rect_count(value: Any, *, require_layer: bool = False) -> int | None:
+        if not isinstance(value, list):
+            return None
+        for rect in value:
+            if not isinstance(rect, dict):
+                return None
+            if not all(isinstance(rect.get(key), (int, float)) and not isinstance(rect.get(key), bool)
+                       for key in ("x1", "y1", "x2", "y2")):
+                return None
+            if require_layer and not isinstance(rect.get("layer"), str):
+                return None
+        return len(value)
+
     for change in comp.get("changes") or []:
-        add("LEF字段变化", change.get("macro", ""),
-            f"{change.get('field')}: {change.get('old')} → {change.get('new')}", "已提取差异",
-            "结合对象用途核对变化", (lef.get("sources") or {}).get("new", {}).get("path", ""), kind="CHANGED")
+        macro = str(change.get("macro") or "未命名 Macro")
+        field = str(change.get("field") or "未知字段")
+        pin_match = re.fullmatch(r"pins\.(.+)\.rects", field, flags=re.IGNORECASE)
+        if pin_match:
+            old_count = rect_count(change.get("old"))
+            new_count = rect_count(change.get("new"))
+            object_name = f"{macro} / Pin {pin_match.group(1)}"
+            if old_count is None or new_count is None:
+                finding = ("Pin RECT 记录集合发生变化；结构化详情见证据，旧、新记录数无法确认；"
+                           "物理区域等价性未验证。")
+            else:
+                finding = (f"Pin RECT 记录集合发生变化：旧 {old_count} 条 → 新 {new_count} 条；"
+                           "物理区域等价性未验证。")
+            add("LEF字段变化", object_name, finding, "已提取差异",
+                "按需查看归档 LEF 核查证据中的坐标、Layer 与 PORT；本摘要不判断面积变化",
+                lef_evidence, kind="CHANGED")
+            continue
+        if re.fullmatch(r"obs(?:\.rects)?", field, flags=re.IGNORECASE):
+            old_count = rect_count(change.get("old"), require_layer=True)
+            new_count = rect_count(change.get("new"), require_layer=True)
+            if old_count is None or new_count is None:
+                finding = ("OBS 几何表示发生变化；结构化详情见证据，记录数无法确认；"
+                           "几何覆盖区域等价性未验证。")
+            else:
+                finding = (f"OBS 几何表示发生变化：旧 {old_count} 条 RECT 记录 → 新 {new_count} 条；"
+                           "几何覆盖区域等价性未验证。")
+            add("LEF字段变化", macro, finding, "已提取差异",
+                "按需查看归档 LEF 核查证据；本摘要不推断覆盖面积变化",
+                lef_evidence, kind="CHANGED")
+            continue
+        add("LEF字段变化", macro,
+            f"{field}: {change.get('old')} → {change.get('new')}", "已提取差异",
+            "结合对象用途核对变化", lef_evidence, kind="CHANGED")
     for field in comp.get("unverified") or []:
         add("LEF证据范围", field, "该字段未得到完整解析覆盖", "证据不足", "确认是否需要补充针对性解析",
-            (lef.get("sources") or {}).get("new", {}).get("path", ""), kind="UNVERIFIED")
+            lef_evidence, kind="UNVERIFIED")
     ll_result = (_result(review, "lef_liberty_check")
                  if _check_result(review, "lef_liberty_check").get("status") == "COMPLETE" else {})
     mismatch_groups: dict[tuple[str, ...], dict[str, Any]] = {}
@@ -905,12 +951,29 @@ def _qa_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     def evidence(name: str) -> str:
         return str(_check_result(review, name).get("result_ref") or "")
-    selected_names = {name for name, item in (review.get("checks") or {}).items() if item.get("selected")}
-    not_run_names = sorted(CHECK_NAMES - selected_names)
+    result_record = review.get("review_result") or {}
+    requested = set(result_record.get("requested_checks") or review.get("requested_checks") or [])
+    execution_records = result_record.get("checks") or {}
+    if not result_record:
+        runtime_checks = review.get("checks") or {}
+        if not requested:
+            requested = {name for name, item in runtime_checks.items() if item.get("selected")}
+        execution_records = {
+            name: {"execution_status": (item.get("status") or "INCOMPLETE")
+                                     if item.get("selected") else "NOT_RUN"}
+            for name, item in runtime_checks.items()
+        }
+    not_run_names = []
+    for name in sorted(CHECK_NAMES):
+        execution = execution_records.get(name) or {}
+        status = str(execution.get("execution_status") or execution.get("status") or "").upper()
+        if status == "NOT_RUN" or (not status and name not in requested):
+            not_run_names.append(name)
+    review_result_ref = str(review.get("review_result_ref") or "")
     rows.append({"IP": label, "问题": "本次有哪些检查没有运行？",
                  "回答": "、".join(CHECK_LABELS[name] for name in not_run_names) if not_run_names else "无，四项检查均已选择执行。",
                  "证据范围": "未选择或未配置的检查不代表通过或失败；如需结论，先补齐输入并单独执行。",
-                 "来源报告": ""})
+                 "来源报告": review_result_ref})
     qa_questions = {
         "formal_nl": "正式目录观察到哪些文件类型和数量？",
         "macro_index": "解析并建立了多少个 LEF Macro 索引？",
@@ -1028,6 +1091,53 @@ def _input_brief(item: dict[str, Any]) -> tuple[str, str]:
     return source_text, "；".join(selections) or "见证据 JSON"
 
 
+def _source_revision() -> dict[str, Any]:
+    """Identify the code revision without claiming a dirty tree is reproducible."""
+    repository = Path(__file__).resolve().parents[2]
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repository, check=True,
+                                capture_output=True, text=True, timeout=2).stdout.strip()
+        dirty = bool(subprocess.run(["git", "status", "--porcelain"],
+                                    cwd=repository, check=True, capture_output=True, text=True,
+                                    timeout=2).stdout.strip())
+        return {"commit": commit, "working_tree_dirty": dirty}
+    except (OSError, subprocess.SubprocessError):
+        return {"commit": "UNAVAILABLE", "working_tree_dirty": None}
+
+
+def _input_scope(review: dict[str, Any]) -> dict[str, Any]:
+    context = review.get("context") or {}
+    versions = context.get("target_raw_versions") or []
+    if not versions and context.get("raw_version"):
+        versions = [context.get("raw_version")]
+    raw_versions = [str(item.get("id") or item.get("version") or "") if isinstance(item, dict)
+                    else str(item) for item in versions]
+    checks = []
+    source_count = 0
+    for name, item in (review.get("checks") or {}).items():
+        if not item.get("selected"):
+            continue
+        sources = (item.get("input_identity") or {}).get("sources") or []
+        source_count += len(sources)
+        checks.append({"name": name, "source_count": len(sources),
+                       "source_roles": sorted({str(source.get("role") or "") for source in sources if source.get("role")}),
+                       "source_versions": (item.get("input_identity") or {}).get("source_versions") or [],
+                       "formal_stages": (item.get("input_identity") or {}).get("formal_stages") or []})
+    return {"checks": checks, "target_raw_versions": raw_versions,
+            "formal_stage": str(context.get("formal_stage") or ""), "source_count": source_count}
+
+
+def _input_scope_label(scope: dict[str, Any]) -> str:
+    check_names = [str(item.get("name") or "") for item in scope.get("checks") or []]
+    parts = ["检查：" + ("、".join(check_names) or "无")]
+    if scope.get("target_raw_versions"):
+        parts.append("RAW：" + "、".join(scope["target_raw_versions"]))
+    if scope.get("formal_stage"):
+        parts.append("正式阶段：" + str(scope["formal_stage"]))
+    parts.append(f"输入来源 {int(scope.get('source_count') or 0)} 项")
+    return "；".join(parts)
+
+
 def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """Flatten independently-scoped IP results into human-reviewable sheet rows."""
     selected_names = {name for review in reviews for name, item in (review.get("checks") or {}).items()
@@ -1053,13 +1163,20 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
         index = _result(review, "macro_index").get("macro_index") or _result(review, "macro_index")
         macro_count = (index.get("baseline") or {}).get("macro_count", len(index.get("macros") or {})) if _check_result(review, "macro_index") else "未检查"
         quality = _review_summary(review)["quality_assessment"]
+        input_scope = review.get("input_scope") or _input_scope(review)
+        revision = review.get("source_revision") or {}
         model["00-概览"].append({"IP": label, "库标识": ip.get("library_id") or ip.get("id", ""),
                                  "RAW版本": ip.get("raw_version", "未指定"), "正式阶段": stage or ip.get("formal_stage", "未检查"),
                                  "已选检查": "、".join(name for name, _ in selected) or "无",
                                  "执行完成项": complete, "执行失败项": failed,
                                  "质量判断": quality["label"],
                                  "正式可见文件": inventory.get("file_count", "未检查"), "Macro数": macro_count,
-                                 "报告结论": quality["boundary"]})
+                                 "报告结论": quality["boundary"],
+                                 "报告生成时间": review.get("generated_at") or "未记录",
+                                 "源提交": revision.get("commit") or "未记录",
+                                 "工作区有改动": "是" if revision.get("working_tree_dirty") is True else
+                                     ("否" if revision.get("working_tree_dirty") is False else "未知"),
+                                 "输入范围": _input_scope_label(input_scope)})
         for name, item in selected:
             summary, scope = _check_summary(name, item)
             execution = {"COMPLETE": "执行完成", "INCOMPLETE": "结果不完整", "FAILED": "执行失败"}.get(
@@ -1090,17 +1207,17 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
 
 def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
     run_started_at = datetime.now(timezone.utc).isoformat()
+    source_revision = _source_revision()
     reviews = run_review(config, out_dir)
     output = Path(out_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     row_counts: Counter[str] = Counter()
     overview_rows = []
     for review in reviews:
+        review["source_revision"] = source_revision
+        review["input_scope"] = _input_scope(review)
         run_dir = Path(review["run_dir"])
         library_dir = Path(review["library_dir"])
-        model = build_workbook_model([review])
-        for name, rows in model.items():
-            row_counts[name] += len(rows)
         requested = review.get("requested_checks") or []
         checks = review.get("checks") or {}
         complete = bool(requested) and all(checks[name].get("status") == "COMPLETE" for name in requested)
@@ -1122,6 +1239,8 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                          "review_id": review.get("review_id"), "generated_at": review.get("generated_at"),
                          "context": review.get("context"),
                          "context_alignment": review.get("context_alignment", "INDEPENDENT"),
+                         "source_revision": source_revision,
+                         "input_scope": review["input_scope"],
                          "requested_checks": requested,
                          "execution_status": "COMPLETE" if complete else ("FAILED" if any(
                              item.get("status") == "FAILED" for item in checks.values()) else "INCOMPLETE"),
@@ -1129,10 +1248,20 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                          "checks": serialized_checks,
                          "summary": summary,
                          "reports": {"xlsx": "ip_review.xlsx"}}
+        review["review_result"] = review_record
+        review["review_result_ref"] = "review_result.json"
+        model = build_workbook_model([review])
+        for name, rows in model.items():
+            row_counts[name] += len(rows)
         review["execution_status"] = review_record["execution_status"]
         review["quality_status"] = review_record["quality_status"]
         review["summary"] = summary
+        revision_label = source_revision.get("commit") or "UNAVAILABLE"
+        if source_revision.get("working_tree_dirty") is True:
+            revision_label += "（工作区有改动）"
         scope_note = (f"IP：{review_record['library_id']}；Review：{review_record['review_id']}；"
+                      f"生成：{review_record['generated_at']}；源提交：{revision_label}；"
+                      f"{_input_scope_label(review_record['input_scope'])}；"
                       "仅汇总本 IP、本次选择的检查。未选择不代表通过。")
         workbook_path = run_dir / "ip_review.xlsx"
         workbook_tmp = run_dir / f".ip_review.{review_record['review_id']}.tmp.xlsx"
@@ -1176,6 +1305,7 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                               "generated_at": review_record["generated_at"],
                               "execution_status": review_record["execution_status"],
                               "requested_checks": requested, "summary": review_record["summary"],
+                              "source_revision": source_revision, "input_scope": review_record["input_scope"],
                               "xlsx_href": "../" + (run_dir / "ip_review.xlsx").relative_to(output).as_posix(),
                               "current_xlsx_href": "../" + (run_dir / "ip_review.xlsx").relative_to(output).as_posix(),
                               "latest_xlsx_href": "../" + (library_dir / "latest.xlsx").relative_to(output).as_posix()
@@ -1300,6 +1430,8 @@ def _overview_rows_for_registry(config: dict[str, Any], output: Path,
             "summary": latest_result.get("summary") or {},
             "context": context,
             "input_paths": input_paths,
+            "source_revision": latest_result.get("source_revision") or {},
+            "input_scope": latest_result.get("input_scope") or {},
             "xlsx_href": workbook_href,
         } if complete_id else {})
         rows.append({
@@ -1347,12 +1479,21 @@ def _review_summary(review: dict[str, Any]) -> dict[str, Any]:
                      "。不等同于 IP 全面质量通过或正式发布放行。"),
         "incomplete_check_count": len(incomplete_checks),
     }
+    kind_order = {"MISMATCH": 0, "UNVERIFIED": 1, "CHANGED": 2, "SCOPE_INFO": 3}
+    primary_findings = []
+    candidates = sorted((item for item in findings if item.get("kind") in {"MISMATCH", "UNVERIFIED", "CHANGED"}),
+                        key=lambda item: (kind_order.get(item.get("kind"), 9), -int(item.get("count") or 0)))
+    for item in candidates[:3]:
+        primary_findings.append({"kind": item.get("kind"), "category": item.get("category"),
+                                 "label": item.get("object") or item.get("message") or "发现项",
+                                 "count": max(0, int(item.get("count") or 0))})
     return {"counts": counts, "finding_records": len(findings),
             "affected_objects": sum(item.get("count", 0) for item in findings),
             "confirmed_changes": counts["CHANGED"]["affected_objects"],
             "confirmed_mismatches": counts["MISMATCH"]["affected_objects"],
             "unverified": counts["UNVERIFIED"]["affected_objects"],
             "scope_notes": counts["SCOPE_INFO"]["affected_objects"],
+            "primary_findings": primary_findings,
             "quality_assessment": quality_assessment}
 
 

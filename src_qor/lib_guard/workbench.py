@@ -6,6 +6,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import ipaddress
 import json
 import logging
@@ -22,7 +23,7 @@ try:
 except ImportError:  # pragma: no cover - exercised only in intentionally minimal installs
     yaml = None
 
-from flask import Blueprint, Flask, abort, redirect, render_template, request, send_file, url_for
+from flask import Blueprint, Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.exceptions import HTTPException
 
 from .review_runner import (CHECK_NAMES, _json_read, _latest_complete_run, _library_dir,
@@ -502,12 +503,19 @@ def _formal_nl_directory_overview(ips: list[dict[str, Any]], registry_file: Path
             "view_counts": {}, "stage_count": 0, "library_count": 0,
             "registered_library_count": 0, "unregistered_library_count": 0,
             "raw_version_count": 0, "file_count": 0, "unmapped_file_count": 0,
+            "stage_file_record_count": 0, "unique_source_count": 0,
             "issues": [], "warnings": warnings,
         }
 
     registered_versions: list[tuple[Path, dict[str, Any]]] = []
     registered_roots: list[tuple[Path, dict[str, Any]]] = []
-    registered_keys: set[tuple[str, str]] = set()
+    registered_keys: set[tuple[str, str, str]] = set()
+
+    def identity_key(identity: dict[str, Any]) -> tuple[str, str, str]:
+        return (str(identity.get("vendor") or "").casefold(),
+                str(identity.get("middle_path") or "").casefold(),
+                str(identity.get("library_name") or "").casefold())
+
     for ip in ips:
         vendor = str(ip.get("vendor") or "").strip()
         library = str(ip.get("library_name") or ip.get("name") or "").strip()
@@ -516,54 +524,102 @@ def _formal_nl_directory_overview(ips: list[dict[str, Any]], registry_file: Path
             vendor, _, library = library_id.partition(".")
         identity = {
             "vendor": vendor or "未识别 Vendor",
+            "middle_path": str(ip.get("middle_path") or "").strip(),
             "library_name": library or str(ip.get("id") or "未识别 IP"),
             "library_id": str(ip.get("library_id") or ip.get("id") or ""),
         }
-        registered_keys.add((identity["vendor"].casefold(), identity["library_name"].casefold()))
+        registered_keys.add(identity_key(identity))
         raw_root_value = str(ip.get("raw_root") or "").strip()
         if raw_root_value:
-            registered_roots.append((Path(_resolve_registry_path(raw_root_value, registry_file)), identity))
+            registered_roots.append((Path(_resolve_registry_path(raw_root_value, registry_file)).resolve(), identity))
         for version in ip.get("raw_versions") or []:
             version_path = str(version.get("path") or "").strip()
             version_id = str(version.get("id") or "").strip()
             if version_path:
-                registered_versions.append((Path(_resolve_registry_path(version_path, registry_file)),
+                registered_versions.append((Path(_resolve_registry_path(version_path, registry_file)).resolve(),
                                             {**identity, "raw_version": version_id}))
 
-    raw_root_value = str(_read_registry(registry_file).get("raw_root") or "").strip()
+    registry_data = _read_registry(registry_file)
+    raw_root_value = str(registry_data.get("raw_root") or "").strip()
     common_raw_root = (Path(_resolve_registry_path(raw_root_value, registry_file))
                        if raw_root_value else None)
+    discovered_versions: list[tuple[Path, dict[str, Any]]] = []
+    if common_raw_root is not None and common_raw_root.is_dir():
+        discovery = discover_raw_report(common_raw_root)
+        for candidate in discovery.get("candidates") or []:
+            candidate_identity = {
+                "vendor": str(candidate.get("vendor") or ""),
+                "middle_path": str(candidate.get("middle_path") or ""),
+                "library_name": str(candidate.get("library_name") or candidate.get("display_name") or ""),
+                "library_id": str(candidate.get("library_id") or ""),
+            }
+            registered_status = "已登记" if identity_key(candidate_identity) in registered_keys else "未登记"
+            for version in candidate.get("versions") or []:
+                version_path = str(version.get("path") or "").strip()
+                if version_path:
+                    discovered_versions.append((Path(version_path).resolve(),
+                                                {**candidate_identity, "raw_version": str(version.get("id") or "未标版本"),
+                                                 "registration_status": registered_status}))
+
+    def longest_match(source: Path, candidates: list[tuple[Path, dict[str, Any]]]
+                      ) -> tuple[dict[str, Any] | None, bool]:
+        matches: list[tuple[int, Path, dict[str, Any]]] = []
+        for path, identity in candidates:
+            try:
+                source.relative_to(path)
+            except ValueError:
+                continue
+            matches.append((len(path.parts), path, identity))
+        if not matches:
+            return None, False
+        longest = max(item[0] for item in matches)
+        best = [item for item in matches if item[0] == longest]
+        distinct = {json.dumps(item[2], ensure_ascii=False, sort_keys=True) for item in best}
+        if len(distinct) != 1:
+            return None, True
+        return best[0][2], False
 
     def source_identity(source_value: str) -> dict[str, str] | None:
-        source = Path(source_value)
-        for version_root, identity in sorted(registered_versions, key=lambda item: len(item[0].parts), reverse=True):
-            try:
-                source.relative_to(version_root)
-                return {**identity, "registration_status": "已登记"}
-            except ValueError:
-                continue
-        for library_root, identity in sorted(registered_roots, key=lambda item: len(item[0].parts), reverse=True):
-            try:
-                relative = source.relative_to(library_root)
-            except ValueError:
-                continue
-            return {**identity, "raw_version": relative.parts[0] if relative.parts else "未标版本",
+        source = Path(source_value).resolve()
+        identity, ambiguous = longest_match(source, registered_versions)
+        if ambiguous:
+            return {"_unresolved": "来源匹配不唯一"}
+        if identity:
+            return {**identity, "registration_status": "已登记"}
+
+        root_identity, ambiguous = longest_match(source, registered_roots)
+        if ambiguous:
+            return {"_unresolved": "来源匹配不唯一"}
+        if root_identity:
+            matching_roots = []
+            for library_root, registered_identity in registered_roots:
+                try:
+                    relative = source.relative_to(library_root)
+                except ValueError:
+                    continue
+                if len(library_root.parts) == max((len(path.parts) for path, _ in registered_roots
+                                                   if source.is_relative_to(path)), default=-1):
+                    matching_roots.append((registered_identity, relative))
+            if len({json.dumps(item[0], sort_keys=True) for item in matching_roots}) != 1:
+                return {"_unresolved": "来源匹配不唯一"}
+            relative = matching_roots[0][1]
+            return {**root_identity, "raw_version": relative.parts[0] if relative.parts else "未标版本",
                     "registration_status": "已登记"}
+
         if common_raw_root is not None:
             try:
-                relative = source.relative_to(common_raw_root)
+                source.relative_to(common_raw_root.resolve())
             except ValueError:
                 return None
-            if len(relative.parts) >= 4:
-                vendor, library, version = relative.parts[:3]
-                key = (vendor.casefold(), library.casefold())
-                return {"vendor": vendor, "library_name": library,
-                        "library_id": f"{vendor}.{library}", "raw_version": version,
-                        "registration_status": "已登记" if key in registered_keys else "未登记"}
+            discovered, ambiguous = longest_match(source, discovered_versions)
+            if ambiguous:
+                return {"_unresolved": "来源匹配不唯一"}
+            if discovered:
+                return discovered
         return None
 
     stages: list[dict[str, Any]] = []
-    library_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    library_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
     file_rows: list[dict[str, str]] = []
     issue_rows: list[dict[str, str]] = []
     view_counts: dict[str, int] = {}
@@ -572,20 +628,28 @@ def _formal_nl_directory_overview(ips: list[dict[str, Any]], registry_file: Path
     for stage_root, stage_name in sorted(
             stage_roots.items(), key=lambda item: (_version_sort_key(item[1]), str(item[0]).casefold())):
         inventory = effective_file_tracker.inventory_for_ip_target(stage_root)
-        stage_libraries: dict[tuple[str, str], dict[str, Any]] = {}
+        stage_libraries: dict[tuple[str, str, str], dict[str, Any]] = {}
         for view, count in (inventory.get("view_counts") or {}).items():
             view_counts[view] = view_counts.get(view, 0) + int(count)
         for file in inventory.get("files") or []:
             identity = source_identity(str(file.get("source_path") or ""))
             row = {**file, "stage": stage_name}
-            if identity:
+            if identity and identity.get("_unresolved"):
+                unmapped_file_count += 1
+                row["vendor"] = "来源未确定"
+                row["middle_path"] = ""
+                row["library_name"] = "来源未确定"
+                row["raw_version"] = "无法识别"
+                row["registration_status"] = identity["_unresolved"]
+            elif identity:
                 row.update(identity)
-                key = (identity["vendor"].casefold(), identity["library_name"].casefold())
+                key = identity_key(identity)
                 raw_version = identity.get("raw_version") or "未标版本"
                 version_keys.add((*key, raw_version))
                 for target in (library_rows, stage_libraries):
                     item = target.setdefault(key, {
                         "vendor": identity["vendor"], "library_name": identity["library_name"],
+                        "middle_path": identity.get("middle_path", ""),
                         "library_id": identity.get("library_id", ""),
                         "registration_status": identity["registration_status"],
                         "versions": set(), "stages": set(), "file_count": 0, "view_counts": {},
@@ -598,6 +662,7 @@ def _formal_nl_directory_overview(ips: list[dict[str, Any]], registry_file: Path
             else:
                 unmapped_file_count += 1
                 row["vendor"] = "无法归属"
+                row["middle_path"] = ""
                 row["library_name"] = "无法归属"
                 row["raw_version"] = "无法识别"
                 row["registration_status"] = "来源不在登记 RAW 路径内"
@@ -621,6 +686,8 @@ def _formal_nl_directory_overview(ips: list[dict[str, Any]], registry_file: Path
     libraries = [finish_library(row) for row in library_rows.values()]
     libraries.sort(key=lambda row: (row["vendor"].casefold(), row["library_name"].casefold()))
     file_rows.sort(key=lambda row: (row.get("stage", ""), row.get("view", ""), row.get("relative_path", "")))
+    unique_sources = {str(Path(row.get("source_path") or "").resolve())
+                      for row in file_rows if row.get("source_path")}
     return {
         "status": "INCOMPLETE" if issue_rows or warnings or unmapped_file_count else "COMPLETE",
         "stages": stages, "stage_labels": sorted({row["stage"] for row in stages}, key=_version_sort_key),
@@ -630,8 +697,50 @@ def _formal_nl_directory_overview(ips: list[dict[str, Any]], registry_file: Path
         "registered_library_count": sum(row["registration_status"] == "已登记" for row in libraries),
         "unregistered_library_count": sum(row["registration_status"] == "未登记" for row in libraries),
         "raw_version_count": len(version_keys), "file_count": sum(row["file_count"] for row in stages),
+        "stage_file_record_count": sum(row["file_count"] for row in stages),
+        "unique_source_count": len(unique_sources),
         "unmapped_file_count": unmapped_file_count, "issues": issue_rows, "warnings": warnings,
     }
+
+
+def _formal_nl_config_fingerprint(registry: dict[str, Any]) -> str:
+    """Fingerprint only the registry fields that determine Formal NL scope."""
+    ips = []
+    for ip in registry.get("ips") or []:
+        ips.append({key: ip.get(key) for key in (
+            "id", "library_id", "vendor", "middle_path", "library_name", "name",
+            "raw_root", "raw_versions", "formal_nl_root", "formal_nl_stages",
+        )})
+    payload = {"raw_root": registry.get("raw_root"), "ips": sorted(
+        ips, key=lambda item: str(item.get("library_id") or item.get("id") or ""))}
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _read_formal_nl_snapshot(output: Path, registry: dict[str, Any]) -> dict[str, Any]:
+    empty = {
+        "status": "NOT_REFRESHED", "stages": [], "stage_labels": [], "libraries": [], "files": [],
+        "view_counts": {}, "stage_count": 0, "library_count": 0, "registered_library_count": 0,
+        "unregistered_library_count": 0, "raw_version_count": 0, "file_count": 0,
+        "stage_file_record_count": 0, "unique_source_count": 0, "unmapped_file_count": 0,
+        "issues": [], "warnings": [], "generated_at": "", "stale": False,
+    }
+    path = output / "formal_nl" / "overview" / "latest.json"
+    if not path.is_file():
+        return empty
+    try:
+        saved = _json_read(path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {**empty, "status": "SNAPSHOT_ERROR", "warnings": [f"正式 NL 快照无法读取：{exc}"]}
+    if not isinstance(saved, dict):
+        return {**empty, "status": "SNAPSHOT_ERROR", "warnings": ["正式 NL 快照格式无效：顶层必须是对象"]}
+    overview = saved.get("overview")
+    if not isinstance(overview, dict):
+        return {**empty, "status": "SNAPSHOT_ERROR", "warnings": ["正式 NL 快照缺少 overview 数据"]}
+    current_fingerprint = _formal_nl_config_fingerprint(registry)
+    stale = saved.get("config_fingerprint") != current_fingerprint
+    return {**overview, "files": [], "generated_at": str(saved.get("generated_at") or ""),
+            "stale": stale, "source_revision": saved.get("source_revision") or "未记录"}
 
 
 def _is_loopback_request() -> bool:
@@ -750,7 +859,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         if raw_root:
             raw_root = _resolve_registry_path(raw_root, registry_file)
         formal_nl = _formal_nl_latest(output, str(selected.get("library_id") or "")) if selected else {}
-        formal_overview = _formal_nl_directory_overview(ips, registry_file)
+        formal_overview = _read_formal_nl_snapshot(output, registry)
         raw_choices = {str(item.get("id")): str(item.get("path")) for item in selected.get("raw_versions") or []}
         base_version = request.args.get("base_raw_version", "") if request.method == "GET" else ""
         base_root = raw_choices.get(base_version, "")
@@ -868,6 +977,50 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                file_choices_limited=bool(file_choice_reasons),
                                file_choices_notice=file_choices_notice)
 
+    @blueprint.post("/formal-nl/overview/refresh")
+    def refresh_formal_nl_overview():
+        if not _is_loopback_request():
+            abort(403)
+        ip_id = _text(request.form, "ip")
+        try:
+            registry = _read_registry(registry_file)
+            overview = _formal_nl_directory_overview(registry.get("ips") or [], registry_file)
+            snapshot = {
+                "schema_version": "formal_nl_overview.v1",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "config_fingerprint": _formal_nl_config_fingerprint(registry),
+                "overview": overview,
+            }
+            _write_json(output / "formal_nl" / "overview" / "latest.json", snapshot)
+            return redirect(url_for("ip_review.index", ip=ip_id, tab="formal-nl",
+                                    formal_refreshed="1"))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return page(ip_id, error=f"正式 NL 总览刷新失败；上次成功快照保留：{exc}",
+                        active_tab="formal-nl"), 400
+
+    @blueprint.get("/formal-nl/overview/files")
+    def formal_nl_overview_files():
+        registry = _read_registry(registry_file)
+        snapshot_path = output / "formal_nl" / "overview" / "latest.json"
+        if not snapshot_path.is_file():
+            return jsonify({"error": "尚无正式 NL 快照；请先刷新目录清点。"}), 404
+        try:
+            snapshot = _json_read(snapshot_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return jsonify({"error": f"正式 NL 快照无法读取；请重新刷新目录清点：{exc}"}), 409
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("overview"), dict):
+            return jsonify({"error": "正式 NL 快照结构无效；请重新刷新目录清点。"}), 409
+        if snapshot.get("config_fingerprint") != _formal_nl_config_fingerprint(registry):
+            return jsonify({"error": "正式 NL 快照已过期；请先刷新目录清点。"}), 409
+        overview = snapshot["overview"]
+        files = overview.get("files") or []
+        if not isinstance(files, list):
+            return jsonify({"error": "正式 NL 快照文件明细格式无效；请重新刷新目录清点。"}), 409
+        return jsonify({"generated_at": snapshot.get("generated_at") or "",
+                        "files": files})
+
     @blueprint.get("/")
     def index():
         try:
@@ -880,6 +1033,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             requested_tab = request.args.get("tab") or default_tab
             if requested_tab not in {"review", "catalog", "discover", "formal-nl"}:
                 requested_tab = default_tab
+            if request.args.get("formal_refreshed") == "1":
+                message = "正式 NL 总览已刷新；统计基于本次只读链接清点。"
             return page(requested if requested in ids else "", new_ip=request.args.get("new") == "1",
                         active_tab=requested_tab, message=message)
         except Exception as exc:

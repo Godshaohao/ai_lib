@@ -17,6 +17,11 @@ manual_preview/
 logs/
 lib_guard.yml
 project_bundles/
+# Generated review evidence and bundles are published only as reviewed milestones.
+/bundle/
+/outputs/
+/src_qor/test-results/
+/html/
 
 # Local OpenROAD technology fixtures are large and should stay out of normal
 # GitHub pushes. Keep tests/fixtures/raw/library_map.yml versioned.

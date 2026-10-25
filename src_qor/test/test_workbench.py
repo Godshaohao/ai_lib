@@ -1386,30 +1386,281 @@ class WorkbenchTests(unittest.TestCase):
                 ])
             registry.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-            response = create_app(registry, root / "output").test_client().get(
-                "/?ip=IP_A&tab=formal-nl")
+            client = create_app(registry, root / "output").test_client()
+            response = client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"})
 
-            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
-            self.assertIn("正式 NL 总览".encode(), response.data)
-            self.assertIn("来源 IP".encode(), response.data)
-            self.assertIn("引用 RAW 版本".encode(), response.data)
-            self.assertIn("文件链接".encode(), response.data)
-            self.assertIn(b"LEF 1", response.data)
-            self.assertIn(b"LIBERTY 1", response.data)
-            self.assertIn(b"GDS 1", response.data)
-            self.assertIn("Vendor_A".encode(), response.data)
-            self.assertIn("Vendor_B".encode(), response.data)
-            self.assertIn("Vendor_C".encode(), response.data)
-            self.assertIn("未登记".encode(), response.data)
-            self.assertIn("正式文件路径与 RAW 来源".encode(), response.data)
-            self.assertIn(str(unregistered_source).encode(), response.data)
+            self.assertEqual(response.status_code, 302)
+            self.assertIn("formal_refreshed=1", response.headers["Location"])
+            page = client.get(response.headers["Location"])
+            self.assertEqual(page.status_code, 200, page.get_data(as_text=True))
+            self.assertIn("正式 NL 总览".encode(), page.data)
+            self.assertIn("来源 IP".encode(), page.data)
+            self.assertIn("引用 RAW 版本".encode(), page.data)
+            self.assertIn("阶段 × 文件记录".encode(), page.data)
+            self.assertIn("正式目录变更后请重新刷新".encode(), page.data)
+            self.assertIn(b"LEF 1", page.data)
+            self.assertIn(b"LIBERTY 1", page.data)
+            self.assertIn(b"GDS 1", page.data)
+            self.assertIn("Vendor_A".encode(), page.data)
+            self.assertIn("Vendor_B".encode(), page.data)
+            self.assertIn("Vendor_C".encode(), page.data)
+            self.assertIn("未登记".encode(), page.data)
+            self.assertIn("正式文件链接与 RAW 来源".encode(), page.data)
+            self.assertNotIn(str(unregistered_source).encode(), page.data)
+            file_payload = client.get("/formal-nl/overview/files").get_json()
+            self.assertIn(str(unregistered_source.resolve()),
+                          [item["source_path"] for item in file_payload["files"]])
 
-            catalog_response = create_app(registry, root / "output").test_client().get(
-                "/?ip=IP_A&tab=catalog")
+            catalog_response = client.get("/?ip=IP_A&tab=catalog")
             self.assertEqual(catalog_response.status_code, 200, catalog_response.get_data(as_text=True))
             self.assertIn(b"LEF 1", catalog_response.data)
             self.assertIn(b"LIBERTY 1", catalog_response.data)
             self.assertIn(b"GDS 1", catalog_response.data)
+
+    def test_formal_nl_source_mapping_uses_raw_discovery_middle_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw_root = root / "raw"
+            source = raw_root / "Vendor_A" / "memory" / "sram" / "SRAM_A" / "V50" / "LEF" / "sram.lef"
+            source.parent.mkdir(parents=True)
+            source.write_text("LEF", encoding="utf-8")
+            formal_ip = root / "formal" / "lib_NL2.5_3" / "IP"
+            link = formal_ip / "LEF" / "sram.lef"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(source)
+            registry = root / "registry.yml"
+            registry.write_text(f"raw_root: {raw_root}\nips:\n  - id: unrelated\n    formal_nl_root: {formal_ip.parent.parent}\n",
+                                encoding="utf-8")
+
+            from lib_guard.workbench import _formal_nl_directory_overview
+            overview = _formal_nl_directory_overview(
+                [{"id": "unrelated", "formal_nl_root": str(formal_ip.parent.parent)}], registry)
+
+            self.assertEqual(overview["library_count"], 1)
+            self.assertEqual(overview["libraries"][0]["vendor"], "Vendor_A")
+            self.assertEqual(overview["libraries"][0]["middle_path"], "memory/sram")
+            self.assertEqual(overview["libraries"][0]["library_name"], "SRAM_A")
+            self.assertEqual(overview["libraries"][0]["versions"], ["V50"])
+            self.assertEqual(overview["unmapped_file_count"], 0)
+
+    def test_formal_nl_ambiguous_raw_discovery_source_is_not_guessed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw_root = root / "raw"
+            source = raw_root / "Vendor_A" / "IP_A" / "V01" / "LEF" / "a.lef"
+            source.parent.mkdir(parents=True)
+            source.write_text("LEF", encoding="utf-8")
+            formal_ip = root / "formal" / "lib_NL2.5_3" / "IP"
+            link = formal_ip / "LEF" / "a.lef"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(source)
+            registry = root / "registry.yml"
+            registry.write_text(f"raw_root: {raw_root}\nips: []\n", encoding="utf-8")
+            duplicated_path = str(source.parents[1])
+            discovery = {"candidates": [
+                {"vendor": "Vendor_A", "middle_path": "group_a", "library_name": "IP_A",
+                 "library_id": "Vendor_A.group_a.IP_A", "versions": [{"id": "V01", "path": duplicated_path}]},
+                {"vendor": "Vendor_A", "middle_path": "group_b", "library_name": "IP_B",
+                 "library_id": "Vendor_A.group_b.IP_B", "versions": [{"id": "V01", "path": duplicated_path}]},
+            ]}
+
+            with patch("lib_guard.workbench.discover_raw_report", return_value=discovery):
+                from lib_guard.workbench import _formal_nl_directory_overview
+                overview = _formal_nl_directory_overview(
+                    [{"id": "unrelated", "formal_nl_root": str(formal_ip.parent.parent)}], registry)
+
+            self.assertEqual(overview["unmapped_file_count"], 1)
+            self.assertEqual(overview["files"][0]["registration_status"], "来源匹配不唯一")
+            self.assertEqual(overview["files"][0]["library_name"], "来源未确定")
+
+    def test_formal_nl_counts_stage_file_records_separately_from_unique_sources(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw_root = root / "raw"
+            source = raw_root / "Vendor_A" / "IP_A" / "V01" / "LEF" / "a.lef"
+            source.parent.mkdir(parents=True)
+            source.write_text("LEF", encoding="utf-8")
+            formal_root = root / "formal"
+            for stage in ("lib_NL2.5_3", "lib_NL2.5_4"):
+                link = formal_root / stage / "IP" / "LEF" / "a.lef"
+                link.parent.mkdir(parents=True)
+                link.symlink_to(source)
+            registry = root / "registry.yml"
+            registry.write_text(f"raw_root: {raw_root}\nips: []\n", encoding="utf-8")
+
+            from lib_guard.workbench import _formal_nl_directory_overview
+            overview = _formal_nl_directory_overview(
+                [{"id": "IP_A", "formal_nl_root": str(formal_root)}], registry)
+
+            self.assertEqual(overview["file_count"], 2)
+            self.assertEqual(overview["stage_file_record_count"], 2)
+            self.assertEqual(overview["unique_source_count"], 1)
+
+    def test_formal_nl_page_reads_snapshot_and_explicit_refresh_creates_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw_root = root / "raw"
+            source = raw_root / "Vendor_A" / "IP_A" / "V01" / "LEF" / "a.lef"
+            source.parent.mkdir(parents=True)
+            source.write_text("LEF", encoding="utf-8")
+            formal_ip = root / "formal" / "lib_NL2.5_3" / "IP"
+            link = formal_ip / "LEF" / "a.lef"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(source)
+            registry = root / "registry.yml"
+            registry.write_text(
+                f"raw_root: {raw_root}\nips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n"
+                f"    vendor: Vendor_A\n    library_name: IP_A\n    raw_versions: []\n"
+                f"    formal_nl_root: {root / 'formal'}\n    formal_nl_stages: [lib_NL2.5_3]\n",
+                encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+
+            with patch("lib_guard.workbench._formal_nl_directory_overview",
+                       side_effect=AssertionError("page render must not walk Formal NL")):
+                initial = client.get("/?ip=IP_A&tab=catalog")
+            self.assertEqual(initial.status_code, 200)
+
+            refreshed = client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"})
+            self.assertEqual(refreshed.status_code, 302)
+            snapshot_path = root / "output" / "formal_nl" / "overview" / "latest.json"
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            self.assertTrue(snapshot["generated_at"])
+            self.assertEqual(snapshot["overview"]["library_count"], 1)
+
+            with patch("lib_guard.workbench._formal_nl_directory_overview",
+                       side_effect=AssertionError("snapshot read must not walk Formal NL")):
+                page = client.get("/?ip=IP_A&tab=formal-nl")
+            self.assertEqual(page.status_code, 200, page.get_data(as_text=True))
+            self.assertIn(snapshot["generated_at"].encode(), page.data)
+            self.assertIn("阶段 × 文件记录".encode(), page.data)
+            self.assertIn("只读目录清点 · 快照完整（生成时）".encode(), page.data)
+
+            files = client.get("/formal-nl/overview/files")
+            self.assertEqual(files.status_code, 200)
+            self.assertEqual(files.get_json()["files"][0]["source_path"], str(source.resolve()))
+
+    def test_formal_nl_snapshot_marks_registry_changes_stale_without_rescan(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            first_formal = root / "formal_a"
+            registry.write_text(
+                f"ips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n"
+                f"    formal_nl_root: {first_formal}\n    formal_nl_stages: []\n",
+                encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"})
+            registry.write_text(
+                f"ips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n"
+                f"    formal_nl_root: {root / 'formal_b'}\n    formal_nl_stages: []\n",
+                encoding="utf-8")
+
+            with patch("lib_guard.workbench._formal_nl_directory_overview",
+                       side_effect=AssertionError("staleness check must not rescan")):
+                response = client.get("/?ip=IP_A&tab=formal-nl")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("快照已过期".encode(), response.data)
+
+    def test_formal_nl_refresh_failure_preserves_last_successful_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw_root = root / "raw"
+            source = raw_root / "Vendor_A" / "IP_A" / "V01" / "LEF" / "a.lef"
+            source.parent.mkdir(parents=True)
+            source.write_text("LEF", encoding="utf-8")
+            formal_ip = root / "formal" / "lib_NL2.5_3" / "IP"
+            link = formal_ip / "LEF" / "a.lef"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(source)
+            registry = root / "registry.yml"
+            registry.write_text(
+                f"raw_root: {raw_root}\nips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n"
+                f"    vendor: Vendor_A\n    library_name: IP_A\n    raw_root: {raw_root / 'Vendor_A' / 'IP_A'}\n"
+                f"    raw_versions:\n      - id: V01\n        path: {source.parents[2]}\n"
+                f"    formal_nl_root: {root / 'formal'}\n    formal_nl_stages: [lib_NL2.5_3]\n",
+                encoding="utf-8")
+            output = root / "output"
+            client = create_app(registry, output).test_client()
+            self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
+            snapshot_path = output / "formal_nl" / "overview" / "latest.json"
+            previous_snapshot = snapshot_path.read_bytes()
+
+            with patch("lib_guard.workbench._formal_nl_directory_overview",
+                       side_effect=OSError("controlled scan failure")):
+                failed = client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"})
+
+            self.assertEqual(failed.status_code, 400)
+            self.assertIn("上次成功快照保留".encode(), failed.data)
+            self.assertEqual(snapshot_path.read_bytes(), previous_snapshot)
+            details = client.get("/formal-nl/overview/files")
+            self.assertEqual(details.status_code, 200)
+            self.assertEqual(details.get_json()["files"][0]["published_path"], str(link))
+
+    def test_formal_nl_link_changes_enter_snapshot_only_after_explicit_refresh(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw_root = root / "raw"
+            version_root = raw_root / "Vendor_A" / "IP_A" / "V01"
+            source_a = version_root / "LEF" / "a.lef"
+            source_b = version_root / "LEF" / "b.lef"
+            source_a.parent.mkdir(parents=True)
+            source_a.write_text("A", encoding="utf-8")
+            source_b.write_text("B", encoding="utf-8")
+            formal_ip = root / "formal" / "lib_NL2.5_3" / "IP"
+            link_a = formal_ip / "LEF" / "a.lef"
+            link_a.parent.mkdir(parents=True)
+            link_a.symlink_to(source_a)
+            registry = root / "registry.yml"
+            registry.write_text(
+                f"raw_root: {raw_root}\nips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n"
+                f"    vendor: Vendor_A\n    library_name: IP_A\n    raw_root: {raw_root / 'Vendor_A' / 'IP_A'}\n"
+                f"    raw_versions:\n      - id: V01\n        path: {version_root}\n"
+                f"    formal_nl_root: {root / 'formal'}\n    formal_nl_stages: [lib_NL2.5_3]\n",
+                encoding="utf-8")
+            output = root / "output"
+            client = create_app(registry, output).test_client()
+            self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
+            link_a.unlink()
+            link_b = formal_ip / "LEF" / "b.lef"
+            link_b.symlink_to(source_b)
+
+            with patch("lib_guard.workbench._formal_nl_directory_overview",
+                       side_effect=AssertionError("GET must use the saved snapshot")):
+                page = client.get("/?ip=IP_A&tab=formal-nl")
+                details_before_refresh = client.get("/formal-nl/overview/files")
+
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("正式目录变更后请重新刷新".encode(), page.data)
+            self.assertEqual(details_before_refresh.status_code, 200)
+            self.assertEqual(details_before_refresh.get_json()["files"][0]["published_path"], str(link_a))
+            refreshed = client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"})
+            self.assertEqual(refreshed.status_code, 302)
+            details_after_refresh = client.get("/formal-nl/overview/files")
+            self.assertEqual(details_after_refresh.status_code, 200)
+            self.assertEqual(details_after_refresh.get_json()["files"][0]["published_path"], str(link_b))
+
+    def test_malformed_formal_nl_snapshot_does_not_break_page_or_file_endpoint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text(
+                f"ips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n"
+                f"    name: IP A\n    formal_nl_root: {root / 'formal'}\n",
+                encoding="utf-8")
+            output = root / "output"
+            snapshot = output / "formal_nl" / "overview" / "latest.json"
+            snapshot.parent.mkdir(parents=True)
+            snapshot.write_text("[]", encoding="utf-8")
+            client = create_app(registry, output).test_client()
+
+            page = client.get("/?ip=IP_A&tab=formal-nl")
+            files = client.get("/formal-nl/overview/files")
+
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("正式 NL 快照无法读取".encode(), page.data)
+            self.assertEqual(files.status_code, 409)
+            self.assertIn("快照无法读取", files.get_json()["error"])
 
     def test_formal_nl_overview_keeps_distinct_roots_with_same_stage_name(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IP 工程检查工作台</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='workbench.css', v='20261025.1') }}">
-  <script src="{{ url_for('static', filename='workbench.js', v='20261025.1') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='workbench.css', v='20261025.2') }}">
+  <script src="{{ url_for('static', filename='workbench.js', v='20261025.2') }}" defer></script>
 </head>
 <body data-active-tab="{{ active_tab }}">
   <a class="skip-link" href="#main">跳到工作区</a>
@@ -100,33 +100,34 @@
       <section class="tab-panel" role="tabpanel" data-workbench-panel="formal-nl" data-tab-group="main" hidden>
         {% if selected %}
         <section class="panel formal-overview-panel" data-formal-inventory>
-          <div class="panel-head formal-overview-head"><div><span class="eyebrow">正式目录组成</span><h3>正式 NL 总览</h3><p>按展平目录中的文件链接归并来源 IP、RAW 版本和 View；只核对路径，不读取文件内容，也不代表质量或放行结论。</p></div><span class="formal-readonly-state">只读目录清点 · {{ '完整' if formal_overview.status == 'COMPLETE' else ('有待归属 / 异常' if formal_overview.status == 'INCOMPLETE' else '未找到阶段') }}</span></div>
+          <div class="panel-head formal-overview-head"><div><span class="eyebrow">正式目录组成</span><h3>正式 NL 总览</h3><p>按展平目录中的文件链接归并来源 IP、RAW 版本和 View；只核对路径，不读取文件内容，也不代表质量或放行结论。正式目录变更后请重新刷新。</p>{% if formal_overview.generated_at %}<small>快照生成：{{ formal_overview.generated_at }}</small>{% endif %}</div><div class="panel-actions"><form method="post" action="{{ url_for('ip_review.refresh_formal_nl_overview') }}"><input type="hidden" name="ip" value="{{ selected.id }}"><button class="button button-secondary" type="submit">刷新正式目录</button></form><span class="formal-readonly-state">只读目录清点 · {{ '快照完整（生成时）' if formal_overview.status == 'COMPLETE' else ('有待归属 / 异常' if formal_overview.status == 'INCOMPLETE' else ('快照异常' if formal_overview.status == 'SNAPSHOT_ERROR' else ('尚未刷新' if formal_overview.status == 'NOT_REFRESHED' else '未找到阶段'))) }}</span></div></div>
+          {% if formal_overview.stale %}<div class="formal-overview-notice"><strong>快照已过期</strong><span>正式目录或 RAW 登记路径配置已变化；当前数字仅供参考。刷新后再查看最新归属。</span></div>{% endif %}
           {% if formal_overview.stage_count %}
           <div class="formal-metrics" aria-label="正式目录统计">
             <div><span>正式阶段目录</span><strong>{{ formal_overview.stage_count }}</strong><small>{% for stage in formal_overview.stage_labels %}{{ stage }}{% if not loop.last %} · {% endif %}{% endfor %}</small></div>
             <div><span>来源 IP</span><strong>{{ formal_overview.library_count }}</strong><small>已登记 {{ formal_overview.registered_library_count }} · 未登记 {{ formal_overview.unregistered_library_count }}</small></div>
             <div><span>引用 RAW 版本</span><strong>{{ formal_overview.raw_version_count }}</strong><small>按来源路径逐 IP 统计，不判断新旧</small></div>
-            <div><span>文件链接</span><strong>{{ formal_overview.file_count }}</strong><small>{{ formal_overview.unmapped_file_count }} 条来源无法归属</small></div>
+            <div><span>阶段 × 文件记录</span><strong>{{ formal_overview.stage_file_record_count }}</strong><small>同一物理来源可能被多个阶段引用</small></div>
+            <div><span>唯一来源文件</span><strong>{{ formal_overview.unique_source_count }}</strong><small>{{ formal_overview.unmapped_file_count }} 条记录来源无法唯一归属</small></div>
           </div>
           <section class="formal-view-summary" aria-labelledby="formal-view-title"><div class="formal-section-heading"><h4 id="formal-view-title">View 文件分布</h4><span>基于正式目录可见链接数</span></div><div class="formal-view-totals">{% for view, count in formal_overview.view_counts.items() %}<span><strong>{{ count }}</strong><small>{{ view|upper }}</small></span>{% else %}<span class="muted">无可识别文件</span>{% endfor %}</div></section>
           {% if formal_overview.libraries %}
           <section class="formal-library-section"><div class="formal-section-heading"><h4>来源 IP 与版本</h4><span>同一 IP 若混用多个 RAW 版本，会逐一列出</span></div>
             <div class="formal-filter-row"><label>筛选来源<input type="search" data-formal-library-search placeholder="Vendor、IP 或 RAW 版本"></label><span data-formal-library-count>{{ formal_overview.libraries|length }} 个来源 IP</span></div>
             <div class="table-wrap"><table class="formal-library-table"><thead><tr><th>Vendor / IP</th><th>登记状态</th><th>RAW 来源版本</th><th>正式阶段</th><th>链接数</th><th>View</th></tr></thead><tbody>
-              {% for library in formal_overview.libraries %}<tr data-formal-library-row data-search="{{ ([library.vendor, library.library_name, library.library_id] + library.versions + library.stages)|join(' ')|lower }}"><td><strong>{{ library.vendor }} / {{ library.library_name }}</strong><small class="cell-sub">{{ library.library_id }}</small></td><td><span class="formal-registration {{ 'is-unregistered' if library.registration_status == '未登记' else '' }}">{{ library.registration_status }}</span></td><td>{% for version in library.versions %}<span class="version-chip">{{ version }}</span>{% endfor %}</td><td>{% for stage in library.stages %}<span class="version-chip">{{ stage }}</span>{% endfor %}</td><td>{{ library.file_count }}</td><td>{% for view, count in library.view_counts.items() %}<span class="version-chip">{{ view|upper }} {{ count }}</span>{% endfor %}</td></tr>{% endfor %}
+              {% for library in formal_overview.libraries %}<tr data-formal-library-row data-search="{{ ([library.vendor, library.middle_path, library.library_name, library.library_id] + library.versions + library.stages)|join(' ')|lower }}"><td><strong>{{ library.vendor }}{% if library.middle_path %} / {{ library.middle_path }}{% endif %} / {{ library.library_name }}</strong><small class="cell-sub">{{ library.library_id }}</small></td><td><span class="formal-registration {{ 'is-unregistered' if library.registration_status == '未登记' else '' }}">{{ library.registration_status }}</span></td><td>{% for version in library.versions %}<span class="version-chip">{{ version }}</span>{% endfor %}</td><td>{% for stage in library.stages %}<span class="version-chip">{{ stage }}</span>{% endfor %}</td><td>{{ library.file_count }}</td><td>{% for view, count in library.view_counts.items() %}<span class="version-chip">{{ view|upper }} {{ count }}</span>{% endfor %}</td></tr>{% endfor %}
             </tbody></table></div>
           </section>
           {% endif %}
-          {% if formal_overview.files %}
-          <details class="formal-files-disclosure"><summary>查看全部 {{ formal_overview.files|length }} 条正式文件路径与 RAW 来源</summary>
-            <div class="formal-filter-row formal-file-filters"><label>搜索文件<input type="search" data-formal-file-search placeholder="IP、版本、文件名或路径"></label><label>View<select data-formal-view-filter><option value="">全部 View</option>{% for view in formal_overview.view_counts %}<option value="{{ view }}">{{ view|upper }}</option>{% endfor %}</select></label><span data-formal-file-count>{{ formal_overview.files|length }} 条</span></div>
-            <div class="table-wrap formal-overview-file-wrap"><table><thead><tr><th>阶段</th><th>来源 IP</th><th>RAW 版本</th><th>View</th><th>正式路径</th><th>RAW 来源路径</th></tr></thead><tbody>
-              {% for file in formal_overview.files %}<tr data-formal-file-row data-view="{{ file.view }}" data-search="{{ ([file.stage, file.vendor, file.library_name, file.raw_version, file.relative_path, file.source_path]|join(' '))|lower }}"><td>{{ file.stage }}</td><td>{{ file.vendor }} / {{ file.library_name }}{% if file.registration_status == '未登记' %}<small class="cell-sub">未登记</small>{% endif %}</td><td>{{ file.raw_version }}</td><td>{{ file.view|upper }}</td><td class="path-cell"><code>{{ file.published_path }}</code></td><td class="path-cell"><code>{{ file.source_path }}</code></td></tr>{% endfor %}
-            </tbody></table></div>
+          {% if formal_overview.file_count %}
+          <details class="formal-files-disclosure" data-formal-files data-files-url="{{ url_for('ip_review.formal_nl_overview_files') }}"><summary>查看全部 {{ formal_overview.stage_file_record_count }} 条正式文件链接与 RAW 来源</summary>
+            <div class="formal-filter-row formal-file-filters"><label>搜索文件<input type="search" data-formal-file-search placeholder="IP、版本、文件名或路径"></label><label>View<select data-formal-view-filter><option value="">全部 View</option>{% for view in formal_overview.view_counts %}<option value="{{ view }}">{{ view|upper }}</option>{% endfor %}</select></label><span data-formal-file-count>{{ formal_overview.stage_file_record_count }} 条</span></div>
+            <div class="table-wrap formal-overview-file-wrap" data-formal-file-content><p class="muted">展开后从快照加载文件路径；不会重新扫描正式目录。</p></div>
           </details>
           {% endif %}
           {% if formal_overview.issues or formal_overview.warnings or formal_overview.unmapped_file_count %}<div class="formal-overview-notice"><strong>盘点范围提醒</strong><span>{% if formal_overview.issues %}{{ formal_overview.issues|length }} 个目录或链接异常。{% endif %}{% if formal_overview.warnings %}{{ formal_overview.warnings|length }} 个配置路径未能读取。{% endif %}{% if formal_overview.unmapped_file_count %}{{ formal_overview.unmapped_file_count }} 个文件来源不在配置的 RAW 根目录内，未归入 IP/版本统计。{% endif %}</span></div>{% endif %}
           <p class="formal-overview-footnote">RAW 版本来自软链接目标路径，仅表示文件来源；不会自动判定哪个版本最新、已接受或可发布。展开文件清单可核对每条正式路径及其绝对来源。</p>
+          {% elif formal_overview.status == 'NOT_REFRESHED' %}<div class="empty-history compact-empty"><strong>尚未生成正式 NL 总览</strong><p>点击“刷新正式目录”后，工作台才会只读遍历已配置的正式阶段；其他页面请求不会触发全盘扫描。</p></div>
           {% else %}<div class="empty-history compact-empty"><strong>尚未发现可读取的正式阶段目录</strong><p>检查 IP 清单中的正式 NL 根目录是否指向包含 <code>lib_NL*/IP</code> 的目录，或直接指向某个阶段的 <code>IP</code> 目录。</p>{% for warning in formal_overview.warnings %}<p>{{ warning }}</p>{% endfor %}</div>{% endif %}
         </section>
         <section class="panel formal-panel">
