@@ -62,30 +62,41 @@ class ReviewRunnerTests(unittest.TestCase):
                 self.assertEqual(axes["process_corner_candidates"], [label])
                 self.assertFalse(axes["conflict"])
 
-    def test_checked_in_simulation_evidence_explains_ihp_and_sram_results(self):
-        root = Path(__file__).resolve().parents[1] / "test-results" / "formal_nl_20261024"
-        for name in ("IHP.sg13g2_stdcell", "SRAM22.sram22_1024x32m8w8",
-                     "SRAM22.sram22_256x16m8w8", "SRAM22.sram22_512x32m4w8"):
-            result_path = next((root / "libraries").glob(f"{name}__*/runs/*/review_result.json"))
-            record = json.loads(result_path.read_text(encoding="utf-8"))
-            checks = {}
-            for check_name, check in record["checks"].items():
-                if check["execution_status"] == "NOT_RUN":
-                    continue
-                evidence = result_path.parent / check["result_ref"]
-                self.assertTrue(evidence.is_file(), evidence)
-                checks[check_name] = {**check, "selected": True, "status": check["execution_status"],
-                                      "result": json.loads(evidence.read_text(encoding="utf-8"))}
-            model = build_workbook_model([{"ip": {"id": name}, "checks": checks}])
-            if name.startswith("IHP"):
-                groups = [row for row in model["04-关注项"] if row["类别"] == "LEF-Liberty接口"]
-                self.assertEqual(len(model["10-Liberty单元"]), 504)
-                self.assertEqual({row["对象"]: row["数量"] for row in groups},
-                                 {"PG脚缺失": 492, "信号Pin多出 + PG脚缺失": 12})
-                self.assertIn("VDD", groups[0]["发现"])
-            else:
-                self.assertEqual(sum(row["类别"] == "LEF字段变化" for row in model["04-关注项"]), 2)
-                self.assertFalse([row for row in model["04-关注项"] if row["类别"] == "LEF-Liberty接口"])
+    def test_interface_mismatch_rollup_counts_instances_by_combined_reason(self):
+        cells = []
+        for index in range(504):
+            signal = {"missing_in_liberty": [], "extra_in_liberty": [], "direction_mismatch": []}
+            pg = {"missing_in_liberty": ["VDD"], "extra_in_liberty": [], "wrong_type": [],
+                  "unverified_type": []}
+            if index >= 492:
+                signal["extra_in_liberty"] = ["EXTRA"]
+            cells.append({"macro": f"CELL_{index:03}", "status": "MISMATCH",
+                          "signal_pins": signal, "power_ground": pg})
+        item = {"ip": {"id": "IHP.sg13g2_stdcell"}, "checks": {"lef_liberty_check": {
+            "selected": True, "status": "COMPLETE", "result": {"files": [{
+                "liberty_source": "/fixture/sg13g2.lib", "summary": {"mismatch_cell_count": 504},
+                "cells": cells}], "summary": {"liberty_file_count": 1}}}}}
+
+        model = build_workbook_model([item])
+
+        groups = [row for row in model["04-关注项"] if row["类别"] == "LEF-Liberty接口"]
+        self.assertEqual(len(model["10-Liberty单元"]), 504)
+        self.assertEqual({row["对象"]: row["数量"] for row in groups},
+                         {"PG脚缺失": 492, "信号Pin多出 + PG脚缺失": 12})
+        self.assertIn("VDD", groups[0]["发现"])
+
+    def test_mismatch_takes_precedence_over_unverified_in_quality_label(self):
+        item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
+        item["checks"]["formal_nl"]["result"]["broken_links"] = ["/formal/LEF/broken.lef"]
+        item["checks"]["macro_index"]["result"]["macro_index"]["unmatched_objects"] = {
+            "liberty": [{"name": "CELL_UNCERTAIN", "file": "/raw/a.lib"}]
+        }
+
+        summary = _review_summary(item)
+
+        self.assertEqual(summary["quality_assessment"]["status"], "ISSUES_FOUND")
+        self.assertEqual(summary["counts"]["MISMATCH"]["affected_objects"], 1)
+        self.assertEqual(summary["counts"]["UNVERIFIED"]["affected_objects"], 1)
 
     def test_cross_view_alone_exports_matching_lef_cell_and_pin_reason(self):
         item = {"ip": {"id": "IP_A"}, "checks": {"lef_liberty_check": {
@@ -132,6 +143,35 @@ class ReviewRunnerTests(unittest.TestCase):
         self.assertEqual(result["signal_pins"]["expanded_bus_ranges"], [
             {"source": "DATA[2:0]", "members": ["DATA[0]", "DATA[1]", "DATA[2]"]}
         ])
+
+    def test_overlapping_bus_and_scalar_pin_definitions_are_unverified_not_order_dependent(self):
+        macro = {"pins": {
+            "DATA[0]": {"direction": "INPUT", "use": "SIGNAL"},
+            "DATA[1]": {"direction": "INPUT", "use": "SIGNAL"},
+        }}
+        definitions = [
+            ("DATA[1:0]", {"direction": "input"}),
+            ("DATA[1]", {"direction": "output"}),
+        ]
+
+        results = []
+        for ordered in (definitions, list(reversed(definitions))):
+            result = _compare_cell("MACRO_A", macro, "lib_a",
+                                   {"pins": dict(ordered), "pg_pins": {}}, True, True, True)
+            results.append(result)
+
+        for result in results:
+            self.assertEqual(result["status"], "UNVERIFIED")
+            self.assertEqual(result["signal_pins"]["missing_in_liberty"], [])
+            self.assertEqual(result["signal_pins"]["extra_in_liberty"], [])
+            self.assertEqual(len(result["signal_pins"]["bus_definition_conflicts"]), 1)
+            conflict = result["signal_pins"]["bus_definition_conflicts"][0]
+            self.assertEqual(conflict["member"], "DATA[1]")
+            self.assertEqual({source["name"] for source in conflict["definitions"]},
+                             {"DATA[1:0]", "DATA[1]"})
+            self.assertTrue(any("DATA[1]" in reason for reason in result["unverified"]))
+        self.assertEqual(results[0]["signal_pins"]["bus_definition_conflicts"],
+                         results[1]["signal_pins"]["bus_definition_conflicts"])
 
     def test_oversized_liberty_bus_range_is_unverified_not_false_pin_mismatch(self):
         macro = {"pins": {"DATA[0]": {"direction": "INPUT", "use": "SIGNAL"}}}
@@ -223,18 +263,22 @@ class ReviewRunnerTests(unittest.TestCase):
 
     def test_overview_distinguishes_failed_attempt_from_last_complete_result(self):
         page = render_overview([{
-            "library_id": "vendor.ip_a", "name": "IP A", "version_count": 5,
-            "attempt_status": "FAILED", "attempt_id": "review_failed", "attempt_time": "2026-10-24T12:00Z",
-            "latest_complete_id": "review_good", "latest_complete_time": "2026-10-23T12:00Z",
-            "latest_summary": {"counts": {"MISMATCH": {"affected_objects": 4, "finding_records": 1}}},
-            "latest_xlsx_href": "../libraries/ip_a/latest.xlsx",
+            "ip": {"name": "IP A", "library_id": "vendor.ip_a"},
+            "last_attempt": {"status": "FAILED", "id": "task_failed", "time": "2026-10-24T12:00Z"},
+            "last_complete": {"id": "review_good", "time": "2026-10-23T12:00Z",
+                               "requested_checks": ["lef_review"],
+                               "checks": {"lef_review": {"execution_status": "COMPLETE"}},
+                               "summary": {"counts": {"MISMATCH": {"affected_objects": 4},
+                                                          "CHANGED": {"affected_objects": 0},
+                                                          "UNVERIFIED": {"affected_objects": 0}}},
+                               "xlsx_href": "../libraries/ip_a/latest.xlsx"},
         }])
 
-        self.assertEqual(page.count("<tbody>"), 1)
-        self.assertIn("review_failed", page)
+        self.assertEqual(page.count("<tbody id=\"ip-rows\">"), 1)
+        self.assertIn("task_failed", page)
         self.assertIn("review_good", page)
-        self.assertIn("最近完整检查报告", page)
-        self.assertIn("不一致 4 项", page)
+        self.assertIn("最近完整报告范围", page)
+        self.assertIn("不一致 4", page)
 
     def test_persistent_overview_reads_failed_web_attempt_separately(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -260,25 +304,36 @@ class ReviewRunnerTests(unittest.TestCase):
             page = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
             self.assertIn("task_failed", page)
             self.assertIn(run_id, page)
-            self.assertIn("不一致 4 项", page)
-            self.assertIn("质量判断：未形成质量结论", page)
-            self.assertNotIn("本次所选检查已完成", page.split("最近尝试", 1)[1].split("最近完整", 1)[0])
+            self.assertIn("不一致 4", page)
+            self.assertIn("发现已确认不一致", page)
+            self.assertIn("最近完整报告范围", page)
 
     def test_overview_shows_one_excel_link_when_latest_and_last_run_are_same(self):
         page = render_overview([{
-            "library_id": "vendor.ip_a", "name": "IP A", "execution_status": "COMPLETE",
-            "xlsx_href": "../libraries/ip_a/runs/review_x/ip_review.xlsx",
-            "latest_xlsx_href": "../libraries/ip_a/latest.xlsx",
+            "ip": {"name": "IP A", "library_id": "vendor.ip_a"},
+            "last_attempt": {"status": "COMPLETE", "id": "review_x"},
+            "last_complete": {"id": "review_x", "requested_checks": ["macro_index"],
+                               "checks": {"macro_index": {"execution_status": "COMPLETE"}},
+                               "summary": {"counts": {"MISMATCH": {"affected_objects": 0},
+                                                          "CHANGED": {"affected_objects": 0},
+                                                          "UNVERIFIED": {"affected_objects": 0}}},
+                               "xlsx_href": "../libraries/ip_a/latest.xlsx"},
         }])
 
-        self.assertIn("最近完整 Excel", page)
+        self.assertEqual(page.count("latest.xlsx"), 1)
+        self.assertIn("打开 Excel", page)
         self.assertNotIn("本次 Excel", page)
 
     def test_overview_keeps_excel_entry_only_in_catalog_table(self):
         page = render_overview([{
-            "library_id": "vendor.ip_a", "name": "IP A", "execution_status": "COMPLETE",
-            "latest_xlsx_href": "../libraries/ip_a/latest.xlsx",
-            "summary": {"counts": {}},
+            "ip": {"name": "IP A", "library_id": "vendor.ip_a"},
+            "last_attempt": {"status": "COMPLETE"},
+            "last_complete": {"id": "review_x", "requested_checks": ["macro_index"],
+                               "checks": {"macro_index": {"execution_status": "COMPLETE"}},
+                               "summary": {"counts": {"MISMATCH": {"affected_objects": 0},
+                                                          "CHANGED": {"affected_objects": 0},
+                                                          "UNVERIFIED": {"affected_objects": 0}}},
+                               "xlsx_href": "../libraries/ip_a/latest.xlsx"},
         }])
 
         self.assertEqual(page.count("latest.xlsx"), 1)
@@ -581,7 +636,7 @@ class ReviewRunnerTests(unittest.TestCase):
             page = (output / "ip_checks" / "index.html").read_text(encoding="utf-8")
             self.assertIn("IP_A", page)
             self.assertIn("IP_B", page)
-            self.assertIn("最近成功", page)
+            self.assertIn("最近完整报告范围", page)
 
     def test_overview_includes_catalog_context_and_stable_latest_workbook_link(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -603,10 +658,8 @@ class ReviewRunnerTests(unittest.TestCase):
             page = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
             self.assertIn("Vendor X", page)
             self.assertIn("memory/sram", page)
-            self.assertIn("V1", page)
-            self.assertIn("V2", page)
-            self.assertIn("LEF", page)
-            self.assertIn("GDS", page)
+            self.assertNotIn("/raw/Vendor_X/IP_A/V1", page)
+            self.assertNotIn("/raw/Vendor_X/IP_A/V2", page)
             self.assertIn("../libraries/", page)
             self.assertIn("latest.xlsx", page)
 
@@ -631,7 +684,7 @@ class ReviewRunnerTests(unittest.TestCase):
             page = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
             self.assertIn("Vendor X", page)
             self.assertIn("IP A", page)
-            self.assertIn("本次所选检查已完成", page)
+            self.assertIn("任务已结束", page)
             self.assertIn(f"runs/{run_id}/ip_review.xlsx", page)
 
     def test_incomplete_run_preserves_previous_stable_workbook(self):

@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IP 工程检查工作台</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='workbench.css', v='20261024.18') }}">
-  <script src="{{ url_for('static', filename='workbench.js', v='20261024.12') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='workbench.css', v='20261025.1') }}">
+  <script src="{{ url_for('static', filename='workbench.js', v='20261025.1') }}" defer></script>
 </head>
 <body data-active-tab="{{ active_tab }}">
   <a class="skip-link" href="#main">跳到工作区</a>
@@ -18,9 +18,9 @@
 
   <div class="app-shell">
     <aside class="ip-rail" aria-label="已登记库">
-      <div class="rail-head"><div><h1>库与版本</h1><p>{{ ips|length }} 个库 · RAW / 正式 NL</p></div><a class="icon-button" href="{{ url_for('ip_review.index', tab='discover') }}" title="发现 RAW 库" aria-label="发现 RAW 库">＋</a></div>
+      <div class="rail-head"><div><h1>IP 检查清单</h1><p>{{ ips|length }} 个已登记 IP</p></div><a class="icon-button" href="{{ url_for('ip_review.index', tab='discover') }}" title="发现并登记 RAW 库" aria-label="发现并登记 RAW 库">＋</a></div>
       <div class="rail-filters">
-        <label class="search-box"><span aria-hidden="true">⌕</span><input type="search" data-ip-search placeholder="搜索 Vendor、库或版本" aria-label="搜索 Vendor、库或版本"></label>
+        <label class="search-box"><span aria-hidden="true">⌕</span><input type="search" data-ip-search placeholder="搜索 Vendor 或 IP" aria-label="搜索 Vendor 或 IP"></label>
         <div class="sidebar-scopes" role="group" aria-label="目录类型筛选">
           <button type="button" data-sidebar-scope="all" aria-pressed="true">全部</button>
           <button type="button" data-sidebar-scope="raw" aria-pressed="false">RAW</button>
@@ -33,16 +33,12 @@
         {% for vendor, vendor_ips in sidebar_ips|groupby('vendor') %}
         <div class="vendor-label" data-vendor-heading data-vendor-name="{{ (vendor or '未指定 Vendor')|lower }}">{{ vendor or '未指定 Vendor' }}</div>
         {% for ip in vendor_ips %}
-          {% set raw_versions = ip.sidebar_raw_versions or [] %}{% set formal_stages = ip.sidebar_formal_stages or [] %}
-          {% set sidebar_search = [ip.name or ip.id, ip.id, ip.library_id, ip.vendor or '未指定 Vendor', ip.middle_path or ''] + (raw_versions|map(attribute='id')|list) + formal_stages %}
-          <div class="ip-entry" data-ip-entry data-ip-name="{{ sidebar_search|join(' ')|lower }}" data-ip-vendor="{{ (ip.vendor or '未指定 Vendor')|lower }}" data-has-raw="{{ 'true' if raw_versions else 'false' }}" data-has-formal="{{ 'true' if ip.formal_nl_root or formal_stages else 'false' }}">
-          <a class="ip-item {{ 'is-selected' if selected and ip.id == selected.id else '' }}" href="{{ url_for('ip_review.index', ip=ip.id, tab='catalog') }}" {{ 'aria-current=page' if selected and ip.id == selected.id else '' }}>
-            <span class="ip-item-mark">{{ (ip.name or ip.id)[:1]|upper }}</span><span class="ip-item-copy"><strong>{{ ip.library_name or ip.name or ip.id }}</strong><small>{{ ip.vendor or '未指定 Vendor' }}{% if ip.middle_path %} / {{ ip.middle_path }}{% endif %} · RAW {{ raw_versions|length }} / 正式 {{ formal_stages|length }}</small></span>
+          {% set raw_count = ip.sidebar_raw_count or 0 %}{% set formal_count = ip.sidebar_formal_count or 0 %}
+          {% set sidebar_search = [ip.name or ip.id, ip.id, ip.library_id, ip.vendor or '未指定 Vendor', ip.middle_path or '', ip.library_name or ''] %}
+          <div class="ip-entry" data-ip-entry data-ip-name="{{ sidebar_search|join(' ')|lower }}" data-ip-vendor="{{ (ip.vendor or '未指定 Vendor')|lower }}" data-has-raw="{{ 'true' if raw_count else 'false' }}" data-has-formal="{{ 'true' if ip.formal_nl_root or formal_count else 'false' }}">
+          <a class="ip-item {{ 'is-selected' if selected and ip.id == selected.id else '' }}" href="{{ url_for('ip_review.index', ip=ip.id, tab='review') }}" {{ 'aria-current=page' if selected and ip.id == selected.id else '' }}>
+            <span class="ip-item-mark">{{ (ip.name or ip.id)[:1]|upper }}</span><span class="ip-item-copy"><strong>{{ ip.library_name or ip.name or ip.id }}</strong><small>{{ ip.vendor or '未指定 Vendor' }}{% if ip.middle_path %} / {{ ip.middle_path }}{% endif %}</small><span class="ip-meta-line"><span>RAW {{ raw_count }} · 正式 {{ formal_count }}</span><span class="sidebar-task-state">{{ ip.sidebar_task_label }}</span></span>{% if ip.sidebar_quality_label and ip.sidebar_quality_label != '未形成质量结论' %}<span class="sidebar-quality-state">{{ ip.sidebar_quality_label }}</span>{% endif %}</span>
           </a>
-          <div class="ip-version-tree">
-            <div class="ip-version-group" data-source-kind="raw"><span class="source-label">RAW</span><div>{% if raw_versions|length > 1 %}<details class="sidebar-version-details"><summary>排序最新版本：{{ raw_versions[-1].id }}（共 {{ raw_versions|length }}）</summary><div class="sidebar-version-list">{% for version in raw_versions %}<a class="sidebar-version" href="{{ url_for('ip_review.index', ip=ip.id, tab='review', raw_version=version.id) }}" title="选择 {{ version.path or '' }} 进行检查">{{ version.id }}</a>{% endfor %}</div></details>{% elif raw_versions %}<a class="sidebar-version" href="{{ url_for('ip_review.index', ip=ip.id, tab='review', raw_version=raw_versions[0].id) }}" title="{{ raw_versions[0].path or '' }}">{{ raw_versions[0].id }}</a>{% else %}<span class="sidebar-empty">未登记</span>{% endif %}</div></div>
-            <div class="ip-version-group" data-source-kind="formal"><span class="source-label formal-source-label">正式 NL</span><div>{% if formal_stages|length > 1 %}<details class="sidebar-version-details"><summary>排序最新阶段：{{ formal_stages[-1] }}（共 {{ formal_stages|length }}）</summary><div class="sidebar-version-list">{% for stage in formal_stages %}<a class="sidebar-version formal-version" href="{{ url_for('ip_review.index', ip=ip.id, tab='formal-nl') }}" title="正式目录阶段；排序不代表有效版">{{ stage }}</a>{% endfor %}</div></details>{% elif formal_stages %}<a class="sidebar-version formal-version" href="{{ url_for('ip_review.index', ip=ip.id, tab='formal-nl') }}" title="正式目录阶段；排序不代表有效版">{{ formal_stages[0] }}</a>{% else %}<span class="sidebar-empty">{{ '已配置，待盘点' if ip.formal_nl_root else '未配置' }}</span>{% endif %}</div></div>
-          </div>
           </div>
         {% endfor %}
         {% else %}<p class="empty-state">尚无已登记库。到“RAW 发现”选择目录并登记。</p>{% endfor %}
@@ -64,7 +60,7 @@
           <div class="task-window-meta"><span data-task-stage>阶段：{{ task_record.phase or {'QUEUED':'排队中','RUNNING':'执行检查','COMPLETE':'已完成','FAILED':'已失败','INTERRUPTED':'已中断'}.get(task_record.status, '状态待更新') }}</span><span data-task-elapsed>用时：计算中</span>{% if task_record.review_id and task_workbook_url %}<a class="table-link" href="{{ task_workbook_url }}">本次 Excel</a>{% endif %}</div>
         </div>
         <div class="task-progress-track {{ 'is-indeterminate' if task_record.status == 'RUNNING' else '' }}" data-task-progress aria-label="任务运行状态"><span></span></div>
-        <details class="task-dynamics" open><summary>运行动态 <span data-task-event-count>{{ task_record.events|length if task_record.events else 1 }} 条</span></summary><ol data-task-events>{% for event in task_record.events or [] %}<li><time>{{ event.at }}</time><span>{{ event.message }}</span></li>{% else %}<li><time>{{ task_record.updated_at or task_record.finished_at or task_record.submitted_at or '' }}</time><span>{{ task_record.error or task_record.progress_message or {'QUEUED':'任务已登记，等待后台执行。','RUNNING':'检查任务正在执行。','COMPLETE':'检查任务已完成。','FAILED':'检查任务失败。','INTERRUPTED':'工作台重启时任务仍未结束，已标记为中断。'}.get(task_record.status, '暂无运行动态') }}</span></li>{% endfor %}</ol></details>
+        <details class="task-dynamics"><summary>运行日志 <span data-task-event-count>{{ task_record.events|length if task_record.events else 1 }} 条</span></summary><ol data-task-events>{% for event in task_record.events or [] %}<li><time>{{ event.at }}</time><span>{{ event.message }}</span></li>{% else %}<li><time>{{ task_record.updated_at or task_record.finished_at or task_record.submitted_at or '' }}</time><span>{{ task_record.error or task_record.progress_message or {'QUEUED':'任务已登记，等待后台执行。','RUNNING':'检查任务正在执行。','COMPLETE':'检查任务已完成。','FAILED':'检查任务失败。','INTERRUPTED':'工作台重启时任务仍未结束，已标记为中断。'}.get(task_record.status, '暂无运行动态') }}</span></li>{% endfor %}</ol></details>
       </section>
       {% endif %}
 
@@ -72,18 +68,18 @@
       {% if error %}<div class="notice is-error" role="alert">{{ error }}</div>{% endif %}
 
       <nav class="view-tabs primary-tabs" role="tablist" aria-label="工作台功能">
-        <button type="button" role="tab" aria-selected="false" data-workbench-tab="catalog" data-tab-group="main">库与版本</button>
-        <button type="button" role="tab" aria-selected="false" data-workbench-tab="discover" data-tab-group="main">RAW 发现</button>
-        <button type="button" role="tab" aria-selected="false" data-workbench-tab="formal-nl" data-tab-group="main">正式 NL</button>
         <button type="button" role="tab" aria-selected="false" data-workbench-tab="review" data-tab-group="main">检查工作区</button>
+        <button type="button" role="tab" aria-selected="false" data-workbench-tab="catalog" data-tab-group="main">库与版本</button>
+        <button type="button" role="tab" aria-selected="false" data-workbench-tab="formal-nl" data-tab-group="main">正式 NL</button>
+        <button type="button" role="tab" aria-selected="false" class="utility-tab" data-workbench-tab="discover" data-tab-group="main">发现 / 登记 RAW <span aria-hidden="true">↗</span></button>
       </nav>
 
       <section class="tab-panel" role="tabpanel" data-workbench-panel="catalog" data-tab-group="main">
         <section class="panel catalog-panel">
-          <div class="panel-head"><div><h3>RAW 库登记总览</h3><p>按旧 Catalog / Discover 口径展示 Vendor、分组路径、库、交付版本和视图；版本排序只作目录参考，不代表已确认的新旧关系。</p></div><div class="panel-actions">{% if review_overview_url %}<a class="button button-secondary" href="{{ review_overview_url }}" target="_blank" rel="noopener">检查结果 HTML</a>{% endif %}<span class="summary-count">{{ ips|length }} 个库</span></div></div>
-          {% if ips %}<div class="table-wrap"><table><thead><tr><th>Vendor</th><th>分组路径</th><th>库</th><th>RAW 版本</th><th>版本数</th><th>视图</th><th>最近尝试</th><th>最近完整报告</th><th>报告 Excel</th><th>库路径</th><th></th></tr></thead><tbody>
-          {% for ip in ips %}<tr><td>{{ ip.vendor or '未指定' }}</td><td>{{ ip.middle_path or '—' }}</td><td><strong>{{ ip.library_name or ip.name or ip.id }}</strong><small class="cell-sub">{{ ip.library_id }}</small></td><td>{% for version in ip.raw_versions or [] %}<span class="version-chip">{{ version.id }}</span>{% else %}<span class="muted">未发现版本</span>{% endfor %}</td><td>{{ ip.raw_versions|length }}</td><td>{% set view_set = [] %}{% for version in ip.raw_versions or [] %}{% for view in version.views or [] %}{% if view not in view_set %}{% set _ = view_set.append(view) %}{% endif %}{% endfor %}{% endfor %}{{ view_set|join(' · ') or '—' }}</td><td>{% if ip.latest_attempt.task_id %}<span class="result-state">{{ ip.latest_attempt.status }} · {{ ip.latest_attempt.execution_status }}</span><small class="cell-sub">{{ ip.latest_attempt.submitted_at }}</small>{% else %}<span class="muted">未运行</span>{% endif %}</td><td>{% if ip.latest_success.review_id %}<span class="result-state">{{ ip.latest_success.execution_status or '已完成' }}</span><small class="cell-sub">{{ ip.latest_success.review_id }}</small>{% else %}<span class="muted">无成功记录</span>{% endif %}</td><td>{% if ip.latest_excel_url %}<a class="table-link" href="{{ ip.latest_excel_url }}">打开最近完整</a>{% else %}<span class="muted">尚未生成</span>{% endif %}</td><td class="path-cell"><code>{{ ip.raw_root or '—' }}</code></td><td class="row-actions"><a class="table-link" href="{{ url_for('ip_review.index', ip=ip.id, tab='review') }}">检查</a><a class="table-link" href="{{ url_for('ip_review.index', ip=ip.id, tab='review', edit_registration='1') }}">修改登记</a><form method="post" action="{{ url_for('ip_review.unregister') }}" onsubmit="return confirm('仅移除工作台登记，不删除 RAW 文件和历史检查结果。继续？')"><input type="hidden" name="id" value="{{ ip.id }}"><button class="table-link danger-link" type="submit">移除登记</button></form></td></tr>
-          {% if ip.raw_versions %}<tr class="version-detail-row"><td colspan="11"><details><summary>查看 {{ ip.raw_versions|length }} 个版本路径与视图</summary><div class="version-list">{% for version in ip.raw_versions %}<div><a href="{{ url_for('ip_review.index', ip=ip.id, tab='review', raw_version=version.id) }}">{{ version.id }} → 检查</a><span>{{ version.views|join(' · ') or '无识别视图' }}</span><code>{{ version.path }}</code></div>{% endfor %}</div></details></td></tr>{% endif %}
+          <div class="panel-head"><div><h3>已登记 IP</h3><p>默认聚焦检查操作；版本路径与完整来源收在行内详情。</p></div><div class="panel-actions">{% if review_overview_url %}<a class="button button-secondary" href="{{ review_overview_url }}" target="_blank" rel="noopener">检查结果 HTML</a>{% endif %}<span class="summary-count">{{ ips|length }} 个 IP</span></div></div>
+          {% if ips %}<div class="table-wrap"><table class="catalog-table"><thead><tr><th>Vendor</th><th>IP / 库标识</th><th>RAW 版本</th><th>视图</th><th>最近任务</th><th>最近质量结论</th><th>结果文件</th><th>操作</th></tr></thead><tbody>
+          {% for ip in ips %}<tr><td>{{ ip.vendor or '未指定' }}{% if ip.middle_path %}<small class="cell-sub">{{ ip.middle_path }}</small>{% endif %}</td><td><strong>{{ ip.library_name or ip.name or ip.id }}</strong><small class="cell-sub">{{ ip.library_id }}</small></td><td>{{ ip.raw_versions|length }} 个版本</td><td>{% set view_set = [] %}{% for version in ip.raw_versions or [] %}{% for view in version.views or [] %}{% if view not in view_set %}{% set _ = view_set.append(view) %}{% endif %}{% endfor %}{% endfor %}{{ view_set|join(' · ') or '—' }}</td><td>{% if ip.latest_attempt.task_id %}<span class="result-state">{{ {'QUEUED':'排队中','RUNNING':'运行中','COMPLETE':'已完成','FAILED':'失败','INTERRUPTED':'已中断'}.get(ip.latest_attempt.status, ip.latest_attempt.status) }}</span><small class="cell-sub">{{ ip.latest_attempt.phase or ip.latest_attempt.submitted_at }}</small>{% else %}<span class="muted">未运行</span>{% endif %}</td><td>{{ ip.latest_quality_label }}</td><td>{% if ip.latest_excel_url %}<a class="table-link" href="{{ ip.latest_excel_url }}">打开最近 Excel</a>{% else %}<span class="muted">尚未生成</span>{% endif %}</td><td class="row-actions"><a class="table-link" href="{{ url_for('ip_review.index', ip=ip.id, tab='review') }}">检查</a><a class="table-link" href="{{ url_for('ip_review.index', ip=ip.id, tab='review', edit_registration='1') }}">登记信息</a><form method="post" action="{{ url_for('ip_review.unregister') }}" onsubmit="return confirm('仅移除工作台登记，不删除 RAW 文件和历史检查结果。继续？')"><input type="hidden" name="id" value="{{ ip.id }}"><button class="table-link danger-link" type="submit">移除</button></form></td></tr>
+          {% if ip.raw_versions %}<tr class="version-detail-row"><td colspan="8"><details><summary>查看 {{ ip.raw_versions|length }} 个 RAW 版本及路径</summary><div class="version-list">{% for version in ip.raw_versions %}<div><a href="{{ url_for('ip_review.index', ip=ip.id, tab='review', raw_version=version.id) }}">{{ version.id }} → 选择检查</a><span>{{ version.views|join(' · ') or '无识别视图' }}</span><code>{{ version.path }}</code></div>{% endfor %}<div class="catalog-raw-root"><strong>库根目录</strong><code>{{ ip.raw_root or '未登记' }}</code></div></div></details></td></tr>{% endif %}
           {% endfor %}</tbody></table></div>{% else %}<div class="empty-history"><strong>还没有登记 RAW 库</strong><p>从“RAW 发现”输入 RAW 根目录，预览后选择要登记的库。</p><button type="button" class="button button-primary" data-main-tab="discover">发现 RAW 库</button></div>{% endif %}
         </section>
       </section>
@@ -103,8 +99,38 @@
 
       <section class="tab-panel" role="tabpanel" data-workbench-panel="formal-nl" data-tab-group="main" hidden>
         {% if selected %}
+        <section class="panel formal-overview-panel" data-formal-inventory>
+          <div class="panel-head formal-overview-head"><div><span class="eyebrow">正式目录组成</span><h3>正式 NL 总览</h3><p>按展平目录中的文件链接归并来源 IP、RAW 版本和 View；只核对路径，不读取文件内容，也不代表质量或放行结论。</p></div><span class="formal-readonly-state">只读目录清点 · {{ '完整' if formal_overview.status == 'COMPLETE' else ('有待归属 / 异常' if formal_overview.status == 'INCOMPLETE' else '未找到阶段') }}</span></div>
+          {% if formal_overview.stage_count %}
+          <div class="formal-metrics" aria-label="正式目录统计">
+            <div><span>正式阶段目录</span><strong>{{ formal_overview.stage_count }}</strong><small>{% for stage in formal_overview.stage_labels %}{{ stage }}{% if not loop.last %} · {% endif %}{% endfor %}</small></div>
+            <div><span>来源 IP</span><strong>{{ formal_overview.library_count }}</strong><small>已登记 {{ formal_overview.registered_library_count }} · 未登记 {{ formal_overview.unregistered_library_count }}</small></div>
+            <div><span>引用 RAW 版本</span><strong>{{ formal_overview.raw_version_count }}</strong><small>按来源路径逐 IP 统计，不判断新旧</small></div>
+            <div><span>文件链接</span><strong>{{ formal_overview.file_count }}</strong><small>{{ formal_overview.unmapped_file_count }} 条来源无法归属</small></div>
+          </div>
+          <section class="formal-view-summary" aria-labelledby="formal-view-title"><div class="formal-section-heading"><h4 id="formal-view-title">View 文件分布</h4><span>基于正式目录可见链接数</span></div><div class="formal-view-totals">{% for view, count in formal_overview.view_counts.items() %}<span><strong>{{ count }}</strong><small>{{ view|upper }}</small></span>{% else %}<span class="muted">无可识别文件</span>{% endfor %}</div></section>
+          {% if formal_overview.libraries %}
+          <section class="formal-library-section"><div class="formal-section-heading"><h4>来源 IP 与版本</h4><span>同一 IP 若混用多个 RAW 版本，会逐一列出</span></div>
+            <div class="formal-filter-row"><label>筛选来源<input type="search" data-formal-library-search placeholder="Vendor、IP 或 RAW 版本"></label><span data-formal-library-count>{{ formal_overview.libraries|length }} 个来源 IP</span></div>
+            <div class="table-wrap"><table class="formal-library-table"><thead><tr><th>Vendor / IP</th><th>登记状态</th><th>RAW 来源版本</th><th>正式阶段</th><th>链接数</th><th>View</th></tr></thead><tbody>
+              {% for library in formal_overview.libraries %}<tr data-formal-library-row data-search="{{ ([library.vendor, library.library_name, library.library_id] + library.versions + library.stages)|join(' ')|lower }}"><td><strong>{{ library.vendor }} / {{ library.library_name }}</strong><small class="cell-sub">{{ library.library_id }}</small></td><td><span class="formal-registration {{ 'is-unregistered' if library.registration_status == '未登记' else '' }}">{{ library.registration_status }}</span></td><td>{% for version in library.versions %}<span class="version-chip">{{ version }}</span>{% endfor %}</td><td>{% for stage in library.stages %}<span class="version-chip">{{ stage }}</span>{% endfor %}</td><td>{{ library.file_count }}</td><td>{% for view, count in library.view_counts.items() %}<span class="version-chip">{{ view|upper }} {{ count }}</span>{% endfor %}</td></tr>{% endfor %}
+            </tbody></table></div>
+          </section>
+          {% endif %}
+          {% if formal_overview.files %}
+          <details class="formal-files-disclosure"><summary>查看全部 {{ formal_overview.files|length }} 条正式文件路径与 RAW 来源</summary>
+            <div class="formal-filter-row formal-file-filters"><label>搜索文件<input type="search" data-formal-file-search placeholder="IP、版本、文件名或路径"></label><label>View<select data-formal-view-filter><option value="">全部 View</option>{% for view in formal_overview.view_counts %}<option value="{{ view }}">{{ view|upper }}</option>{% endfor %}</select></label><span data-formal-file-count>{{ formal_overview.files|length }} 条</span></div>
+            <div class="table-wrap formal-overview-file-wrap"><table><thead><tr><th>阶段</th><th>来源 IP</th><th>RAW 版本</th><th>View</th><th>正式路径</th><th>RAW 来源路径</th></tr></thead><tbody>
+              {% for file in formal_overview.files %}<tr data-formal-file-row data-view="{{ file.view }}" data-search="{{ ([file.stage, file.vendor, file.library_name, file.raw_version, file.relative_path, file.source_path]|join(' '))|lower }}"><td>{{ file.stage }}</td><td>{{ file.vendor }} / {{ file.library_name }}{% if file.registration_status == '未登记' %}<small class="cell-sub">未登记</small>{% endif %}</td><td>{{ file.raw_version }}</td><td>{{ file.view|upper }}</td><td class="path-cell"><code>{{ file.published_path }}</code></td><td class="path-cell"><code>{{ file.source_path }}</code></td></tr>{% endfor %}
+            </tbody></table></div>
+          </details>
+          {% endif %}
+          {% if formal_overview.issues or formal_overview.warnings or formal_overview.unmapped_file_count %}<div class="formal-overview-notice"><strong>盘点范围提醒</strong><span>{% if formal_overview.issues %}{{ formal_overview.issues|length }} 个目录或链接异常。{% endif %}{% if formal_overview.warnings %}{{ formal_overview.warnings|length }} 个配置路径未能读取。{% endif %}{% if formal_overview.unmapped_file_count %}{{ formal_overview.unmapped_file_count }} 个文件来源不在配置的 RAW 根目录内，未归入 IP/版本统计。{% endif %}</span></div>{% endif %}
+          <p class="formal-overview-footnote">RAW 版本来自软链接目标路径，仅表示文件来源；不会自动判定哪个版本最新、已接受或可发布。展开文件清单可核对每条正式路径及其绝对来源。</p>
+          {% else %}<div class="empty-history compact-empty"><strong>尚未发现可读取的正式阶段目录</strong><p>检查 IP 清单中的正式 NL 根目录是否指向包含 <code>lib_NL*/IP</code> 的目录，或直接指向某个阶段的 <code>IP</code> 目录。</p>{% for warning in formal_overview.warnings %}<p>{{ warning }}</p>{% endfor %}</div>{% endif %}
+        </section>
         <section class="panel formal-panel">
-          <div class="panel-head"><div><h3>正式 NL 目录盘点</h3><p>只读路径盘点：读取正式目录中的链接和可见文件名，帮助比较正式阶段间的组成与来源；不读取内容、不修改链接、不判断发布放行。</p></div></div>
+          <div class="panel-head"><div><h3>所选 IP 来源核查</h3><p>调用正式文件盘点脚本，查看当前 IP 的阶段记录、RAW 文件来源和既有核查报告；不修改正式链接，也不作质量放行判断。</p></div></div>
           <form method="post" action="{{ url_for('ip_review.scan_formal_nl') }}" class="discover-form">
             <input type="hidden" name="id" value="{{ selected.id }}">
             <label>正式 NL 根目录<input name="formal_nl_root" value="{{ selected.formal_nl_root or '' }}" required placeholder="例如 /proj/release/NL"></label>
@@ -114,8 +140,8 @@
           <div class="formal-result-head">
             <div><strong>最近一次目录浏览</strong><span>{{ formal_nl.generated_at }} · 发现：{{ formal_nl.discovery_status or '未分类' }} · 单阶段核查：{{ formal_nl.report_status if formal_nl.discovery_status == 'SINGLE_STAGE' else '未执行' }}</span></div>
             <nav class="artifact-links" aria-label="正式 NL 报告下载">
-              <a href="{{ url_for('ip_review.formal_report', kind='md', id=selected.id) }}">阅读报告 Markdown</a>
-              <a href="{{ url_for('ip_review.formal_report', kind='json', id=selected.id) }}">完整数据 JSON</a>
+              <a href="{{ url_for('ip_review.formal_report', kind='md', id=selected.id, scope='check' if formal_nl.discovery_status == 'SINGLE_STAGE' else none) }}">阅读报告 Markdown</a>
+              <a href="{{ url_for('ip_review.formal_report', kind='json', id=selected.id, scope='check' if formal_nl.discovery_status == 'SINGLE_STAGE' else none) }}">完整数据 JSON</a>
             </nav>
           </div>
           {% if formal_nl.latest_check %}<p>最近完成的单阶段核查：{{ formal_nl.latest_check.generated_at }} · <a href="{{ url_for('ip_review.formal_report', kind='json', id=selected.id, scope='check') }}">下载该阶段 JSON</a>{% if formal_nl.latest_check_stage %} · <a href="{{ url_for('ip_review.index', ip=selected.id, tab='review', formal_stage=formal_nl.latest_check_stage) }}">用 {{ formal_nl.latest_check_stage }} 进入检查</a>{% endif %}</p>{% endif %}
@@ -144,58 +170,65 @@
         </nav>
       <section id="panel-config" class="tab-panel" role="tabpanel" aria-labelledby="tab-config" data-workbench-panel="config" data-tab-group="review">
         <section class="panel config-panel">
-          <div class="panel-head"><div><h3>检查内容</h3><p>勾选要运行的检查，再填写对应输入。未勾选的检查不会执行。库标识固定；显示名称、Vendor、分组和库目录名可修改，保存时一并写回登记清单。</p></div></div>
-          {% if selected.raw_versions %}<form method="get" action="{{ url_for('ip_review.index') }}" class="discover-form"><input type="hidden" name="ip" value="{{ selected.id }}"><input type="hidden" name="tab" value="review"><label>目标 RAW 版本<select name="raw_version" required><option value="">请选择</option>{% for version in selected.raw_versions %}<option value="{{ version.id }}" {{ 'selected' if selected_raw_version == version.id else '' }}>{{ version.id }}</option>{% endfor %}</select></label><label>基准 RAW 版本（选填）<select name="base_raw_version"><option value="">不选择</option>{% for version in selected.raw_versions %}<option value="{{ version.id }}" {{ 'selected' if base_raw_version == version.id else '' }}>{{ version.id }}</option>{% endfor %}</select></label><button class="button button-secondary" type="submit">载入版本文件</button></form>{% endif %}
+          <div class="panel-head"><div><h3>配置本次检查</h3><p>先选目标与基准版本，再勾选检查项。只有一个运行入口；高级输入默认收起。</p></div></div>
+          {% if selected.raw_versions %}<form id="version-scope-form" method="get" action="{{ url_for('ip_review.index') }}" class="scope-selector"><input type="hidden" name="ip" value="{{ selected.id }}"><input type="hidden" name="tab" value="review"><label>目标 RAW 版本<select name="raw_version" data-scope-target required><option value="">请选择目标版本</option>{% for version in selected.raw_versions %}<option value="{{ version.id }}" {{ 'selected' if selected_raw_version == version.id else '' }}>{{ version.id }}</option>{% endfor %}</select></label><label>基准 RAW 版本（选填）<select name="base_raw_version" data-scope-base><option value="">无基准（仅看当前版本）</option>{% for version in selected.raw_versions %}<option value="{{ version.id }}" {{ 'selected' if base_raw_version == version.id else '' }}>{{ version.id }}</option>{% endfor %}</select></label><button class="button button-secondary" type="submit">载入版本文件</button></form>{% endif %}
           {% if file_choices_limited %}<p class="notice">{{ file_choices_notice }}</p>{% endif %}
           <form method="post" action="{{ url_for('ip_review.run_selected') }}" data-review-form>
+            <input type="hidden" name="id" value="{{ selected.id or '' }}">
+            <input type="hidden" name="library_id" value="{{ selected.library_id or '' }}">
+            <input type="hidden" name="raw_version" value="{{ selected_raw_version or selected.raw_version or '' }}">
+            <input type="hidden" name="formal_stage" value="{{ selected.formal_stage or '' }}">
+            {% set saved_checks = selected.get('checks', {}) %}
             {% if selected_raw_version %}
-            <section class="quick-review" aria-labelledby="quick-review-title">
-              <div><span class="eyebrow">自动准备</span><h4 id="quick-review-title">LEF / Macro / Liberty 联动核查</h4><p>扫描目标版本的 Macro / View 和 Liberty；选择基准版后，系统会额外比较可配对的 LEF。多份 LEF 无法唯一配对时才需点选。</p></div>
-              <input type="hidden" name="quick_raw_version" value="{{ selected_raw_version }}">
-              <input type="hidden" name="quick_base_raw_version" value="{{ base_raw_version }}">
-              <div class="quick-review-inputs">
-                {% if new_lefs %}<label>目标 LEF<select name="quick_target_lef"><option value="">自动选择（仅有一个时）</option>{% for path in new_lefs %}<option value="{{ path }}" {{ 'selected' if path == default_target_lef else '' }}>{{ path }}</option>{% endfor %}</select></label>{% endif %}
-                {% if base_raw_version and old_lefs %}<label>基准 LEF<select name="quick_base_lef"><option value="">按相对路径自动配对</option>{% for path in old_lefs %}<option value="{{ path }}" {{ 'selected' if path == default_base_lef else '' }}>{{ path }}</option>{% endfor %}</select></label>{% endif %}
-              </div>
-              {% if quick_notes %}<ul class="quick-review-notes">{% for note in quick_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
-              <button class="button button-primary" type="submit" name="quick_linked_check" value="1">运行自动联动核查</button>
+            <section class="auto-suggestions" aria-labelledby="suggestions-title">
+              <div><span class="eyebrow">基于所选 RAW 自动识别</span><h4 id="suggestions-title">检查输入建议</h4><p>{% for note in quick_notes %}{{ note }}{% if not loop.last %} {% endif %}{% else %}未识别到可直接使用的输入；可以在检查项中手工选择。{% endfor %}</p></div>
+              <button class="button button-secondary" type="button" data-apply-suggested-checks {{ 'disabled' if not quick_checks else '' }}>填入自动建议</button>
+              <span class="sr-only" data-suggestion-feedback aria-live="polite"></span>
+              <script type="application/json" data-suggested-checks>{{ quick_checks|tojson }}</script>
             </section>
             {% endif %}
-            {% if selected_raw_version %}<details class="identity-details"><summary>IP 登记信息（选填，通常无需修改）</summary>{% endif %}
-            <div class="identity-grid">
-              <label>IP 标识<input name="id" value="{{ selected.id or '' }}" required {{ 'readonly' if selected.id else '' }}></label>
-              <label>库标识<input name="library_id" value="{{ selected.library_id or '' }}" required {{ 'readonly' if selected.library_id else '' }}></label>
-              <label>显示名称<input name="name" value="{{ selected.name or '' }}"></label>
-              <label>Vendor<input name="vendor" value="{{ selected.vendor or '' }}" placeholder="例如 Vendor_A"></label>
-              <label>分组路径<input name="middle_path" value="{{ selected.middle_path or '' }}" placeholder="例如 memory/sram"></label>
-              <label>库目录名<input name="library_name" value="{{ selected.library_name or '' }}" placeholder="例如 phy_ip"></label>
-              <label>RAW 版本<input name="raw_version" value="{{ selected.raw_version or '' }}" placeholder="可留空"></label>
-              <label>正式阶段<input name="formal_stage" value="{{ selected.formal_stage or '' }}" placeholder="可留空"></label>
+            {% if selected.id %}
+            <details class="identity-details" {{ 'open' if request.args.get('edit_registration') == '1' else '' }}><summary>登记信息（通常无需修改）</summary><div class="identity-grid">
+              <label>显示名称<input name="name" value="{{ selected.name or '' }}"></label><label>Vendor<input name="vendor" value="{{ selected.vendor or '' }}"></label><label>分组路径<input name="middle_path" value="{{ selected.middle_path or '' }}"></label><label>库目录名<input name="library_name" value="{{ selected.library_name or '' }}"></label>
               <label class="check-option latest-option"><input type="checkbox" name="publish_latest" {{ 'checked' if selected.publish_latest else '' }}><span><strong>运行成功后更新最近记录</strong><small>失败时保留上次成功记录</small></span></label>
-            </div>
-            {% if selected_raw_version %}</details>{% endif %}
+            </div></details>
+            {% else %}
+            <div class="identity-grid new-ip-fields"><label>IP 标识<input name="id" value="" required></label><label>库标识<input name="library_id" value="" required></label><label>显示名称<input name="name" value=""></label><label>Vendor<input name="vendor" value=""></label><label>分组路径<input name="middle_path" value=""></label><label>库目录名<input name="library_name" value=""></label></div>
+            {% endif %}
 
-            {% set saved_checks = selected.get('checks', {}) %}
-            <div class="check-list"><div class="selection-tools check-selection-tools"><span>检查项选择</span><button type="button" class="button button-secondary" data-check-select-all>全选检查</button><button type="button" class="button button-secondary" data-check-clear>清空</button></div>
+            <section class="run-scope-summary" data-run-scope-summary aria-labelledby="run-scope-title">
+              <div class="scope-summary-head"><h4 id="run-scope-title">本次运行范围</h4><span>随当前选择更新</span></div>
+              <div class="scope-summary-grid">
+                <div><small>IP</small><strong data-scope-ip>{{ selected.name or selected.id or '未登记' }}</strong></div>
+                <div><small>目标版本</small><strong data-scope-target-label>{{ selected_raw_version or selected.raw_version or '未选择' }}</strong></div>
+                <div><small>基准版本</small><strong data-scope-base-label>{{ base_raw_version or '不比较版本差异' }}</strong></div>
+                <div><small>检查项</small><strong data-scope-checks>尚未选择</strong></div>
+                <div class="scope-files"><small>文件范围</small><div data-scope-files>选择检查项后显示文件范围。</div></div>
+              </div>
+            </section>
+
+            <div class="check-list"><div class="selection-tools check-selection-tools"><span>选择要执行的检查</span><button type="button" class="button button-secondary" data-check-select-all>全选检查</button><button type="button" class="button button-secondary" data-check-clear>清空</button></div>
               <details class="check-card" data-check-card {{ 'open' if saved_checks.get('formal_nl') is not none else '' }}>
-                <summary><input type="checkbox" name="checks" value="formal_nl" {{ 'checked' if saved_checks.get('formal_nl') is not none else '' }}><span class="check-card-title"><strong>正式目录盘点</strong><small>统计正式 NL 链接、RAW 来源和 View 文件分布</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
-                {% set spec = saved_checks.get('formal_nl', {}) %}<div class="check-fields"><label>盘点配置文件<input name="formal_config" value="{{ spec.get('config','') }}" placeholder="/path/to/formal_nl.yml"></label><label>已有盘点报告<input name="formal_report_json" value="{{ spec.get('report_json','') }}" placeholder="可复用现有 JSON"></label></div>
+                <summary><input type="checkbox" name="checks" value="formal_nl" {{ 'checked' if saved_checks.get('formal_nl') is not none else '' }}><span class="check-card-title"><strong>正式目录盘点</strong><small>统计正式 NL 链接、来源和 View 文件分布</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
+                {% set spec = saved_checks.get('formal_nl', {}) %}<div class="check-fields"><label class="span-two">盘点配置文件<input name="formal_config" data-scope-source-input data-input-source="{{ '已保存配置' if spec.get('config') else '' }}" value="{{ spec.get('config','') }}" placeholder="选择 formal_nl.yml"></label><details class="advanced-inputs span-two"><summary>高级输入</summary><div><label>已有盘点报告 JSON<input name="formal_report_json" value="{{ spec.get('report_json','') }}" placeholder="复用已有报告"></label></div></details></div>
               </details>
               <details class="check-card" data-check-card {{ 'open' if saved_checks.get('macro_index') is not none else '' }}>
                 <summary><input type="checkbox" name="checks" value="macro_index" {{ 'checked' if saved_checks.get('macro_index') is not none else '' }}><span class="check-card-title"><strong>Macro / View 文件索引</strong><small>按 Macro 汇总 LEF、Liberty、Verilog 等文件证据</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
-                {% set spec = saved_checks.get('macro_index', {}) %}<div class="check-fields"><label>RAW 或文件根目录<input name="macro_root" value="{{ spec.get('root','') }}"></label><label>已有索引报告<input name="macro_report_json" value="{{ spec.get('report_json','') }}"></label><label>已有 FileMap<input name="macro_filemap_json" value="{{ spec.get('filemap_json','') }}"></label><label>Parser Facts<input name="macro_parser_facts_json" value="{{ spec.get('parser_facts_json','') }}"></label><label>来源版本<input name="macro_version" value="{{ spec.get('version','') }}"></label><label>库标识覆盖<input name="macro_library_id" value="{{ spec.get('library_id','') }}"></label></div>
+                {% set spec = saved_checks.get('macro_index', {}) %}<div class="check-fields"><label class="span-two">RAW 或文件根目录<input name="macro_root" data-scope-source-input data-input-source="{{ '已保存配置' if spec.get('root') else '' }}" value="{{ spec.get('root','') }}" placeholder="选择目标版本后填入建议"></label><details class="advanced-inputs span-two"><summary>高级输入 · 报告、FileMap 与 Parser Facts</summary><div><label>已有索引报告 JSON<input name="macro_report_json" value="{{ spec.get('report_json','') }}"></label><label>已有 FileMap JSON<input name="macro_filemap_json" value="{{ spec.get('filemap_json','') }}"></label><label>Parser Facts JSON<input name="macro_parser_facts_json" value="{{ spec.get('parser_facts_json','') }}"></label><label>来源版本<input name="macro_version" value="{{ spec.get('version','') }}"></label><label>库标识覆盖<input name="macro_library_id" value="{{ spec.get('library_id','') }}"></label></div></details></div>
               </details>
               <details class="check-card" data-check-card {{ 'open' if saved_checks.get('lef_review') is not none else '' }}>
                 <summary><input type="checkbox" name="checks" value="lef_review" {{ 'checked' if saved_checks.get('lef_review') is not none else '' }}><span class="check-card-title"><strong>LEF 双文件核查</strong><small>对比两份 LEF 的 Macro、Pin、尺寸与几何事实</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
-                {% set spec = saved_checks.get('lef_review', {}) %}<div class="check-fields"><label>基准 LEF<input name="lef_old_file" value="{{ spec.get('old_file','') }}"></label><label>目标 LEF<input name="lef_new_file" value="{{ spec.get('new_file','') }}"></label>{% if old_lefs %}<label>从基准版本选择<select data-fill-input="lef_old_file"><option value="">选择文件</option>{% for path in old_lefs %}<option value="{{ path }}">{{ path }}</option>{% endfor %}</select></label>{% endif %}{% if new_lefs %}<label>从目标版本选择<select data-fill-input="lef_new_file"><option value="">选择文件</option>{% for path in new_lefs %}<option value="{{ path }}">{{ path }}</option>{% endfor %}</select></label>{% endif %}<label>已有核查报告<input name="lef_report_json" value="{{ spec.get('report_json','') }}"></label></div>
+                {% set spec = saved_checks.get('lef_review', {}) %}<div class="check-fields"><label>基准 LEF<input name="lef_old_file" data-scope-source-input data-input-source="{{ '已保存配置' if spec.get('old_file') else '' }}" value="{{ spec.get('old_file','') }}"></label><label>目标 LEF<input name="lef_new_file" data-scope-source-input data-input-source="{{ '已保存配置' if spec.get('new_file') else '' }}" value="{{ spec.get('new_file','') }}"></label>{% if old_lefs %}<label>选择基准文件<select data-fill-input="lef_old_file"><option value="">从基准版本选择</option>{% for path in old_lefs %}<option value="{{ path }}">{{ path }}</option>{% endfor %}</select></label>{% endif %}{% if new_lefs %}<label>选择目标文件<select data-fill-input="lef_new_file"><option value="">从目标版本选择</option>{% for path in new_lefs %}<option value="{{ path }}">{{ path }}</option>{% endfor %}</select></label>{% endif %}<details class="advanced-inputs span-two"><summary>高级输入 · 复用已有报告</summary><div><label>已有核查报告 JSON<input name="lef_report_json" value="{{ spec.get('report_json','') }}"></label></div></details></div>
               </details>
               <details class="check-card" data-check-card {{ 'open' if saved_checks.get('lef_liberty_check') is not none else '' }}>
-                <summary><input type="checkbox" name="checks" value="lef_liberty_check" {{ 'checked' if saved_checks.get('lef_liberty_check') is not none else '' }}><span class="check-card-title"><strong>LEF–Liberty 接口核查</strong><small>逐个 Liberty 文件核对 Cell 与 LEF Macro、Pin 及电源脚</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
-                {% set spec = saved_checks.get('lef_liberty_check', {}) %}<div class="check-fields"><label class="span-two">Liberty 文件（每行一个）<textarea name="ll_liberty_files">{{ '\n'.join(spec.get('liberty_files', [])) }}</textarea></label>{% if liberty_choices %}<fieldset class="span-two"><legend>从目标版本勾选 Liberty</legend><div class="liberty-selection-tools"><input type="search" data-lib-search placeholder="筛选 Corner、文件名或路径" aria-label="筛选 Liberty 文件"><button type="button" class="button button-secondary" data-lib-select-visible>全选显示项</button><button type="button" class="button button-secondary" data-lib-clear-visible>清空显示项</button><span data-lib-count>{{ liberty_choices|length }} 个文件</span></div><div class="sidebar-version-list liberty-list">{% for path in liberty_choices %}<label data-lib-row data-lib-path="{{ path|lower }}"><input type="checkbox" data-lib-file value="{{ path }}" {{ 'checked' if path in spec.get('liberty_files', []) else '' }}>{{ path }}</label>{% endfor %}</div></fieldset>{% endif %}<label>已有联动报告<input name="ll_report_json" value="{{ spec.get('report_json','') }}"></label><label>LEF 核查报告 JSON<input name="ll_lef_analysis_json" value="{{ spec.get('lef_analysis_json','') }}"></label><label>LEF 所属库标识<input name="ll_lef_library_id" value="{{ spec.get('lef_library_id','') }}"></label><label class="check-option"><input type="checkbox" name="ll_include_matching_cells" {{ 'checked' if spec.get('include_matching_cells', True) else '' }}><span><strong>Excel 导出匹配 Cell 明细</strong></span></label></div>
-                <p class="check-footnote">也可以同时勾选 LEF 双文件核查，自动复用本次 LEF 结果。</p>
+                <summary><input type="checkbox" name="checks" value="lef_liberty_check" {{ 'checked' if saved_checks.get('lef_liberty_check') is not none else '' }}><span class="check-card-title"><strong>LEF–Liberty 接口核查</strong><small>逐个 Liberty 核对 Cell、Pin 与电源脚</small></span><span class="check-chevron" aria-hidden="true">⌄</span></summary>
+                {% set spec = saved_checks.get('lef_liberty_check', {}) %}<div class="check-fields"><label>LEF 文件<input name="ll_lef_file" data-scope-source-input data-input-source="{{ '已保存配置' if spec.get('lef_file') else '' }}" value="{{ spec.get('lef_file','') }}" placeholder="选择当前 RAW 中的 LEF"></label>{% if new_lefs %}<label>选择 LEF<select data-fill-input="ll_lef_file"><option value="">从目标版本选择</option>{% for path in new_lefs %}<option value="{{ path }}" {{ 'selected' if path == default_target_lef else '' }}>{{ path }}</option>{% endfor %}</select></label>{% endif %}
+                  {% if liberty_choices %}<fieldset class="span-two"><legend>Liberty 文件 · 勾选本次核查范围</legend><div class="liberty-selection-tools"><input type="search" data-lib-search placeholder="筛选 Corner、文件名或路径" aria-label="筛选 Liberty 文件"><button type="button" class="button button-secondary" data-lib-select-visible>全选显示项</button><button type="button" class="button button-secondary" data-lib-clear-visible>清空显示项</button><span data-lib-count>{{ liberty_choices|length }} 个文件</span></div><div class="sidebar-version-list liberty-list">{% for path in liberty_choices %}<label data-lib-row data-lib-path="{{ path|lower }}"><input type="checkbox" data-lib-file value="{{ path }}" {{ 'checked' if path in spec.get('liberty_files', []) else '' }}>{{ path }}</label>{% endfor %}</div></fieldset>{% else %}<p class="scope-note span-two">当前目标版本未枚举到 Liberty；可在高级输入中指定文件路径。</p>{% endif %}
+                  <details class="advanced-inputs span-two"><summary>高级输入 · 手工路径与既有报告</summary><div><label class="span-two">Liberty 文件路径（每行一个）<textarea name="ll_liberty_files" data-scope-source-input data-input-source="{{ '已保存配置' if spec.get('liberty_files') else '' }}" placeholder="从上方勾选会自动填入；也可逐行填写">{{ '\n'.join(spec.get('liberty_files', [])) }}</textarea></label><label>已有联动报告 JSON<input name="ll_report_json" value="{{ spec.get('report_json','') }}"></label><label>LEF 核查报告 JSON<input name="ll_lef_analysis_json" value="{{ spec.get('lef_analysis_json','') }}"></label><label>LEF 所属库标识<input name="ll_lef_library_id" value="{{ spec.get('lef_library_id','') }}"></label><label class="check-option"><input type="checkbox" name="ll_include_matching_cells" {{ 'checked' if spec.get('include_matching_cells', True) else '' }}><span><strong>Excel 导出匹配 Cell 明细</strong></span></label></div></details>
+                </div><p class="check-footnote">同时勾选 LEF 双文件核查时，接口核查可复用同一次运行中的目标 LEF Facts。</p>
               </details>
             </div>
-            <div class="form-actions"><button class="button button-primary" type="submit">运行所选检查</button><button class="button button-secondary" type="submit" formaction="{{ url_for('ip_review.save') }}">保存配置</button><span>后台执行，最多 2 项并行；可离开页面。</span></div>
+            <div class="form-actions"><button class="button button-primary" type="submit">运行所选检查</button><button class="button button-secondary" type="submit" formaction="{{ url_for('ip_review.save') }}">保存配置</button><span>后台运行，最多 2 项并行；失败不会覆盖上次完整报告。</span></div>
           </form>
         </section>
       </section>

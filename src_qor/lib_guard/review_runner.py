@@ -116,6 +116,30 @@ def _latest_complete_run(library_dir: Path) -> tuple[dict[str, Any], Path | None
     return result, workbook
 
 
+def _publish_cli_attempt_if_idle(path: Path, attempt: dict[str, Any]) -> bool:
+    """Persist a synchronous CLI attempt without replacing a live workbench task."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(".latest_attempt.lock")
+    with lock_path.open("a+") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                current = _json_read(path) if path.is_file() else {}
+            except (OSError, ValueError, json.JSONDecodeError):
+                current = {}
+            if current.get("status") in {"QUEUED", "PENDING", "RUNNING"}:
+                return False
+            current_time = (current.get("submitted_at") or current.get("started_at")
+                            or current.get("finished_at") or current.get("updated_at")
+                            or current.get("generated_at"))
+            if current_time and _timestamp_key(attempt.get("submitted_at")) <= _timestamp_key(current_time):
+                return False
+            _json_write_atomic(path, attempt)
+            return True
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
 def _new_review_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"review_{timestamp}_{uuid4().hex[:8]}"
@@ -1065,6 +1089,7 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
 
 
 def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    run_started_at = datetime.now(timezone.utc).isoformat()
     reviews = run_review(config, out_dir)
     output = Path(out_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -1119,6 +1144,18 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
         finally:
             workbook_tmp.unlink(missing_ok=True)
         _json_write_atomic(run_dir / "review_result.json", review_record)
+        _publish_cli_attempt_if_idle(library_dir / "latest_attempt.json", {
+            "task_id": review_record["review_id"],
+            "review_id": review_record["review_id"],
+            "library_id": review_record["library_id"],
+            "status": "COMPLETE",
+            "execution_status": review_record["execution_status"],
+            "requested_checks": requested,
+            "submitted_at": run_started_at,
+            "started_at": run_started_at,
+            "finished_at": review_record["generated_at"],
+            "summary": summary,
+        })
         latest_xlsx_ref = ""
         if complete and _publish_latest_workbook(workbook_path, library_dir, review_record["review_id"],
                                                  review_record["generated_at"]):
@@ -1147,11 +1184,46 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
         review["review_result_path"] = str(run_dir / "review_result.json")
         review["xlsx_path"] = str(run_dir / "ip_review.xlsx")
         review["latest_path"] = latest_ref or ""
-    overview_rows = _overview_rows_for_registry(config, output, overview_rows)
-    overview_path = output / "ip_checks" / "index.html"
-    overview_path.parent.mkdir(parents=True, exist_ok=True)
-    overview_path.write_text(render_overview(overview_rows), encoding="utf-8")
+    try:
+        refresh_ip_overview(config, output, current_attempts=overview_rows)
+    except Exception as exc:
+        print(f"WARNING: Review 已生成，但 IP 总览未同步：{exc}", file=sys.stderr)
     return reviews, dict(row_counts)
+
+
+def _timestamp_key(value: Any) -> str:
+    try:
+        timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError):
+        return ""
+
+
+def refresh_ip_overview(registry: dict[str, Any], output_dir: str | Path, *,
+                        current_attempts: list[dict[str, Any]] | None = None) -> Path:
+    """Refresh the static overview from registry and persisted reports only.
+
+    This function never runs a checker. The optional current_attempts are the
+    just-finished CLI attempt records; persisted active workbench task snapshots
+    always take precedence until the workbench writes its terminal state.
+    """
+    output = Path(output_dir).expanduser().resolve()
+    page = output / "ip_checks" / "index.html"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    rows = _overview_rows_for_registry(registry, output, current_attempts or [])
+    content = render_overview(rows, simulation=(str(registry.get("environment") or "").upper() == "SIMULATION"
+                                                or bool(registry.get("simulation"))))
+    temporary = page.with_name(f".{page.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(content, encoding="utf-8")
+        if temporary.stat().st_size == 0:
+            raise OSError("IP 总览临时文件为空")
+        os.replace(temporary, page)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return page
 
 
 def _overview_rows_for_registry(config: dict[str, Any], output: Path,
@@ -1162,87 +1234,83 @@ def _overview_rows_for_registry(config: dict[str, Any], output: Path,
     for index, ip in enumerate(registry):
         library_id = str(ip.get("library_id") or ip.get("id") or ip.get("name") or f"IP_{index + 1}")
         library_dir = output / "libraries" / _library_dir(library_id)
-        latest_path = library_dir / "latest.json"
-        latest_result = {}
-        workbook_pointer_path = library_dir / "latest_workbook.json"
-        if workbook_pointer_path.is_file():
-            pointer = _json_read(workbook_pointer_path)
-            workbook_review_id = str(pointer.get("review_id") or "")
-            if re.fullmatch(r"review_[A-Za-z0-9_-]+", workbook_review_id):
-                workbook_result_path = library_dir / "runs" / workbook_review_id / "review_result.json"
-                if workbook_result_path.is_file():
-                    candidate_result = _json_read(workbook_result_path)
-                    if candidate_result.get("execution_status") == "COMPLETE":
-                        latest_result = candidate_result
-        if latest_path.is_file():
-            pointer = _json_read(latest_path)
-            result_path = library_dir / str(pointer.get("review_result_ref") or "")
-            if not latest_result and result_path.is_file():
-                latest_result = _json_read(result_path)
-        if latest_result.get("execution_status") != "COMPLETE":
-            latest_result, _ = _latest_complete_run(library_dir)
-        current = current_by_library.get(library_id) or {}
-        latest_workbook = library_dir / str((latest_result.get("reports") or {}).get("xlsx") or "")
-        if latest_result and latest_result.get("review_id"):
-            latest_workbook = library_dir / "runs" / str(latest_result["review_id"]) / "ip_review.xlsx"
-        latest_href = ("../" + latest_workbook.relative_to(output).as_posix()
-                       if latest_workbook.is_file() else "")
-        stable_workbook = library_dir / "latest.xlsx"
-        stable_href = ("../" + stable_workbook.relative_to(output).as_posix()
-                       if stable_workbook.is_file() else "")
-        current_review_id = str(current.get("review_id") or "")
-        latest_review_id = str(latest_result.get("review_id") or "")
-        current_workbook_href = current.get("current_xlsx_href") or current.get("xlsx_href") or ""
-        if current_review_id and current_review_id == latest_review_id:
-            current_workbook_href = ""
+        latest_result, latest_workbook = _latest_complete_run(library_dir)
+        complete_id = str(latest_result.get("review_id") or "")
+        workbook_href = ""
+        if latest_workbook and latest_workbook.is_file():
+            stable_workbook = library_dir / "latest.xlsx"
+            pointer_path = library_dir / "latest_workbook.json"
+            try:
+                stable_pointer = _json_read(pointer_path) if pointer_path.is_file() else {}
+            except (OSError, ValueError, json.JSONDecodeError):
+                stable_pointer = {}
+            if (stable_workbook.is_file() and str(stable_pointer.get("review_id") or "") == complete_id):
+                workbook_href = "../" + stable_workbook.relative_to(output).as_posix()
+            else:
+                workbook_href = "../" + latest_workbook.relative_to(output).as_posix()
         attempt_path = library_dir / "latest_attempt.json"
         try:
             saved_attempt = _json_read(attempt_path) if attempt_path.is_file() else {}
         except (OSError, ValueError, json.JSONDecodeError):
             saved_attempt = {}
-        attempt_status = (current.get("execution_status") or saved_attempt.get("execution_status")
-                          or saved_attempt.get("status") or latest_result.get("execution_status") or "NOT_RUN")
-        attempt_id = (current.get("review_id") or saved_attempt.get("review_id")
-                      or saved_attempt.get("task_id") or latest_result.get("review_id") or "")
-        attempt_time = (current.get("generated_at") or saved_attempt.get("finished_at")
-                        or saved_attempt.get("submitted_at") or latest_result.get("generated_at") or "")
-        attempt_checks = (current.get("requested_checks") or saved_attempt.get("requested_checks") or [])
-        raw_versions = list(ip.get("raw_versions") or [])
-        version_view_set = []
-        for version in raw_versions:
-            for view in version.get("views") or []:
-                if view not in version_view_set:
-                    version_view_set.append(view)
+        current = current_by_library.get(library_id) or {}
+        saved_status = str(saved_attempt.get("status") or "")
+        current_time = str(current.get("generated_at") or "")
+        saved_time = str(saved_attempt.get("finished_at") or saved_attempt.get("submitted_at") or "")
+        active_saved_attempt = saved_status in {"QUEUED", "PENDING", "RUNNING"}
+        current_is_newer = bool(current and _timestamp_key(current_time) > _timestamp_key(saved_time))
+        if active_saved_attempt:
+            attempt = saved_attempt
+        elif current_is_newer:
+            attempt = {
+                "status": "COMPLETE",
+                "execution_status": current.get("execution_status") or "INCOMPLETE",
+                "task_id": current.get("review_id") or "",
+                "review_id": current.get("review_id") or "",
+                "generated_at": current_time,
+                "requested_checks": current.get("requested_checks") or [],
+            }
+        else:
+            attempt = saved_attempt
+        if not attempt and latest_result:
+            # A persisted complete Review is valid attempt evidence when an older
+            # workspace has no separate task snapshot for that execution.
+            attempt = {"status": latest_result.get("execution_status") or "COMPLETE",
+                       "execution_status": latest_result.get("execution_status") or "COMPLETE",
+                       "review_id": complete_id, "generated_at": latest_result.get("generated_at"),
+                       "requested_checks": latest_result.get("requested_checks") or []}
+        attempt_time = (attempt.get("finished_at") or attempt.get("updated_at")
+                        or attempt.get("started_at") or attempt.get("submitted_at")
+                        or attempt.get("generated_at") or "")
+        attempt_status = str(attempt.get("status") or attempt.get("execution_status") or "NOT_RUN")
+        attempt_id = str(attempt.get("task_id") or attempt.get("review_id") or "")
+
+        input_paths = []
+        for check in (latest_result.get("checks") or {}).values():
+            for source in ((check.get("input_identity") or {}).get("sources") or []):
+                path = source.get("path")
+                if path and path not in input_paths:
+                    input_paths.append(path)
+        context = latest_result.get("context") or {}
+        last_complete = ({
+            "id": complete_id,
+            "time": latest_result.get("generated_at") or "",
+            "requested_checks": latest_result.get("requested_checks") or [],
+            "checks": latest_result.get("checks") or {},
+            "summary": latest_result.get("summary") or {},
+            "context": context,
+            "input_paths": input_paths,
+            "xlsx_href": workbook_href,
+        } if complete_id else {})
         rows.append({
-            **current,
-            "library_id": library_id,
-            "name": ip.get("name") or ip.get("id") or library_id,
-            "requested_checks": current.get("requested_checks") or latest_result.get("requested_checks") or [
-                name for name, spec in (ip.get("checks") or {}).items()
-                if isinstance(spec, dict) and spec.get("enabled", True)],
-            "execution_status": current.get("execution_status") or latest_result.get("execution_status") or "NOT_RUN",
-            "summary": current.get("summary") or latest_result.get("summary") or {},
-            "latest_summary": latest_result.get("summary") or {},
-            "latest_review_id": latest_result.get("review_id") or "",
-            "attempt_status": attempt_status,
-            "attempt_id": attempt_id,
-            "attempt_time": attempt_time,
-            "attempt_checks": attempt_checks,
-            "attempt_quality_assessment": ((current.get("summary") or saved_attempt.get("summary") or {})
-                                            .get("quality_assessment") or {}),
-            "latest_complete_id": latest_result.get("review_id") or "",
-            "latest_complete_time": latest_result.get("generated_at") or "",
-            "latest_complete_checks": latest_result.get("requested_checks") or [],
-            "vendor": ip.get("vendor") or "",
-            "middle_path": ip.get("middle_path") or "",
-            "raw_root": ip.get("raw_root") or "",
-            "raw_versions": raw_versions,
-            "version_count": len(raw_versions),
-            "view_types": version_view_set,
-            "xlsx_href": current.get("xlsx_href") or latest_href,
-            "current_xlsx_href": current_workbook_href,
-            "latest_xlsx_href": stable_href or latest_href,
-            "latest": bool(stable_href or latest_href),
+            "ip": {"id": ip.get("id") or library_id,
+                   "name": ip.get("name") or ip.get("id") or library_id,
+                   "library_id": library_id, "vendor": ip.get("vendor") or "未分组",
+                   "group": ip.get("middle_path") or ip.get("group") or ""},
+            "last_attempt": {"status": attempt_status, "execution_status": attempt.get("execution_status") or "",
+                             "id": attempt_id, "time": attempt_time,
+                             "checks": attempt.get("requested_checks") or []},
+            "last_complete": last_complete,
         })
     return rows
 
@@ -1262,10 +1330,10 @@ def _review_summary(review: dict[str, Any]) -> dict[str, Any]:
         quality_status, quality_label = "NOT_ASSESSED", "未形成质量结论"
     elif incomplete_checks:
         quality_status, quality_label = "INCOMPLETE", "检查未完整"
-    elif counts["UNVERIFIED"]["affected_objects"]:
-        quality_status, quality_label = "REVIEW_REQUIRED", "存在待核实项"
     elif counts["MISMATCH"]["affected_objects"]:
         quality_status, quality_label = "ISSUES_FOUND", "发现已确认不一致"
+    elif counts["UNVERIFIED"]["affected_objects"]:
+        quality_status, quality_label = "REVIEW_REQUIRED", "存在待核实项"
     elif counts["CHANGED"]["affected_objects"]:
         quality_status, quality_label = "CHANGES_FOUND", "发现已确认变化"
     else:

@@ -30,8 +30,9 @@
 
   document.querySelectorAll("[data-check-card]").forEach((card) => {
     const checkbox = card.querySelector('summary input[type="checkbox"]');
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
     checkbox.addEventListener("change", () => {
-      if (checkbox.checked) card.open = true;
+      card.open = checkbox.checked;
     });
   });
 
@@ -54,10 +55,6 @@
         (!vendor || entry.dataset.ipVendor === vendor);
       entry.hidden = !matches;
       if (matches) visibleCount += 1;
-
-      entry.querySelectorAll("[data-source-kind]").forEach((group) => {
-        group.hidden = sidebarScope !== "all" && group.dataset.sourceKind !== sidebarScope;
-      });
     });
 
     document.querySelectorAll("[data-vendor-heading]").forEach((heading) => {
@@ -139,16 +136,21 @@
   document.querySelectorAll("[data-fill-input]").forEach((choice) => {
     choice.addEventListener("change", () => {
       const input = document.querySelector(`[name="${choice.dataset.fillInput}"]`);
-      if (input && choice.value) input.value = choice.value;
+      if (input && choice.value) {
+        input.value = choice.value;
+        input.dataset.inputSource = "从版本文件列表选择";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
     });
   });
   const libertyInput = document.querySelector('[name="ll_liberty_files"]');
   const libertyRows = [...document.querySelectorAll("[data-lib-row]")];
   const libertySearch = document.querySelector("[data-lib-search]");
   const libertyCount = document.querySelector("[data-lib-count]");
-  function syncLibertyInput() {
+  function syncLibertyInput(source = "从当前 RAW 文件列表勾选") {
     if (libertyInput) libertyInput.value = [...document.querySelectorAll("[data-lib-file]:checked")]
       .map((item) => item.value).join("\n");
+    if (libertyInput) libertyInput.dataset.inputSource = source;
   }
   function applyLibertyFilter() {
     const query = (libertySearch?.value || "").trim().toLocaleLowerCase();
@@ -168,8 +170,169 @@
   document.querySelectorAll("[data-lib-file]").forEach((choice) => {
     choice.addEventListener("change", () => {
       syncLibertyInput();
+      updateScopeSummary();
     });
   });
+  libertyInput?.addEventListener("input", (event) => {
+    document.querySelectorAll("[data-lib-file]").forEach((choice) => { choice.checked = false; });
+    if (event.isTrusted) libertyInput.dataset.inputSource = "手工指定";
+    updateScopeSummary();
+  });
+
+  const reviewForm = document.querySelector("[data-review-form]");
+  const suggestedButton = document.querySelector("[data-apply-suggested-checks]");
+  const suggestedPayload = document.querySelector("[data-suggested-checks]");
+  const suggestionFeedback = document.querySelector("[data-suggestion-feedback]");
+  const suggestedFields = {
+    macro_index: { root: "macro_root", version: "macro_version", library_id: "macro_library_id" },
+    lef_review: { old_file: "lef_old_file", new_file: "lef_new_file" },
+    lef_liberty_check: { lef_file: "ll_lef_file" },
+  };
+  suggestedButton?.addEventListener("click", () => {
+    let suggestions = {};
+    try { suggestions = JSON.parse(suggestedPayload?.textContent || "{}"); } catch { suggestions = {}; }
+    const applied = [];
+    Object.entries(suggestions).forEach(([checkName, values]) => {
+      const check = reviewForm?.querySelector(`input[name="checks"][value="${checkName}"]`);
+      if (!check || !values) return;
+      check.checked = true;
+      check.dispatchEvent(new Event("change", { bubbles: true }));
+      applied.push(check.closest("details")?.querySelector(".check-card-title strong")?.textContent || checkName);
+      Object.entries(suggestedFields[checkName] || {}).forEach(([key, fieldName]) => {
+        const input = reviewForm.querySelector(`[name="${fieldName}"]`);
+        if (input && values[key]) {
+          input.value = values[key];
+          input.dataset.inputSource = "自动建议";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
+      if (checkName === "lef_liberty_check" && Array.isArray(values.liberty_files)) {
+        const choices = [...document.querySelectorAll("[data-lib-file]")];
+        choices.forEach((choice) => { choice.checked = values.liberty_files.includes(choice.value); });
+        if (choices.length && values.liberty_files.every((path) => choices.some((choice) => choice.value === path))) {
+          syncLibertyInput("自动建议");
+        } else if (libertyInput) {
+          libertyInput.value = values.liberty_files.join("\n");
+          libertyInput.dataset.inputSource = "自动建议";
+        }
+      }
+    });
+    if (suggestionFeedback) suggestionFeedback.textContent = applied.length
+      ? `已填入并勾选：${applied.join("、")}。请核对范围后运行。`
+      : "没有可填入的自动建议，请手动选择检查项。";
+    updateScopeSummary();
+  });
+
+  const checkLabels = {
+    formal_nl: "正式目录盘点", macro_index: "Macro / View 索引",
+    lef_review: "LEF 双文件核查", lef_liberty_check: "LEF–Liberty 接口核查",
+  };
+  const scopeTarget = document.querySelector("[data-scope-target]");
+  const scopeBase = document.querySelector("[data-scope-base]");
+  const scopeSummary = document.querySelector("[data-run-scope-summary]");
+  function addScopeFile(container, label, path, source = "") {
+    const row = document.createElement("div");
+    const title = document.createElement("span");
+    const value = document.createElement("code");
+    const normalized = String(path || "").trim();
+    const names = normalized.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+      .map((item) => item.split(/[\\/]/).filter(Boolean).pop());
+    title.textContent = label;
+    value.textContent = names.length ? names.join("、") : "未指定";
+    if (normalized) value.title = normalized;
+    row.append(title, value);
+    if (source) {
+      const origin = document.createElement("small");
+      origin.className = "scope-source";
+      origin.textContent = `来源：${source}`;
+      row.append(origin);
+    }
+    container.append(row);
+  }
+  function updateScopeSummary() {
+    if (!scopeSummary) return;
+    const selectedChecks = [...(reviewForm?.querySelectorAll('input[name="checks"]:checked') || [])];
+    const target = scopeTarget?.value
+      ? scopeTarget.selectedOptions[0]?.textContent
+      : (reviewForm?.querySelector('[name="raw_version"]')?.value || "未选择");
+    const base = scopeBase?.selectedOptions[0]?.textContent || "不比较版本差异";
+    const targetNode = scopeSummary.querySelector("[data-scope-target-label]");
+    const baseNode = scopeSummary.querySelector("[data-scope-base-label]");
+    const checksNode = scopeSummary.querySelector("[data-scope-checks]");
+    const filesNode = scopeSummary.querySelector("[data-scope-files]");
+    if (targetNode) targetNode.textContent = target || "未选择";
+    if (baseNode) baseNode.textContent = base || "不比较版本差异";
+    if (checksNode) checksNode.textContent = selectedChecks.length
+      ? selectedChecks.map((item) => checkLabels[item.value] || item.value).join("、") : "尚未选择";
+    if (!filesNode) return;
+    filesNode.replaceChildren();
+    if (!selectedChecks.length) {
+      filesNode.textContent = "选择检查项后显示文件范围。";
+      return;
+    }
+    const append = (label, field, fallbackSource = "手工指定") => {
+      const input = reviewForm?.querySelector(`[name="${field}"]`);
+      if (input?.value.trim()) addScopeFile(filesNode, label, input.value.trim(), input.dataset.inputSource || fallbackSource);
+    };
+    selectedChecks.forEach((item) => {
+      if (item.value === "formal_nl") append("正式目录配置", "formal_config");
+      if (item.value === "macro_index") append("RAW 根目录", "macro_root", "所选 RAW 版本");
+      if (item.value === "lef_review") {
+        append("基准 LEF", "lef_old_file");
+        append("目标 LEF", "lef_new_file");
+      }
+      if (item.value === "lef_liberty_check") {
+        if (selectedChecks.some((selected) => selected.value === "lef_review")) {
+          append("LEF（复用目标 LEF）", "lef_new_file");
+        } else {
+          append("LEF", "ll_lef_file", "所选 RAW 版本");
+        }
+        const paths = (libertyInput?.value || "").split(/\r?\n/).map((path) => path.trim()).filter(Boolean);
+        if (paths.length) addScopeFile(filesNode, `Liberty（${paths.length} 个）`, paths.join("\n"), libertyInput?.dataset.inputSource || "所选 RAW 版本");
+        else addScopeFile(filesNode, "Liberty", "", "尚未选择");
+      }
+    });
+    if (!filesNode.childElementCount) filesNode.textContent = "部分文件尚未选择；展开对应检查项补齐。";
+  }
+  scopeTarget?.addEventListener("change", updateScopeSummary);
+  scopeBase?.addEventListener("change", updateScopeSummary);
+  reviewForm?.addEventListener("input", updateScopeSummary);
+  reviewForm?.addEventListener("change", updateScopeSummary);
+  reviewForm?.querySelectorAll("[data-scope-source-input]").forEach((input) => {
+    input.addEventListener("input", (event) => {
+      if (event.isTrusted) input.dataset.inputSource = "手工指定";
+      updateScopeSummary();
+    });
+  });
+  updateScopeSummary();
+  const formalLibrarySearch = document.querySelector("[data-formal-library-search]");
+  const formalLibraryRows = [...document.querySelectorAll("[data-formal-library-row]")];
+  const formalLibraryCount = document.querySelector("[data-formal-library-count]");
+  const formalFileSearch = document.querySelector("[data-formal-file-search]");
+  const formalViewFilter = document.querySelector("[data-formal-view-filter]");
+  const formalFileRows = [...document.querySelectorAll("[data-formal-file-row]")];
+  const formalFileCount = document.querySelector("[data-formal-file-count]");
+  function filterFormalInventory() {
+    const libraryQuery = (formalLibrarySearch?.value || "").trim().toLocaleLowerCase();
+    let visibleLibraries = 0;
+    formalLibraryRows.forEach((row) => {
+      row.hidden = !row.dataset.search.includes(libraryQuery);
+      if (!row.hidden) visibleLibraries += 1;
+    });
+    if (formalLibraryCount) formalLibraryCount.textContent = `${visibleLibraries} 个来源 IP`;
+
+    const fileQuery = (formalFileSearch?.value || "").trim().toLocaleLowerCase();
+    const view = formalViewFilter?.value || "";
+    let visibleFiles = 0;
+    formalFileRows.forEach((row) => {
+      row.hidden = !row.dataset.search.includes(fileQuery) || (view && row.dataset.view !== view);
+      if (!row.hidden) visibleFiles += 1;
+    });
+    if (formalFileCount) formalFileCount.textContent = `${visibleFiles} 条`;
+  }
+  formalLibrarySearch?.addEventListener("input", filterFormalInventory);
+  formalFileSearch?.addEventListener("input", filterFormalInventory);
+  formalViewFilter?.addEventListener("change", filterFormalInventory);
   const taskBanner = document.querySelector("[data-review-task]");
   if (taskBanner) {
     const statusNode = taskBanner.querySelector("[data-task-status]");
@@ -185,6 +348,11 @@
       const end = Date.parse(task.finished_at || taskBanner.dataset.taskFinishedAt) || Date.now();
       if (elapsedNode && Number.isFinite(start)) elapsedNode.textContent = `用时：${Math.max(0, (end - start) / 1000).toFixed(1)} 秒`;
     };
+  reviewForm?.querySelectorAll("[data-scope-source-input]").forEach((input) => {
+    input.addEventListener("input", (event) => {
+      if (event.isTrusted) input.dataset.inputSource = "手工指定";
+    });
+  });
     const renderEvents = (events = []) => {
       if (!eventList) return;
       const rows = events.slice(-12);

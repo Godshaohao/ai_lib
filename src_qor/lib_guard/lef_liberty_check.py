@@ -330,14 +330,17 @@ _BUS_MEMBER_RANGE = re.compile(r"^(?P<base>.*)\[(?P<first>-?\d+):(?P<last>-?\d+)
 _MAX_EXPANDED_BUS_WIDTH = 65536
 
 
-def _expand_liberty_signal_pins(pins: dict[str, dict]) -> tuple[dict[str, dict], list[dict], list[str]]:
-    expanded: dict[str, dict] = {}
+def _expand_liberty_signal_pins(
+    pins: dict[str, dict],
+) -> tuple[dict[str, dict], list[dict], list[str], list[dict]]:
     ranges: list[dict] = []
     unexpanded: list[str] = []
+    definitions_by_member: dict[str, list[dict]] = {}
     for raw_name, pin in pins.items():
         match = _BUS_MEMBER_RANGE.fullmatch(str(raw_name))
         if match is None:
-            expanded.setdefault(str(raw_name), pin)
+            definitions_by_member.setdefault(str(raw_name), []).append(
+                {"name": str(raw_name), "attributes": pin})
             continue
         first, last = int(match.group("first")), int(match.group("last"))
         width = abs(first - last) + 1
@@ -347,8 +350,20 @@ def _expand_liberty_signal_pins(pins: dict[str, dict]) -> tuple[dict[str, dict],
         members = [f"{match.group('base')}[{index}]" for index in range(min(first, last), max(first, last) + 1)]
         ranges.append({"source": str(raw_name), "members": members})
         for member in members:
-            expanded.setdefault(member, pin)
-    return expanded, ranges, unexpanded
+            definitions_by_member.setdefault(member, []).append(
+                {"name": str(raw_name), "attributes": pin})
+    expanded: dict[str, dict] = {}
+    conflicts = []
+    for member, definitions in definitions_by_member.items():
+        distinct = {json.dumps(item["attributes"], sort_keys=True, ensure_ascii=False) for item in definitions}
+        if len(distinct) > 1:
+            conflicts.append({"member": member, "definitions": sorted(
+                definitions, key=lambda item: (item["name"], json.dumps(item["attributes"], sort_keys=True,
+                                                                          ensure_ascii=False)))})
+        else:
+            expanded[member] = definitions[0]["attributes"]
+    conflicts.sort(key=lambda item: item["member"])
+    return expanded, ranges, unexpanded, conflicts
 
 
 def _compare_cell(macro_name: str, macro: dict, library_name: str, cell: dict,
@@ -356,17 +371,22 @@ def _compare_cell(macro_name: str, macro: dict, library_name: str, cell: dict,
                   liberty_pg_complete: bool) -> dict:
     lef_signals, lef_power, lef_ground = _lef_pins(macro)
     raw_liberty_pins = cell.get('pins') or {}
-    liberty_pins, expanded_bus_ranges, unexpanded_bus_ranges = _expand_liberty_signal_pins(raw_liberty_pins)
+    liberty_pins, expanded_bus_ranges, unexpanded_bus_ranges, bus_definition_conflicts = (
+        _expand_liberty_signal_pins(raw_liberty_pins))
     liberty_pg_pins = cell.get('pg_pins') or {}
     signal_result = {'missing_in_liberty': [], 'extra_in_liberty': [], 'direction_mismatch': [],
-                     'expanded_bus_ranges': expanded_bus_ranges}
+                     'expanded_bus_ranges': expanded_bus_ranges,
+                     'bus_definition_conflicts': bus_definition_conflicts}
     pg_result = {'missing_in_liberty': [], 'extra_in_liberty': [], 'wrong_type': [], 'unverified_type': [],
                  'name_alias_candidates': []}
     unverified = [f'Liberty 总线范围过大，未展开核对：{name}' for name in unexpanded_bus_ranges]
+    unverified.extend(f'Liberty 总线/单 Pin 定义冲突，未核对成员：{item["member"]}'
+                      for item in bus_definition_conflicts)
+    conflicted_members = {item["member"] for item in bus_definition_conflicts}
 
     if lef_ports_complete and liberty_ports_complete and not unexpanded_bus_ranges:
-        signal_names = set(lef_signals)
-        liberty_signal_names = set(liberty_pins)
+        signal_names = set(lef_signals) - conflicted_members
+        liberty_signal_names = set(liberty_pins) - conflicted_members
         signal_result['missing_in_liberty'] = sorted(signal_names - liberty_signal_names)
         signal_result['extra_in_liberty'] = sorted(liberty_signal_names - signal_names)
         for pin_name in sorted(signal_names & liberty_signal_names):
@@ -440,7 +460,8 @@ def _compare_cell(macro_name: str, macro: dict, library_name: str, cell: dict,
         'library': library_name,
         'status': status,
         'signal_pins': signal_result,
-        'signal_pin_checked_count': len(set(lef_signals) | set(liberty_pins)) if lef_ports_complete and liberty_ports_complete else None,
+        'signal_pin_checked_count': len((set(lef_signals) | set(liberty_pins)) - conflicted_members)
+        if lef_ports_complete and liberty_ports_complete else None,
         'power_ground': {
             'lef_power_pins': sorted(lef_power),
             'liberty_power_pins': sorted(name for name, pin in liberty_pg_pins.items()

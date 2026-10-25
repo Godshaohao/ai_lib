@@ -198,7 +198,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn("检查结果 HTML".encode(), response.data)
             html = client.get("/review-reports/ip_checks/index.html")
             self.assertEqual(html.status_code, 200)
-            self.assertIn("IP 检查总览".encode(), html.data)
+            self.assertIn("检查报告总览".encode(), html.data)
             html.close()
             response.close()
 
@@ -331,7 +331,7 @@ class WorkbenchTests(unittest.TestCase):
             page.close()
             workbook.close()
 
-    def test_quick_linked_form_submits_auto_configured_check_inputs(self):
+    def test_legacy_quick_linked_submit_cannot_bypass_selected_checks(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             version = root / "raw" / "V1"
@@ -347,31 +347,16 @@ class WorkbenchTests(unittest.TestCase):
             app = create_app(registry, root / "output")
             client = app.test_client()
 
-            with patch("lib_guard.workbench.run", return_value=([{
-                "execution_status": "COMPLETE", "review_id": "review_test", "summary": {},
-            }], {})) as runner:
+            with patch("lib_guard.workbench.run") as runner:
                 response = client.post("/run", data={
                     "id": "IP_A", "library_id": "Vendor.IP_A", "quick_linked_check": "1",
                     "quick_raw_version": "V1", "quick_target_lef": str(lef),
-                }, follow_redirects=True)
-                self.assertEqual(response.status_code, 200)
-                task_url = re.search(rb'data-task-url="([^"]+)"', response.data).group(1).decode()
-                task_url = task_url.replace("&amp;", "&")
-                for _ in range(100):
-                    task = client.get(task_url).get_json()
-                    if task["status"] in {"COMPLETE", "FAILED"}:
-                        break
-                    time.sleep(0.01)
+                })
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("至少勾选一项检查".encode(), response.data)
+            runner.assert_not_called()
 
-            self.assertEqual(task["status"], "COMPLETE", task)
-            submitted = runner.call_args.args[0]["ips"][0]
-            self.assertEqual(submitted["raw_version"], "V1")
-            self.assertEqual(set(submitted["checks"]), {"macro_index", "lef_liberty_check"})
-            self.assertEqual(submitted["checks"]["macro_index"]["root"], str(version.resolve()))
-            self.assertEqual(submitted["checks"]["lef_liberty_check"]["lef_file"], str(lef.resolve()))
-            self.assertEqual(submitted["checks"]["lef_liberty_check"]["liberty_files"], [str(liberty)])
-
-    def test_run_uses_post_redirect_get_so_refresh_does_not_repeat_check(self):
+    def test_selected_check_form_runs_once_and_refresh_does_not_repeat_check(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             version = root / "raw" / "V1"
@@ -389,8 +374,10 @@ class WorkbenchTests(unittest.TestCase):
                 "execution_status": "COMPLETE", "review_id": "review_refresh_guard", "summary": {},
             }], {})) as runner:
                 response = client.post("/run", data={
-                    "id": "IP_A", "library_id": "Vendor.IP_A", "quick_linked_check": "1",
-                    "quick_raw_version": "V1", "quick_target_lef": str(lef),
+                    "id": "IP_A", "library_id": "Vendor.IP_A", "raw_version": "V1",
+                    "checks": ["macro_index", "lef_liberty_check"],
+                    "macro_root": str(version), "macro_version": "V1",
+                    "ll_lef_file": str(lef), "ll_liberty_files": str(liberty),
                 })
                 self.assertEqual(response.status_code, 303)
                 self.assertIn("tab=review", response.headers["Location"])
@@ -407,6 +394,10 @@ class WorkbenchTests(unittest.TestCase):
                 self.assertTrue(any("检查完成" in event["message"] for event in task["events"]))
                 client.get(response.headers["Location"])
                 self.assertEqual(runner.call_count, 1)
+            submitted = runner.call_args.args[0]["ips"][0]
+            self.assertEqual(set(submitted["checks"]), {"macro_index", "lef_liberty_check"})
+            self.assertEqual(submitted["checks"]["lef_liberty_check"]["lef_file"], str(lef))
+            self.assertEqual(submitted["checks"]["lef_liberty_check"]["liberty_files"], [str(liberty)])
 
     def test_new_queued_task_becomes_latest_without_old_worker_replacing_it(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -423,7 +414,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(latest["task_id"], "task_new")
             self.assertEqual(latest["status"], "QUEUED")
 
-    def test_selected_raw_version_prefills_macro_input_without_saving(self):
+    def test_selected_raw_version_offers_suggestions_without_preselecting_checks(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             version = root / "raw" / "V50"
@@ -435,10 +426,17 @@ class WorkbenchTests(unittest.TestCase):
             registry.write_text(original, encoding="utf-8")
             response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review&raw_version=V50")
             self.assertEqual(response.status_code, 200)
-            self.assertIn(f'name="macro_root" value="{version}"'.encode(), response.data)
-            self.assertIn(b'name="macro_version" value="V50"', response.data)
-            self.assertIn("运行自动联动核查".encode(), response.data)
-            self.assertLess(response.data.index(b'class="quick-review"'), response.data.index(b'class="identity-details"'))
+            self.assertNotIn(f'name="macro_root" value="{version}"'.encode(), response.data)
+            self.assertNotRegex(response.get_data(as_text=True), r'name="checks" value="macro_index" checked')
+            self.assertIn("填入自动建议".encode(), response.data)
+            self.assertNotIn("运行自动联动核查".encode(), response.data)
+            suggestion_match = re.search(rb'data-suggested-checks>(.*?)</script>', response.data)
+            self.assertIsNotNone(suggestion_match)
+            suggestions = json.loads(suggestion_match.group(1))
+            self.assertEqual(suggestions["macro_index"]["root"], str(version))
+            self.assertEqual(suggestions["macro_index"]["version"], "V50")
+            self.assertIn(b'data-run-scope-summary', response.data)
+            self.assertLess(response.data.index(b'class="run-scope-summary"'), response.data.index(b'class="check-list"'))
             self.assertNotIn(b'/old/report.json', response.data)
             self.assertEqual(registry.read_text(encoding="utf-8"), original)
             with patch("lib_guard.workbench.run", side_effect=RuntimeError("captured")) as runner:
@@ -484,6 +482,8 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn(f'value="{lib}"'.encode(), response.data)
             self.assertIn(b'data-fill-input="lef_old_file"', response.data)
             self.assertIn(b'data-lib-file', response.data)
+            self.assertIn(b'name="ll_lef_file"', response.data)
+            self.assertIn(b'data-fill-input="ll_lef_file"', response.data)
 
     def test_duplicate_library_id_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -567,10 +567,37 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn(b"formal_nl", response.data)
             self.assertIn(b"macro_index", response.data)
             self.assertIn("库与版本".encode(), response.data)
-            self.assertIn("RAW 发现".encode(), response.data)
+            self.assertIn("发现 / 登记 RAW".encode(), response.data)
             self.assertIn(b"data-tab-group=\"main\"", response.data)
             self.assertIn(b"data-workbench-panel=\"config\"", response.data)
             self.assertIn(b"data-workbench-panel=\"history\"", response.data)
+            self.assertIn(b'data-active-tab="review"', response.data)
+
+    def test_empty_registry_defaults_to_raw_discovery(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get("/")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'data-active-tab="discover"', response.data)
+            self.assertIn("发现 RAW 库与版本".encode(), response.data)
+
+    def test_main_navigation_prioritizes_review_and_discovery_is_secondary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, name: IP A, checks: {}}\n", encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get("/")
+            html = response.get_data(as_text=True)
+            nav = html.split('<nav class="view-tabs primary-tabs"', 1)[1].split("</nav>", 1)[0]
+
+            self.assertLess(nav.index('data-workbench-tab="review"'), nav.index('data-workbench-tab="catalog"'))
+            self.assertLess(nav.index('data-workbench-tab="catalog"'), nav.index('data-workbench-tab="formal-nl"'))
+            self.assertIn('class="utility-tab"', nav)
 
     def test_catalog_distinguishes_latest_attempt_from_latest_success(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -591,8 +618,8 @@ class WorkbenchTests(unittest.TestCase):
             response = create_app(registry, output).test_client().get("/?ip=IP_A&tab=catalog")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("最近尝试".encode(), response.data)
-            self.assertIn("最近完整报告".encode(), response.data)
+            self.assertIn("最近任务".encode(), response.data)
+            self.assertIn("最近完整检查报告".encode(), response.data)
             self.assertIn(b"task_123", response.data)
             self.assertIn(b"review_good", response.data)
 
@@ -646,7 +673,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn(b'data-runtime-window', response.data)
             self.assertIn(b'data-task-stage', response.data)
             self.assertIn("执行检查".encode(), response.data)
-            self.assertIn("运行动态".encode(), response.data)
+            self.assertIn("运行日志".encode(), response.data)
             self.assertIn("正在执行：Macro / View 文件索引".encode(), response.data)
             self.assertIn("data-task-started-at".encode(), response.data)
 
@@ -671,7 +698,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn("阶段：已失败".encode(), response.data)
             self.assertIn("导出 Excel 需要 XlsxWriter".encode(), response.data)
-            self.assertNotIn("暂无运行动态".encode(), response.data)
+            self.assertNotIn("暂无运行日志".encode(), response.data)
 
     def test_task_status_api_reports_real_phase_and_event_updates(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -718,13 +745,16 @@ class WorkbenchTests(unittest.TestCase):
             response = app.test_client().get("/?ip=PHY_A")
 
             self.assertEqual(response.status_code, 200)
-            for expected in ("Vendor_A", "phy_ip", "V01", "V02", "lib_NL2.4_2", "lib_NL2.5_3",
-                             "全部", "RAW", "正式 NL", "筛选 Vendor"):
+            for expected in ("Vendor_A", "phy_ip", "全部", "RAW", "正式 NL", "筛选 Vendor"):
                 self.assertIn(expected.encode(), response.data)
             self.assertIn(b"data-sidebar-scope", response.data)
             self.assertIn(b"data-vendor-filter", response.data)
+            sidebar = response.get_data(as_text=True).split('<aside class="ip-rail"', 1)[1].split("</aside>", 1)[0]
+            for version in ("V01", "V02", "lib_NL2.4_2", "lib_NL2.5_3"):
+                self.assertNotIn(version, sidebar)
+            self.assertIn("RAW 2 · 正式 2", sidebar)
 
-    def test_sidebar_collapses_multiple_versions_and_shows_naturally_latest(self):
+    def test_sidebar_shows_version_counts_without_guessing_latest_or_rendering_tree(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             registry = root / "registry.yml"
@@ -743,14 +773,15 @@ class WorkbenchTests(unittest.TestCase):
             html = response.get_data(as_text=True)
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("排序最新版本：V10（共 3）".encode(), response.data)
-            self.assertIn("排序最新阶段：lib_NL2.10_1（共 2）".encode(), response.data)
-            self.assertIn('class="sidebar-version-details"', html)
-            self.assertNotIn('<details class="sidebar-version-details" open', html)
-            self.assertIn("V2".encode(), response.data)
-            self.assertIn("V3".encode(), response.data)
+            sidebar = html.split('<aside class="ip-rail"', 1)[1].split("</aside>", 1)[0]
+            self.assertIn("RAW 3 · 正式 2", sidebar)
+            self.assertNotIn("V2", sidebar)
+            self.assertNotIn("V3", sidebar)
+            self.assertNotIn("V10", sidebar)
+            self.assertNotIn("排序最新", sidebar)
+            self.assertNotIn("ip-version-tree", sidebar)
 
-    def test_sidebar_keeps_single_raw_and_formal_version_directly_visible(self):
+    def test_sidebar_hides_even_single_raw_and_formal_version_names(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             registry = root / "registry.yml"
@@ -765,9 +796,10 @@ class WorkbenchTests(unittest.TestCase):
             html = response.get_data(as_text=True)
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn('title="/raw/V01">V01</a>', html)
-            self.assertIn(">lib_NL2.5_3</a>", html)
-            self.assertNotIn("sidebar-version-details", html)
+            sidebar = html.split('<aside class="ip-rail"', 1)[1].split("</aside>", 1)[0]
+            self.assertNotIn("V01", sidebar)
+            self.assertNotIn("lib_NL2.5_3", sidebar)
+            self.assertIn("RAW 1 · 正式 1", sidebar)
 
     def test_simulation_registry_warns_that_data_is_not_a_real_ip_delivery(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -798,6 +830,9 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn(b"IP A", response.data)
             saved = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
             self.assertEqual(saved["ips"][0]["checks"]["macro_index"]["report_json"], str(report))
+            overview = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("IP A", overview)
+            self.assertIn("尚无完整检查报告", overview)
 
     def test_run_executes_existing_runner_and_downloads_per_ip_workbook(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -832,6 +867,9 @@ class WorkbenchTests(unittest.TestCase):
                         break
                     time.sleep(0.01)
             self.assertEqual(payload["status"], "COMPLETE", payload)
+            overview = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
+            self.assertIn("review_", overview)
+            self.assertIn("打开 Excel", overview)
             result = next((root / "output" / "libraries").rglob("review_result.json"))
             review_id = json.loads(result.read_text(encoding="utf-8"))["review_id"]
             download = client.get("/download", query_string={"library_id": "vendor.ip_a", "review_id": review_id})
@@ -872,6 +910,9 @@ class WorkbenchTests(unittest.TestCase):
             latest_attempt = json.loads((library_dir / "latest_attempt.json").read_text(encoding="utf-8"))
             self.assertEqual(latest_attempt["task_id"], task_id)
             self.assertEqual(latest_attempt["status"], "FAILED")
+            overview = (output / "ip_checks" / "index.html").read_text(encoding="utf-8")
+            self.assertIn(task_id, overview)
+            self.assertIn("执行失败", overview)
 
     def test_two_review_jobs_can_run_concurrently(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1127,8 +1168,8 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn("已登记".encode(), refreshed_view.data)
             self.assertIn("更新登记".encode(), refreshed_view.data)
             catalog = client.get("/")
-            self.assertIn("修改登记".encode(), catalog.data)
-            self.assertIn("移除登记".encode(), catalog.data)
+            self.assertIn("登记信息".encode(), catalog.data)
+            self.assertIn("移除".encode(), catalog.data)
             review = client.get(f"/?ip={entry_id}&tab=review&raw_version=V01")
             self.assertIn(b"data-check-select-all", review.data)
             self.assertIn(b"data-lib-search", review.data)
@@ -1240,8 +1281,169 @@ class WorkbenchTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertIn("正式 NL".encode(), response.data)
-            self.assertIn("只读路径盘点".encode(), response.data)
+            self.assertIn("只读盘点".encode(), response.data)
             self.assertIn(str(formal).encode(), response.data)
+
+    def test_formal_nl_tab_shows_single_stage_snapshot_without_discovery_pointer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            formal_ip = root / "lib_NL2.5_3" / "IP"
+            formal_ip.mkdir(parents=True)
+            raw_root = root / "raw" / "IP_A"
+            raw_root.mkdir(parents=True)
+            raw_lef = raw_root / "V01" / "LEF" / "IP_A.lef"
+            raw_lef.parent.mkdir(parents=True)
+            raw_lef.write_text("LEF evidence\n", encoding="utf-8")
+            formal_lef = formal_ip / "LEF" / "IP_A.lef"
+            formal_lef.parent.mkdir(parents=True)
+            formal_lef.symlink_to(raw_lef)
+            registry.write_text(
+                f"ips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n    name: IP A\n"
+                f"    library_name: IP_A\n    raw_root: {raw_root}\n"
+                f"    formal_nl_root: {formal_ip}\n    checks: {{}}\n", encoding="utf-8")
+            output = root / "output"
+            formal_dir = output / "formal_nl" / workbench._library_dir("Vendor_A.IP_A")
+            run_dir = formal_dir / "runs" / "single-stage-run"
+            run_dir.mkdir(parents=True)
+            report_path = run_dir / "formal_nl.json"
+            report_path.write_text(json.dumps({
+                "report_status": "COMPLETE",
+                "formal_scope": "SINGLE_STAGE",
+                "formal_nl_root": str(formal_ip),
+                "matches": [{
+                    "nl_version": "lib_NL2.5_3",
+                    "link_path": str(formal_ip),
+                    "target_path": str(formal_ip),
+                    "layout": "FLAT_FILE_LINKS",
+                    "classification": "SELECTED_STAGE",
+                    "file_count": 1,
+                }],
+                "inventories": {"lib_NL2.5_3": {
+                    "file_count": 1,
+                    "view_counts": {"lef": 1},
+                    "files": [{"view": "lef", "published_path": "LEF/IP_A.lef",
+                               "source_path": str(raw_root / "V01" / "LEF" / "IP_A.lef")}],
+                }},
+                "filename_coverage": {"lib_NL2.5_3": {"corner_counts": {}}},
+            }), encoding="utf-8")
+            (formal_dir / "latest_check.json").write_text(json.dumps({
+                "generated_at": "2026-10-25T00:00:00+00:00",
+                "report_status": "COMPLETE",
+                "discovery_status": "SINGLE_STAGE",
+                "report_json": str(report_path),
+            }), encoding="utf-8")
+
+            response = create_app(registry, output).test_client().get("/?ip=IP_A&tab=formal-nl")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("lib_NL2.5_3".encode(), response.data)
+            self.assertIn(b"lef 1", response.data)
+            self.assertIn("LEF/IP_A.lef".encode(), response.data)
+            self.assertIn(str(raw_root / "V01" / "LEF" / "IP_A.lef").encode(), response.data)
+
+            selected_stage = create_app(registry, output).test_client().post("/formal-nl", data={
+                "id": "IP_A", "formal_nl_root": str(formal_ip), "formal_stage": "lib_NL2.5_3",
+            })
+
+            self.assertEqual(selected_stage.status_code, 200, selected_stage.get_data(as_text=True))
+
+    def test_formal_nl_tab_summarizes_flattened_tree_by_source_library_version_and_view(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw_root = root / "raw"
+            formal_ip = root / "lib_NL2.5_3" / "IP"
+            formal_ip.mkdir(parents=True)
+            registered = [
+                ("IP_A", "Vendor_A", "IP_A", "V01", "LEF", "a.lef"),
+                ("IP_B", "Vendor_B", "IP_B", "V02", "LIB", "b_tt.lib"),
+            ]
+            for ip_id, vendor, library, version, view, filename in registered:
+                source = raw_root / vendor / library / version / view / filename
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("source\n", encoding="utf-8")
+                link = formal_ip / view / filename
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(source)
+            unregistered_source = raw_root / "Vendor_C" / "IP_C" / "V03" / "GDS" / "c.gds"
+            unregistered_source.parent.mkdir(parents=True, exist_ok=True)
+            unregistered_source.write_text("source\n", encoding="utf-8")
+            unregistered_link = formal_ip / "GDS" / "c.gds"
+            unregistered_link.parent.mkdir(parents=True, exist_ok=True)
+            unregistered_link.symlink_to(unregistered_source)
+
+            registry = root / "registry.yml"
+            lines = [f"raw_root: {raw_root}", "ips:"]
+            for ip_id, vendor, library, version, _view, _filename in registered:
+                version_root = raw_root / vendor / library / version
+                lines.extend([
+                    f"  - id: {ip_id}", f"    library_id: {vendor}.{library}",
+                    f"    vendor: {vendor}", f"    library_name: {library}",
+                    f"    raw_root: {raw_root / vendor / library}",
+                    f"    raw_versions:", f"      - id: {version}", f"        path: {version_root}",
+                    f"    formal_nl_root: {formal_ip}", f"    formal_nl_stages: [lib_NL2.5_3]",
+                    "    checks: {}",
+                ])
+            registry.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get(
+                "/?ip=IP_A&tab=formal-nl")
+
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            self.assertIn("正式 NL 总览".encode(), response.data)
+            self.assertIn("来源 IP".encode(), response.data)
+            self.assertIn("引用 RAW 版本".encode(), response.data)
+            self.assertIn("文件链接".encode(), response.data)
+            self.assertIn(b"LEF 1", response.data)
+            self.assertIn(b"LIBERTY 1", response.data)
+            self.assertIn(b"GDS 1", response.data)
+            self.assertIn("Vendor_A".encode(), response.data)
+            self.assertIn("Vendor_B".encode(), response.data)
+            self.assertIn("Vendor_C".encode(), response.data)
+            self.assertIn("未登记".encode(), response.data)
+            self.assertIn("正式文件路径与 RAW 来源".encode(), response.data)
+            self.assertIn(str(unregistered_source).encode(), response.data)
+
+            catalog_response = create_app(registry, root / "output").test_client().get(
+                "/?ip=IP_A&tab=catalog")
+            self.assertEqual(catalog_response.status_code, 200, catalog_response.get_data(as_text=True))
+            self.assertIn(b"LEF 1", catalog_response.data)
+            self.assertIn(b"LIBERTY 1", catalog_response.data)
+            self.assertIn(b"GDS 1", catalog_response.data)
+
+    def test_formal_nl_overview_keeps_distinct_roots_with_same_stage_name(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            entries = []
+            for vendor, library, version, view, filename in (
+                ("Vendor_A", "IP_A", "V01", "LEF", "a.lef"),
+                ("Vendor_B", "IP_B", "V02", "GDS", "b.gds"),
+            ):
+                library_root = root / "raw" / vendor / library
+                source = library_root / version / view / filename
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("source\n", encoding="utf-8")
+                formal_root = root / f"formal_{vendor}" / "lib_NL2.5_3" / "IP"
+                link = formal_root / view / filename
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(source)
+                entries.append({
+                    "id": f"{vendor}.{library}", "library_id": f"{vendor}.{library}",
+                    "vendor": vendor, "library_name": library, "raw_root": str(library_root),
+                    "raw_versions": [{"id": version, "path": str(source.parents[2])}],
+                    "formal_nl_root": str(formal_root.parents[1]),
+                    "formal_nl_stages": ["lib_NL2.5_3"],
+                })
+
+            from lib_guard.workbench import _formal_nl_directory_overview
+
+            overview = _formal_nl_directory_overview(entries, registry)
+
+            self.assertEqual(overview["stage_count"], 2)
+            self.assertEqual(overview["library_count"], 2)
+            self.assertEqual(overview["file_count"], 2)
+            self.assertEqual(overview["view_counts"], {"gds": 1, "lef": 1})
 
     def test_saving_check_configuration_preserves_formal_nl_root(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1302,7 +1504,9 @@ class WorkbenchTests(unittest.TestCase):
             saved = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
             self.assertEqual(saved["ips"][0]["formal_nl_root"], str(formal_root))
             self.assertEqual(saved["ips"][0]["formal_nl_stages"], ["lib_NL2.5_3", "lib_NL2.4_2"])
-            self.assertIn(b'class="sidebar-version formal-version"', response.data)
+            sidebar = response.get_data(as_text=True).split('<aside class="ip-rail"', 1)[1].split("</aside>", 1)[0]
+            self.assertIn("正式 2", sidebar)
+            self.assertNotIn("lib_NL2.5_3", sidebar)
             latest_path = next(output.glob("formal_nl/*/latest.json"))
             latest = json.loads(latest_path.read_text(encoding="utf-8"))
             browse_pointer = latest_path.read_bytes()
