@@ -153,21 +153,23 @@ def _quick_linked_checks(selected: dict[str, Any], target_version: str, base_ver
     target_root_path = Path(target_root).expanduser().resolve()
     target_lefs, target_lefs_truncated = _files_for_selection(str(target_root_path), (".lef", ".lef.gz"))
     liberty_files, liberty_truncated = _files_for_selection(str(target_root_path), (".lib", ".lib.gz"))
-    if target_lefs_truncated:
-        reason = "；".join(value for marker, value in (
-            ("ACCESS_ERROR", "存在目录不可读"), ("LIMIT", "超过工作台枚举上限"))
-            if _reason_has(target_lefs_truncated, marker))
-        raise ValueError(f"目标版本 LEF 文件列表不完整（{reason}），无法保证联动核查范围；请检查权限或缩小版本目录后重试。")
-    if liberty_truncated:
-        reason = "；".join(value for marker, value in (
-            ("ACCESS_ERROR", "存在目录不可读"), ("LIMIT", "超过工作台枚举上限"))
-            if _reason_has(liberty_truncated, marker))
-        raise ValueError(f"Liberty 文件列表不完整（{reason}），无法保证 Corner 核查范围；请检查权限或缩小版本目录后重试。")
     checks: dict[str, dict[str, Any]] = {
         "macro_index": {"root": str(target_root_path), "version": target_version,
                         "library_id": str(selected.get("library_id") or selected.get("id") or "")}
     }
     notes = [f"Macro / View：扫描目标版本下支持的文件；LEF：{len(target_lefs)} 个；Liberty：{len(liberty_files)} 个。"]
+
+    def limit_reason(markers: str) -> str:
+        return "；".join(value for marker, value in (
+            ("ACCESS_ERROR", "存在目录不可读"), ("LIMIT", "超过工作台枚举上限"))
+            if _reason_has(markers, marker))
+
+    if target_lefs_truncated:
+        notes.append(f"目标版本 LEF 文件列表不完整（{limit_reason(target_lefs_truncated)}）；暂不自动选择 LEF，不影响 Macro / View 检查。")
+        target_lefs = []
+    if liberty_truncated:
+        notes.append(f"Liberty 文件列表不完整（{limit_reason(liberty_truncated)}）；暂不自动选择 Liberty，不影响其他检查。")
+        liberty_files = []
 
     def choose(value: str, choices: list[str], label: str) -> str:
         if value:
@@ -186,10 +188,8 @@ def _quick_linked_checks(selected: dict[str, Any], target_version: str, base_ver
         base_root_path = Path(base_root).expanduser().resolve()
         base_lefs, base_lefs_truncated = _files_for_selection(base_root, (".lef", ".lef.gz"))
         if base_lefs_truncated:
-            reason = "；".join(value for marker, value in (
-                ("ACCESS_ERROR", "存在目录不可读"), ("LIMIT", "超过工作台枚举上限"))
-                if _reason_has(base_lefs_truncated, marker))
-            raise ValueError(f"基准版本 LEF 文件列表不完整（{reason}），无法保证配对；请检查权限或缩小版本目录后重试。")
+            notes.append(f"基准版本 LEF 文件列表不完整（{limit_reason(base_lefs_truncated)}）；暂不自动配对基准 LEF。")
+            base_lefs = []
         base_lef = choose(base_lef_choice, base_lefs, "基准 LEF")
         if not target_lef and len(target_lefs) > 1:
             base_by_relative: dict[str, list[str]] = {}
@@ -217,14 +217,14 @@ def _quick_linked_checks(selected: dict[str, Any], target_version: str, base_ver
         elif target_lef:
             notes.append("LEF：未找到唯一基准配对；执行目标 LEF 接口核查，不生成 LEF 差异结论。")
         elif target_lefs:
-            raise ValueError("目标版本有多个 LEF 且无法唯一配对，请明确选择目标和基准文件后再运行。")
-        else:
+            notes.append("目标版本有多个 LEF，需选择目标文件才能核查 LEF；不影响 Macro / View 检查。")
+        elif not target_lefs_truncated:
             notes.append("LEF：基准和目标版本均未发现 LEF，本次不执行 LEF 检查。")
     elif target_lef:
         notes.append("LEF：没有选择基准版本；以目标 LEF 做接口核查，不生成版本差异结论。")
     elif target_lefs:
-        raise ValueError("目标版本有多个 LEF，请明确选择一个目标 LEF 后再运行联动核查。")
-    else:
+        notes.append("目标版本有多个 LEF，需选择目标文件才能核查 LEF；不影响 Macro / View 检查。")
+    elif not target_lefs_truncated:
         notes.append("LEF：目标版本没有发现 LEF，本次不执行接口核查。")
 
     if target_lef and liberty_files:
@@ -232,7 +232,7 @@ def _quick_linked_checks(selected: dict[str, Any], target_version: str, base_ver
         if "lef_review" not in checks:
             liberty_spec["lef_file"] = target_lef
         checks["lef_liberty_check"] = liberty_spec
-    elif target_lef:
+    elif target_lef and not liberty_truncated:
         notes.append("Liberty：目标版本没有发现 .lib/.lib.gz，本次不执行 LEF–Liberty 核查。")
     return checks, notes
 
@@ -275,6 +275,13 @@ def _entry_from_form(form: Any, previous: dict[str, Any] | None = None) -> dict[
     }
     for check_name in sorted(selected):
         spec = {key: _text(form, field) for key, field in specs[check_name].items() if _text(form, field)}
+        if check_name == "formal_nl" and not (spec.get("config") or spec.get("report_json")):
+            source = previous or {}
+            if source.get("formal_nl_root"):
+                spec.update({"formal_nl_root": str(source["formal_nl_root"]),
+                             "root": str(source.get("raw_root") or ""),
+                             "ip_directory_name": str(source.get("library_name") or source.get("name") or ip_id),
+                             "library_id": library_id})
         if check_name == "lef_liberty_check":
             liberty_paths = [line.strip() for line in _text(form, "ll_liberty_files").splitlines() if line.strip()]
             if liberty_paths:
@@ -298,7 +305,8 @@ def _validate_for_run(entry: dict[str, Any]) -> None:
     if not checks:
         raise ValueError("至少勾选一项检查")
     requirements = {
-        "formal_nl": lambda spec: bool(spec.get("config") or spec.get("report_json")),
+        "formal_nl": lambda spec: bool(spec.get("config") or spec.get("report_json") or
+                                      (spec.get("formal_nl_root") and spec.get("ip_directory_name"))),
         "macro_index": lambda spec: bool(spec.get("report_json") or spec.get("filemap_json") or spec.get("root")),
         "lef_review": lambda spec: bool(spec.get("report_json") or (spec.get("old_file") and spec.get("new_file"))),
         "lef_liberty_check": lambda spec: bool(spec.get("report_json") or (spec.get("liberty_files") and
@@ -308,6 +316,29 @@ def _validate_for_run(entry: dict[str, Any]) -> None:
     for name, spec in checks.items():
         if not requirements[name](spec):
             raise ValueError(f"{name} 已勾选，但缺少所需路径或报告输入")
+
+
+def _formal_config_choices(registry_file: Path) -> list[dict[str, str]]:
+    if yaml is None:
+        return []
+    choices = []
+    paths = sorted((*registry_file.parent.glob("*.yml"), *registry_file.parent.glob("*.yaml")),
+                   key=lambda path: path.name.casefold())
+    for path in paths[:100]:
+        if path == registry_file or path.is_symlink() or not path.is_file():
+            continue
+        try:
+            config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError, yaml.YAMLError):
+            continue
+        if not isinstance(config, dict):
+            continue
+        formal = config.get("formal_nl") or {}
+        library = config.get("library") or {}
+        if (isinstance(formal, dict) and isinstance(library, dict)
+                and formal.get("root") and (library.get("ip_directory_name") or library.get("root"))):
+            choices.append({"path": str(path.resolve()), "label": path.name})
+    return choices
 
 
 def _save_entry(registry: dict[str, Any], entry: dict[str, Any]) -> None:
@@ -867,6 +898,10 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         old_lefs, old_limit = _files_for_selection(base_root, (".lef", ".lef.gz")) if base_root else ([], "")
         new_lefs, new_limit = _files_for_selection(target_root, (".lef", ".lef.gz")) if target_root else ([], "")
         liberty_files, lib_limit = _files_for_selection(target_root, (".lib", ".lib.gz")) if target_root else ([], "")
+        old_lef_choices = [{"path": path, "relative": Path(path).relative_to(Path(base_root).resolve()).as_posix()}
+                           for path in old_lefs]
+        new_lef_choices = [{"path": path, "relative": Path(path).relative_to(Path(target_root).resolve()).as_posix()}
+                           for path in new_lefs]
         file_choice_reasons = [(label, reason) for label, reason in (
             ("基准 LEF", old_limit), ("目标 LEF", new_limit), ("Liberty", lib_limit)) if reason]
         file_choices_notice = ""
@@ -963,12 +998,14 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                checks=sorted(CHECK_NAMES), discovered=discovered or [], raw_root=raw_root,
                                active_tab=active_tab, discovery_artifacts=discovery_artifacts,
                                environment_label=environment_label, formal_nl=formal_nl, vendors=vendors,
+                               formal_configs=_formal_config_choices(registry_file),
                                identity_conflicts=identity_conflicts or [], partial_discovery=partial_discovery,
                                formal_overview=formal_overview,
                                discovery_warnings=discovery_warnings or [],
                                registered_ids={str(item.get("library_id") or "") for item in ips},
                                selected_raw_version=chosen_version, base_raw_version=base_version,
                                old_lefs=old_lefs, new_lefs=new_lefs, liberty_choices=liberty_files,
+                               old_lef_choices=old_lef_choices, new_lef_choices=new_lef_choices,
                                default_target_lef=default_target_lef, default_base_lef=default_base_lef,
                                quick_checks=quick_checks, quick_notes=quick_notes,
                                latest_workbook_url=latest_workbook_url,
@@ -1042,7 +1079,9 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                    message="", error=str(exc), run_record=None, checks=sorted(CHECK_NAMES),
                                    vendors=[], identity_conflicts=[], partial_discovery=False,
                                    selected_raw_version="", base_raw_version="", old_lefs=[], new_lefs=[],
-                                   liberty_choices=[], file_choices_limited=False), 400
+                                   old_lef_choices=[], new_lef_choices=[], liberty_choices=[],
+                                   quick_checks={}, quick_notes=[], default_target_lef="", default_base_lef="",
+                                   file_choices_limited=False), 400
 
     @blueprint.post("/save")
     def save():

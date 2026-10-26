@@ -236,16 +236,20 @@ def _publish_latest_workbook(workbook_path: Path, library_dir: Path,
 def _run_formal(spec: dict[str, Any], config_dir: Path, out_dir: Path) -> dict[str, Any]:
     if spec.get("report_json"):
         return _json_read(_resolve(spec["report_json"], config_dir))
-    if not spec.get("config"):
-        raise ValueError("formal_nl 需要 config 或 report_json")
-    original = _resolve(spec["config"], config_dir)
-    raw = effective_file_tracker._load_config(original)
-    for section, key in (("library", "root"), ("formal_nl", "root"), ("library", "catalog")):
-        value = (raw.get(section) or {}).get(key)
-        if value:
-            (raw[section])[key] = str(_resolve(value, original.parent))
-    ip_label = str((raw.get("library") or {}).get("ip_directory_name") or
-                   (raw.get("library") or {}).get("id") or original.stem)
+    if spec.get("config"):
+        original = _resolve(spec["config"], config_dir)
+        raw = effective_file_tracker._load_config(original)
+        for section, key in (("library", "root"), ("formal_nl", "root"), ("library", "catalog")):
+            value = (raw.get(section) or {}).get(key)
+            if value:
+                (raw[section])[key] = str(_resolve(value, original.parent))
+    else:
+        if not (spec.get("formal_nl_root") and spec.get("ip_directory_name")):
+            raise ValueError("formal_nl 需要已登记的正式 NL 路径和库名，或自选 config/report_json")
+        raw = {"library": {"id": str(spec.get("library_id") or ""),
+                           "root": str(_resolve(spec["root"], config_dir)) if spec.get("root") else "",
+                           "ip_directory_name": str(spec["ip_directory_name"])},
+               "formal_nl": {"root": str(_resolve(spec["formal_nl_root"], config_dir))}}
     target = out_dir / "formal_nl"
     raw["output"] = {"report_json": str(target / "formal_nl.json"), "report_md": str(target / "formal_nl.md")}
     if yaml is None:

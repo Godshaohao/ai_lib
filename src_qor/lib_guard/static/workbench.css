@@ -355,6 +355,17 @@ tr[data-discovery-row][hidden] { display: none; }
 .liberty-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; max-height: 240px; padding: 8px; background: #fff; border: 1px solid var(--line-soft); }
 .liberty-list label { display: flex; min-width: 0; align-items: flex-start; gap: 8px; padding: 5px; color: var(--soft); font-size: 12px; overflow-wrap: anywhere; }
 .liberty-list input { width: 16px; height: 16px; flex: 0 0 auto; accent-color: var(--teal); }
+.lef-choice-group { min-width: 0; margin: 0; padding: 9px; border: 1px solid var(--line-soft); background: #fff; }
+.lef-choice-group legend { padding: 0 4px; color: var(--soft); font-size: 12px; font-weight: 700; }
+.lef-choice-group > input { margin-bottom: 7px; }
+.lef-choice-list { display: grid; max-height: 188px; overflow: auto; border: 1px solid var(--line-soft); }
+.lef-choice-list label { display: flex; min-width: 0; align-items: flex-start; gap: 8px; padding: 7px 9px; border-bottom: 1px solid var(--line-soft); color: var(--ink); font-size: 12px; cursor: pointer; }
+.lef-choice-list label:last-child { border-bottom: 0; }
+.lef-choice-list label:hover, .lef-choice-list label:has(input:checked) { background: var(--teal-soft); }
+.lef-choice-list label[hidden] { display: none; }
+.lef-choice-list input { width: 16px; height: 16px; flex: 0 0 auto; margin: 1px 0 0; accent-color: var(--teal); }
+.lef-choice-list span { min-width: 0; overflow-wrap: anywhere; }
+.check-fields textarea[name$="lef_file"], .check-fields textarea[name^="lef_"] { min-height: 58px; overflow-wrap: anywhere; resize: vertical; }
 .liberty-selection-tools { flex-wrap: wrap; }
 .liberty-selection-tools > span { font-size: 12px; }
 .liberty-selection-tools .button { min-height: 32px; font-size: 12px; }
@@ -383,8 +394,8 @@ td { font-size: 13px; }
 }
 @media (max-width: 760px) {
   .app-shell { grid-template-columns: minmax(0, 1fr); }
-  .ip-rail { position: static; height: auto; min-height: 0; max-height: 44vh; }
-  .ip-list { min-height: 80px; }
+  .ip-rail { position: static; height: auto; min-height: 0; max-height: none; }
+  .ip-list { min-height: 0; max-height: 200px; }
   .main-area { padding: 16px 12px 30px; }
   .scope-selector { grid-template-columns: minmax(0, 1fr); }
   .scope-summary-grid, .identity-grid, .check-fields, .advanced-inputs > div, .liberty-list { grid-template-columns: minmax(0, 1fr); }

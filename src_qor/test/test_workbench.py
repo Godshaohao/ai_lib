@@ -6,6 +6,7 @@ from threading import Barrier
 import time
 import unittest
 from unittest.mock import patch
+from werkzeug.datastructures import MultiDict
 
 from lib_guard import workbench
 from lib_guard.workbench import _acquire_library_lock, _files_for_selection, _quick_linked_checks, _release_library_lock, _update_task, create_app
@@ -145,8 +146,10 @@ class WorkbenchTests(unittest.TestCase):
             ip = {"id": "IP_A", "library_id": "Vendor.IP_A", "raw_versions": [
                 {"id": "V1", "path": str(root)}]}
 
-            with self.assertRaisesRegex(ValueError, "多个 LEF.*明确选择"):
-                _quick_linked_checks(ip, "V1", "", "", "")
+            checks, notes = _quick_linked_checks(ip, "V1", "", "", "")
+            self.assertEqual(set(checks), {"macro_index"})
+            self.assertIn("多个 LEF", " ".join(notes))
+            self.assertIn("不影响 Macro", " ".join(notes))
 
     def test_quick_linked_checks_rejects_truncated_liberty_file_list(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -161,8 +164,9 @@ class WorkbenchTests(unittest.TestCase):
             ip = {"id": "IP_A", "library_id": "Vendor.IP_A", "raw_versions": [
                 {"id": "V1", "path": str(root)}]}
 
-            with self.assertRaisesRegex(ValueError, "Liberty 文件列表不完整.*超过工作台枚举上限"):
-                _quick_linked_checks(ip, "V1", "", str(lef), "")
+            checks, notes = _quick_linked_checks(ip, "V1", "", str(lef), "")
+            self.assertEqual(set(checks), {"macro_index"})
+            self.assertIn("Liberty 文件列表不完整", " ".join(notes))
 
     def test_catalog_places_download_link_next_to_latest_success(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -426,7 +430,7 @@ class WorkbenchTests(unittest.TestCase):
             registry.write_text(original, encoding="utf-8")
             response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review&raw_version=V50")
             self.assertEqual(response.status_code, 200)
-            self.assertNotIn(f'name="macro_root" value="{version}"'.encode(), response.data)
+            self.assertIn(f'name="macro_root" data-scope-source-input data-input-source="当前 RAW 版本" value="{version}"'.encode(), response.data)
             self.assertNotRegex(response.get_data(as_text=True), r'name="checks" value="macro_index" checked')
             self.assertIn("填入自动建议".encode(), response.data)
             self.assertNotIn("运行自动联动核查".encode(), response.data)
@@ -484,6 +488,29 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn(b'data-lib-file', response.data)
             self.assertIn(b'name="ll_lef_file"', response.data)
             self.assertIn(b'data-fill-input="ll_lef_file"', response.data)
+
+    def test_multiple_lefs_keep_macro_suggestion_and_offer_readable_file_choices(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            version = root / "raw" / "V02"
+            for name in ("block_a.lef", "block_b.lef"):
+                path = version / "LEF" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor.IP_A\n    raw_versions:\n"
+                f"      - {{id: V02, path: {version}}}\n    checks: {{}}\n", encoding="utf-8")
+            response = create_app(registry, root / "output").test_client().get(
+                "/?ip=IP_A&tab=review&raw_version=V02")
+            page = response.get_data(as_text=True)
+            payload = re.search(r'data-suggested-checks>(.*?)</script>', page).group(1)
+            self.assertEqual(set(json.loads(payload)), {"macro_index"})
+            self.assertIn("不影响 Macro", page)
+            self.assertIn('data-lef-search="target"', page)
+            self.assertIn('data-lef-path="lef/block_a.lef"', page)
+            self.assertIn('data-fill-input="lef_new_file"', page)
+            self.assertIn('data-fill-input="ll_lef_file"', page)
 
     def test_duplicate_library_id_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -749,10 +776,58 @@ class WorkbenchTests(unittest.TestCase):
                 self.assertIn(expected.encode(), response.data)
             self.assertIn(b"data-sidebar-scope", response.data)
             self.assertIn(b"data-vendor-filter", response.data)
+            self.assertIn(b"data-library-filter", response.data)
+            self.assertIn(b'data-ip-library="vendor_a.phy_ip"', response.data)
             sidebar = response.get_data(as_text=True).split('<aside class="ip-rail"', 1)[1].split("</aside>", 1)[0]
             for version in ("V01", "V02", "lib_NL2.4_2", "lib_NL2.5_3"):
                 self.assertNotIn(version, sidebar)
             self.assertIn("RAW 2 · 正式 2", sidebar)
+
+    def test_formal_check_uses_registered_directories_without_config_file(self):
+        previous = {
+            "id": "PHY_A", "library_id": "Vendor_A.phy_ip", "name": "PHY A",
+            "library_name": "phy_ip", "raw_root": "/raw/Vendor_A/phy_ip",
+            "formal_nl_root": "/release/lib_NL2.5_3/IP", "checks": {},
+        }
+        form = MultiDict([("id", "PHY_A"), ("library_id", "Vendor_A.phy_ip"),
+                          ("checks", "formal_nl")])
+
+        entry = workbench._entry_from_form(form, previous)
+        workbench._validate_for_run(entry)
+
+        self.assertEqual(entry["checks"]["formal_nl"]["root"], previous["raw_root"])
+        self.assertEqual(entry["checks"]["formal_nl"]["formal_nl_root"], previous["formal_nl_root"])
+        self.assertEqual(entry["checks"]["formal_nl"]["ip_directory_name"], "phy_ip")
+
+    def test_formal_check_explicit_config_takes_priority_over_registered_directories(self):
+        previous = {"id": "PHY_A", "library_id": "Vendor_A.phy_ip", "name": "PHY A",
+                    "raw_root": "/raw/default", "formal_nl_root": "/release/default", "checks": {}}
+        form = MultiDict([("id", "PHY_A"), ("library_id", "Vendor_A.phy_ip"),
+                          ("checks", "formal_nl"), ("formal_config", "/configs/formal.yml")])
+
+        entry = workbench._entry_from_form(form, previous)
+        workbench._validate_for_run(entry)
+
+        self.assertEqual(entry["checks"]["formal_nl"], {"config": "/configs/formal.yml"})
+
+    def test_formal_config_choices_include_only_valid_nearby_yaml(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: PHY_A\n    library_id: Vendor_A.phy_ip\n"
+                "    formal_nl_root: /release/default\n    checks: {}\n", encoding="utf-8")
+            audit = root / "formal_audit.yml"
+            audit.write_text("library:\n  ip_directory_name: phy_ip\nformal_nl:\n  root: /release/custom\n",
+                             encoding="utf-8")
+            (root / "unrelated.yml").write_text("ips: []\n", encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get("/?ip=PHY_A")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'data-fill-input="formal_config"', response.data)
+            self.assertIn(str(audit).encode(), response.data)
+            self.assertNotIn(b"unrelated.yml", response.data)
 
     def test_sidebar_shows_version_counts_without_guessing_latest_or_rendering_tree(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1135,6 +1210,33 @@ class WorkbenchTests(unittest.TestCase):
             updated = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
             self.assertEqual([item["id"] for item in updated["raw_versions"]], ["V01", "V02", "V03"])
             self.assertEqual(updated["checks"]["macro_index"]["root"], "/kept/input")
+
+    def test_register_date_cell_layout_keeps_real_version_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw"
+            cell = "ln04lpp_sc_hvt_c54104"
+            for release in ("20260917_DTCO", "20261001_DTCO"):
+                view = raw / "Metax" / "DTCO" / release / "elf" / "psls" / cell / "LEF"
+                view.mkdir(parents=True)
+                (view / "cell.lef").touch()
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            library_id = f"Metax.DTCO.elf.psls.{cell}"
+
+            response = client.post("/register-discovered", data={
+                "raw_root": str(raw), "library_ids": [library_id]
+            })
+
+            self.assertEqual(response.status_code, 200)
+            entry = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
+            self.assertEqual(entry["library_id"], library_id)
+            self.assertEqual(entry["middle_path"], "DTCO/elf/psls")
+            self.assertEqual([item["id"] for item in entry["raw_versions"]],
+                             ["20260917_DTCO", "20261001_DTCO"])
+            self.assertEqual(entry["raw_versions"][0]["path"],
+                             str(raw / "Metax" / "DTCO" / "20260917_DTCO" / "elf" / "psls" / cell))
 
     def test_discovery_supports_single_row_registration_and_catalog_edit_remove_actions(self):
         with tempfile.TemporaryDirectory() as temp:

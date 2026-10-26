@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Any
 
 MAX_CELL_TEXT_LENGTH = 32767
@@ -39,7 +40,10 @@ def export_review_excel(
     try:
         import xlsxwriter
     except ImportError as exc:
-        raise RuntimeError("导出 Excel 需要 XlsxWriter；请安装 src_qor/requirements.txt") from exc
+        raise RuntimeError(
+            f"当前 Python {sys.executable} 无法导入 XlsxWriter；"
+            "请用已配置 XlsxWriter 的同一解释器启动工作台和导出命令。"
+        ) from exc
 
     from .review_runner import SHEET_HEADERS
 

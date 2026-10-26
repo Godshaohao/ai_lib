@@ -39,12 +39,14 @@
   const sidebarEntries = [...document.querySelectorAll("[data-ip-entry]")];
   const sidebarSearch = document.querySelector("[data-ip-search]");
   const vendorFilter = document.querySelector("[data-vendor-filter]");
+  const libraryFilter = document.querySelector("[data-library-filter]");
   const sidebarCount = document.querySelector("[data-sidebar-count]");
   let sidebarScope = "all";
 
   function applySidebarFilters() {
     const query = (sidebarSearch?.value || "").trim().toLocaleLowerCase();
     const vendor = (vendorFilter?.value || "").toLocaleLowerCase();
+    const library = (libraryFilter?.value || "").toLocaleLowerCase();
     let visibleCount = 0;
 
     sidebarEntries.forEach((entry) => {
@@ -52,7 +54,8 @@
         (sidebarScope === "raw" && entry.dataset.hasRaw === "true") ||
         (sidebarScope === "formal" && entry.dataset.hasFormal === "true");
       const matches = scopeMatches && entry.dataset.ipName.includes(query) &&
-        (!vendor || entry.dataset.ipVendor === vendor);
+        (!vendor || entry.dataset.ipVendor === vendor) &&
+        (!library || entry.dataset.ipLibrary === library);
       entry.hidden = !matches;
       if (matches) visibleCount += 1;
     });
@@ -67,7 +70,15 @@
   }
 
   sidebarSearch?.addEventListener("input", applySidebarFilters);
-  vendorFilter?.addEventListener("change", applySidebarFilters);
+  vendorFilter?.addEventListener("change", () => {
+    const vendor = (vendorFilter.value || "").toLocaleLowerCase();
+    libraryFilter?.querySelectorAll("option[data-vendor]").forEach((option) => {
+      option.hidden = Boolean(vendor && option.dataset.vendor !== vendor);
+    });
+    if (libraryFilter?.selectedOptions[0]?.hidden) libraryFilter.value = "";
+    applySidebarFilters();
+  });
+  libraryFilter?.addEventListener("change", applySidebarFilters);
   document.querySelectorAll("[data-sidebar-scope]").forEach((button) => {
     button.addEventListener("click", () => {
       sidebarScope = button.dataset.sidebarScope;
@@ -138,9 +149,18 @@
       const input = document.querySelector(`[name="${choice.dataset.fillInput}"]`);
       if (input && choice.value) {
         input.value = choice.value;
-        input.dataset.inputSource = "从版本文件列表选择";
+        input.dataset.inputSource = choice.dataset.inputSource || "从版本文件列表选择";
         input.dispatchEvent(new Event("input", { bubbles: true }));
       }
+    });
+  });
+  document.querySelectorAll("[data-lef-list]").forEach((group) => {
+    const search = group.querySelector("[data-lef-search]");
+    search?.addEventListener("input", () => {
+      const query = search.value.trim().toLocaleLowerCase();
+      group.querySelectorAll("[data-lef-row]").forEach((row) => {
+        row.hidden = !row.dataset.lefPath.includes(query);
+      });
     });
   });
   const libertyInput = document.querySelector('[name="ll_liberty_files"]');
@@ -275,7 +295,17 @@
       if (input?.value.trim()) addScopeFile(filesNode, label, input.value.trim(), input.dataset.inputSource || fallbackSource);
     };
     selectedChecks.forEach((item) => {
-      if (item.value === "formal_nl") append("正式目录配置", "formal_config");
+      if (item.value === "formal_nl") {
+        const config = reviewForm?.querySelector('[name="formal_config"]');
+        const report = reviewForm?.querySelector('[name="formal_report_json"]');
+        if (report?.value.trim()) append("已有盘点报告", "formal_report_json");
+        else if (config?.value.trim()) append("自选盘点配置", "formal_config");
+        else if (reviewForm?.dataset.formalDefaultRoot) {
+          addScopeFile(filesNode, "正式 NL 根目录", reviewForm.dataset.formalDefaultRoot, "已登记目录");
+          if (reviewForm.dataset.formalDefaultRaw)
+            addScopeFile(filesNode, "RAW 根目录", reviewForm.dataset.formalDefaultRaw, "已登记目录");
+        }
+      }
       if (item.value === "macro_index") append("RAW 根目录", "macro_root", "所选 RAW 版本");
       if (item.value === "lef_review") {
         append("基准 LEF", "lef_old_file");
@@ -294,8 +324,11 @@
     });
     if (!filesNode.childElementCount) filesNode.textContent = "部分文件尚未选择；展开对应检查项补齐。";
   }
-  scopeTarget?.addEventListener("change", updateScopeSummary);
-  scopeBase?.addEventListener("change", updateScopeSummary);
+  const versionForm = document.querySelector("#version-scope-form");
+  [scopeTarget, scopeBase].forEach((control) => control?.addEventListener("change", () => {
+    updateScopeSummary();
+    if (scopeTarget?.value) versionForm?.requestSubmit();
+  }));
   reviewForm?.addEventListener("input", updateScopeSummary);
   reviewForm?.addEventListener("change", updateScopeSummary);
   reviewForm?.querySelectorAll("[data-scope-source-input]").forEach((input) => {

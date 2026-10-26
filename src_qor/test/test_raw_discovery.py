@@ -103,6 +103,59 @@ class RawDiscoveryTests(unittest.TestCase):
             self.assertEqual(result[0]["versions"][0]["views"], ["LEF", "VERILOG"])
             self.assertEqual(result[0]["versions"][1]["views"], ["GDS", "LIB"])
 
+    def test_date_release_with_netlist_and_spi_is_one_library_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "raw"
+            version = raw / "Metax" / "ddl" / "20260817_ma_ddl_pd_release"
+            for relative in ("netlist/ddl.v", "spi/ddl.sp", "def/ddl.def"):
+                path = version / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+
+            result = discover_raw_libraries(raw)
+
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["library_id"], "Metax.ddl")
+            self.assertEqual(result[0]["version_names"], [version.name])
+            self.assertEqual(result[0]["versions"][0]["path"], str(version))
+            self.assertEqual(result[0]["view_types"], ["DEF", "SPICE", "VERILOG"])
+
+    def test_date_release_with_cell_subdirectories_groups_versions_by_cell(self):
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "raw"
+            cell = "ln04lpp_sc_hvt_c54104"
+            for release in ("20260917_DTCO", "20261001_DTCO"):
+                version = raw / "Metax" / "DTCO" / release / "elf" / "psls" / cell
+                for relative in ("LEF/cell.lef", "CDL/cell.cdl"):
+                    path = version / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.touch()
+
+            result = discover_raw_libraries(raw)
+
+            self.assertEqual(len(result), 1)
+            candidate = result[0]
+            self.assertEqual(candidate["library_id"], f"Metax.DTCO.elf.psls.{cell}")
+            self.assertEqual(candidate["library_name"], cell)
+            self.assertEqual(candidate["middle_path"], "DTCO/elf/psls")
+            self.assertEqual(candidate["version_names"], ["20260917_DTCO", "20261001_DTCO"])
+            self.assertEqual(candidate["versions"][0]["path"],
+                             str(raw / "Metax" / "DTCO" / "20260917_DTCO" / "elf" / "psls" / cell))
+            self.assertEqual(candidate["view_types"], ["CDL", "LEF"])
+
+    def test_repeated_source_package_is_not_a_cell_library(self):
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "raw"
+            for release in ("20260917", "20261001"):
+                path = raw / "Metax" / "ddl" / release / "source_package" / "lef" / "ddl.lef"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+
+            result = discover_raw_libraries(raw)
+
+            self.assertEqual([item["library_id"] for item in result], ["Metax.ddl"])
+            self.assertEqual(result[0]["version_names"], ["20260917", "20261001"])
+
     def test_rejects_missing_root_and_ignores_version_dirs_without_views(self):
         with tempfile.TemporaryDirectory() as temp:
             raw = Path(temp) / "raw"

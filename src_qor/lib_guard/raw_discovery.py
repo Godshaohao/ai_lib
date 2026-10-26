@@ -16,6 +16,7 @@ _VIEW_SUFFIXES = {
     ".lef": "LEF", ".lib": "LIB", ".db": "DB", ".gds": "GDS", ".oas": "OAS",
     ".cdl": "CDL", ".sp": "SPICE", ".spi": "SPICE", ".v": "VERILOG", ".sv": "VERILOG",
     ".sdc": "SDC", ".upf": "UPF", ".cpf": "CPF", ".spef": "SPEF", ".ndm": "NDM",
+    ".def": "DEF",
 }
 _IGNORED_DIRS = {
     ".git", ".svn", "__pycache__", "catalog", "diff", "reports", "release_area", "scan_out",
@@ -23,8 +24,10 @@ _IGNORED_DIRS = {
 }
 _VIEW_DIR_NAMES = {
     "lef", "lib", "db", "gds", "oas", "cdl", "spice", "verilog", "rtl", "timing", "spef",
-    "sdc", "upf", "cpf", "nldm", "ccs", "ecsm", "ccs_lvf",
+    "sdc", "upf", "cpf", "nldm", "ccs", "ecsm", "ccs_lvf", "netlist", "spi",
+    "def", "ndm", "hack_lef",
 }
+_PACKAGING_DIR_NAMES = {"package", "source_package", "delivery_package", "release_package"}
 _IGNORED_PREFIXES = ("upstream_",)
 _VERSION_NAME = re.compile(
     r"(?:\d{2,8}(?:[._-]\d+)*.*|\d{4}q[1-4].*|v\d+.*|r\d+.*|rev.*|beta.*|release.*|final.*|"
@@ -111,6 +114,55 @@ def _is_delivery(path: Path, errors: list[dict[str, str]] | None = None) -> tupl
     return bool(hints), hints, truncated
 
 
+def _direct_view_payload(path: Path, errors: list[dict[str, str]]) -> bool:
+    """A version's own View files/directories, excluding nested Cell packages."""
+    try:
+        with os.scandir(path) as entries:
+            return any(
+                (entry.is_file(follow_symlinks=False) and _view_for_name(entry.name))
+                or (entry.is_dir(follow_symlinks=False) and entry.name.lower() in _VIEW_DIR_NAMES)
+                for entry in entries
+            )
+    except OSError as exc:
+        _record_access_error(errors, path, exc)
+        return False
+
+
+def _cell_view_roots(version: Path, errors: list[dict[str, str]]) -> tuple[list[tuple[Path, set[str], bool]], bool]:
+    """Find bounded Cell/View leaves below a release, without descending into Views."""
+    roots: list[tuple[Path, set[str], bool]] = []
+    queue: list[tuple[Path, int]] = [(version, 0)]
+    visited = 0
+    while queue and visited < _HINT_ENTRIES:
+        path, depth = queue.pop(0)
+        visited += 1
+        if depth and _direct_view_payload(path, errors):
+            views, truncated = _view_hints(path, errors)
+            if views:
+                roots.append((path, views, truncated))
+            continue
+        if depth < _HINT_DEPTH:
+            queue.extend((child, depth + 1) for child in _children(path, errors)
+                         if child.name.lower() not in _VIEW_DIR_NAMES)
+    return roots, bool(queue)
+
+
+def _candidate(root: Path, relative_parts: tuple[str, ...], deliveries: list[dict[str, Any]],
+               *, basis: str = "文件名后缀与直接子目录") -> dict[str, Any]:
+    ordered = sorted(deliveries, key=lambda item: item["id"].casefold())
+    views = sorted({view for item in ordered for view in item["views"]})
+    return {
+        "status": "REVIEW", "library_id": _library_id(relative_parts),
+        "root_abs": str(root.resolve()), "root": str(root.resolve()),
+        "display_name": relative_parts[-1], "library_name": relative_parts[-1],
+        "vendor": relative_parts[0], "middle_path": "/".join(relative_parts[1:-1]),
+        "version_count": len(ordered), "example_versions": [item["id"] for item in ordered[:5]],
+        "confidence": 0.0, "reason": f"delivery_instances={len(ordered)};views={','.join(views)}",
+        "view_types": views, "version_names": [item["id"] for item in ordered],
+        "versions": ordered, "detection_basis": basis,
+    }
+
+
 def _library_id(relative_parts: tuple[str, ...]) -> str:
     parts = [re.sub(r"[^0-9A-Za-z_.-]+", "_", part).strip("._-") or "unknown" for part in relative_parts]
     return ".".join(parts)
@@ -134,9 +186,39 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
         if depth:
             relative = path.relative_to(root)
             is_top_vendor = len(relative.parts) == 1 and relative.parts[0].lower().startswith("vendor")
-            if not is_top_vendor and not any(_VERSION_NAME.fullmatch(part) for part in relative.parts[:-1]):
+            if (not is_top_vendor and not _VERSION_NAME.fullmatch(path.name)
+                    and not any(_VERSION_NAME.fullmatch(part) for part in relative.parts[:-1])):
                 deliveries = []
+                cell_deliveries: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+                nested_by_version: dict[str, list[tuple[Path, set[str], bool]]] = {}
                 for child in _children(path, scan_errors):
+                    if _VERSION_NAME.fullmatch(child.name) and not _direct_view_payload(child, scan_errors):
+                        nested, truncated = _cell_view_roots(child, scan_errors)
+                        if truncated:
+                            truncated_hints.append(str(child))
+                        nested_by_version[child.name] = nested
+                nested_names = Counter(
+                    leaf.relative_to(path / version).as_posix()
+                    for version, leaves in nested_by_version.items() for leaf, _, _ in leaves
+                )
+                for child in _children(path, scan_errors):
+                    nested = nested_by_version.get(child.name, [])
+                    # One packaging wrapper is ambiguous. Repeated Cell identities,
+                    # deeper Cell paths, or multiple Cells establish this layout.
+                    confirmed = [item for item in nested if (
+                        item[0].name.lower() not in _PACKAGING_DIR_NAMES
+                        and (len(nested) > 1 or len(item[0].relative_to(child).parts) > 1
+                             or nested_names[item[0].relative_to(child).as_posix()] > 1)
+                    )]
+                    if confirmed:
+                        for leaf, views, hints_truncated in confirmed:
+                            key = leaf.relative_to(child).parts
+                            cell_deliveries.setdefault(key, []).append({
+                                "id": child.name, "path": str(leaf.resolve()), "views": sorted(views),
+                                "hints_truncated": hints_truncated,
+                                "detection_basis": "日期发布/Cell/View",
+                            })
+                        continue
                     is_delivery, views, hints_truncated = _is_delivery(child, scan_errors)
                     if hints_truncated:
                         truncated_hints.append(str(child))
@@ -145,30 +227,10 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
                                            "hints_truncated": hints_truncated,
                                            "detection_basis": "文件名后缀与直接子目录"})
                 if deliveries:
-                    parts = relative.parts
-                    vendor = parts[0]
-                    library_name = parts[-1]
-                    middle_path = "/".join(parts[1:-1])
-                    library_id = _library_id(parts)
-                    version_names = [item["id"] for item in sorted(deliveries, key=lambda item: item["id"].casefold())]
-                    view_types = sorted({view for item in deliveries for view in item["views"]})
-                    results.append({
-                        "status": "REVIEW",
-                        "library_id": library_id,
-                        "root_abs": str(path.resolve()),
-                        "root": str(path.resolve()),
-                        "display_name": library_name,
-                        "library_name": library_name,
-                        "vendor": vendor,
-                        "middle_path": middle_path,
-                        "version_count": len(deliveries),
-                        "example_versions": version_names[:5],
-                        "confidence": 0.0,
-                        "reason": f"delivery_instances={len(deliveries)};views={','.join(view_types)}",
-                        "view_types": view_types,
-                        "version_names": version_names,
-                        "versions": sorted(deliveries, key=lambda item: item["id"].casefold()),
-                    })
+                    results.append(_candidate(path, relative.parts, deliveries))
+                for cell_parts, versions in cell_deliveries.items():
+                    results.append(_candidate(path, relative.parts + cell_parts, versions,
+                                              basis="日期发布/Cell/View"))
         if depth >= _MAX_DEPTH:
             if not _ignored(path.name) and not _VERSION_NAME.fullmatch(path.name):
                 unvisited = [child for child in _children(path, scan_errors)

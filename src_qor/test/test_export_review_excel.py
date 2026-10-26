@@ -1,8 +1,11 @@
 import posixpath
+import builtins
+import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 from lib_guard.export_review_excel import export_review_excel
@@ -40,6 +43,21 @@ def _cell_text(workbook_path: Path, sheet_name: str, address: str) -> tuple[str,
 
 
 class ExportReviewExcelTests(unittest.TestCase):
+    def test_missing_xlsxwriter_identifies_the_running_interpreter_without_pip_advice(self):
+        original_import = builtins.__import__
+
+        def import_without_xlsxwriter(name, *args, **kwargs):
+            if name == "xlsxwriter":
+                raise ImportError("not installed in this interpreter")
+            return original_import(name, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temp, patch("builtins.__import__", side_effect=import_without_xlsxwriter):
+            with self.assertRaises(RuntimeError) as raised:
+                export_review_excel({"03-问答": []}, Path(temp) / "report.xlsx")
+        self.assertIn(sys.executable, str(raised.exception))
+        self.assertIn("XlsxWriter", str(raised.exception))
+        self.assertNotIn("pip", str(raised.exception).lower())
+
     def test_oversized_non_geometry_lef_value_is_rejected_without_truncation(self):
         finding = _finding_rows({"ip": {"id": "IP_A"}, "checks": {"lef_review": {
             "selected": True, "status": "COMPLETE", "result_ref": "evidence/lef_review.json",

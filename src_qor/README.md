@@ -15,15 +15,14 @@ The runner selects only the checks listed for each IP in YAML:
 
 These are evidence checks, not a release gate. `COMPLETE` means the selected script ran and produced a report; it does not mean the IP passed quality review or is approved for release. Checks not selected are `NOT_RUN`.
 
-## Install and run
+## Run with the configured Python
 
-Requires Python 3.11 or newer. `Flask` is needed only for the local workbench; CLI report generation needs PyYAML and XlsxWriter.
+Requires Python 3.11 or newer. Use the host's existing interpreter with PyYAML and XlsxWriter; Flask is needed for the local workbench. Do not switch to a virtual environment or another `python3` alias between the workbench and the exporter. `requirements.txt` lists dependencies but is not an installation step for managed hosts.
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r src_qor/requirements.txt
-PYTHONPATH=src_qor python -m lib_guard.review_runner \
+export SRC_QOR_PYTHON=/absolute/path/to/configured/python3
+"$SRC_QOR_PYTHON" -c 'import sys, yaml, xlsxwriter, flask; print(sys.executable, xlsxwriter.__version__)'
+PYTHONPATH=src_qor "$SRC_QOR_PYTHON" -m lib_guard.review_runner \
   --config src_qor/configs/review.example.yml \
   --out-dir work/ip_review_run
 ```
@@ -31,7 +30,7 @@ PYTHONPATH=src_qor python -m lib_guard.review_runner \
 Start the local workbench with a persistent IP registry:
 
 ```bash
-PYTHONPATH=src_qor python -m lib_guard.workbench \
+PYTHONPATH=src_qor "$SRC_QOR_PYTHON" -m lib_guard.workbench \
   --registry ../3rd_IP/configs/ip_registry.simulation.yml \
   --out-dir work/ip_review_simulation \
   --port 5084
@@ -39,13 +38,15 @@ PYTHONPATH=src_qor python -m lib_guard.workbench \
 
 This command opens the multi-Vendor/multi-version Catalog simulation from the main `3rd_IP` tree. `SIMULATION_*` marker files are not valid IP data. Use `src_qor/configs/ip_registry.example.yml` only when creating a separate real registry.
 
-Open the port selected with `--port` (the simulation command above uses `http://127.0.0.1:5084/`). The standalone workbench has separate tabs for the registered library/version overview, RAW discovery, read-only Formal NL inventory, and engineering checks (with nested configuration/history tabs). RAW discovery follows the previous Catalog/Discover model: it recursively finds library roots whose direct children are delivery/version directories, retaining the relative `Vendor / middle_path / Library / Version` hierarchy. It accepts one-version libraries and summarizes view types from filenames only.
+Open the port selected with `--port` (the simulation command above uses `http://127.0.0.1:5084/`). The standalone workbench has separate tabs for the registered library/version overview, RAW discovery, read-only Formal NL inventory, and engineering checks (with nested configuration/history tabs). RAW discovery supports both `Vendor/Library/Date/View` and `Vendor/Group/Date/[intermediate]/Cell/View` layouts. It accepts one-version libraries and summarizes view types from filenames only. An ambiguous single wrapper below a date remains a review candidate instead of being silently treated as a Cell library.
 
 Formal NL inventory is per IP and read-only. Enter the formal NL root and run a scan to list matching `lib_NL*` stages, IP link targets, visible file counts by View, filename-based Liberty/DB Corner clues, and the associated RAW source paths where resolvable. Stage order is inferred from the formal directory names and is a browsing aid, not an accepted Effective pointer. The inventory does not read file contents, validate required views or semantic correctness, change links, or approve release. JSON and Markdown snapshots are stored under `<out-dir>/formal_nl/<library-id>/runs/`; the last successful snapshot remains available if a later refresh fails.
 
 Each Discover run writes only `<out-dir>/discovery/library_discovery.json` by default; the candidate table is already shown in the workbench. HTML and `library.list` are generated on demand from that JSON when their export links are opened. A candidate enters the Catalog overview only after explicit registration; registration updates the YAML registry with Vendor/group/library/version metadata. Discover and registration do not rename, move, copy, parse, or link files under the RAW root. Therefore `3rd_IP` retains its source hierarchy; the Catalog hierarchy is a view of the registry, not a physical reorganization.
 
 The left rail searches registered libraries grouped by Vendor. Each registered library keeps the complete `raw_versions` list and absolute paths; no version is automatically declared newest. Check inputs expand only when selected. The workbench binds to loopback, saves library/check inputs back to the YAML registry, and invokes the same runner used by the CLI. Checks run in a bounded in-process queue (two workers, at most eight queued/running tasks); task state is persisted as JSON and can be polled after leaving or refreshing the page. A process restart does not resume queued work; the next read marks an old queued/running task `INTERRUPTED` and asks the operator to resubmit. The overview distinguishes the latest attempt from the latest successful result. The service does not accept shell commands, modify formal NL links, or change release decisions.
+
+The left rail also has an exact library selector; it combines with Vendor, text search, and RAW/Formal scope. For the Formal NL check, a registered formal root and IP name are enough: the runner writes a temporary per-run YAML under the evidence output. The optional selector lists valid Formal NL YAML files next to the registry; other existing YAML paths can be entered manually. A supplied Formal NL YAML overrides registered paths; an existing report JSON takes precedence over both. No generated configuration is written to RAW or Formal NL input directories.
 
 Choose a RAW version in the library list to open the review form with that version's Macro Index root and source version filled in for this run. Saved reports are cleared from this temporary selection so the chosen version is actually inspected. Save Configuration is explicit; Run does not rewrite the registry. Formal NL browsing keeps a separate latest discovery snapshot; a selected stage only updates the successful check pointer when the single-stage report is `COMPLETE`. Discovery reports sampled filename limits and refuses colliding library IDs.
 
@@ -83,7 +84,7 @@ Each check result records its input identity. If explicit source versions differ
 ## Tests
 
 ```bash
-PYTHONPATH=src_qor python3 -m unittest discover -s src_qor/test -v
+PYTHONPATH=src_qor "$SRC_QOR_PYTHON" -m unittest discover -s src_qor/test -v
 ```
 
 Tests cover IP isolation, selected-check reporting, failed-check QA, finding counts by stable kind/object count, explicit input identity, atomic report publication, the ten engineering topics, vertical Macro-View file mappings, persistent registry overview, local workbench asset isolation and save/run/download behavior, LEF/Liberty evidence binding, workbook sheets, and HTML report links.

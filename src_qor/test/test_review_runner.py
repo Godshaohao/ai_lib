@@ -8,8 +8,40 @@ from xml.etree import ElementTree as ET
 from unittest.mock import patch
 
 from lib_guard.review_runner import (_finding_rows, _publish_latest_workbook, _qa_rows, _review_summary,
-                                    _source_revision,
+                                    _run_formal, _source_revision,
                                     _write_latest_if_newer, build_workbook_model, run, run_review)
+
+
+class FormalDefaultConfigTests(unittest.TestCase):
+    def test_formal_inventory_uses_registered_paths_without_yaml(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw" / "Vendor_A" / "phy_ip"
+            raw.mkdir(parents=True)
+            formal = root / "formal" / "lib_NL2.5_3" / "IP"
+            formal.mkdir(parents=True)
+
+            result = _run_formal({"root": str(raw), "formal_nl_root": str(formal),
+                                  "ip_directory_name": "phy_ip", "library_id": "Vendor_A.phy_ip"},
+                                 root, root / "evidence")
+
+            self.assertEqual(result["formal_nl_root"], str(formal))
+            self.assertEqual(result["library_root"], str(raw))
+            self.assertTrue((root / "evidence" / "formal_nl" / "formal_nl.json").is_file())
+
+    def test_formal_inventory_explicit_yaml_overrides_registered_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            formal = root / "formal" / "lib_NL2.5_3" / "IP"
+            formal.mkdir(parents=True)
+            config = root / "formal.yml"
+            config.write_text("library:\n  ip_directory_name: phy_ip\nformal_nl:\n  root: " +
+                              str(formal) + "\n", encoding="utf-8")
+
+            result = _run_formal({"config": str(config), "formal_nl_root": "/wrong/path"},
+                                 root, root / "evidence")
+
+            self.assertEqual(result["formal_nl_root"], str(formal))
 from lib_guard.ip_check_overview import render_overview
 from lib_guard.lef_liberty_check import _compare_cell, _corner_axes, analyze_many
 from lib_guard.export_review_excel import export_review_excel
