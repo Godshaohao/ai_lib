@@ -83,6 +83,127 @@ def review(ip_id, macro_name, source_path):
 
 
 class ReviewRunnerTests(unittest.TestCase):
+    def test_workbook_includes_saved_formal_and_all_raw_file_inventories(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "output"
+            library_id = "Vendor.IP_A"
+            # The production directory includes a hash suffix; use the runner helper.
+            from lib_guard.review_runner import _library_dir
+            formal_dir = output / "formal_nl" / _library_dir(library_id)
+            report_path = formal_dir / "runs" / "formal_001" / "formal_nl.json"
+            report_path.parent.mkdir(parents=True)
+            report = {
+                "library_id": library_id,
+                "report_status": "COMPLETE",
+                "generated_at": "2026-10-25T10:00:00+00:00",
+                "inventories": {
+                    "lib_NL2.5_3": {"status": "COMPLETE", "view_counts": {"lef": 1},
+                                    "files": [{"relative_path": "LEF/a.lef", "view": "lef",
+                                               "raw_version": "20261001_v1",
+                                               "source_path": "/raw/v1/LEF/a.lef",
+                                               "published_path": "/formal/lib_NL2.5_3/IP/LEF/a.lef"}]}
+                },
+                "raw_library": {"status": "COMPLETE", "versions": [
+                    {"version_id": "20261001_v1", "path": "/raw/v1", "inventory_status": "COMPLETE",
+                     "file_count": 1, "view_counts": {"lef": 1}},
+                    {"version_id": "20261002_v2", "path": "/raw/v2", "inventory_status": "COMPLETE",
+                     "file_count": 2, "view_counts": {"lef": 1, "liberty": 1}},
+                ], "inventories": {
+                    "20261001_v1": {"status": "COMPLETE", "file_count": 1,
+                                     "view_counts": {"lef": 1}, "files": [
+                                         {"relative_path": "LEF/a.lef", "view": "lef", "source_path": "/raw/v1/LEF/a.lef"}]},
+                    "20261002_v2": {"status": "COMPLETE", "file_count": 2,
+                                     "view_counts": {"lef": 1, "liberty": 1}, "files": [
+                                         {"relative_path": "LEF/a.lef", "view": "lef", "source_path": "/raw/v2/LEF/a.lef"},
+                                         {"relative_path": "LIB/a.lib", "view": "liberty", "source_path": "/raw/v2/LIB/a.lib"}]},
+                }},
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            (formal_dir / "latest_check.json").write_text(json.dumps({
+                "generated_at": "2026-10-25T10:00:00+00:00",
+                "report_status": "COMPLETE",
+                "report_json": str(report_path),
+            }), encoding="utf-8")
+            macro_report = root / "macro.json"
+            macro_report.write_text(json.dumps({"status": "COMPLETE", "macro_index": {
+                "baseline": {"status": "NO_LEF", "macro_count": 0}, "macros": {},
+                "unmatched_files": [], "unmatched_objects": {},
+            }}), encoding="utf-8")
+            captured = {}
+
+            def export(model, path, *, scope_note):
+                captured["model"] = model
+                Path(path).write_bytes(b"workbook")
+
+            with patch("lib_guard.review_runner._source_revision", return_value={
+                    "commit": "abc123", "working_tree_dirty": False,
+            }), patch("lib_guard.review_runner.export_review_excel", side_effect=export):
+                run({"ips": [{"id": "IP_A", "library_id": library_id, "raw_version": "20261002_v2",
+                               "checks": {"macro_index": {"report_json": str(macro_report)}}}]}, output)
+
+            model = captured["model"]
+            self.assertEqual(len(model["07-正式文件"]), 1)
+            self.assertEqual(model["07-正式文件"][0]["正式阶段"], "lib_NL2.5_3")
+            self.assertEqual(len(model["RAW文件清单"]), 3)
+            self.assertEqual({row["RAW版本"] for row in model["RAW文件清单"]},
+                             {"20261001_v1", "20261002_v2"})
+            self.assertEqual(model["00-概览"][0]["质量判断"], "本次范围未发现问题")
+            workbook_path = root / "inventory.xlsx"
+            export_review_excel(model, workbook_path)
+            with zipfile.ZipFile(workbook_path) as archive:
+                workbook_xml = ET.fromstring(archive.read("xl/workbook.xml"))
+                sheet_names = [sheet.attrib["name"] for sheet in workbook_xml.findall(".//{*}sheet")]
+                text_evidence = b"".join(archive.read(name) for name in archive.namelist()
+                                           if name.startswith("xl/worksheets/sheet"))
+                if "xl/sharedStrings.xml" in archive.namelist():
+                    text_evidence += archive.read("xl/sharedStrings.xml")
+            self.assertIn("07-正式文件", sheet_names)
+            self.assertIn("RAW文件清单", sheet_names)
+            self.assertIn(b"lib_NL2.5_3", text_evidence)
+            self.assertIn(b"20261002_v2", text_evidence)
+            self.assertIn(b"/raw/v2/LIB/a.lib", text_evidence)
+
+    def test_missing_saved_inventory_is_explicit_not_zero_files(self):
+        model = build_workbook_model([{
+            "ip": {"id": "IP_A", "library_id": "Vendor.IP_A"},
+            "checks": {"macro_index": {"selected": True, "status": "COMPLETE", "result": {}}},
+        }])
+
+        self.assertIn("07-正式文件", model)
+        self.assertIn("RAW文件清单", model)
+        self.assertEqual(model["07-正式文件"][0]["盘点状态"], "未附盘点")
+        self.assertEqual(model["RAW文件清单"][0]["版本盘点状态"], "未附盘点")
+        self.assertIn("未找到", model["RAW文件清单"][0]["盘点报告"])
+
+    def test_new_review_scope_does_not_treat_formal_inventory_as_manual_check(self):
+        item = {"ip": {"id": "IP_A"}, "checks": {
+            "macro_index": {"selected": True, "status": "COMPLETE", "result": {}}
+        }}
+
+        summary = _review_summary(item)
+        qa = _qa_rows(item)
+        not_run = next(row for row in qa if row["问题"] == "本次有哪些检查没有运行？")
+        model = build_workbook_model([item])
+
+        self.assertEqual(summary["quality_assessment"]["not_run_checks"],
+                         ["lef_liberty_check", "lef_review"])
+        self.assertNotIn("正式可见文件", model["00-概览"][0])
+        self.assertNotIn("正式目录盘点", not_run["回答"])
+        self.assertIn("07-正式文件", model)
+        self.assertEqual(model["07-正式文件"][0]["盘点状态"], "未附盘点")
+        self.assertEqual(model["RAW文件清单"][0]["版本盘点状态"], "未附盘点")
+        self.assertFalse(any("正式目录观察到哪些文件类型和数量？" == row["问题"]
+                             for row in model["03-问答"]))
+
+    def test_legacy_formal_review_evidence_remains_exportable(self):
+        item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
+
+        model = build_workbook_model([item])
+
+        self.assertIn("07-正式文件", model)
+        self.assertEqual(model["07-正式文件"][0]["来源路径"], "/raw/a/LEF/a.lef")
+
     def test_source_revision_marks_untracked_workspace_files_dirty(self):
         with patch("lib_guard.review_runner.subprocess.run", side_effect=[
                 subprocess.CompletedProcess([], 0, "0123456789abcdef\n", ""),
@@ -802,7 +923,7 @@ class ReviewRunnerTests(unittest.TestCase):
         model = build_workbook_model([item])
 
         self.assertEqual(list(model), ["00-概览", "01-工程检查", "02-执行记录",
-                                       "03-问答", "04-关注项", "08-LEF宏"])
+                                       "03-问答", "04-关注项", "07-正式文件", "08-LEF宏", "RAW文件清单"])
         self.assertEqual(model["04-关注项"][0]["证据路径"], "evidence/lef_review.json")
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "lef_only.xlsx"
@@ -841,12 +962,12 @@ class ReviewRunnerTests(unittest.TestCase):
                 record = __import__("json").loads(result_file.read_text(encoding="utf-8"))
                 self.assertEqual(record["execution_status"], "COMPLETE")
                 self.assertEqual(record["requested_checks"], ["macro_index"])
-                self.assertEqual(record["checks"]["formal_nl"]["execution_status"], "NOT_RUN")
+                self.assertNotIn("formal_nl", record["checks"])
                 with zipfile.ZipFile(result_file.parent / "ip_review.xlsx") as archive:
                     workbook = ET.fromstring(archive.read("xl/workbook.xml"))
                     self.assertEqual([item.attrib["name"] for item in workbook.findall(".//{*}sheet")],
                                      ["00-概览", "01-工程检查", "02-执行记录", "03-问答", "04-关注项",
-                                      "05-MacroView", "06-MacroView文件"])
+                              "05-MacroView", "06-MacroView文件", "07-正式文件", "RAW文件清单"])
             self.assertFalse((root / "output" / "ai_lib_IP检查结果.xlsx").exists())
             self.assertFalse(any((root / "output" / "libraries").glob("*/latest.json")))
             self.assertTrue((root / "output" / "ip_checks" / "index.html").is_file())
@@ -995,7 +1116,7 @@ class ReviewRunnerTests(unittest.TestCase):
         self.assertNotIn("09-Liberty角", model)
         self.assertNotIn("10-Liberty单元", model)
 
-    def test_macro_file_mapping_and_ten_engineering_topics_are_filterable_rows(self):
+    def test_macro_file_mapping_and_nine_engineering_topics_are_filterable_rows(self):
         item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
         item["checks"]["macro_index"]["result"]["macro_index"]["macros"]["MACRO_A"]["liberty"] = [
             {"view": "liberty", "file": "lib/tt.lib.gz", "source_path": "/raw/V2/lib/tt.lib.gz",
@@ -1009,8 +1130,10 @@ class ReviewRunnerTests(unittest.TestCase):
         self.assertEqual((liberty_row["来源版本"], liberty_row["Corner/线索"], liberty_row["状态"]),
                          ("V2", "TT", "PARSED_OBJECT"))
         checklist = model["01-工程检查"]
-        self.assertEqual(len(checklist), 10)
-        self.assertEqual(checklist[0]["工程检查主题"], "RAW 版本与文件盘点")
+        self.assertEqual(len(checklist), 10)  # 9 current topics plus one legacy formal-NL row.
+        self.assertEqual(checklist[0]["工程检查主题"], "RAW 版本与文件索引")
+        self.assertIn("正式文件及 RAW 来源（旧版 Review）",
+                      [row["工程检查主题"] for row in checklist])
         self.assertEqual(checklist[-1]["工程检查主题"], "文档更新 Delta")
         self.assertIn("工程覆盖", checklist[0])
         self.assertIn("本次执行", checklist[0])
@@ -1021,7 +1144,7 @@ class ReviewRunnerTests(unittest.TestCase):
         model = build_workbook_model([item])
 
         self.assertEqual(list(model), ["00-概览", "01-工程检查", "02-执行记录", "03-问答", "04-关注项",
-                                       "05-MacroView", "06-MacroView文件"])
+                                       "05-MacroView", "06-MacroView文件", "07-正式文件", "RAW文件清单"])
         self.assertEqual(len(model["03-问答"]), 3)
         self.assertEqual(sum("Macro" in row["问题"] for row in model["03-问答"]), 2)
         self.assertTrue(any(row["问题"] == "本次有哪些检查没有运行？" for row in model["03-问答"]))
@@ -1034,17 +1157,22 @@ class ReviewRunnerTests(unittest.TestCase):
             config = {
                 "_config_path": str(root / "config.json"),
                 "ips": [
-                    {"id": "IP_BAD", "checks": {"formal_nl": {"report_json": "missing.json"}}},
+                    {"id": "IP_BAD", "checks": {"lef_review": {"report_json": "missing.json"}}},
                     {"id": "IP_GOOD", "checks": {"macro_index": {"report_json": str(good)}}},
                 ],
             }
             results = run_review(config, root / "output")
-            self.assertEqual(results[0]["checks"]["formal_nl"]["status"], "FAILED")
+            self.assertEqual(results[0]["checks"]["lef_review"]["status"], "FAILED")
             self.assertEqual(results[1]["checks"]["macro_index"]["status"], "COMPLETE")
 
     def test_unknown_check_name_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "不支持的检查名"):
             run_review({"ips": [{"id": "IP_A", "checks": {"release_gate": {}}}]}, tempfile.mkdtemp())
+
+    def test_formal_inventory_is_not_runnable_from_manual_review_runner(self):
+        with self.assertRaisesRegex(ValueError, "不支持的检查名.*formal_nl"):
+            run_review({"ips": [{"id": "IP_A", "checks": {"formal_nl": {"report_json": "formal.json"}}}]},
+                       tempfile.mkdtemp())
 
     def test_liberty_batch_can_retain_matching_cells_for_excel_detail(self):
         with tempfile.TemporaryDirectory() as temp:

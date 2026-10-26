@@ -28,32 +28,33 @@ from .export_review_excel import export_review_excel
 from .ip_check_overview import render_overview
 
 
-CHECK_NAMES = {"formal_nl", "macro_index", "lef_review", "lef_liberty_check"}
+CHECK_NAMES = {"macro_index", "lef_review", "lef_liberty_check"}
+LEGACY_CHECK_NAMES = {"formal_nl"}
 CHECK_LABELS = {
-    "formal_nl": "正式目录盘点",
+    "formal_nl": "正式目录盘点（旧版 Review 记录）",
     "macro_index": "Macro / View 文件索引",
     "lef_review": "LEF 双文件核查",
     "lef_liberty_check": "LEF–Liberty 接口核查",
 }
 VIEW_NAMES = ("lef", "liberty", "gds", "cdl", "db", "verilog")
 SHEET_HEADERS = {
-    "00-概览": ["IP", "库标识", "RAW版本", "正式阶段", "已选检查", "执行完成项", "执行失败项", "质量判断", "正式可见文件", "Macro数", "报告结论", "报告生成时间", "源提交", "工作区有改动", "输入范围"],
+    "00-概览": ["IP", "库标识", "RAW版本", "正式阶段", "已选检查", "执行完成项", "执行失败项", "质量判断", "Macro数", "报告结论", "报告生成时间", "源提交", "工作区有改动", "输入范围"],
     "01-工程检查": ["序号", "工程检查主题", "工程覆盖", "本次执行", "本次证据", "范围或缺口"],
     "02-执行记录": ["IP", "检查", "执行状态", "上下文关系", "结果摘要", "范围说明", "输入身份", "输入范围", "报告路径"],
     "03-问答": ["IP", "问题", "回答", "证据范围", "来源报告"],
     "04-关注项": ["IP", "类别", "类型", "对象", "数量", "发现", "状态", "建议核对", "证据路径"],
     "05-MacroView": ["IP", "RAW版本", "Macro", "LEF", "Liberty", "GDS", "CDL", "DB", "Verilog", "基准状态", "证据说明"],
     "06-MacroView文件": ["IP", "RAW版本", "Macro", "View", "Corner/线索", "来源版本", "文件名", "关联证据", "状态", "来源路径"],
-    "07-正式文件": ["IP", "正式阶段", "相对路径", "View", "来源RAW版本", "来源路径", "正式路径", "盘点状态"],
+    "07-正式文件": ["IP", "快照时间", "正式阶段", "相对路径", "View", "来源RAW版本", "来源路径", "正式路径", "盘点状态", "盘点报告"],
+    "RAW文件清单": ["IP", "快照时间", "RAW版本", "RAW根目录", "版本盘点状态", "版本文件数", "View", "View文件数", "相对路径", "来源路径", "盘点报告"],
     "08-LEF宏": ["IP", "LEF文件", "Macro", "类别", "Site", "宽度", "高度", "单位", "Pin数", "电源Pin", "地Pin", "OBS几何数", "解析范围"],
     "09-Liberty角": ["IP", "Liberty文件", "Library", "工艺角线索", "RC角线索", "条件", "Process", "Voltage (V)", "Temp (°C)", "文件Cell数", "同名Cell", "LEF有而本文件无", "本文件有而LEF无", "信号Pin对照", "信号Pin差异", "电源/地脚对照", "电源/地脚差异", "证据不足Cell数", "角标说明"],
     "10-Liberty单元": ["IP", "Liberty文件", "Corner线索", "Cell", "LEF同名", "信号Pin数", "PG Pin数", "接口状态", "差异类型", "具体差异", "证据路径"],
 }
 
 ENGINEERING_CHECKLIST = (
-    ("RAW 版本与文件盘点", ("formal_nl", "macro_index"), "单次目录或选定版本盘点，不代表完整历史。"),
-    ("文件更新与清单 Delta", ("formal_nl", "lef_review"), "正式来源路径或指定 LEF 对比；不等于全视图内容 Delta。"),
-    ("正式文件及 RAW 来源", ("formal_nl",), "只读路径、链接和来源盘点，不作发布放行判断。"),
+    ("RAW 版本与文件索引", ("macro_index",), "单次选定版本索引，不代表完整历史。"),
+    ("文件更新与清单 Delta", ("lef_review",), "限指定 LEF 对及当前 Parser 支持字段。"),
     ("Macro 清单、来源与更新", ("macro_index",), "选定 FileMap 的对象与文件关联，不代表多版本演进已覆盖。"),
     ("Macro 六类文件映射", ("macro_index",), "名称/解析证据映射；候选关联不是已确认齐套。"),
     ("Signoff Corner 覆盖", ("lef_liberty_check",), "仅显示所选 Liberty 的角标线索；没有期望角集合时不判断齐套。"),
@@ -410,11 +411,10 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
         evidence_dir.mkdir(parents=True, exist_ok=True)
         lef_result = None
         runners = {
-            "formal_nl": lambda spec: _run_formal(spec, config_dir, evidence_dir),
             "macro_index": lambda spec: _run_macro(spec, config_dir, evidence_dir, ip_id),
             "lef_review": lambda spec: _run_lef_review(spec, config_dir, evidence_dir, ip_id),
         }
-        execution_order = {"lef_review": 0, "formal_nl": 1, "macro_index": 2, "lef_liberty_check": 3}
+        execution_order = {"lef_review": 0, "macro_index": 1, "lef_liberty_check": 2}
         for name, spec in sorted(checks_spec.items(), key=lambda item: execution_order[item[0]]):
             if not isinstance(spec, dict) or spec.get("enabled", True) is False:
                 continue
@@ -597,6 +597,61 @@ def _formal_inventory(formal: dict[str, Any], stage: str | None = None) -> tuple
     return stage or "", {}
 
 
+def _load_saved_formal_inventory(output: Path, library_id: str) -> dict[str, Any]:
+    """Load the newest successful saved Formal NL report for one IP, without rescanning."""
+    formal_dir = output / "formal_nl" / _library_dir(library_id)
+    candidates = []
+    for priority, pointer_name in enumerate(("latest.json", "latest_check.json")):
+        pointer_path = formal_dir / pointer_name
+        if not pointer_path.is_file():
+            continue
+        try:
+            pointer = _json_read(pointer_path)
+            report_value = str(pointer.get("report_json") or "").strip()
+            if not report_value:
+                continue
+            report_path = Path(report_value).expanduser()
+            if not report_path.is_absolute():
+                report_path = pointer_path.parent / report_path
+            report_path = report_path.resolve()
+            if not report_path.is_relative_to(output.resolve()) or not report_path.is_file():
+                continue
+            report = _json_read(report_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if str(report.get("library_id") or "") != library_id:
+            continue
+        status = str(pointer.get("report_status") or report.get("report_status") or
+                     report.get("status") or "").upper()
+        if status not in {"COMPLETE", "MATCHED", "DONE", "PASS"}:
+            continue
+        try:
+            report_ref = report_path.relative_to(output.resolve()).as_posix()
+        except ValueError:
+            continue
+        candidates.append((str(pointer.get("generated_at") or report.get("generated_at") or ""),
+                           -priority, report, report_ref))
+    if not candidates:
+        return {}
+    generated_at, _priority, report, report_ref = max(candidates, key=lambda item: (item[0], item[1]))
+    return {"report": report, "generated_at": generated_at, "report_ref": report_ref,
+            "status": str(report.get("report_status") or report.get("status") or "COMPLETE")}
+
+
+def _inventory_snapshot(review: dict[str, Any]) -> dict[str, Any]:
+    saved = review.get("inventory_snapshot")
+    if isinstance(saved, dict):
+        return saved
+    check = _check_result(review, "formal_nl")
+    if check.get("selected") and check.get("status") == "COMPLETE":
+        return {"report": check.get("result") or {},
+                "generated_at": (check.get("result") or {}).get("generated_at") or
+                                review.get("generated_at") or "",
+                "report_ref": check.get("result_ref") or check.get("report_path") or "",
+                "status": check.get("result_status") or "COMPLETE"}
+    return {}
+
+
 def _macro_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     result = _result(review, "macro_index")
     index = result.get("macro_index") or result
@@ -640,7 +695,11 @@ def _macro_file_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
 def _engineering_check_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     checks = review.get("checks") or {}
     rows = []
-    for number, (topic, supporting_checks, limitation) in enumerate(ENGINEERING_CHECKLIST, 1):
+    checklist = list(ENGINEERING_CHECKLIST)
+    if "formal_nl" in checks:
+        checklist.insert(2, ("正式文件及 RAW 来源（旧版 Review）", ("formal_nl",),
+                             "正式目录链接统计已由独立页承担；此行仅保留历史检查记录。"))
+    for number, (topic, supporting_checks, limitation) in enumerate(checklist, 1):
         selected = [(name, checks[name]) for name in supporting_checks if name in checks and checks[name].get("selected")]
         if not selected:
             coverage, execution, evidence = "未检查", "未选择相关检查", ""
@@ -663,16 +722,76 @@ def _engineering_check_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _formal_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     ip = review.get("ip") or {}
-    formal = _result(review, "formal_nl")
-    stage, inventory = _formal_inventory(formal, ip.get("formal_stage"))
+    snapshot = _inventory_snapshot(review)
+    formal = snapshot.get("report") or {}
+    label = ip.get("name") or ip.get("id") or "未命名IP"
+    report_ref = snapshot.get("report_ref") or ""
+    snapshot_at = snapshot.get("generated_at") or "未记录"
     rows = []
-    for item in inventory.get("files") or []:
-        rows.append({"IP": ip.get("name") or ip.get("id"), "正式阶段": stage,
-                     "相对路径": item.get("relative_path", ""), "View": item.get("view", "other"),
-                     "来源RAW版本": item.get("raw_version", "未映射"),
-                     "来源路径": item.get("source_path", ""),
-                     "正式路径": item.get("published_path", ""),
-                     "盘点状态": inventory.get("status", formal.get("status", "未知"))})
+    inventories = formal.get("inventories") or {}
+    selected_stage = str(ip.get("formal_stage") or "")
+    stages = [(selected_stage, inventories[selected_stage])] if selected_stage in inventories else (
+        list(inventories.items()) if not selected_stage else [])
+    for stage, inventory in stages:
+        for item in inventory.get("files") or []:
+            rows.append({"IP": label, "快照时间": snapshot_at, "正式阶段": stage,
+                         "相对路径": item.get("relative_path", ""), "View": item.get("view", "other"),
+                         "来源RAW版本": item.get("raw_version", "未映射"),
+                         "来源路径": item.get("source_path", ""),
+                         "正式路径": item.get("published_path", ""),
+                         "盘点状态": inventory.get("status", formal.get("status", "未知")),
+                         "盘点报告": report_ref})
+    if not rows:
+        rows.append({"IP": label, "快照时间": snapshot_at, "正式阶段": selected_stage or "未指定",
+                     "相对路径": "", "View": "", "来源RAW版本": "", "来源路径": "",
+                     "正式路径": "", "盘点状态": "未附盘点" if not snapshot else "无匹配阶段或无文件记录",
+                     "盘点报告": report_ref or "未找到该 IP 已保存的正式 NL 盘点报告"})
+    return rows
+
+
+def _raw_inventory_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
+    ip = review.get("ip") or {}
+    label = ip.get("name") or ip.get("id") or "未命名IP"
+    snapshot = _inventory_snapshot(review)
+    formal_report = snapshot.get("report") or {}
+    has_raw_inventory = isinstance(formal_report.get("raw_library"), dict)
+    raw_library = formal_report.get("raw_library") or {}
+    inventories = raw_library.get("inventories") or {}
+    versions = raw_library.get("versions") or []
+    snapshot_at = snapshot.get("generated_at") or "未记录"
+    report_ref = snapshot.get("report_ref") or ""
+    rows = []
+    for version in versions:
+        version_id = str(version.get("version_id") or "未标版本")
+        inventory = inventories.get(version_id) or {}
+        files = inventory.get("files") or []
+        view_counts = inventory.get("view_counts") or version.get("view_counts") or {}
+        status = str(inventory.get("status") or version.get("inventory_status") or "明细未记录")
+        file_count = inventory.get("file_count", version.get("file_count", len(files)))
+        common = {"IP": label, "快照时间": snapshot_at, "RAW版本": version_id,
+                  "RAW根目录": version.get("resolved_path") or version.get("path") or inventory.get("target_path", ""),
+                  "版本盘点状态": status, "版本文件数": file_count,
+                  "盘点报告": report_ref}
+        if files:
+            for item in files:
+                view = str(item.get("view") or "other")
+                rows.append({**common, "View": view, "View文件数": view_counts.get(view, "未统计"),
+                             "相对路径": item.get("relative_path", ""),
+                             "来源路径": item.get("source_path") or item.get("published_path", "")})
+        else:
+            rows.append({**common, "View": "", "View文件数": "",
+                         "相对路径": "该版本没有文件明细记录", "来源路径": ""})
+    if not rows:
+        has_snapshot = bool(snapshot)
+        rows.append({"IP": label, "快照时间": snapshot_at, "RAW版本": "", "RAW根目录": "",
+                     "版本盘点状态": (str(raw_library.get("status") or "无 RAW 版本记录")
+                                    if has_snapshot and has_raw_inventory else
+                                    ("快照未包含 RAW 多版本盘点" if has_snapshot else "未附盘点")),
+                     "版本文件数": "", "View": "", "View文件数": "",
+                     "相对路径": ("未发现已登记 RAW 版本" if has_raw_inventory else
+                                  ("该盘点报告未包含 RAW 多版本清单" if has_snapshot else "")),
+                     "来源路径": "",
+                     "盘点报告": report_ref or "未找到该 IP 已保存的 RAW 多版本盘点报告"})
     return rows
 
 
@@ -968,14 +1087,17 @@ def _qa_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
             for name, item in runtime_checks.items()
         }
     not_run_names = []
-    for name in sorted(CHECK_NAMES):
+    available_checks = set(CHECK_NAMES)
+    if "formal_nl" in execution_records or "formal_nl" in (review.get("checks") or {}):
+        available_checks.update(LEGACY_CHECK_NAMES)
+    for name in sorted(available_checks):
         execution = execution_records.get(name) or {}
         status = str(execution.get("execution_status") or execution.get("status") or "").upper()
         if status == "NOT_RUN" or (not status and name not in requested):
             not_run_names.append(name)
     review_result_ref = str(review.get("review_result_ref") or "")
     rows.append({"IP": label, "问题": "本次有哪些检查没有运行？",
-                 "回答": "、".join(CHECK_LABELS[name] for name in not_run_names) if not_run_names else "无，四项检查均已选择执行。",
+                 "回答": "、".join(CHECK_LABELS[name] for name in not_run_names) if not_run_names else "无，本次列出的检查项均已选择执行。",
                  "证据范围": "未选择或未配置的检查不代表通过或失败；如需结论，先补齐输入并单独执行。",
                  "来源报告": review_result_ref})
     qa_questions = {
@@ -1149,12 +1271,12 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
     sheet_names = ["00-概览", "01-工程检查", "02-执行记录", "03-问答", "04-关注项"]
     if "macro_index" in selected_names:
         sheet_names.extend(["05-MacroView", "06-MacroView文件"])
-    if "formal_nl" in selected_names:
-        sheet_names.append("07-正式文件")
+    sheet_names.append("07-正式文件")
     if "lef_review" in selected_names:
         sheet_names.append("08-LEF宏")
     if "lef_liberty_check" in selected_names:
         sheet_names.extend(["09-Liberty角", "10-Liberty单元"])
+    sheet_names.append("RAW文件清单")
     model = {name: [] for name in sheet_names}
     for review in reviews:
         ip = review.get("ip") or {}
@@ -1163,7 +1285,7 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
         complete = sum(item.get("status") == "COMPLETE" for _, item in selected)
         failed = sum(item.get("status") == "FAILED" for _, item in selected)
         formal = _result(review, "formal_nl")
-        stage, inventory = _formal_inventory(formal, ip.get("formal_stage"))
+        stage, _inventory = _formal_inventory(formal, ip.get("formal_stage"))
         index = _result(review, "macro_index").get("macro_index") or _result(review, "macro_index")
         macro_count = (index.get("baseline") or {}).get("macro_count", len(index.get("macros") or {})) if _check_result(review, "macro_index") else "未检查"
         quality = _review_summary(review)["quality_assessment"]
@@ -1173,8 +1295,7 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
                                  "RAW版本": ip.get("raw_version", "未指定"), "正式阶段": stage or ip.get("formal_stage", "未检查"),
                                  "已选检查": "、".join(name for name, _ in selected) or "无",
                                  "执行完成项": complete, "执行失败项": failed,
-                                 "质量判断": quality["label"],
-                                 "正式可见文件": inventory.get("file_count", "未检查"), "Macro数": macro_count,
+                                 "质量判断": quality["label"], "Macro数": macro_count,
                                  "报告结论": quality["boundary"],
                                  "报告生成时间": review.get("generated_at") or "未记录",
                                  "源提交": revision.get("commit") or "未记录",
@@ -1195,11 +1316,11 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
         model["01-工程检查"].extend(_engineering_check_rows(review))
         model["03-问答"].extend(_qa_rows(review))
         model["04-关注项"].extend(_finding_rows(review))
+        model["07-正式文件"].extend(_formal_rows(review))
+        model["RAW文件清单"].extend(_raw_inventory_rows(review))
         if _check_result(review, "macro_index").get("selected"):
             model["05-MacroView"].extend(_macro_rows(review))
             model["06-MacroView文件"].extend(_macro_file_rows(review))
-        if _check_result(review, "formal_nl").get("selected"):
-            model["07-正式文件"].extend(_formal_rows(review))
         if _check_result(review, "lef_review").get("selected"):
             model["08-LEF宏"].extend(_lef_rows(review))
         if _check_result(review, "lef_liberty_check").get("selected"):
@@ -1218,6 +1339,10 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
     row_counts: Counter[str] = Counter()
     overview_rows = []
     for review in reviews:
+        ip_context = review.get("ip") or {}
+        library_id = str(ip_context.get("library_id") or ip_context.get("id") or "")
+        if not _inventory_snapshot(review) and library_id:
+            review["inventory_snapshot"] = _load_saved_formal_inventory(output, library_id)
         review["source_revision"] = source_revision
         review["input_scope"] = _input_scope(review)
         run_dir = Path(review["run_dir"])
@@ -1266,7 +1391,7 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
         scope_note = (f"IP：{review_record['library_id']}；Review：{review_record['review_id']}；"
                       f"生成：{review_record['generated_at']}；源提交：{revision_label}；"
                       f"{_input_scope_label(review_record['input_scope'])}；"
-                      "仅汇总本 IP、本次选择的检查。未选择不代表通过。")
+                      "仅汇总本 IP、本次选择的检查。未选择不代表通过。NL/RAW盘点表复用该 IP 最近一次成功的正式目录快照；导出不重扫，也不验证源目录此后是否变化。")
         workbook_path = run_dir / "ip_review.xlsx"
         workbook_tmp = run_dir / f".ip_review.{review_record['review_id']}.tmp.xlsx"
         try:
@@ -1460,7 +1585,10 @@ def _review_summary(review: dict[str, Any]) -> dict[str, Any]:
                         "affected_objects": sum(item.get("count", 0) for item in selected)}
     selected = [item for item in (review.get("checks") or {}).values() if item.get("selected")]
     selected_names = {name for name, item in (review.get("checks") or {}).items() if item.get("selected")}
-    not_run_checks = sorted(CHECK_NAMES - selected_names)
+    known_checks = set(CHECK_NAMES)
+    if "formal_nl" in (review.get("checks") or {}) or "formal_nl" in ((review.get("review_result") or {}).get("checks") or {}):
+        known_checks.update(LEGACY_CHECK_NAMES)
+    not_run_checks = sorted(known_checks - selected_names)
     incomplete_checks = [item for item in selected if item.get("status") != "COMPLETE"]
     if not selected:
         quality_status, quality_label = "NOT_ASSESSED", "未形成质量结论"

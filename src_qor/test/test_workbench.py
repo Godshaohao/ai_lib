@@ -13,6 +13,113 @@ from lib_guard.workbench import _acquire_library_lock, _files_for_selection, _qu
 
 
 class WorkbenchTests(unittest.TestCase):
+    def test_review_files_tab_reads_cache_and_refresh_builds_formal_to_raw_lef_status(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old_root = root / "raw" / "20261001_full"
+            new_root = root / "raw" / "20261005_fix"
+            old_lef = old_root / "LEF" / "top.lef"
+            new_lef = new_root / "LEF" / "top.lef"
+            for path in (old_lef, new_lef):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(path.parent.parent.name, encoding="utf-8")
+            stage_ip = root / "formal" / "lib_NL2.5_3" / "IP"
+            formal_link = stage_ip / "LEF" / "top.lef"
+            formal_link.parent.mkdir(parents=True)
+            formal_link.symlink_to(old_lef)
+            registry = root / "registry.yml"
+            registry.write_text(
+                f"ips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n"
+                f"    vendor: Vendor_A\n    library_name: IP_A\n"
+                f"    raw_versions:\n      - id: 20261001_full\n        path: {old_root}\n"
+                f"      - id: 20261005_fix\n        path: {new_root}\n"
+                f"    formal_nl_root: {stage_ip}\n",
+                encoding="utf-8")
+            output = root / "output"
+            client = create_app(registry, output).test_client()
+            self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
+
+            with patch("lib_guard.workbench.scan_registered_raw_lefs",
+                       side_effect=AssertionError("GET must not scan RAW")):
+                page = client.get("/?ip=IP_A&tab=review")
+            self.assertEqual(page.status_code, 200, page.get_data(as_text=True))
+            self.assertIn("正式 NL 正在使用的 LEF".encode(), page.data)
+            self.assertIn('data-workbench-tab="files"'.encode(), page.data)
+
+            refreshed = client.post("/file-status/refresh", data={"ip": "IP_A"})
+            self.assertEqual(refreshed.status_code, 303)
+            self.assertIn("review_tab=files", refreshed.headers["Location"])
+            from lib_guard.review_runner import _library_dir
+            status_path = output / "file_status" / _library_dir("Vendor_A.IP_A") / "latest.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            self.assertEqual(status["status"], "COMPLETE")
+            self.assertEqual(status["files"][0]["delivery_relation"], "LATER_DELIVERY_HINT")
+            self.assertEqual(status["files"][0]["nl_source"]["source_path"], str(old_lef.resolve()))
+            self.assertEqual(status["files"][0]["recent_raw_source"]["source_path"], str(new_lef.resolve()))
+            self.assertEqual(status["files"][0]["content_check"], "NOT_RUN")
+            previous_status = status_path.read_bytes()
+            with patch("lib_guard.workbench.scan_registered_raw_lefs",
+                       side_effect=OSError("controlled RAW scan failure")):
+                failed_refresh = client.post("/file-status/refresh", data={"ip": "IP_A"})
+            self.assertEqual(failed_refresh.status_code, 303)
+            self.assertEqual(status_path.read_bytes(), previous_status)
+
+            rendered = client.get(refreshed.headers["Location"])
+            self.assertIn("发现较晚交付线索".encode(), rendered.data)
+            self.assertIn("唯一归属".encode(), rendered.data)
+            self.assertIn(str(formal_link).encode(), rendered.data)
+            self.assertIn("较晚交付不等于内容变化".encode(), rendered.data)
+
+    def test_file_status_does_not_guess_between_multiple_formal_stages(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw" / "20261001_full"
+            source = raw / "LEF" / "top.lef"
+            source.parent.mkdir(parents=True)
+            source.write_text("lef", encoding="utf-8")
+            formal_root = root / "formal"
+            for stage in ("lib_NL2.5_2", "lib_NL2.5_3"):
+                link = formal_root / stage / "IP" / "LEF" / "top.lef"
+                link.parent.mkdir(parents=True)
+                link.symlink_to(source)
+            registry = root / "registry.yml"
+            registry.write_text(
+                f"ips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n    vendor: Vendor_A\n"
+                f"    library_name: IP_A\n    raw_versions: [{{id: 20261001_full, path: {raw}}}]\n"
+                f"    formal_nl_root: {formal_root}\n",
+                encoding="utf-8")
+            output = root / "output"
+            client = create_app(registry, output).test_client()
+            self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
+            with patch("lib_guard.workbench.scan_registered_raw_lefs",
+                       side_effect=AssertionError("ambiguous context must stop before RAW scan")):
+                response = client.post("/file-status/refresh", data={"ip": "IP_A"}, follow_redirects=True)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("当前 NL 阶段无法唯一确定".encode(), response.data)
+
+    def test_formal_stage_hint_must_exist_in_the_refreshed_inventory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw" / "20261001_full"
+            source = raw / "LEF" / "top.lef"
+            source.parent.mkdir(parents=True)
+            source.write_text("lef", encoding="utf-8")
+            configured_stage_ip = root / "formal" / "lib_NL2.5_9" / "IP"
+            registry = root / "registry.yml"
+            registry.write_text(
+                f"ips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n    vendor: Vendor_A\n"
+                f"    library_name: IP_A\n    raw_versions: [{{id: 20261001_full, path: {raw}}}]\n"
+                f"    formal_nl_root: {configured_stage_ip}\n",
+                encoding="utf-8")
+            output = root / "output"
+            client = create_app(registry, output).test_client()
+            self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
+            with patch("lib_guard.workbench.scan_registered_raw_lefs",
+                       side_effect=AssertionError("unobserved stage must not scan RAW")):
+                response = client.post("/file-status/refresh", data={"ip": "IP_A"}, follow_redirects=True)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("当前 NL 阶段无法唯一确定".encode(), response.data)
+
     def test_file_selection_reports_walk_permission_errors_as_truncation(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "raw"
@@ -792,25 +899,46 @@ class WorkbenchTests(unittest.TestCase):
         form = MultiDict([("id", "PHY_A"), ("library_id", "Vendor_A.phy_ip"),
                           ("checks", "formal_nl")])
 
-        entry = workbench._entry_from_form(form, previous)
-        workbench._validate_for_run(entry)
+        with self.assertRaisesRegex(ValueError, "正式 NL.*页面"):
+            workbench._entry_from_form(form, previous)
 
-        self.assertEqual(entry["checks"]["formal_nl"]["root"], previous["raw_root"])
-        self.assertEqual(entry["checks"]["formal_nl"]["formal_nl_root"], previous["formal_nl_root"])
-        self.assertEqual(entry["checks"]["formal_nl"]["ip_directory_name"], "phy_ip")
+    def test_formal_inventory_is_not_a_manual_review_selection(self):
+        previous = {
+            "id": "PHY_A", "library_id": "Vendor_A.phy_ip", "name": "PHY A",
+            "library_name": "phy_ip", "raw_root": "/raw/Vendor_A/phy_ip",
+            "formal_nl_root": "/release/lib_NL2.5_3/IP", "checks": {},
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            registry = Path(temp) / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: PHY_A\n    library_id: Vendor_A.phy_ip\n"
+                "    name: PHY A\n    library_name: phy_ip\n"
+                "    formal_nl_root: /release/lib_NL2.5_3/IP\n    checks: {}\n",
+                encoding="utf-8")
+            response = create_app(registry, registry.parent / "output").test_client().get(
+                "/?ip=PHY_A&tab=review")
+            page = response.get_data(as_text=True)
+            review_form = page.split('data-review-form', 1)[1].split('</form>', 1)[0]
 
-    def test_formal_check_explicit_config_takes_priority_over_registered_directories(self):
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn('name="checks" value="formal_nl"', review_form)
+            self.assertNotIn("正式目录盘点", review_form)
+            self.assertIn("正式 NL 总览", page)
+            with self.assertRaisesRegex(ValueError, "正式 NL.*页面"):
+                workbench._entry_from_form(MultiDict([
+                    ("id", "PHY_A"), ("library_id", "Vendor_A.phy_ip"),
+                    ("checks", "formal_nl")]), previous)
+
+    def test_formal_check_config_is_not_a_manual_review_input(self):
         previous = {"id": "PHY_A", "library_id": "Vendor_A.phy_ip", "name": "PHY A",
                     "raw_root": "/raw/default", "formal_nl_root": "/release/default", "checks": {}}
         form = MultiDict([("id", "PHY_A"), ("library_id", "Vendor_A.phy_ip"),
                           ("checks", "formal_nl"), ("formal_config", "/configs/formal.yml")])
 
-        entry = workbench._entry_from_form(form, previous)
-        workbench._validate_for_run(entry)
+        with self.assertRaisesRegex(ValueError, "正式 NL.*页面"):
+            workbench._entry_from_form(form, previous)
 
-        self.assertEqual(entry["checks"]["formal_nl"], {"config": "/configs/formal.yml"})
-
-    def test_formal_config_choices_include_only_valid_nearby_yaml(self):
+    def test_manual_review_does_not_offer_formal_config_selector(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             registry = root / "registry.yml"
@@ -825,9 +953,10 @@ class WorkbenchTests(unittest.TestCase):
             response = create_app(registry, root / "output").test_client().get("/?ip=PHY_A")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn(b'data-fill-input="formal_config"', response.data)
-            self.assertIn(str(audit).encode(), response.data)
-            self.assertNotIn(b"unrelated.yml", response.data)
+            review_form = response.get_data(as_text=True).split('data-review-form', 1)[1].split('</form>', 1)[0]
+            self.assertNotIn('data-fill-input="formal_config"', review_form)
+            self.assertNotIn(str(audit), review_form)
+            self.assertNotIn("formal_config", review_form)
 
     def test_sidebar_shows_version_counts_without_guessing_latest_or_rendering_tree(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1881,10 +2010,10 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(stage_report["report_status"], "COMPLETE")
             check_pointer = latest_path.parent / "latest_check.json"
             self.assertEqual(check_pointer.exists(), stage_report["report_status"] == "COMPLETE")
-            review = client.get("/?ip=IP_A&tab=review&formal_stage=lib_NL2.5_3")
+            review = client.get("/?ip=IP_A&tab=formal-nl&formal_stage=lib_NL2.5_3")
             self.assertEqual(review.status_code, 200)
-            self.assertIn(b'name="formal_stage" value="lib_NL2.5_3"', review.data)
-            self.assertIn(json.loads(check_pointer.read_text(encoding="utf-8"))["report_json"].encode(), review.data)
+            self.assertIn("最近完成的单阶段核查".encode(), review.data)
+            self.assertIn(b"scope=check", review.data)
             for link, target in symlinks:
                 self.assertTrue(link.is_symlink())
                 self.assertEqual(link.resolve(), target)

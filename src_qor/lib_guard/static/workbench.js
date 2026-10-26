@@ -244,7 +244,7 @@
   });
 
   const checkLabels = {
-    formal_nl: "正式目录盘点", macro_index: "Macro / View 索引",
+    macro_index: "Macro / View 索引",
     lef_review: "LEF 双文件核查", lef_liberty_check: "LEF–Liberty 接口核查",
   };
   const scopeTarget = document.querySelector("[data-scope-target]");
@@ -295,17 +295,6 @@
       if (input?.value.trim()) addScopeFile(filesNode, label, input.value.trim(), input.dataset.inputSource || fallbackSource);
     };
     selectedChecks.forEach((item) => {
-      if (item.value === "formal_nl") {
-        const config = reviewForm?.querySelector('[name="formal_config"]');
-        const report = reviewForm?.querySelector('[name="formal_report_json"]');
-        if (report?.value.trim()) append("已有盘点报告", "formal_report_json");
-        else if (config?.value.trim()) append("自选盘点配置", "formal_config");
-        else if (reviewForm?.dataset.formalDefaultRoot) {
-          addScopeFile(filesNode, "正式 NL 根目录", reviewForm.dataset.formalDefaultRoot, "已登记目录");
-          if (reviewForm.dataset.formalDefaultRaw)
-            addScopeFile(filesNode, "RAW 根目录", reviewForm.dataset.formalDefaultRaw, "已登记目录");
-        }
-      }
       if (item.value === "macro_index") append("RAW 根目录", "macro_root", "所选 RAW 版本");
       if (item.value === "lef_review") {
         append("基准 LEF", "lef_old_file");
@@ -502,6 +491,25 @@
     window.setTimeout(poll, 700);
     }
   }
+  const fileStatusRows = [...document.querySelectorAll("[data-file-status-row]")];
+  const fileStatusSearch = document.querySelector("[data-file-status-search]");
+  const fileStatusFilter = document.querySelector("[data-file-status-filter]");
+  const fileStatusCount = document.querySelector("[data-file-status-count]");
+  function applyFileStatusFilters() {
+    const query = (fileStatusSearch?.value || "").trim().toLocaleLowerCase();
+    const relation = fileStatusFilter?.value || "";
+    let visible = 0;
+    fileStatusRows.forEach((row) => {
+      const show = row.dataset.search.includes(query) && (!relation || row.dataset.relation === relation);
+      row.hidden = !show;
+      if (show) visible += 1;
+    });
+    if (fileStatusCount) fileStatusCount.textContent = `显示 ${visible} / ${fileStatusRows.length} 份 LEF`;
+  }
+  fileStatusSearch?.addEventListener("input", applyFileStatusFilters);
+  fileStatusFilter?.addEventListener("change", applyFileStatusFilters);
+  applyFileStatusFilters();
+
   selectTab(document.body.dataset.activeTab || "catalog", "main");
-  selectTab("config", "review");
+  selectTab(document.body.dataset.activeReviewTab || "files", "review");
 })();

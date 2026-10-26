@@ -268,6 +268,27 @@ def _view_relative_key(relative_path: str, view: str) -> tuple[str, tuple[str, .
     return view, tuple(value.casefold() for value in parts)
 
 
+def longest_registered_path_match(
+    source: Path, candidates: list[tuple[Path, dict[str, Any]]],
+) -> tuple[tuple[Path, dict[str, Any]] | None, bool]:
+    """Return the unique identity at the longest registered path prefix."""
+    matches = []
+    for path, identity in candidates:
+        try:
+            source.relative_to(path)
+        except ValueError:
+            continue
+        matches.append((len(path.parts), path, identity))
+    if not matches:
+        return None, False
+    longest = max(item[0] for item in matches)
+    best = [item for item in matches if item[0] == longest]
+    distinct = {json.dumps(item[2], ensure_ascii=False, sort_keys=True) for item in best}
+    if len(distinct) != 1:
+        return None, True
+    return (best[0][1], best[0][2]), False
+
+
 def _pair_side_record(file: dict[str, Any], *, version: str, root: str | Path,
                       formal: bool) -> dict[str, Any] | None:
     source_path = str(file.get("source_path") or "")

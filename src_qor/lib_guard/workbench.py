@@ -29,6 +29,7 @@ from werkzeug.exceptions import HTTPException
 from .review_runner import (CHECK_NAMES, _json_read, _latest_complete_run, _library_dir,
                            refresh_ip_overview, run)
 from .raw_discovery import discover_raw_report, write_discovery_artifacts
+from .file_status import build_lef_file_status, scan_registered_raw_lefs
 from . import effective_file_tracker
 from .effective_file_tracker import run as run_formal_nl
 
@@ -248,6 +249,8 @@ def _formal_discovery_status(report: dict[str, Any]) -> str:
 
 def _entry_from_form(form: Any, previous: dict[str, Any] | None = None) -> dict[str, Any]:
     selected = set(form.getlist("checks"))
+    if "formal_nl" in selected:
+        raise ValueError("正式目录链接、来源和 View 统计请在“正式 NL”页面查看；这里不重复运行。")
     unknown = selected - CHECK_NAMES
     if unknown:
         raise ValueError(f"不支持的检查名：{', '.join(sorted(unknown))}")
@@ -265,7 +268,6 @@ def _entry_from_form(form: Any, previous: dict[str, Any] | None = None) -> dict[
         "checks": {},
     }
     specs = {
-        "formal_nl": {"config": "formal_config", "report_json": "formal_report_json"},
         "macro_index": {"report_json": "macro_report_json", "filemap_json": "macro_filemap_json",
                          "root": "macro_root", "parser_facts_json": "macro_parser_facts_json",
                          "version": "macro_version", "library_id": "macro_library_id"},
@@ -275,13 +277,6 @@ def _entry_from_form(form: Any, previous: dict[str, Any] | None = None) -> dict[
     }
     for check_name in sorted(selected):
         spec = {key: _text(form, field) for key, field in specs[check_name].items() if _text(form, field)}
-        if check_name == "formal_nl" and not (spec.get("config") or spec.get("report_json")):
-            source = previous or {}
-            if source.get("formal_nl_root"):
-                spec.update({"formal_nl_root": str(source["formal_nl_root"]),
-                             "root": str(source.get("raw_root") or ""),
-                             "ip_directory_name": str(source.get("library_name") or source.get("name") or ip_id),
-                             "library_id": library_id})
         if check_name == "lef_liberty_check":
             liberty_paths = [line.strip() for line in _text(form, "ll_liberty_files").splitlines() if line.strip()]
             if liberty_paths:
@@ -305,8 +300,6 @@ def _validate_for_run(entry: dict[str, Any]) -> None:
     if not checks:
         raise ValueError("至少勾选一项检查")
     requirements = {
-        "formal_nl": lambda spec: bool(spec.get("config") or spec.get("report_json") or
-                                      (spec.get("formal_nl_root") and spec.get("ip_directory_name"))),
         "macro_index": lambda spec: bool(spec.get("report_json") or spec.get("filemap_json") or spec.get("root")),
         "lef_review": lambda spec: bool(spec.get("report_json") or (spec.get("old_file") and spec.get("new_file"))),
         "lef_liberty_check": lambda spec: bool(spec.get("report_json") or (spec.get("liberty_files") and
@@ -316,29 +309,6 @@ def _validate_for_run(entry: dict[str, Any]) -> None:
     for name, spec in checks.items():
         if not requirements[name](spec):
             raise ValueError(f"{name} 已勾选，但缺少所需路径或报告输入")
-
-
-def _formal_config_choices(registry_file: Path) -> list[dict[str, str]]:
-    if yaml is None:
-        return []
-    choices = []
-    paths = sorted((*registry_file.parent.glob("*.yml"), *registry_file.parent.glob("*.yaml")),
-                   key=lambda path: path.name.casefold())
-    for path in paths[:100]:
-        if path == registry_file or path.is_symlink() or not path.is_file():
-            continue
-        try:
-            config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except (OSError, ValueError, yaml.YAMLError):
-            continue
-        if not isinstance(config, dict):
-            continue
-        formal = config.get("formal_nl") or {}
-        library = config.get("library") or {}
-        if (isinstance(formal, dict) and isinstance(library, dict)
-                and formal.get("root") and (library.get("ip_directory_name") or library.get("root"))):
-            choices.append({"path": str(path.resolve()), "label": path.name})
-    return choices
 
 
 def _save_entry(registry: dict[str, Any], entry: dict[str, Any]) -> None:
@@ -592,36 +562,22 @@ def _formal_nl_directory_overview(ips: list[dict[str, Any]], registry_file: Path
                                                 {**candidate_identity, "raw_version": str(version.get("id") or "未标版本"),
                                                  "registration_status": registered_status}))
 
-    def longest_match(source: Path, candidates: list[tuple[Path, dict[str, Any]]]
-                      ) -> tuple[dict[str, Any] | None, bool]:
-        matches: list[tuple[int, Path, dict[str, Any]]] = []
-        for path, identity in candidates:
-            try:
-                source.relative_to(path)
-            except ValueError:
-                continue
-            matches.append((len(path.parts), path, identity))
-        if not matches:
-            return None, False
-        longest = max(item[0] for item in matches)
-        best = [item for item in matches if item[0] == longest]
-        distinct = {json.dumps(item[2], ensure_ascii=False, sort_keys=True) for item in best}
-        if len(distinct) != 1:
-            return None, True
-        return best[0][2], False
-
     def source_identity(source_value: str) -> dict[str, str] | None:
         source = Path(source_value).resolve()
-        identity, ambiguous = longest_match(source, registered_versions)
+        match, ambiguous = effective_file_tracker.longest_registered_path_match(
+            source, registered_versions)
         if ambiguous:
             return {"_unresolved": "来源匹配不唯一"}
-        if identity:
+        if match:
+            _, identity = match
             return {**identity, "registration_status": "已登记"}
 
-        root_identity, ambiguous = longest_match(source, registered_roots)
+        root_match, ambiguous = effective_file_tracker.longest_registered_path_match(
+            source, registered_roots)
         if ambiguous:
             return {"_unresolved": "来源匹配不唯一"}
-        if root_identity:
+        if root_match:
+            _, root_identity = root_match
             matching_roots = []
             for library_root, registered_identity in registered_roots:
                 try:
@@ -642,10 +598,12 @@ def _formal_nl_directory_overview(ips: list[dict[str, Any]], registry_file: Path
                 source.relative_to(common_raw_root.resolve())
             except ValueError:
                 return None
-            discovered, ambiguous = longest_match(source, discovered_versions)
+            discovered_match, ambiguous = effective_file_tracker.longest_registered_path_match(
+                source, discovered_versions)
             if ambiguous:
                 return {"_unresolved": "来源匹配不唯一"}
-            if discovered:
+            if discovered_match:
+                _, discovered = discovered_match
                 return discovered
         return None
 
@@ -746,6 +704,35 @@ def _formal_nl_config_fingerprint(registry: dict[str, Any]) -> str:
         ips, key=lambda item: str(item.get("library_id") or item.get("id") or ""))}
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _file_status_path(output: Path, library_id: str) -> Path:
+    return output / "file_status" / _library_dir(library_id) / "latest.json"
+
+
+def _read_lef_file_status(output: Path, registry: dict[str, Any], selected: dict[str, Any],
+                          formal_overview: dict[str, Any]) -> dict[str, Any]:
+    library_id = str(selected.get("library_id") or selected.get("id") or "")
+    empty = {"status": "NOT_REFRESHED", "files": [], "stale": False,
+             "generated_at": "", "raw_scope": {"registered_deliveries": 0, "scan_status": "UNKNOWN",
+                                                     "ordering_basis": "UNKNOWN"},
+             "nl_context": {"stage": "", "root": "", "snapshot_generated_at": "", "status": "UNKNOWN"}}
+    if not library_id:
+        return empty
+    path = _file_status_path(output, library_id)
+    if not path.is_file():
+        return empty
+    try:
+        saved = _json_read(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {**empty, "status": "SNAPSHOT_ERROR", "stale": True}
+    if saved.get("schema_version") != "lef_file_status.v1":
+        return {**empty, "status": "SNAPSHOT_ERROR", "stale": True}
+    stale = bool(saved.get("registry_fingerprint") != _formal_nl_config_fingerprint(registry)
+                 or formal_overview.get("stale")
+                 or not formal_overview.get("generated_at")
+                 or saved.get("formal_snapshot_generated_at") != formal_overview.get("generated_at"))
+    return {**saved, "stale": stale, "status": "STALE" if stale else saved.get("status", "COMPLETE")}
 
 
 def _read_formal_nl_snapshot(output: Path, registry: dict[str, Any]) -> dict[str, Any]:
@@ -891,6 +878,11 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             raw_root = _resolve_registry_path(raw_root, registry_file)
         formal_nl = _formal_nl_latest(output, str(selected.get("library_id") or "")) if selected else {}
         formal_overview = _read_formal_nl_snapshot(output, registry)
+        lef_file_status = _read_lef_file_status(output, registry, selected, formal_overview)
+        file_status_error = request.args.get("file_status_error", "")
+        active_review_tab = request.args.get("review_tab", "files")
+        if active_review_tab not in {"files", "config", "history"}:
+            active_review_tab = "files"
         raw_choices = {str(item.get("id")): str(item.get("path")) for item in selected.get("raw_versions") or []}
         base_version = request.args.get("base_raw_version", "") if request.method == "GET" else ""
         base_root = raw_choices.get(base_version, "")
@@ -926,15 +918,10 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         )
         default_base_lef = (quick_checks.get("lef_review") or {}).get("old_file") or ""
         chosen_stage = request.args.get("formal_stage", "") if request.method == "GET" else ""
-        check = formal_nl.get("latest_check") or {}
-        if selected and chosen_stage and check.get("report_status") == "COMPLETE":
-            check_report = _json_read(Path(check["report_json"]))
-            matches = check_report.get("matches") or []
-            if check_report.get("formal_scope") == "SINGLE_STAGE" and len(matches) == 1 and matches[0].get("nl_version") == chosen_stage:
-                selected = dict(selected)
-                selected["formal_stage"] = chosen_stage
-                selected["raw_version"] = ""
-                selected["checks"] = {"formal_nl": {"report_json": check["report_json"]}}
+        if selected and chosen_stage:
+            selected = dict(selected)
+            selected["formal_stage"] = chosen_stage
+            selected["raw_version"] = ""
         environment_label = (
             "模拟数据 · 不可用于 EDA 或发布"
             if registry.get("environment") == "SIMULATION"
@@ -998,9 +985,11 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                checks=sorted(CHECK_NAMES), discovered=discovered or [], raw_root=raw_root,
                                active_tab=active_tab, discovery_artifacts=discovery_artifacts,
                                environment_label=environment_label, formal_nl=formal_nl, vendors=vendors,
-                               formal_configs=_formal_config_choices(registry_file),
                                identity_conflicts=identity_conflicts or [], partial_discovery=partial_discovery,
                                formal_overview=formal_overview,
+                               lef_file_status=lef_file_status,
+                               file_status_error=file_status_error,
+                               active_review_tab=active_review_tab,
                                discovery_warnings=discovery_warnings or [],
                                registered_ids={str(item.get("library_id") or "") for item in ips},
                                selected_raw_version=chosen_version, base_raw_version=base_version,
@@ -1037,6 +1026,111 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             return page(ip_id, error=f"正式 NL 总览刷新失败；上次成功快照保留：{exc}",
                         active_tab="formal-nl"), 400
 
+    @blueprint.post("/file-status/refresh")
+    def refresh_file_status():
+        if not _is_loopback_request():
+            abort(403)
+        ip_id = _text(request.form, "ip")
+        try:
+            registry = _read_registry(registry_file)
+            entry = next((item for item in registry.get("ips", []) if str(item.get("id")) == ip_id), None)
+            if entry is None:
+                abort(404)
+            formal_snapshot_path = output / "formal_nl" / "overview" / "latest.json"
+            if not formal_snapshot_path.is_file():
+                raise ValueError("尚无正式 NL 文件来源快照；请先刷新正式目录盘点。")
+            formal_snapshot = _json_read(formal_snapshot_path)
+            if formal_snapshot.get("config_fingerprint") != _formal_nl_config_fingerprint(registry):
+                raise ValueError("正式 NL 盘点已过期；请先刷新正式目录盘点，再刷新文件状态。")
+            overview = formal_snapshot.get("overview")
+            if not isinstance(overview, dict) or not isinstance(overview.get("files"), list):
+                raise ValueError("正式 NL 快照缺少完整文件明细；请重新刷新正式目录盘点。")
+
+            library_id = str(entry.get("library_id") or entry.get("id") or "")
+            ip_files = [file for file in overview["files"]
+                        if str(file.get("library_id") or "") == library_id]
+            configured_root_value = str(entry.get("formal_nl_root") or "").strip()
+            configured_root = Path(_resolve_registry_path(configured_root_value, registry_file)) if configured_root_value else None
+            stage_pattern = re.compile(r"^lib_NL[A-Za-z0-9_.-]+$", re.IGNORECASE)
+            stage_hint = next((part for part in reversed(configured_root.parts)
+                               if stage_pattern.fullmatch(part)), "") if configured_root else ""
+            stage_rows = overview.get("stages") or []
+            scoped_stage_rows = []
+            for stage_row in stage_rows:
+                stage_root_value = str(stage_row.get("root") or "").strip()
+                stage_root = Path(stage_root_value).expanduser().resolve(strict=False) if stage_root_value else None
+                if stage_root is None:
+                    continue
+                if configured_root is not None:
+                    if stage_hint and str(stage_row.get("stage")) != stage_hint:
+                        continue
+                    if not (stage_root == configured_root or stage_root.is_relative_to(configured_root)
+                            or configured_root.is_relative_to(stage_root)):
+                        continue
+                scoped_stage_rows.append(stage_row)
+            stages_for_ip = {str(file.get("stage") or "") for file in ip_files if file.get("stage")}
+            scoped_stage_names = {str(item.get("stage") or "") for item in scoped_stage_rows}
+            if stage_hint:
+                selected_stage = stage_hint if stage_hint in scoped_stage_names else ""
+            elif len(entry.get("formal_nl_stages") or []) == 1:
+                configured_stage = str(entry["formal_nl_stages"][0])
+                selected_stage = configured_stage if configured_stage in scoped_stage_names else ""
+            elif len(stages_for_ip) == 1:
+                selected_stage = next(iter(stages_for_ip))
+            elif len(stages_for_ip) > 1:
+                selected_stage = ""
+            elif len(scoped_stage_rows) == 1:
+                selected_stage = str(scoped_stage_rows[0].get("stage") or "")
+            else:
+                selected_stage = ""
+
+            if not selected_stage:
+                result = {
+                    "schema_version": "lef_file_status.v1", "library_id": library_id,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "status": "NEEDS_CONTEXT", "files": [],
+                    "nl_context": {"stage": "", "root": str(configured_root or ""),
+                                   "snapshot_generated_at": str(formal_snapshot.get("generated_at") or ""),
+                                   "status": "NEEDS_CONTEXT"},
+                    "raw_scope": {"registered_deliveries": len(entry.get("raw_versions") or []),
+                                  "scan_status": "NOT_SCANNED", "ordering_basis": "UNKNOWN"},
+                    "warnings": ["正式目录包含多个可能阶段，当前 IP 未指定唯一 NL 上下文。"],
+                }
+            else:
+                stage_row = next((item for item in stage_rows
+                                  if str(item.get("stage") or "") == selected_stage
+                                  and (not configured_root or not scoped_stage_rows
+                                       or item in scoped_stage_rows)), {})
+                stage_files = [file for file in ip_files
+                               if str(file.get("stage") or "") == selected_stage
+                               and str(file.get("view") or "").casefold() == "lef"]
+                versions = [{"id": str(item.get("id") or ""),
+                             "path": _resolve_registry_path(str(item.get("path") or ""), registry_file)}
+                            for item in entry.get("raw_versions") or []]
+                raw_inventory = scan_registered_raw_lefs(versions)
+                result = build_lef_file_status(
+                    stage_files, versions, raw_inventory,
+                    context={"library_id": library_id, "stage": selected_stage,
+                             "root": str(stage_row.get("root") or configured_root or ""),
+                             "snapshot_generated_at": str(formal_snapshot.get("generated_at") or ""),
+                             "status": str(stage_row.get("status") or overview.get("status") or "UNKNOWN")},
+                )
+                result["status"] = ("INCOMPLETE" if result["nl_context"]["status"] != "COMPLETE"
+                                     or result["raw_scope"]["scan_status"] in {"PARTIAL", "INCOMPLETE"}
+                                     else ("NO_LEF_IN_SCOPE" if not result["files"] else "COMPLETE"))
+                result["generated_at"] = datetime.now(timezone.utc).isoformat()
+
+            result["registry_fingerprint"] = _formal_nl_config_fingerprint(registry)
+            result["formal_snapshot_generated_at"] = str(formal_snapshot.get("generated_at") or "")
+            _write_json(_file_status_path(output, library_id), result)
+            return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
+                                    file_status_refreshed="1"), code=303)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
+                                    file_status_error=str(exc)), code=303)
+
     @blueprint.get("/formal-nl/overview/files")
     def formal_nl_overview_files():
         registry = _read_registry(registry_file)
@@ -1066,6 +1160,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             ids = {str(item.get("id")) for item in registry.get("ips", [])}
             message = "检查任务已提交到后台；可离开页面，完成后在运行记录中查看。" \
                 if request.args.get("submitted") == "1" else ""
+            if request.args.get("file_status_refreshed") == "1":
+                message = "LEF 文件状态已刷新；来源和日期只提供交付线索，不代表内容变化或已生效。"
             default_tab = "review" if ids or request.args.get("new") == "1" else "discover"
             requested_tab = request.args.get("tab") or default_tab
             if requested_tab not in {"review", "catalog", "discover", "formal-nl"}:
@@ -1081,7 +1177,11 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                    selected_raw_version="", base_raw_version="", old_lefs=[], new_lefs=[],
                                    old_lef_choices=[], new_lef_choices=[], liberty_choices=[],
                                    quick_checks={}, quick_notes=[], default_target_lef="", default_base_lef="",
-                                   file_choices_limited=False), 400
+                                   file_choices_limited=False,
+                                   active_tab="catalog", active_review_tab="files",
+                                   lef_file_status={"status": "NOT_REFRESHED", "files": [], "stale": False,
+                                                    "raw_scope": {}, "nl_context": {}},
+                                   file_status_error=""), 400
 
     @blueprint.post("/save")
     def save():

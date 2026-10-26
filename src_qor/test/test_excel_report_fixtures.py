@@ -128,7 +128,11 @@ class ExcelReportFixtureTests(unittest.TestCase):
 
         model = build_workbook_model([review])
         self.assertEqual(len(model["04-关注项"]), 2)
-        self.assertEqual(len(model), 11)
+        self.assertEqual(list(model), [
+            "00-概览", "01-工程检查", "02-执行记录", "03-问答", "04-关注项",
+            "05-MacroView", "06-MacroView文件", "07-正式文件", "08-LEF宏",
+            "09-Liberty角", "10-Liberty单元", "RAW文件清单",
+        ])
         with zipfile.ZipFile(archived_workbook) as archive:
             previous = ET.fromstring(archive.read("xl/sharedStrings.xml"))
             strings = ["".join(text.text or "" for text in item.findall(f".//{{{MAIN_NS}}}t"))
