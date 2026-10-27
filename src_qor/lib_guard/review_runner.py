@@ -522,7 +522,12 @@ def _input_identity(name: str, spec: dict[str, Any], result: dict[str, Any]) -> 
         add("cross_view_report", spec.get("report_json"))
     versions = sorted({source["version"] for source in sources if source.get("version")})
     stages = sorted({source["stage"] for source in sources if source.get("stage")})
-    return {"check": name, "sources": sources, "source_versions": versions, "formal_stages": stages}
+    identity = {"check": name, "sources": sources, "source_versions": versions,
+                "formal_stages": stages}
+    comparison_scope = spec.get("comparison_scope") if name == "lef_review" else None
+    if isinstance(comparison_scope, dict):
+        identity["comparison_scope"] = dict(comparison_scope)
+    return identity
 
 
 def _context_alignment(checks: dict[str, dict[str, Any]], target_version: Any = None) -> str:
@@ -1243,14 +1248,27 @@ def _input_scope(review: dict[str, Any]) -> dict[str, Any]:
     for name, item in (review.get("checks") or {}).items():
         if not item.get("selected"):
             continue
-        sources = (item.get("input_identity") or {}).get("sources") or []
+        identity = item.get("input_identity") or {}
+        sources = identity.get("sources") or []
         source_count += len(sources)
-        checks.append({"name": name, "source_count": len(sources),
+        check_scope = {"name": name, "source_count": len(sources),
                        "source_roles": sorted({str(source.get("role") or "") for source in sources if source.get("role")}),
-                       "source_versions": (item.get("input_identity") or {}).get("source_versions") or [],
-                       "formal_stages": (item.get("input_identity") or {}).get("formal_stages") or []})
+                       "source_versions": identity.get("source_versions") or [],
+                       "formal_stages": identity.get("formal_stages") or []}
+        if isinstance(identity.get("comparison_scope"), dict):
+            check_scope["comparison_scope"] = identity["comparison_scope"]
+        checks.append(check_scope)
+    snapshot = _inventory_snapshot(review)
+    snapshot_report = snapshot.get("report") or {}
+    formal_snapshot = {
+        "status": str(snapshot.get("status") or "NOT_FOUND"),
+        "generated_at": str(snapshot.get("generated_at") or ""),
+        "report_ref": str(snapshot.get("report_ref") or ""),
+        "stages": sorted(str(stage) for stage in (snapshot_report.get("inventories") or {})),
+    }
     return {"checks": checks, "target_raw_versions": raw_versions,
-            "formal_stage": str(context.get("formal_stage") or ""), "source_count": source_count}
+            "formal_stage": str(context.get("formal_stage") or ""), "source_count": source_count,
+            "formal_inventory_snapshot": formal_snapshot}
 
 
 def _input_scope_label(scope: dict[str, Any]) -> str:
@@ -1261,6 +1279,16 @@ def _input_scope_label(scope: dict[str, Any]) -> str:
     if scope.get("formal_stage"):
         parts.append("正式阶段：" + str(scope["formal_stage"]))
     parts.append(f"输入来源 {int(scope.get('source_count') or 0)} 项")
+    for check in scope.get("checks") or []:
+        comparison = check.get("comparison_scope") or {}
+        if comparison.get("kind") == "INDEPENDENT_CROSS_IP":
+            parts.append("LEF：独立跨 IP 文件对比，不代表所选库的版本变化")
+    snapshot = scope.get("formal_inventory_snapshot") or {}
+    if snapshot.get("generated_at"):
+        stages = "、".join(snapshot.get("stages") or []) or "阶段未列明"
+        parts.append(f"单 IP 正式盘点快照：{snapshot['generated_at']}（{stages}）")
+    else:
+        parts.append("单 IP 正式盘点快照：未找到")
     return "；".join(parts)
 
 

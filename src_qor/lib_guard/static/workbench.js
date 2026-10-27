@@ -1,6 +1,22 @@
 (() => {
   const tabs = [...document.querySelectorAll("[data-workbench-tab]")];
   const panels = [...document.querySelectorAll("[data-workbench-panel]")];
+  const pageHeading = document.querySelector("[data-page-heading]");
+  const pageContext = {
+    review: ["IP REVIEW", pageHeading?.dataset.ipTitle || "登记 IP", "配置并运行所需检查；每个 IP 的结果独立保存。"],
+    catalog: ["LIBRARY CATALOG", "库与版本", "查找已登记 IP，进入文件状态、检查或历史结果。"],
+    "formal-nl": ["FORMAL NL", "正式 NL", "只读查看当前正式目录中的文件链接与来源。"],
+    discover: ["RAW DISCOVERY", "发现 / 登记 RAW", "从 RAW 目录识别 Vendor、IP 与交付版本。"],
+  };
+
+  function writeTabToUrl(name, group) {
+    const url = new URL(window.location.href);
+    url.searchParams.set(group === "review" ? "review_tab" : "tab", name);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    document.querySelectorAll('input[name="review_tab"]').forEach((input) => {
+      input.value = url.searchParams.get("review_tab") || "files";
+    });
+  }
 
   function selectTab(name, group = "main") {
     tabs.filter((tab) => (tab.dataset.tabGroup || "main") === group).forEach((tab) => {
@@ -11,6 +27,18 @@
     panels.filter((panel) => (panel.dataset.tabGroup || "main") === group).forEach((panel) => {
       panel.hidden = panel.dataset.workbenchPanel !== name;
     });
+    if (group === "main") {
+      document.body.dataset.activeTab = name;
+      const [eyebrow, title, subtitle] = pageContext[name] || pageContext.review;
+      const eyebrowNode = pageHeading?.querySelector("[data-page-eyebrow]");
+      const titleNode = pageHeading?.querySelector("[data-page-title]");
+      const subtitleNode = pageHeading?.querySelector("[data-page-subtitle]");
+      if (eyebrowNode) eyebrowNode.textContent = eyebrow;
+      if (titleNode) titleNode.textContent = title;
+      if (subtitleNode) subtitleNode.textContent = subtitle;
+    }
+    writeTabToUrl(name, group);
+    if (group === "main" && name === "formal-nl") loadFormalFiles();
   }
 
   tabs.forEach((tab) => {
@@ -41,7 +69,32 @@
   const vendorFilter = document.querySelector("[data-vendor-filter]");
   const libraryFilter = document.querySelector("[data-library-filter]");
   const sidebarCount = document.querySelector("[data-sidebar-count]");
+  const sidebarStateKey = "src_qor:workbench-sidebar:v1";
   let sidebarScope = "all";
+  function removeSessionValue(key) {
+    try { window.sessionStorage.removeItem(key); } catch (_) { /* Ignore unavailable storage. */ }
+  }
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(sidebarStateKey) || "{}");
+    sidebarSearch.value = saved.query || "";
+    vendorFilter.value = saved.vendor || "";
+    libraryFilter.value = saved.library || "";
+    sidebarScope = ["all", "raw", "formal"].includes(saved.scope) ? saved.scope : "all";
+    document.querySelectorAll("[data-sidebar-scope]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.sidebarScope === sidebarScope));
+    });
+  } catch (_) {
+    removeSessionValue(sidebarStateKey);
+  }
+
+  function saveSidebarState() {
+    try {
+      window.sessionStorage.setItem(sidebarStateKey, JSON.stringify({
+        query: sidebarSearch?.value || "", vendor: vendorFilter?.value || "",
+        library: libraryFilter?.value || "", scope: sidebarScope,
+      }));
+    } catch (_) { /* Storage can be unavailable in restricted browser contexts. */ }
+  }
 
   function applySidebarFilters() {
     const query = (sidebarSearch?.value || "").trim().toLocaleLowerCase();
@@ -69,7 +122,7 @@
     if (sidebarCount) sidebarCount.textContent = `显示 ${visibleCount} / ${sidebarEntries.length} 个库`;
   }
 
-  sidebarSearch?.addEventListener("input", applySidebarFilters);
+  sidebarSearch?.addEventListener("input", () => { applySidebarFilters(); saveSidebarState(); });
   vendorFilter?.addEventListener("change", () => {
     const vendor = (vendorFilter.value || "").toLocaleLowerCase();
     libraryFilter?.querySelectorAll("option[data-vendor]").forEach((option) => {
@@ -77,8 +130,9 @@
     });
     if (libraryFilter?.selectedOptions[0]?.hidden) libraryFilter.value = "";
     applySidebarFilters();
+    saveSidebarState();
   });
-  libraryFilter?.addEventListener("change", applySidebarFilters);
+  libraryFilter?.addEventListener("change", () => { applySidebarFilters(); saveSidebarState(); });
   document.querySelectorAll("[data-sidebar-scope]").forEach((button) => {
     button.addEventListener("click", () => {
       sidebarScope = button.dataset.sidebarScope;
@@ -86,6 +140,7 @@
         item.setAttribute("aria-pressed", String(item === button));
       });
       applySidebarFilters();
+      saveSidebarState();
     });
   });
   applySidebarFilters();
@@ -274,14 +329,14 @@
     const selectedChecks = [...(reviewForm?.querySelectorAll('input[name="checks"]:checked') || [])];
     const target = scopeTarget?.value
       ? scopeTarget.selectedOptions[0]?.textContent
-      : (reviewForm?.querySelector('[name="raw_version"]')?.value || "未选择");
-    const base = scopeBase?.selectedOptions[0]?.textContent || "不比较版本差异";
+      : (reviewForm?.querySelector('[name="raw_version"]')?.value || "未载入");
+    const base = scopeBase?.value ? scopeBase.selectedOptions[0]?.textContent : "未载入";
     const targetNode = scopeSummary.querySelector("[data-scope-target-label]");
     const baseNode = scopeSummary.querySelector("[data-scope-base-label]");
     const checksNode = scopeSummary.querySelector("[data-scope-checks]");
     const filesNode = scopeSummary.querySelector("[data-scope-files]");
-    if (targetNode) targetNode.textContent = target || "未选择";
-    if (baseNode) baseNode.textContent = base || "不比较版本差异";
+    if (targetNode) targetNode.textContent = target || "未载入";
+    if (baseNode) baseNode.textContent = base || "未载入";
     if (checksNode) checksNode.textContent = selectedChecks.length
       ? selectedChecks.map((item) => checkLabels[item.value] || item.value).join("、") : "尚未选择";
     if (!filesNode) return;
@@ -314,9 +369,61 @@
     if (!filesNode.childElementCount) filesNode.textContent = "部分文件尚未选择；展开对应检查项补齐。";
   }
   const versionForm = document.querySelector("#version-scope-form");
+  function saveReviewDraft() {
+    if (!reviewForm) return;
+    const draft = {};
+    [...reviewForm.elements].forEach((control) => {
+      if (!control.name || ["id", "library_id", "raw_version", "formal_stage", "base_raw_version", "review_tab"].includes(control.name)) return;
+      if (control.dataset.scopeSourceInput !== undefined && !["手工指定", "已保存配置"].includes(control.dataset.inputSource)) return;
+      if (["checkbox", "radio"].includes(control.type)) {
+        if (!draft[control.name]) draft[control.name] = [];
+        if (control.checked) draft[control.name].push(control.value);
+      } else {
+        if (!draft[control.name]) draft[control.name] = [];
+        draft[control.name].push(control.value);
+      }
+    });
+    try {
+      const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const key = `src_qor:review-draft:${reviewForm.elements.id?.value || "new"}:${token}`;
+      window.sessionStorage.setItem(key, JSON.stringify(draft));
+      const tokenInput = versionForm?.querySelector('[name="ui_draft"]');
+      if (tokenInput) tokenInput.value = token;
+    } catch (_) { /* Keep scope navigation usable when storage is blocked. */ }
+  }
+  function restoreReviewDraft() {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("ui_draft");
+    if (!reviewForm || !token) return;
+    const key = `src_qor:review-draft:${reviewForm.elements.id?.value || "new"}:${token}`;
+    try {
+      const draft = JSON.parse(window.sessionStorage.getItem(key) || "null");
+      if (!draft || typeof draft !== "object") {
+        removeSessionValue(key);
+        return;
+      }
+      Object.entries(draft).forEach(([name, values]) => {
+        const controls = [...reviewForm.querySelectorAll(`[name="${CSS.escape(name)}"]`)];
+        controls.forEach((control, index) => {
+          if (["checkbox", "radio"].includes(control.type)) control.checked = values.includes(control.value);
+          else if (index < values.length) control.value = values[index];
+          control.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+      });
+      window.sessionStorage.removeItem(key);
+    } catch (_) {
+      removeSessionValue(key);
+    }
+  }
+  restoreReviewDraft();
+  versionForm?.addEventListener("submit", saveReviewDraft);
+  reviewForm?.addEventListener("submit", () => {
+    const token = new URLSearchParams(window.location.search).get("ui_draft");
+    if (token) removeSessionValue(`src_qor:review-draft:${reviewForm.elements.id?.value || "new"}:${token}`);
+  });
   [scopeTarget, scopeBase].forEach((control) => control?.addEventListener("change", () => {
     updateScopeSummary();
-    if (scopeTarget?.value) versionForm?.requestSubmit();
+    versionForm?.requestSubmit();
   }));
   reviewForm?.addEventListener("input", updateScopeSummary);
   reviewForm?.addEventListener("change", updateScopeSummary);
@@ -331,6 +438,7 @@
   const formalLibraryRows = [...document.querySelectorAll("[data-formal-library-row]")];
   const formalLibraryCount = document.querySelector("[data-formal-library-count]");
   const formalFileSearch = document.querySelector("[data-formal-file-search]");
+  const formalFileLibraryFilter = document.querySelector("[data-formal-library-filter]");
   const formalViewFilter = document.querySelector("[data-formal-view-filter]");
   const formalFilesDisclosure = document.querySelector("[data-formal-files]");
   const formalFileContent = document.querySelector("[data-formal-file-content]");
@@ -347,13 +455,16 @@
     if (formalLibraryCount) formalLibraryCount.textContent = `${visibleLibraries} 个来源 IP`;
 
     const fileQuery = (formalFileSearch?.value || "").trim().toLocaleLowerCase();
+    const library = formalFileLibraryFilter?.value || "";
     const view = formalViewFilter?.value || "";
     let visibleFiles = 0;
     formalFileRows.forEach((row) => {
-      row.hidden = !row.dataset.search.includes(fileQuery) || (view && row.dataset.view !== view);
+      row.hidden = !row.dataset.search.includes(fileQuery)
+        || (library && row.dataset.library !== library)
+        || (view && row.dataset.view !== view);
       if (!row.hidden) visibleFiles += 1;
     });
-    if (formalFileCount) formalFileCount.textContent = `${visibleFiles} 条`;
+    if (formalFileCount) formalFileCount.textContent = `${visibleFiles} 条${view ? ` ${view.toUpperCase()}` : "文件"}`;
   }
   function textCell(row, value, className = "") {
     const cell = document.createElement("td");
@@ -380,12 +491,13 @@
       const row = document.createElement("tr");
       row.dataset.formalFileRow = "";
       row.dataset.view = file.view || "other";
+      row.dataset.library = file.library_id || "__unmapped__";
       row.dataset.search = [file.stage, file.vendor, file.middle_path, file.library_name,
-        file.raw_version, file.relative_path, file.published_path, file.source_path]
+        file.library_id, file.raw_version, file.relative_path, file.published_path, file.source_path]
         .join(" ").toLocaleLowerCase();
       row.append(
         textCell(row, file.stage),
-        textCell(row, [file.vendor, file.middle_path, file.library_name].filter(Boolean).join(" / ")),
+        textCell(row, [file.vendor, file.middle_path, file.library_name].filter(Boolean).join(" / ") || "来源未归属"),
         textCell(row, file.raw_version),
         textCell(row, String(file.view || "other").toUpperCase()),
         textCell(row, file.published_path, "path-cell"),
@@ -400,8 +512,10 @@
     formalFilesLoaded = true;
     filterFormalInventory();
   }
-  formalFilesDisclosure?.addEventListener("toggle", async () => {
-    if (!formalFilesDisclosure.open || formalFilesLoaded) return;
+  let formalFilesLoading = false;
+  async function loadFormalFiles() {
+    if (!formalFilesDisclosure?.open || formalFilesLoaded || formalFilesLoading) return;
+    formalFilesLoading = true;
     formalFileContent.textContent = "正在读取已保存的正式目录快照…";
     try {
       const response = await fetch(formalFilesDisclosure.dataset.filesUrl, { headers: { Accept: "application/json" } });
@@ -410,9 +524,14 @@
       renderFormalFiles(payload.files || []);
     } catch (error) {
       formalFileContent.textContent = `${error.message} 请刷新正式目录后重试。`;
+    } finally {
+      formalFilesLoading = false;
     }
-  });
+  }
+  formalFilesDisclosure?.addEventListener("toggle", loadFormalFiles);
+  if (formalFilesDisclosure?.open && document.body.dataset.activeTab === "formal-nl") loadFormalFiles();
   formalLibrarySearch?.addEventListener("input", filterFormalInventory);
+  formalFileLibraryFilter?.addEventListener("change", filterFormalInventory);
   formalFileSearch?.addEventListener("input", filterFormalInventory);
   formalViewFilter?.addEventListener("change", filterFormalInventory);
   const taskBanner = document.querySelector("[data-review-task]");
@@ -424,7 +543,15 @@
     const progressNode = taskBanner.querySelector("[data-task-progress]");
     const eventList = taskBanner.querySelector("[data-task-events]");
     const eventCount = taskBanner.querySelector("[data-task-event-count]");
+    const refreshButton = taskBanner.querySelector("[data-task-refresh]");
+    refreshButton?.addEventListener("click", () => window.location.reload());
     const statusLabels = { QUEUED: "排队中", RUNNING: "运行中", COMPLETE: "已完成", FAILED: "失败", INTERRUPTED: "已中断" };
+    let elapsedTimer = null;
+    const stopElapsedTimer = () => {
+      if (elapsedTimer === null) return;
+      window.clearInterval(elapsedTimer);
+      elapsedTimer = null;
+    };
     const renderElapsed = (task) => {
       const start = Date.parse(task.started_at || taskBanner.dataset.taskStartedAt || task.submitted_at || taskBanner.dataset.taskSubmittedAt);
       const end = Date.parse(task.finished_at || taskBanner.dataset.taskFinishedAt) || Date.now();
@@ -461,12 +588,17 @@
       taskBanner.classList.toggle("is-failed", ["FAILED", "INTERRUPTED"].includes(status));
       taskBanner.classList.toggle("is-finished", status === "COMPLETE");
       progressNode?.classList.toggle("is-indeterminate", status === "RUNNING");
+      if (task.started_at) taskBanner.dataset.taskStartedAt = task.started_at;
+      if (["COMPLETE", "FAILED", "INTERRUPTED"].includes(status)) {
+        taskBanner.dataset.taskFinishedAt = task.finished_at || taskBanner.dataset.taskFinishedAt || new Date().toISOString();
+        stopElapsedTimer();
+      }
       renderElapsed(task);
       renderEvents(task.events || []);
     };
     renderElapsed({});
     const initiallyActive = ["排队中", "运行中", "QUEUED", "RUNNING"].includes(statusNode.textContent.trim());
-    if (initiallyActive) window.setInterval(() => renderElapsed({}), 1000);
+    if (initiallyActive) elapsedTimer = window.setInterval(() => renderElapsed({}), 1000);
     if (!initiallyActive) {
       renderEvents([...eventList.querySelectorAll("li")].map((row) => ({
         at: row.querySelector("time")?.textContent,
@@ -480,7 +612,7 @@
         const task = await response.json();
         renderTask(task);
         if (["COMPLETE", "FAILED"].includes(task.status)) {
-          window.setTimeout(() => window.location.reload(), 700);
+          if (refreshButton) refreshButton.hidden = false;
           return;
         }
       } catch (error) {

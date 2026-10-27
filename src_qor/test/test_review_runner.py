@@ -8,6 +8,7 @@ from xml.etree import ElementTree as ET
 from unittest.mock import patch
 
 from lib_guard.review_runner import (_finding_rows, _publish_latest_workbook, _qa_rows, _review_summary,
+                                    _input_identity, _input_scope, _input_scope_label,
                                     _run_formal, _source_revision,
                                     _write_latest_if_newer, build_workbook_model, run, run_review)
 
@@ -28,6 +29,36 @@ class FormalDefaultConfigTests(unittest.TestCase):
             self.assertEqual(result["formal_nl_root"], str(formal))
             self.assertEqual(result["library_root"], str(raw))
             self.assertTrue((root / "evidence" / "formal_nl" / "formal_nl.json").is_file())
+
+
+class InputScopeTests(unittest.TestCase):
+    def test_cross_ip_lef_scope_and_formal_snapshot_are_recorded_for_excel(self):
+        comparison_scope = {
+            "kind": "INDEPENDENT_CROSS_IP",
+            "old_library_id": "Vendor_B.RM_IP",
+            "new_library_id": "Vendor_A.stdcell",
+            "notice": "独立跨 IP 文件对比；不代表所选库的版本变化。",
+        }
+        identity = _input_identity("lef_review", {"comparison_scope": comparison_scope}, {})
+        review = {
+            "context": {"target_raw_versions": []},
+            "checks": {"lef_review": {"selected": True, "input_identity": identity}},
+            "inventory_snapshot": {
+                "status": "COMPLETE", "generated_at": "2026-10-26T10:00:00Z",
+                "report_ref": "formal_nl/vendor_a/runs/formal_01/formal_nl.json",
+                "report": {"inventories": {"lib_NL2.5_3": {}}},
+            },
+        }
+
+        scope = _input_scope(review)
+        label = _input_scope_label(scope)
+
+        self.assertEqual(scope["checks"][0]["comparison_scope"], comparison_scope)
+        self.assertEqual(scope["formal_inventory_snapshot"]["generated_at"], "2026-10-26T10:00:00Z")
+        self.assertEqual(scope["formal_inventory_snapshot"]["stages"], ["lib_NL2.5_3"])
+        self.assertIn("独立跨 IP 文件对比", label)
+        self.assertIn("不代表所选库的版本变化", label)
+        self.assertIn("2026-10-26T10:00:00Z", label)
 
     def test_formal_inventory_explicit_yaml_overrides_registered_paths(self):
         with tempfile.TemporaryDirectory() as temp:

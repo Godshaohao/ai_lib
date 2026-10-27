@@ -13,6 +13,70 @@ from lib_guard.workbench import _acquire_library_lock, _files_for_selection, _qu
 
 
 class WorkbenchTests(unittest.TestCase):
+    def test_formal_file_inventory_lists_lefs_across_libraries_and_exposes_library_filter(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n"
+                "  - id: IP_A\n    library_id: Vendor_A.IP_A\n    vendor: Vendor_A\n    library_name: IP_A\n"
+                "  - id: IP_B\n    library_id: Vendor_B.IP_B\n    vendor: Vendor_B\n    library_name: IP_B\n",
+                encoding="utf-8")
+            output = root / "output"
+            client = create_app(registry, output).test_client()
+            overview = {
+                "status": "COMPLETE", "stages": [{"stage": "lib_NL2.5_3", "root": "/formal/IP",
+                                                        "file_count": 3, "view_counts": {"lef": 2, "lib": 1},
+                                                        "library_count": 2, "status": "COMPLETE"}],
+                "stage_labels": ["lib_NL2.5_3"],
+                "libraries": [
+                    {"vendor": "Vendor_A", "middle_path": "", "library_name": "IP_A",
+                     "library_id": "Vendor_A.IP_A", "registration_status": "已登记",
+                     "versions": ["V01"], "stages": ["lib_NL2.5_3"], "file_count": 1,
+                     "view_counts": {"lef": 1}},
+                    {"vendor": "Vendor_B", "middle_path": "", "library_name": "IP_B",
+                     "library_id": "Vendor_B.IP_B", "registration_status": "已登记",
+                     "versions": ["V02"], "stages": ["lib_NL2.5_3"], "file_count": 2,
+                     "view_counts": {"lef": 1, "lib": 1}},
+                ],
+                "files": [
+                    {"stage": "lib_NL2.5_3", "vendor": "Vendor_A", "library_name": "IP_A",
+                     "library_id": "Vendor_A.IP_A", "raw_version": "V01", "view": "lef",
+                     "published_path": "LEF/a.lef", "source_path": "/raw/V01/LEF/a.lef"},
+                    {"stage": "lib_NL2.5_3", "vendor": "Vendor_B", "library_name": "IP_B",
+                     "library_id": "Vendor_B.IP_B", "raw_version": "V02", "view": "lef",
+                     "published_path": "LEF/b.lef", "source_path": "/raw/V02/LEF/b.lef"},
+                    {"stage": "lib_NL2.5_3", "vendor": "Vendor_B", "library_name": "IP_B",
+                     "library_id": "Vendor_B.IP_B", "raw_version": "V02", "view": "lib",
+                     "published_path": "LIB/b.lib", "source_path": "/raw/V02/LIB/b.lib"},
+                ],
+                "view_counts": {"lef": 2, "lib": 1}, "stage_count": 1, "library_count": 2,
+                "registered_library_count": 2, "unregistered_library_count": 0,
+                "raw_version_count": 2, "file_count": 3, "stage_file_record_count": 3,
+                "unique_source_count": 3, "unmapped_file_count": 0, "issues": [], "warnings": [],
+            }
+            with patch("lib_guard.workbench._formal_nl_directory_overview", return_value=overview):
+                refreshed = client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"})
+
+            self.assertEqual(refreshed.status_code, 302)
+            page = client.get("/?ip=IP_A&tab=formal-nl")
+            self.assertEqual(page.status_code, 200, page.get_data(as_text=True))
+            self.assertIn(b'data-formal-library-filter', page.data)
+            self.assertIn(b'value="Vendor_A.IP_A"', page.data)
+            self.assertIn(b'value="Vendor_B.IP_B"', page.data)
+            self.assertIn('正式文件链接 · 3 条（默认显示 LEF）'.encode(), page.data)
+            self.assertIn(b'<option value="lef" selected>LEF</option>', page.data)
+            self.assertLess(page.data.index(b'data-formal-files'), page.data.index(b'class="formal-metrics"'))
+            self.assertLess(page.data.index(b'data-formal-files'), page.data.index(b'class="formal-library-section"'))
+
+            files = client.get("/formal-nl/overview/files")
+            self.assertEqual(files.status_code, 200)
+            payload = files.get_json()
+            self.assertEqual([item["library_id"] for item in payload["files"]], [
+                "Vendor_A.IP_A", "Vendor_B.IP_B", "Vendor_B.IP_B",
+            ])
+            self.assertEqual([item["view"] for item in payload["files"]], ["lef", "lef", "lib"])
+
     def test_review_files_tab_reads_cache_and_refresh_builds_formal_to_raw_lef_status(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -43,7 +107,7 @@ class WorkbenchTests(unittest.TestCase):
                        side_effect=AssertionError("GET must not scan RAW")):
                 page = client.get("/?ip=IP_A&tab=review")
             self.assertEqual(page.status_code, 200, page.get_data(as_text=True))
-            self.assertIn("正式 NL 正在使用的 LEF".encode(), page.data)
+            self.assertIn("选中库的 RAW 来源追踪".encode(), page.data)
             self.assertIn('data-workbench-tab="files"'.encode(), page.data)
 
             refreshed = client.post("/file-status/refresh", data={"ip": "IP_A"})
@@ -388,11 +452,222 @@ class WorkbenchTests(unittest.TestCase):
             with patch("lib_guard.workbench.discover_raw_report", return_value=report):
                 response = app.test_client().post("/discover", data={"raw_root": str(root)})
 
-            body = response.get_data(as_text=True)
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 303)
+            self.assertIn("tab=discover", response.headers["Location"])
+            body = app.test_client().get(response.headers["Location"]).get_data(as_text=True)
             self.assertIn("有 2 个目录访问失败", body)
             self.assertIn("有 1 个目录达到目录深度上限 8", body)
             self.assertNotIn("文件线索抽样或目录访问达到上限", body)
+
+    def test_discovery_post_redirects_and_get_restores_snapshot_without_rescanning(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw"
+            view = raw / "Vendor_A" / "phy_ip" / "V01" / "LEF"
+            view.mkdir(parents=True)
+            (view / "phy.lef").touch()
+            registry = root / "registry.yml"
+            registry.write_text("ips: []\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+
+            with patch("lib_guard.workbench.discover_raw_report",
+                       wraps=workbench.discover_raw_report) as discover:
+                response = client.post("/discover", data={"raw_root": str(raw)})
+                self.assertEqual(response.status_code, 303)
+                self.assertIn("tab=discover", response.headers["Location"])
+                self.assertIn("discovery=latest", response.headers["Location"])
+                self.assertEqual(discover.call_count, 1)
+
+                restored = client.get(response.headers["Location"])
+                self.assertEqual(restored.status_code, 200)
+                self.assertIn(b"Vendor_A.phy_ip", restored.data)
+                self.assertIn("发现结果已恢复".encode(), restored.data)
+                self.assertEqual(discover.call_count, 1)
+
+    def test_saved_cross_ip_lef_pair_is_explicitly_labeled_in_review_ui(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old_root = root / "raw" / "Vendor_B" / "RM_IP" / "V01"
+            new_root = root / "raw" / "Vendor_A" / "stdcell" / "V02"
+            for path in (old_root / "LEF" / "old.lef", new_root / "LEF" / "new.lef"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("VERSION 5.8 ;\nEND LIBRARY\n", encoding="utf-8")
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n"
+                f"  - id: IP_A\n    library_id: Vendor_A.stdcell\n    name: Stdcell\n"
+                f"    raw_versions: [{{id: V02, path: {new_root}}}]\n"
+                f"    checks: {{lef_review: {{old_file: {old_root / 'LEF' / 'old.lef'}, new_file: {new_root / 'LEF' / 'new.lef'}}}}}\n"
+                f"  - id: IP_B\n    library_id: Vendor_B.RM_IP\n    name: RM IP\n"
+                f"    raw_versions: [{{id: V01, path: {old_root}}}]\n    checks: {{}}\n",
+                encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get(
+                "/?ip=IP_A&tab=review&review_tab=config")
+
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            self.assertIn(b'data-cross-ip-scope', response.data)
+            self.assertIn("独立跨 IP 文件对比".encode(), response.data)
+            self.assertIn("Vendor_B.RM_IP".encode(), response.data)
+            self.assertIn("Vendor_A.stdcell".encode(), response.data)
+            self.assertIn("不代表当前所选库的版本变化".encode(), response.data)
+
+    def test_review_configuration_identifies_per_ip_formal_snapshot_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "output"
+            library_id = "Vendor_A.stdcell"
+            from lib_guard.review_runner import _library_dir
+            formal_dir = output / "formal_nl" / _library_dir(library_id)
+            report_path = formal_dir / "runs" / "formal_01" / "formal_nl.json"
+            report_path.parent.mkdir(parents=True)
+            report_path.write_text(json.dumps({
+                "library_id": library_id, "report_status": "COMPLETE",
+                "generated_at": "2026-10-26T10:00:00Z",
+                "matches": [{"nl_version": "lib_NL2.5_3"}],
+                "inventories": {"lib_NL2.5_3": {"files": []}},
+            }), encoding="utf-8")
+            (formal_dir / "latest.json").write_text(json.dumps({
+                "generated_at": "2026-10-26T10:00:00Z", "report_status": "COMPLETE",
+                "report_json": str(report_path),
+            }), encoding="utf-8")
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor_A.stdcell\n    checks: {}\n",
+                encoding="utf-8")
+
+            response = create_app(registry, output).test_client().get(
+                "/?ip=IP_A&tab=review&review_tab=config")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'data-formal-snapshot-source', response.data)
+            self.assertIn(b"2026-10-26T10:00:00Z", response.data)
+            self.assertIn("全局“正式 NL”总览是另一份快照".encode(), response.data)
+
+    def test_review_snapshot_note_uses_same_successful_inventory_as_excel(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "output"
+            library_id = "Vendor_A.stdcell"
+            from lib_guard.review_runner import _library_dir
+            formal_dir = output / "formal_nl" / _library_dir(library_id)
+            runs_dir = formal_dir / "runs"
+            runs_dir.mkdir(parents=True)
+            for run_id, status, generated_at in (
+                ("old", "COMPLETE", "2026-10-26T09:00:00Z"),
+                ("new", "INCOMPLETE", "2026-10-26T11:00:00Z"),
+            ):
+                report_path = runs_dir / f"{run_id}.json"
+                report_path.write_text(json.dumps({
+                    "library_id": library_id, "report_status": status,
+                    "generated_at": generated_at,
+                    "matches": [{"nl_version": "lib_NL2.5_3"}],
+                    "inventories": {"lib_NL2.5_3": {"files": []}},
+                }), encoding="utf-8")
+                pointer = "latest_check.json" if run_id == "old" else "latest.json"
+                (formal_dir / pointer).write_text(json.dumps({
+                    "generated_at": generated_at, "report_status": status,
+                    "report_json": str(report_path),
+                }), encoding="utf-8")
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor_A.stdcell\n    checks: {}\n",
+                encoding="utf-8")
+
+            response = create_app(registry, output).test_client().get(
+                "/?ip=IP_A&tab=review&review_tab=config")
+
+            self.assertEqual(response.status_code, 200)
+            note = response.data.split(b'data-formal-snapshot-source', 1)[1].split(b'</details>', 1)[0]
+            self.assertIn(b"2026-10-26T09:00:00Z", note)
+            self.assertNotIn(b"2026-10-26T11:00:00Z", note)
+
+    def test_manual_lef_paths_do_not_require_raw_version_selection(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            version = root / "raw" / "V01"
+            version.mkdir(parents=True)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor_A.stdcell\n    raw_version: V01\n"
+                f"    raw_versions: [{{id: V01, path: {version}}}]\n    checks: {{}}\n",
+                encoding="utf-8")
+
+            response = create_app(registry, root / "output").test_client().get(
+                "/?ip=IP_A&tab=review&review_tab=config")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn(b'name="raw_version" data-scope-target required', response.data)
+            self.assertIn("RAW 版本只用于载入文件建议；也可直接填写路径".encode(), response.data)
+            self.assertIn(b'name="raw_version" value=""', response.data)
+
+    def test_workbench_headings_and_review_inputs_follow_current_task(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n    name: IP A\n"
+                "    raw_versions: []\n    checks: {}\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+
+            review = client.get("/?ip=IP_A&tab=review&review_tab=config")
+            self.assertEqual(review.status_code, 200)
+            self.assertIn(b'<h2 data-page-title>IP A</h2>', review.data)
+            self.assertLess(review.data.index(b'class="check-list"'),
+                            review.data.index(b'data-run-scope-summary'))
+            self.assertIn("文件建议来源".encode(), review.data)
+            self.assertIn("尚无可复用的本 IP 成功盘点快照".encode(), review.data)
+
+            formal = client.get("/?ip=IP_A&tab=formal-nl")
+            self.assertEqual(formal.status_code, 200)
+            self.assertIn('<h2 data-page-title>正式 NL</h2>'.encode(), formal.data)
+            catalog = client.get("/?ip=IP_A&tab=catalog")
+            self.assertIn('<h2 data-page-title>库与版本</h2>'.encode(), catalog.data)
+            discover = client.get("/?ip=IP_A&tab=discover")
+            self.assertIn('<h2 data-page-title>发现 / 登记 RAW</h2>'.encode(), discover.data)
+
+    def test_clearing_raw_suggestion_source_submits_the_selection(self):
+        script = (Path(__file__).parents[1] / "lib_guard" / "static" / "workbench.js").read_text(
+            encoding="utf-8")
+        self.assertNotIn('if (scopeTarget?.value) versionForm?.requestSubmit();', script)
+        self.assertIn('versionForm?.requestSubmit();', script)
+
+    def test_cross_ip_lef_run_carries_scope_into_review_runner_input(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old_root = root / "raw" / "Vendor_B" / "RM_IP" / "V01"
+            new_root = root / "raw" / "Vendor_A" / "stdcell" / "V02"
+            old_file, new_file = old_root / "LEF" / "old.lef", new_root / "LEF" / "new.lef"
+            for path in (old_file, new_file):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("VERSION 5.8 ;\nEND LIBRARY\n", encoding="utf-8")
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n"
+                f"  - id: IP_A\n    library_id: Vendor_A.stdcell\n    raw_versions: [{{id: V02, path: {new_root}}}]\n    checks: {{}}\n"
+                f"  - id: IP_B\n    library_id: Vendor_B.RM_IP\n    raw_versions: [{{id: V01, path: {old_root}}}]\n    checks: {{}}\n",
+                encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            captured = []
+            review_result = {"execution_status": "COMPLETE", "review_id": "review_scope",
+                             "summary": {"quality_assessment": {"status": "NOT_ASSESSED",
+                                                                    "label": "本次范围有限",
+                                                                    "boundary": "仅限输入文件"}}}
+
+            with patch("lib_guard.workbench.run", side_effect=lambda config, _out: (
+                    captured.append(config) or ([review_result], {}))), \
+                    patch.object(workbench._REVIEW_EXECUTOR, "submit", side_effect=lambda fn: fn()):
+                response = client.post("/run", data={
+                    "id": "IP_A", "library_id": "Vendor_A.stdcell", "checks": ["lef_review"],
+                    "lef_old_file": str(old_file), "lef_new_file": str(new_file),
+                    "review_tab": "config",
+                })
+
+            self.assertEqual(response.status_code, 303)
+            scope = captured[0]["ips"][0]["checks"]["lef_review"]["comparison_scope"]
+            self.assertEqual(scope["kind"], "INDEPENDENT_CROSS_IP")
+            self.assertEqual(scope["old_library_id"], "Vendor_B.RM_IP")
+            self.assertEqual(scope["new_library_id"], "Vendor_A.stdcell")
 
     def test_excel_link_uses_latest_complete_run_when_latest_pointer_is_not_enabled(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -486,14 +761,20 @@ class WorkbenchTests(unittest.TestCase):
             }], {})) as runner:
                 response = client.post("/run", data={
                     "id": "IP_A", "library_id": "Vendor.IP_A", "raw_version": "V1",
+                    "base_raw_version": "V0",
+                    "review_tab": "config",
                     "checks": ["macro_index", "lef_liberty_check"],
                     "macro_root": str(version), "macro_version": "V1",
                     "ll_lef_file": str(lef), "ll_liberty_files": str(liberty),
                 })
                 self.assertEqual(response.status_code, 303)
                 self.assertIn("tab=review", response.headers["Location"])
+                self.assertIn("review_tab=config", response.headers["Location"])
+                self.assertIn("base_raw_version=V0", response.headers["Location"])
                 page = client.get(response.headers["Location"])
                 self.assertEqual(page.status_code, 200)
+                self.assertIn(b'name="checks" value="macro_index" checked', page.data)
+                self.assertIn(b'data-task-refresh hidden', page.data)
                 task_url = re.search(rb'data-task-url="([^"]+)"', page.data).group(1).decode()
                 task_url = task_url.replace("&amp;", "&")
                 for _ in range(100):
@@ -509,6 +790,64 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(set(submitted["checks"]), {"macro_index", "lef_liberty_check"})
             self.assertEqual(submitted["checks"]["lef_liberty_check"]["lef_file"], str(lef))
             self.assertEqual(submitted["checks"]["lef_liberty_check"]["liberty_files"], [str(liberty)])
+
+    def test_review_configuration_tab_survives_scope_navigation_and_run_redirect(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw"
+            (raw / "V1").mkdir(parents=True)
+            (raw / "V2").mkdir(parents=True)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor.IP_A\n    raw_versions:\n"
+                f"      - {{id: V1, path: {raw / 'V1'}}}\n"
+                f"      - {{id: V2, path: {raw / 'V2'}}}\n    checks: {{}}\n",
+                encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+
+            page = client.get("/?ip=IP_A&tab=review&review_tab=config&raw_version=V2")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(b'name="review_tab" value="config"', page.data)
+
+            with patch("lib_guard.workbench.run", return_value=([{
+                "execution_status": "COMPLETE", "review_id": "review_keep_tab", "summary": {},
+            }], {})):
+                response = client.post("/run", data={
+                    "id": "IP_A", "library_id": "Vendor.IP_A", "raw_version": "V2",
+                    "base_raw_version": "V1",
+                    "review_tab": "config", "checks": ["macro_index"],
+                    "macro_root": str(raw / "V2"), "macro_version": "V2",
+                })
+
+            self.assertEqual(response.status_code, 303)
+            self.assertIn("raw_version=V2", response.headers["Location"])
+            self.assertIn("base_raw_version=V1", response.headers["Location"])
+            self.assertIn("review_tab=config", response.headers["Location"])
+            restored = client.get(response.headers["Location"])
+            self.assertIn(b'data-active-review-tab="config"', restored.data)
+            self.assertIn(b'aria-selected="true" data-workbench-tab="config"', restored.data)
+
+    def test_run_validation_error_keeps_selected_version_and_review_tab(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            version = root / "raw" / "V07"
+            version.mkdir(parents=True)
+            registry = root / "registry.yml"
+            registry.write_text(
+                "ips:\n  - id: IP_A\n    library_id: Vendor.IP_A\n    raw_versions:\n"
+                f"      - {{id: V07, path: {version}}}\n    checks: {{}}\n",
+                encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+
+            response = client.post("/run", data={
+                "id": "IP_A", "library_id": "Vendor.IP_A", "raw_version": "V07",
+                "review_tab": "config", "checks": ["macro_index"],
+            })
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn(b'data-active-review-tab="config"', response.data)
+            self.assertIn(b'name="raw_version" value="V07"', response.data)
+            self.assertIn(b'<option value="V07" selected>V07</option>', response.data)
 
     def test_new_queued_task_becomes_latest_without_old_worker_replacing_it(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -547,7 +886,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(suggestions["macro_index"]["root"], str(version))
             self.assertEqual(suggestions["macro_index"]["version"], "V50")
             self.assertIn(b'data-run-scope-summary', response.data)
-            self.assertLess(response.data.index(b'class="run-scope-summary"'), response.data.index(b'class="check-list"'))
+            self.assertLess(response.data.index(b'class="check-list"'), response.data.index(b'class="run-scope-summary"'))
             self.assertNotIn(b'/old/report.json', response.data)
             self.assertEqual(registry.read_text(encoding="utf-8"), original)
             with patch("lib_guard.workbench.run", side_effect=RuntimeError("captured")) as runner:
@@ -861,6 +1200,14 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(payload["progress_message"], "正在执行：LEF 双文件核查")
             self.assertEqual(payload["events"][0]["message"], "开始执行：LEF 双文件核查")
 
+    def test_task_elapsed_timer_freezes_at_terminal_status(self):
+        script = (Path(__file__).parents[1] / "lib_guard" / "static" / "workbench.js").read_text(
+            encoding="utf-8")
+
+        self.assertIn("let elapsedTimer = null", script)
+        self.assertIn("taskBanner.dataset.taskFinishedAt = task.finished_at", script)
+        self.assertIn("window.clearInterval(elapsedTimer)", script)
+
     def test_sidebar_exposes_vendor_library_raw_and_formal_versions_with_filters(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1030,8 +1377,10 @@ class WorkbenchTests(unittest.TestCase):
                 "checks": ["macro_index"], "macro_report_json": str(report),
             })
 
-            self.assertEqual(response.status_code, 200)
-            self.assertIn(b"IP A", response.data)
+            self.assertEqual(response.status_code, 303)
+            page = app.test_client().get(response.headers["Location"])
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(b"IP A", page.data)
             saved = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
             self.assertEqual(saved["ips"][0]["checks"]["macro_index"]["report_json"], str(report))
             overview = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
@@ -1247,11 +1596,14 @@ class WorkbenchTests(unittest.TestCase):
             app = create_app(registry, root / "output")
 
             response = app.test_client().post("/run", data={
-                "id": "IP_A", "library_id": "vendor.ip_a", "name": "IP A", "checks": ["macro_index"]
+                "id": "IP_A", "library_id": "vendor.ip_a", "name": "IP A", "checks": ["macro_index"],
+                "review_tab": "history",
             })
 
             self.assertEqual(response.status_code, 400)
             self.assertIn("缺少所需路径".encode(), response.data)
+            self.assertIn(b'data-active-tab="review"', response.data)
+            self.assertIn(b'data-active-review-tab="history"', response.data)
             saved = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
             self.assertEqual(saved["ips"], [])
 
@@ -1283,12 +1635,14 @@ class WorkbenchTests(unittest.TestCase):
 
             response = app.test_client().post("/discover", data={"raw_root": str(raw)})
 
-            self.assertEqual(response.status_code, 200)
-            self.assertIn(b"Vendor_A", response.data)
-            self.assertIn(b"phy_ip", response.data)
-            self.assertIn(b"V01", response.data)
-            self.assertIn("分组路径".encode(), response.data)
-            self.assertIn(b"library_discovery.json", response.data)
+            self.assertEqual(response.status_code, 303)
+            page = app.test_client().get(response.headers["Location"])
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(b"Vendor_A", page.data)
+            self.assertIn(b"phy_ip", page.data)
+            self.assertIn(b"V01", page.data)
+            self.assertIn("分组路径".encode(), page.data)
+            self.assertIn(b"library_discovery.json", page.data)
             self.assertEqual(__import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"], [])
             self.assertTrue((root / "output" / "discovery" / "library_discovery.json").exists())
             self.assertFalse((root / "output" / "discovery" / "library.list").exists())
@@ -1319,7 +1673,9 @@ class WorkbenchTests(unittest.TestCase):
                 "raw_root": str(raw), "library_ids": ["Vendor_A.phy_ip"]
             })
 
-            self.assertEqual(registered.status_code, 200)
+            self.assertEqual(registered.status_code, 303)
+            self.assertIn("tab=catalog", registered.headers["Location"])
+            self.assertIn("registered=1", registered.headers["Location"])
             data = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
             entry = data["ips"][0]
             self.assertEqual(entry["vendor"], "Vendor_A")
@@ -1335,7 +1691,7 @@ class WorkbenchTests(unittest.TestCase):
                 "raw_root": str(raw), "library_ids": ["Vendor_A.phy_ip"]
             })
 
-            self.assertEqual(refreshed.status_code, 200)
+            self.assertEqual(refreshed.status_code, 303)
             updated = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
             self.assertEqual([item["id"] for item in updated["raw_versions"]], ["V01", "V02", "V03"])
             self.assertEqual(updated["checks"]["macro_index"]["root"], "/kept/input")
@@ -1358,7 +1714,7 @@ class WorkbenchTests(unittest.TestCase):
                 "raw_root": str(raw), "library_ids": [library_id]
             })
 
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 303)
             entry = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
             self.assertEqual(entry["library_id"], library_id)
             self.assertEqual(entry["middle_path"], "DTCO/elf/psls")
@@ -1382,22 +1738,26 @@ class WorkbenchTests(unittest.TestCase):
             client = create_app(registry, root / "output").test_client()
 
             discovered = client.post("/discover", data={"raw_root": str(raw)})
-            self.assertEqual(discovered.status_code, 200)
-            self.assertIn("未登记".encode(), discovered.data)
-            self.assertIn(b'name="register_one"', discovered.data)
-            self.assertIn("全选当前结果".encode(), discovered.data)
-            self.assertNotIn("库候选".encode(), discovered.data)
+            self.assertEqual(discovered.status_code, 303)
+            discovered_page = client.get(discovered.headers["Location"])
+            self.assertEqual(discovered_page.status_code, 200)
+            self.assertIn("未登记".encode(), discovered_page.data)
+            self.assertIn(b'name="register_one"', discovered_page.data)
+            self.assertIn("全选当前结果".encode(), discovered_page.data)
+            self.assertNotIn("库候选".encode(), discovered_page.data)
 
             registered = client.post("/register-discovered", data={
                 "raw_root": str(raw), "register_one": "Vendor_A.phy_ip"
             })
-            self.assertEqual(registered.status_code, 200)
+            self.assertEqual(registered.status_code, 303)
             data = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
             self.assertEqual([entry["library_id"] for entry in data["ips"]], ["Vendor_A.phy_ip"])
             entry_id = data["ips"][0]["id"]
             refreshed_view = client.post("/discover", data={"raw_root": str(raw)})
-            self.assertIn("已登记".encode(), refreshed_view.data)
-            self.assertIn("更新登记".encode(), refreshed_view.data)
+            self.assertEqual(refreshed_view.status_code, 303)
+            refreshed_page = client.get(refreshed_view.headers["Location"])
+            self.assertIn("已登记".encode(), refreshed_page.data)
+            self.assertIn("更新登记".encode(), refreshed_page.data)
             catalog = client.get("/")
             self.assertIn("登记信息".encode(), catalog.data)
             self.assertIn("移除".encode(), catalog.data)
@@ -1409,7 +1769,7 @@ class WorkbenchTests(unittest.TestCase):
                 "id": entry_id, "library_id": "Vendor_A.phy_ip", "name": "renamed display",
                 "vendor": "Vendor_A", "middle_path": "group/subgroup", "library_name": "phy_ip",
             })
-            self.assertEqual(edited.status_code, 200)
+            self.assertEqual(edited.status_code, 303)
             saved = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
             self.assertEqual(saved["name"], "renamed display")
             self.assertEqual(saved["middle_path"], "group/subgroup")
@@ -1420,7 +1780,7 @@ class WorkbenchTests(unittest.TestCase):
             marker = history / "review_result.json"
             marker.write_text("{}", encoding="utf-8")
             removed = client.post("/unregister", data={"id": entry_id})
-            self.assertEqual(removed.status_code, 200)
+            self.assertEqual(removed.status_code, 303)
             self.assertEqual(__import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"], [])
             self.assertTrue((raw / "Vendor_A" / "phy_ip" / "V01" / "LEF" / "phy.lef").exists())
             self.assertTrue(marker.exists())
@@ -1436,6 +1796,8 @@ class WorkbenchTests(unittest.TestCase):
             registry.write_text("ips: []\n", encoding="utf-8")
             client = create_app(registry, root / "output").test_client()
             response = client.post("/discover", data={"raw_root": str(raw)})
+            self.assertEqual(response.status_code, 303)
+            response = client.get(response.headers["Location"])
             self.assertEqual(response.status_code, 200)
             for control in (b"data-discovery-search", b"data-discovery-vendor",
                             b"data-discovery-view", b"data-discovery-state",
@@ -1461,7 +1823,7 @@ class WorkbenchTests(unittest.TestCase):
                 "raw_root": str(raw), "library_ids": ["Vendor_A.memory.sram.phy_ip"]
             })
 
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 303)
             entry = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
             self.assertEqual(entry["vendor"], "Vendor_A")
             self.assertEqual(entry["middle_path"], "memory/sram")
@@ -1494,8 +1856,10 @@ class WorkbenchTests(unittest.TestCase):
             discovered = app.test_client().post("/discover", data={"raw_root": "../raw-root"})
 
             self.assertIn(str(root / "raw-root").encode(), page.data)
-            self.assertEqual(discovered.status_code, 200)
-            self.assertIn(b"Vendor_A.phy_ip", discovered.data)
+            self.assertEqual(discovered.status_code, 303)
+            discovered_page = app.test_client().get(discovered.headers["Location"])
+            self.assertEqual(discovered_page.status_code, 200)
+            self.assertIn(b"Vendor_A.phy_ip", discovered_page.data)
 
     def test_formal_nl_tab_is_available_and_restores_saved_root(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1577,7 +1941,7 @@ class WorkbenchTests(unittest.TestCase):
                 "id": "IP_A", "formal_nl_root": str(formal_ip), "formal_stage": "lib_NL2.5_3",
             })
 
-            self.assertEqual(selected_stage.status_code, 200, selected_stage.get_data(as_text=True))
+            self.assertEqual(selected_stage.status_code, 303, selected_stage.get_data(as_text=True))
 
     def test_formal_nl_tab_summarizes_flattened_tree_by_source_library_version_and_view(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1636,7 +2000,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn("Vendor_B".encode(), page.data)
             self.assertIn("Vendor_C".encode(), page.data)
             self.assertIn("未登记".encode(), page.data)
-            self.assertIn("正式文件链接与 RAW 来源".encode(), page.data)
+            self.assertIn("正式文件链接 ·".encode(), page.data)
             self.assertNotIn(str(unregistered_source).encode(), page.data)
             file_payload = client.get("/formal-nl/overview/files").get_json()
             self.assertIn(str(unregistered_source.resolve()),
@@ -1939,7 +2303,7 @@ class WorkbenchTests(unittest.TestCase):
 
             saved = client.post("/save", data={"id": "IP_A", "library_id": "Vendor_A.IP_A", "name": "IP A"})
 
-            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(saved.status_code, 303)
             persisted = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
             self.assertEqual(persisted["ips"][0]["formal_nl_root"], str(formal))
 
@@ -1971,22 +2335,24 @@ class WorkbenchTests(unittest.TestCase):
 
             response = client.post("/formal-nl", data={"id": "IP_A", "formal_nl_root": str(formal_root)})
 
-            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
-            self.assertIn("lib_NL2.5_3".encode(), response.data)
-            self.assertIn("lib_NL2.4_2".encode(), response.data)
-            self.assertIn("liberty".encode(), response.data)
-            self.assertIn("LEF".encode(), response.data)
-            self.assertIn("DB".encode(), response.data)
-            self.assertIn("TT".encode(), response.data)
-            self.assertIn("目录名排序靠前".encode(), response.data)
-            self.assertIn("目录名排序第二".encode(), response.data)
-            self.assertIn(str(formal_root / "lib_NL2.5_3" / "IP" / "IP_A").encode(), response.data)
-            self.assertIn(b"lef 2", response.data)
-            self.assertIn(b"formal-report/json", response.data)
+            self.assertEqual(response.status_code, 303, response.get_data(as_text=True))
+            page = client.get(response.headers["Location"])
+            self.assertEqual(page.status_code, 200, page.get_data(as_text=True))
+            self.assertIn("lib_NL2.5_3".encode(), page.data)
+            self.assertIn("lib_NL2.4_2".encode(), page.data)
+            self.assertIn("liberty".encode(), page.data)
+            self.assertIn("LEF".encode(), page.data)
+            self.assertIn("DB".encode(), page.data)
+            self.assertIn("TT".encode(), page.data)
+            self.assertIn("目录名排序靠前".encode(), page.data)
+            self.assertIn("目录名排序第二".encode(), page.data)
+            self.assertIn(str(formal_root / "lib_NL2.5_3" / "IP" / "IP_A").encode(), page.data)
+            self.assertIn(b"lef 2", page.data)
+            self.assertIn(b"formal-report/json", page.data)
             saved = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))
             self.assertEqual(saved["ips"][0]["formal_nl_root"], str(formal_root))
             self.assertEqual(saved["ips"][0]["formal_nl_stages"], ["lib_NL2.5_3", "lib_NL2.4_2"])
-            sidebar = response.get_data(as_text=True).split('<aside class="ip-rail"', 1)[1].split("</aside>", 1)[0]
+            sidebar = page.get_data(as_text=True).split('<aside class="ip-rail"', 1)[1].split("</aside>", 1)[0]
             self.assertIn("正式 2", sidebar)
             self.assertNotIn("lib_NL2.5_3", sidebar)
             latest_path = next(output.glob("formal_nl/*/latest.json"))
@@ -2002,7 +2368,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertFalse((latest_path.parent / "latest_check.json").exists())
             stage_response = client.post("/formal-nl", data={"id": "IP_A", "formal_nl_root": str(formal_root),
                                                              "formal_stage": "lib_NL2.5_3"})
-            self.assertEqual(stage_response.status_code, 200, stage_response.get_data(as_text=True))
+            self.assertEqual(stage_response.status_code, 303, stage_response.get_data(as_text=True))
             self.assertEqual(latest_path.read_bytes(), browse_pointer)
             stage_reports = [json.loads(path.read_text(encoding="utf-8"))
                              for path in (latest_path.parent / "runs").glob("*/formal_nl.json")]
@@ -2049,7 +2415,7 @@ class WorkbenchTests(unittest.TestCase):
             output = root / "output"
             client = create_app(registry, output).test_client()
             first = client.post("/formal-nl", data={"id": "IP_A", "formal_nl_root": str(formal_root)})
-            self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+            self.assertEqual(first.status_code, 303, first.get_data(as_text=True))
             latest_path = next(output.glob("formal_nl/*/latest.json"))
             previous_pointer = latest_path.read_bytes()
 

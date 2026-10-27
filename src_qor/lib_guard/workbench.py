@@ -27,6 +27,7 @@ from flask import Blueprint, Flask, abort, jsonify, redirect, render_template, r
 from werkzeug.exceptions import HTTPException
 
 from .review_runner import (CHECK_NAMES, _json_read, _latest_complete_run, _library_dir,
+                           _load_saved_formal_inventory,
                            refresh_ip_overview, run)
 from .raw_discovery import discover_raw_report, write_discovery_artifacts
 from .file_status import build_lef_file_status, scan_registered_raw_lefs
@@ -245,6 +246,52 @@ def _formal_discovery_status(report: dict[str, Any]) -> str:
                                           (report.get("inventories") or {}).values()):
         return "PARTIAL"
     return "DISCOVERED"
+
+
+def _registered_raw_owner(path_value: Any, ips: list[dict[str, Any]], registry_file: Path) -> dict[str, str] | None:
+    if not path_value:
+        return None
+    try:
+        source = Path(_resolve_registry_path(str(path_value), registry_file)).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    candidates: list[tuple[Path, dict[str, Any]]] = []
+    for ip in ips:
+        library_id = str(ip.get("library_id") or ip.get("id") or "")
+        identity = {
+            "id": str(ip.get("id") or library_id),
+            "library_id": library_id,
+            "label": str(ip.get("library_name") or ip.get("name") or library_id),
+        }
+        for version in ip.get("raw_versions") or []:
+            version_path = str(version.get("path") or "").strip()
+            if not version_path:
+                continue
+            try:
+                candidates.append((Path(_resolve_registry_path(version_path, registry_file)).resolve(), identity))
+            except (OSError, RuntimeError, ValueError):
+                continue
+    match, ambiguous = effective_file_tracker.longest_registered_path_match(source, candidates)
+    if ambiguous or not match:
+        return None
+    return {key: str(value) for key, value in match[1].items()}
+
+
+def _lef_comparison_scope(old_file: Any, new_file: Any, ips: list[dict[str, Any]],
+                          registry_file: Path) -> dict[str, str] | None:
+    old_owner = _registered_raw_owner(old_file, ips, registry_file)
+    new_owner = _registered_raw_owner(new_file, ips, registry_file)
+    if (not old_owner or not new_owner
+            or old_owner.get("library_id") == new_owner.get("library_id")):
+        return None
+    return {
+        "kind": "INDEPENDENT_CROSS_IP",
+        "old_library_id": old_owner["library_id"],
+        "old_library_label": old_owner["label"],
+        "new_library_id": new_owner["library_id"],
+        "new_library_label": new_owner["label"],
+        "notice": "独立跨 IP 文件对比；不代表所选库的版本变化。",
+    }
 
 
 def _entry_from_form(form: Any, previous: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -781,7 +828,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
 
     def page(selected_id: str = "", message: str = "", error: str = "", run_record: dict[str, Any] | None = None,
              new_ip: bool = False, discovered: list[dict[str, Any]] | None = None,
-             raw_root: str = "", active_tab: str = "catalog", discovery_artifacts: bool = False,
+             raw_root: str = "", active_tab: str = "catalog", active_review_tab: str | None = None,
+             discovery_artifacts: bool = False,
              identity_conflicts: list[str] | None = None, partial_discovery: bool = False,
              discovery_warnings: list[str] | None = None):
         registry = _read_registry(registry_file)
@@ -851,11 +899,17 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             )
             sidebar_ips.append(sidebar_ip)
         selected = {} if new_ip else next((item for item in ips if item.get("id") == selected_id), ips[0] if ips else {})
-        chosen_version = request.args.get("raw_version", "") if request.method == "GET" else ""
+        chosen_version = (request.args.get("raw_version", "") if request.method == "GET"
+                          else _text(request.form, "raw_version"))
+        if selected:
+            # A registry default is not an explicit selection for this review visit.
+            # Keep the saved registration untouched and require a deliberate choice
+            # before loading RAW-derived file suggestions.
+            selected = dict(selected)
+            selected["raw_version"] = ""
         if selected and chosen_version:
             versions = [item for item in selected.get("raw_versions") or [] if str(item.get("id")) == chosen_version]
             if len(versions) == 1:
-                selected = dict(selected)
                 selected["raw_version"] = chosen_version
                 selected["formal_stage"] = ""
                 selected["checks"] = {}
@@ -873,18 +927,23 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                 task_path, latest_attempt_path = _task_paths(
                     output, str(selected.get("library_id") or ""), str(latest_attempt["task_id"]))
                 latest_attempt = _interrupt_stale_task(task_path, latest_attempt_path, latest_attempt)
+        submitted_checks = (set(latest_attempt.get("requested_checks") or [])
+                            if request.args.get("submitted") == "1" else set())
         raw_root = raw_root or str(registry.get("raw_root") or "")
         if raw_root:
             raw_root = _resolve_registry_path(raw_root, registry_file)
         formal_nl = _formal_nl_latest(output, str(selected.get("library_id") or "")) if selected else {}
+        review_formal_snapshot = _load_saved_formal_inventory(
+            output, str(selected.get("library_id") or "")) if selected else {}
         formal_overview = _read_formal_nl_snapshot(output, registry)
         lef_file_status = _read_lef_file_status(output, registry, selected, formal_overview)
         file_status_error = request.args.get("file_status_error", "")
-        active_review_tab = request.args.get("review_tab", "files")
+        active_review_tab = active_review_tab or request.args.get("review_tab", "files")
         if active_review_tab not in {"files", "config", "history"}:
             active_review_tab = "files"
         raw_choices = {str(item.get("id")): str(item.get("path")) for item in selected.get("raw_versions") or []}
-        base_version = request.args.get("base_raw_version", "") if request.method == "GET" else ""
+        base_version = (request.args.get("base_raw_version", "") if request.method == "GET"
+                        else _text(request.form, "base_raw_version"))
         base_root = raw_choices.get(base_version, "")
         target_root = raw_choices.get(chosen_version, "")
         old_lefs, old_limit = _files_for_selection(base_root, (".lef", ".lef.gz")) if base_root else ([], "")
@@ -917,7 +976,14 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             (quick_checks.get("lef_liberty_check") or {}).get("lef_file") or ""
         )
         default_base_lef = (quick_checks.get("lef_review") or {}).get("old_file") or ""
-        chosen_stage = request.args.get("formal_stage", "") if request.method == "GET" else ""
+        display_lef_spec = ((selected.get("checks") or {}).get("lef_review") or {})
+        scope_old_file = (_text(request.form, "lef_old_file") if request.method == "POST"
+                          else str(display_lef_spec.get("old_file") or default_base_lef))
+        scope_new_file = (_text(request.form, "lef_new_file") if request.method == "POST"
+                          else str(display_lef_spec.get("new_file") or default_target_lef))
+        lef_comparison_scope = _lef_comparison_scope(scope_old_file, scope_new_file, ips, registry_file)
+        chosen_stage = (request.args.get("formal_stage", "") if request.method == "GET"
+                        else _text(request.form, "formal_stage"))
         if selected and chosen_stage:
             selected = dict(selected)
             selected["formal_stage"] = chosen_stage
@@ -981,10 +1047,12 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                if review_overview_path.is_file() else "")
         return render_template("workbench.html", ips=catalog_ips, sidebar_ips=sidebar_ips, selected=selected, latest=latest_display,
                                history=records, latest_attempt=latest_attempt,
+                               submitted_checks=submitted_checks,
                                message=message, error=error, run_record=run_record,
                                checks=sorted(CHECK_NAMES), discovered=discovered or [], raw_root=raw_root,
                                active_tab=active_tab, discovery_artifacts=discovery_artifacts,
                                environment_label=environment_label, formal_nl=formal_nl, vendors=vendors,
+                               review_formal_snapshot=review_formal_snapshot,
                                identity_conflicts=identity_conflicts or [], partial_discovery=partial_discovery,
                                formal_overview=formal_overview,
                                lef_file_status=lef_file_status,
@@ -997,6 +1065,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                old_lef_choices=old_lef_choices, new_lef_choices=new_lef_choices,
                                default_target_lef=default_target_lef, default_base_lef=default_base_lef,
                                quick_checks=quick_checks, quick_notes=quick_notes,
+                               lef_comparison_scope=lef_comparison_scope,
                                latest_workbook_url=latest_workbook_url,
                                task_workbook_url=task_workbook_url,
                                review_overview_url=review_overview_url,
@@ -1168,8 +1237,45 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                 requested_tab = default_tab
             if request.args.get("formal_refreshed") == "1":
                 message = "正式 NL 总览已刷新；统计基于本次只读链接清点。"
+            if request.args.get("saved") == "1":
+                message = "IP 配置已保存。"
+            if request.args.get("registered") == "1":
+                message = "登记已完成；RAW 版本清单已更新，未修改源文件。"
+            if request.args.get("removed") == "1":
+                message = "已移除库登记；RAW 文件和历史检查结果均未删除。"
+            if request.args.get("formal_scanned") == "1":
+                message = "正式 NL 目录盘点已完成；本次只读检查结果已保存。"
+
+            discovered = []
+            discovery_artifacts = False
+            identity_conflicts = []
+            partial_discovery = False
+            discovery_warnings = []
+            discovery_raw_root = ""
+            if requested_tab == "discover":
+                discovery_path = output / "discovery" / "library_discovery.json"
+                if discovery_path.is_file():
+                    try:
+                        discovery = _json_read(discovery_path)
+                        if isinstance(discovery, dict) and isinstance(discovery.get("candidates"), list):
+                            discovered = discovery["candidates"]
+                            discovery_raw_root = str(discovery.get("raw_root") or "")
+                            identity_conflicts = list(discovery.get("identity_conflicts") or [])
+                            partial_discovery = bool(discovery.get("partial_discovery"))
+                            discovery_warnings = list(discovery.get("warnings") or [])
+                            discovery_artifacts = True
+                            if request.args.get("discovery") == "latest":
+                                generated = str(discovery.get("generated_at") or "")
+                                suffix = f"（{generated}）" if generated else ""
+                                message = f"发现结果已恢复{suffix}；未重新扫描。"
+                    except (OSError, ValueError, json.JSONDecodeError):
+                        if request.args.get("discovery") == "latest":
+                            message = "上次发现结果无法读取；请重新扫描 RAW 根目录。"
             return page(requested if requested in ids else "", new_ip=request.args.get("new") == "1",
-                        active_tab=requested_tab, message=message)
+                        active_tab=requested_tab, message=message, discovered=discovered,
+                        raw_root=discovery_raw_root, discovery_artifacts=discovery_artifacts,
+                        identity_conflicts=identity_conflicts, partial_discovery=partial_discovery,
+                        discovery_warnings=discovery_warnings)
         except Exception as exc:
             return render_template("workbench.html", ips=[], sidebar_ips=[], selected={}, latest={}, history=[],
                                    message="", error=str(exc), run_record=None, checks=sorted(CHECK_NAMES),
@@ -1199,9 +1305,16 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             _save_entry(registry, entry)
             _write_registry(registry_file, registry)
             _refresh_overview(registry_file, output)
-            return page(entry["id"], message="IP 配置已保存。", active_tab="review")
+            review_tab = _text(request.form, "review_tab") or "config"
+            if review_tab not in {"files", "config", "history"}:
+                review_tab = "config"
+            return redirect(url_for("ip_review.index", ip=entry["id"], tab="review",
+                                    raw_version=entry.get("raw_version") or None,
+                                    base_raw_version=_text(request.form, "base_raw_version") or None,
+                                    review_tab=review_tab, saved="1"), code=303)
         except Exception as exc:
-            return page(_text(request.form, "id"), error=str(exc)), 400
+            return page(_text(request.form, "id"), error=str(exc), active_tab="review",
+                        active_review_tab=_text(request.form, "review_tab") or "config"), 400
 
     @blueprint.post("/discover")
     def discover():
@@ -1211,19 +1324,10 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         try:
             raw_root = _resolve_registry_path(raw_root, registry_file)
             report = discover_raw_report(raw_root)
+            report["generated_at"] = datetime.now(timezone.utc).isoformat()
             candidates = report["candidates"]
             write_discovery_artifacts(report, output / "discovery")
-            message = f"扫描完成：识别到 {len(candidates)} 个库；请筛选后直接登记或更新登记信息。"
-            if report["partial_discovery"]:
-                warnings = report.get("warnings") or ["发现范围不完整；请查看扫描产物中的告警明细。"]
-                message += " " + " ".join(str(warning) for warning in warnings)
-            if report["identity_conflicts"]:
-                message += " 存在库标识冲突，冲突库不可登记。"
-            return page(message=message, discovered=candidates, raw_root=raw_root,
-                        identity_conflicts=report["identity_conflicts"],
-                        partial_discovery=report["partial_discovery"],
-                        discovery_warnings=report.get("warnings") or [],
-                        active_tab="discover", discovery_artifacts=True)
+            return redirect(url_for("ip_review.index", tab="discover", discovery="latest"), code=303)
         except Exception as exc:
             return page(error=str(exc), raw_root=raw_root, active_tab="discover"), 400
 
@@ -1235,6 +1339,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         try:
             raw_root = _resolve_registry_path(raw_root, registry_file)
             discovery = discover_raw_report(raw_root)
+            discovery["generated_at"] = datetime.now(timezone.utc).isoformat()
             candidates = discovery["candidates"]
             selected_ids = set(request.form.getlist("library_ids"))
             register_one = _text(request.form, "register_one")
@@ -1267,7 +1372,9 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             _write_registry(registry_file, registry)
             _refresh_overview(registry_file, output)
             first_id = sorted(selected_ids)[0]
-            return page(first_id, message=f"已登记 {len(selected_ids)} 个库及其 RAW 版本。", active_tab="catalog")
+            write_discovery_artifacts(discovery, output / "discovery")
+            return redirect(url_for("ip_review.index", ip=first_id, tab="catalog",
+                                    registered="1"), code=303)
         except Exception as exc:
             return page(error=str(exc), raw_root=raw_root, active_tab="discover"), 400
 
@@ -1285,7 +1392,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         registry["ips"] = [item for item in ips if str(item.get("id") or "") != ip_id]
         _write_registry(registry_file, registry)
         _refresh_overview(registry_file, output)
-        return page(message="已移除库登记；RAW 文件和历史检查结果均未删除。", active_tab="catalog")
+        return redirect(url_for("ip_review.index", tab="catalog", removed="1"), code=303)
 
     @blueprint.get("/discovery-artifact/<artifact_name>")
     def discovery_artifact(artifact_name: str):
@@ -1378,8 +1485,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             entry["formal_nl_scan_at"] = latest["generated_at"]
             entry["formal_nl_report_status"] = latest["report_status"]
             _write_registry(registry_file, registry)
-            return page(ip_id, message="正式 NL 目录已浏览；单阶段核查状态请看报告。",
-                        active_tab="formal-nl")
+            return redirect(url_for("ip_review.index", ip=ip_id, tab="formal-nl",
+                                    formal_scanned="1", formal_stage=stage or None), code=303)
         except HTTPException:
             raise
         except Exception as exc:
@@ -1421,18 +1528,25 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             _validate_for_run(entry)
             if previous and entry["library_id"] != previous["library_id"]:
                 raise ValueError("库标识与已登记记录不一致")
+            lef_spec = entry.get("checks", {}).get("lef_review")
+            if lef_spec:
+                comparison_scope = _lef_comparison_scope(
+                    lef_spec.get("old_file"), lef_spec.get("new_file"),
+                    registry.get("ips") or [], registry_file)
+                if comparison_scope:
+                    lef_spec["comparison_scope"] = comparison_scope
             with _SUBMISSION_LOCK:
                 library_id = entry["library_id"]
                 if not _REVIEW_TASK_SLOTS.acquire(blocking=False):
                     return page(entry["id"], error="检查队列已满（最多 8 个排队或运行任务），请稍后提交。",
-                                active_tab="review"), 429
+                            active_tab="review", active_review_tab=_text(request.form, "review_tab") or "config"), 429
                 slot_reserved = True
                 library_lock = _acquire_library_lock(output, library_id)
                 if library_lock is None:
                     _REVIEW_TASK_SLOTS.release()
                     slot_reserved = False
                     return page(entry["id"], error="该 IP 已有检查任务正在其他工作台中运行；请等待完成后再提交。",
-                                active_tab="review"), 409
+                                active_tab="review", active_review_tab=_text(request.form, "review_tab") or "config"), 409
                 _, latest_attempt_path = _task_paths(output, library_id, "")
                 try:
                     latest_attempt = _json_read(latest_attempt_path)
@@ -1445,7 +1559,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                         _REVIEW_TASK_SLOTS.release()
                         slot_reserved = False
                         return page(entry["id"], error="该 IP 已有检查任务正在排队或运行；请等待完成后再提交。",
-                                    active_tab="review"), 409
+                                    active_tab="review", active_review_tab=_text(request.form, "review_tab") or "config"), 409
                     stale_task_path, _ = _task_paths(output, library_id, str(latest_attempt.get("task_id") or ""))
                     _interrupt_stale_task(stale_task_path, latest_attempt_path, latest_attempt)
                 task_id = f"task_{uuid4().hex}"
@@ -1504,15 +1618,20 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             _REVIEW_EXECUTOR.submit(execute)
             slot_reserved = False
             library_lock = None
+            review_tab = _text(request.form, "review_tab")
+            if review_tab not in {"files", "config", "history"}:
+                review_tab = "config"
             return redirect(url_for("ip_review.index", ip=entry["id"], tab="review",
                                     raw_version=entry.get("raw_version") or None,
-                                    base_raw_version=_text(request.form, "quick_base_raw_version") or None,
+                                    base_raw_version=_text(request.form, "base_raw_version") or None,
+                                    review_tab=review_tab,
                                     submitted="1"), code=303)
         except Exception as exc:
             if slot_reserved:
                 _REVIEW_TASK_SLOTS.release()
             _release_library_lock(library_lock)
-            return page(_text(request.form, "id"), error=str(exc)), 400
+            return page(_text(request.form, "id"), error=str(exc), active_tab="review",
+                        active_review_tab=_text(request.form, "review_tab") or "config"), 400
 
     @blueprint.get("/tasks/<task_id>")
     def task_status(task_id: str):
