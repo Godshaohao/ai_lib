@@ -15,6 +15,107 @@ from lib_guard.workbench import _acquire_library_lock, _files_for_selection, _qu
 
 
 class WorkbenchTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("xlsxwriter"), "需要已安装的 XlsxWriter")
+    def test_matrix_selection_runs_batch_and_returns_same_projection_in_excel(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old_root, new_root = root / "raw" / "20261001_full", root / "raw" / "20261005_fix"
+            for version_root, size in ((old_root, 2), (new_root, 3)):
+                for name in ("a.lef", "b.lef"):
+                    path = version_root / "LEF" / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(f"VERSION 5.8 ;\nMACRO A\n SIZE 1 BY {size} ;\nEND A\nEND LIBRARY\n", encoding="utf-8")
+            (new_root / "LEF" / "new.lef").write_text("VERSION 5.8 ;\nEND LIBRARY\n", encoding="utf-8")
+            formal = root / "lib_NL2.5_3" / "IP"
+            (formal / "LEF").mkdir(parents=True)
+            (formal / "LEF" / "a.lef").symlink_to(old_root / "LEF" / "a.lef")
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "IP_A", "library_id": "Vendor.IP_A", "vendor": "Vendor",
+                "library_name": "IP_A", "raw_versions": [{"id": old_root.name, "path": str(old_root)},
+                {"id": new_root.name, "path": str(new_root)}], "formal_nl_root": str(formal), "checks": {}}]}), encoding="utf-8")
+            output = root / "output"
+            client = create_app(registry, output).test_client()
+            self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
+            self.assertEqual(client.post("/file-status/refresh", data={"ip": "IP_A", "base_version": old_root.name,
+                                                                       "target_version": new_root.name}).status_code, 303)
+            from lib_guard.review_runner import _library_dir
+            pointer = json.loads((output / "file_versions" / _library_dir("Vendor.IP_A") / "latest.json").read_text())
+            for snapshot, key in ((pointer["snapshot_id"], "lef:missing.lef"),
+                                  ("snapshot_stale", "lef:a.lef")):
+                rejected = client.post("/run", data={"mode": "matrix", "id": "IP_A", "library_id": "Vendor.IP_A",
+                    "snapshot_id": snapshot, "file_key": [key]})
+                self.assertEqual(rejected.status_code, 400)
+            self.assertFalse((output / "libraries" / _library_dir("Vendor.IP_A") / "latest_attempt.json").exists())
+            response = client.post("/run", data={"mode": "matrix", "id": "IP_A", "library_id": "Vendor.IP_A",
+                "snapshot_id": pointer["snapshot_id"], "file_key": ["lef:a.lef", "lef:b.lef"]}, follow_redirects=True)
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            task_match = re.search(rb'data-task-url="([^"]+)"', response.data)
+            self.assertIsNotNone(task_match)
+            task_url = task_match.group(1).decode().replace("&amp;", "&")
+            for _ in range(1000):
+                payload = client.get(task_url).get_json()
+                if payload["status"] in {"COMPLETE", "FAILED"}:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(payload["execution_status"], "COMPLETE", payload)
+            run_dir = output / "libraries" / _library_dir("Vendor.IP_A") / "runs" / payload["review_id"]
+            projection = json.loads((run_dir / "evidence" / "file_version_projection.json").read_text())
+            self.assertEqual(projection["source_snapshot_id"], pointer["snapshot_id"])
+            self.assertEqual([row["comparison"]["content_status"] for row in projection["files"]], ["DIFF", "DIFF", "NOT_COMPARED"])
+            pair_ref = projection["files"][0]["comparison"]["evidence_refs"][0]
+            pair_id = Path(pair_ref).stem
+            evidence = client.get(f"/review-evidence/{payload['review_id']}/{pair_id}",
+                                  query_string={"library_id": "Vendor.IP_A"})
+            self.assertEqual(evidence.status_code, 200)
+            self.assertEqual(evidence.get_json()["schema_version"], "lef_analysis.v1")
+            evidence.close()
+            self.assertEqual(client.get(f"/review-evidence/{payload['review_id']}/{pair_id}",
+                                        query_string={"library_id": "Other.IP"}).status_code, 404)
+            with zipfile.ZipFile(run_dir / "ip_review.xlsx") as workbook:
+                strings = workbook.read("xl/sharedStrings.xml").decode()
+                self.assertIn(projection["snapshot_id"], strings)
+                self.assertIn("未发现", strings)
+                self.assertNotIn("ABSENT_VERIFIED", strings)
+                self.assertNotIn(">INDEPENDENT<", strings)
+            page = client.get("/?ip=IP_A&tab=review&review_tab=files").get_data(as_text=True)
+            self.assertIn(projection["snapshot_id"], page)
+            self.assertIn("未发现", page)
+            self.assertIn("已提供", page)
+            self.assertNotIn("ABSENT_VERIFIED", page)
+            self.assertNotIn(">DIFF / CHANGED", page)
+            self.assertEqual((formal / "LEF" / "a.lef").resolve(), old_root / "LEF" / "a.lef")
+
+    def test_legacy_cli_task_uses_saved_quality_summary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: Vendor.IP_A}\n", encoding="utf-8")
+            from lib_guard.review_runner import _library_dir
+            attempt = root / "output" / "libraries" / _library_dir("Vendor.IP_A") / "latest_attempt.json"
+            attempt.parent.mkdir(parents=True)
+            attempt.write_text(json.dumps({"task_id": "legacy", "status": "COMPLETE", "execution_status": "COMPLETE",
+                "summary": {"quality_assessment": {"status": "REVIEW_REQUIRED"}}}), encoding="utf-8")
+            response = create_app(registry, root / "output").test_client().get("/?ip=IP_A&tab=review")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("质量判断：存在待核实项".encode(), response.data)
+
+    def test_file_status_marks_interrupted_pointer_publication_stale(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = {"ips": [{"id": "IP_A", "library_id": "Vendor.IP_A"}]}
+            from lib_guard.review_runner import _library_dir
+            status_path = root / "file_status" / _library_dir("Vendor.IP_A") / "latest.json"
+            status_path.parent.mkdir(parents=True)
+            status_path.write_text(json.dumps({"schema_version": "lef_file_status.v1", "status": "COMPLETE",
+                "projection_snapshot_id": "snapshot_new", "registry_fingerprint": workbench._formal_nl_config_fingerprint(registry),
+                "formal_snapshot_generated_at": "t1"}), encoding="utf-8")
+            pointer_path = root / "file_versions" / _library_dir("Vendor.IP_A") / "latest.json"
+            pointer_path.parent.mkdir(parents=True)
+            pointer_path.write_text(json.dumps({"snapshot_id": "snapshot_old"}), encoding="utf-8")
+            status = workbench._read_lef_file_status(root, registry, registry["ips"][0], {"generated_at": "t1", "stale": False})
+            self.assertTrue(status["stale"])
+            self.assertEqual(status["status"], "STALE")
+
     def test_formal_file_inventory_lists_lefs_across_libraries_and_exposes_library_filter(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -120,12 +221,32 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn("选中库的 RAW 来源追踪".encode(), page.data)
             self.assertIn('data-workbench-tab="files"'.encode(), page.data)
 
-            refreshed = client.post("/file-status/refresh", data={"ip": "IP_A"})
+            refreshed = client.post("/file-status/refresh", data={"ip": "IP_A", "base_version": "20261001_full",
+                                                                 "target_version": "20261005_fix"})
             self.assertEqual(refreshed.status_code, 303)
             self.assertIn("review_tab=files", refreshed.headers["Location"])
             from lib_guard.review_runner import _library_dir
             status_path = output / "file_status" / _library_dir("Vendor_A.IP_A") / "latest.json"
             status = json.loads(status_path.read_text(encoding="utf-8"))
+            projection_root = output / "file_versions" / _library_dir("Vendor_A.IP_A")
+            pointer = json.loads((projection_root / "latest.json").read_text(encoding="utf-8"))
+            projection = json.loads((projection_root / pointer["projection_ref"]).read_text(encoding="utf-8"))
+            self.assertEqual(projection["snapshot_id"], pointer["snapshot_id"])
+            self.assertEqual(projection["schema_version"], "file_version_projection.v1")
+            self.assertEqual(projection["library_id"], "Vendor_A.IP_A")
+            with patch("lib_guard.workbench._write_json", side_effect=OSError("status write failed")):
+                client.post("/file-status/refresh", data={"ip": "IP_A"})
+            self.assertEqual(json.loads((projection_root / "latest.json").read_text(encoding="utf-8")), pointer)
+            old_status_bytes = status_path.read_bytes()
+            real_replace = Path.replace
+            def fail_projection_pointer(source, target):
+                if Path(target) == projection_root / "latest.json":
+                    raise OSError("pointer write failed")
+                return real_replace(source, target)
+            with patch.object(Path, "replace", fail_projection_pointer):
+                client.post("/file-status/refresh", data={"ip": "IP_A"})
+            self.assertEqual(status_path.read_bytes(), old_status_bytes)
+            self.assertEqual(json.loads((projection_root / "latest.json").read_text(encoding="utf-8")), pointer)
             self.assertEqual(status["status"], "COMPLETE")
             self.assertEqual(status["files"][0]["delivery_relation"], "LATER_DELIVERY_HINT")
             self.assertEqual(status["files"][0]["nl_source"]["source_path"], str(old_lef.resolve()))
@@ -143,6 +264,9 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(status_path.read_bytes(), previous_status)
 
             rendered = client.get(refreshed.headers["Location"])
+            self.assertIn(pointer["snapshot_id"].encode(), rendered.data)
+            self.assertIn("文件版本矩阵".encode(), rendered.data)
+            self.assertIn("未比较内容".encode(), rendered.data)
             self.assertIn("发现较晚交付线索".encode(), rendered.data)
             self.assertIn("唯一归属".encode(), rendered.data)
             self.assertIn(str(formal_link).encode(), rendered.data)

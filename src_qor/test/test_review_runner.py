@@ -465,7 +465,7 @@ class ReviewRunnerTests(unittest.TestCase):
         check["input_spec"] = {"root": "/raw/a", "enabled": True}
 
         model = build_workbook_model([item])
-        record = next(row for row in model["02-执行记录"] if row["检查"] == "macro_index")
+        record = next(row for row in model["02-执行记录"] if row["检查"] == "Macro / View 文件索引")
         self.assertNotIn("{", record["输入身份"])
         self.assertNotIn("{", record["输入范围"])
         self.assertEqual(record["报告路径"], "evidence/macro_index.json")

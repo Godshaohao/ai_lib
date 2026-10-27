@@ -546,6 +546,11 @@
     const refreshButton = taskBanner.querySelector("[data-task-refresh]");
     refreshButton?.addEventListener("click", () => window.location.reload());
     const statusLabels = { QUEUED: "排队中", RUNNING: "运行中", COMPLETE: "已完成", FAILED: "失败", INTERRUPTED: "已中断" };
+    const executionLabels = { COMPLETE: "完成", INCOMPLETE: "不完整", FAILED: "失败", INTERRUPTED: "已中断" };
+    const readableTaskMessage = (message) => message.replace(/任务执行：(COMPLETE|INCOMPLETE|FAILED|INTERRUPTED)/g,
+      (_, value) => `执行结果：${executionLabels[value]}`);
+    if (messageNode) messageNode.textContent = readableTaskMessage(messageNode.textContent);
+    eventList?.querySelectorAll("span").forEach((node) => { node.textContent = readableTaskMessage(node.textContent); });
     let elapsedTimer = null;
     const stopElapsedTimer = () => {
       if (elapsedTimer === null) return;
@@ -572,7 +577,7 @@
         const text = document.createElement("span");
         const parsed = Date.parse(event.at || "");
         time.textContent = Number.isFinite(parsed) ? new Date(parsed).toLocaleTimeString() : "";
-        text.textContent = event.message || "";
+        text.textContent = readableTaskMessage(event.message || "");
         row.append(time, text);
         eventList.append(row);
       });
@@ -581,8 +586,9 @@
     const renderTask = (task) => {
       const status = String(task.status || "");
       statusNode.textContent = statusLabels[status] || status;
-      messageNode.textContent = task.error || task.progress_message ||
-        (task.execution_status && task.execution_status !== "PENDING" ? `检查结论：${task.execution_status}` : "等待任务状态");
+      const message = task.error || task.progress_message ||
+        (task.execution_status && task.execution_status !== "PENDING" ? `执行结果：${executionLabels[task.execution_status] || "待核实"}` : "等待任务状态");
+      messageNode.textContent = readableTaskMessage(message);
       stageNode.textContent = `阶段：${task.phase || (status === "QUEUED" ? "排队中" : "状态待更新")}`;
       taskBanner.classList.toggle("is-running", ["QUEUED", "RUNNING"].includes(status));
       taskBanner.classList.toggle("is-failed", ["FAILED", "INTERRUPTED"].includes(status));
@@ -644,6 +650,26 @@
   fileStatusFilter?.addEventListener("change", applyFileStatusFilters);
   fileStatusView?.addEventListener("change", applyFileStatusFilters);
   applyFileStatusFilters();
+
+  const projectionRows = [...document.querySelectorAll("[data-projection-row]")];
+  const projectionSearch = document.querySelector("[data-projection-search]");
+  const projectionView = document.querySelector("[data-projection-view]");
+  const projectionCount = document.querySelector("[data-projection-count]");
+  function filterProjection() {
+    const query = (projectionSearch?.value || "").trim().toLocaleLowerCase();
+    let visible = 0;
+    projectionRows.forEach((row) => {
+      const show = row.dataset.search.includes(query) && (!projectionView?.value || row.dataset.view === projectionView.value);
+      row.hidden = !show;
+      if (show) visible += 1;
+    });
+    if (projectionCount) projectionCount.textContent = `显示 ${visible} / ${projectionRows.length} 个文件`;
+  }
+  projectionSearch?.addEventListener("input", filterProjection);
+  projectionView?.addEventListener("change", filterProjection);
+  document.querySelector("[data-matrix-select]")?.addEventListener("click", () => setVisibleChecks("[data-matrix-file]", true));
+  document.querySelector("[data-matrix-clear]")?.addEventListener("click", () => setVisibleChecks("[data-matrix-file]", false));
+  filterProjection();
 
   selectTab(document.body.dataset.activeTab || "catalog", "main");
   selectTab(document.body.dataset.activeReviewTab || "files", "review");

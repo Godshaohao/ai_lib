@@ -38,6 +38,9 @@ CHECK_LABELS = {
 }
 VIEW_NAMES = ("lef", "liberty", "gds", "cdl", "db", "verilog")
 SHEET_HEADERS = {
+    "文件版本矩阵": ["IP", "View", "文件键", "文件名", "基准版本", "目标版本", "基准路径", "目标路径",
+                   "基准存在性", "目标存在性", "身份状态", "内容状态", "语义状态", "正式阶段", "正式来源",
+                   "批准状态", "RAW 覆盖", "快照 ID", "投影证据"],
     "00-概览": ["IP", "库标识", "RAW版本", "正式阶段", "已选检查", "执行完成项", "执行失败项", "质量判断", "Macro数", "报告结论", "报告生成时间", "源提交", "工作区有改动", "输入范围"],
     "01-工程检查": ["序号", "工程检查主题", "工程覆盖", "本次执行", "本次证据", "范围或缺口"],
     "02-执行记录": ["IP", "检查", "执行状态", "上下文关系", "结果摘要", "范围说明", "输入身份", "输入范围", "报告路径"],
@@ -300,6 +303,9 @@ def _run_macro(spec: dict[str, Any], config_dir: Path, out_dir: Path, ip_id: str
 
 
 def _run_lef_review(spec: dict[str, Any], config_dir: Path, out_dir: Path, ip_id: str) -> dict[str, Any]:
+    if spec.get("pairs"):
+        from .batch_lef_review import analyze_pairs
+        return analyze_pairs(spec["pairs"], out_dir / "lef_batch")
     if spec.get("report_json"):
         return _json_read(_resolve(spec["report_json"], config_dir))
     if not spec.get("old_file") or not spec.get("new_file"):
@@ -417,6 +423,70 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
             raise ValueError(f"{ip_id}: 不支持的检查名：{', '.join(sorted(unknown))}")
         check_results: dict[str, dict[str, Any]] = {}
         evidence_dir.mkdir(parents=True, exist_ok=True)
+        projection = None
+        batch_pairs = None
+        if ip.get("projection_json"):
+            projection = _json_read(_resolve(ip["projection_json"], config_dir))
+            if projection.get("schema_version") != "file_version_projection.v1" or not projection.get("snapshot_id"):
+                raise ValueError("文件版本投影格式或快照标识无效")
+            if str(projection.get("library_id") or "") != library_id:
+                raise ValueError("文件版本投影的库标识不一致")
+            target = str((projection.get("scope") or {}).get("target_version") or "")
+            if not target or target != str(ip.get("raw_version") or ""):
+                raise ValueError("文件版本投影的目标版本与本次检查不一致")
+            lef_spec = checks_spec.get("lef_review") or {}
+            if lef_spec and lef_spec.get("enabled", True):
+                if lef_spec.get("pairs"):
+                    requested = lef_spec["pairs"]
+                    if not isinstance(requested, list) or not 1 <= len(requested) <= 50:
+                        raise ValueError("LEF 批量检查需选择 1 至 50 个文件")
+                    keys = [str(item.get("file_key") or "") for item in requested if isinstance(item, dict)]
+                    if len(keys) != len(requested) or len(set(keys)) != len(keys):
+                        raise ValueError("LEF 文件选择无效或重复")
+                    base = str((projection.get("scope") or {}).get("base_version") or "")
+                    if not base:
+                        raise ValueError("LEF 批量检查需要投影基准版本")
+                    batch_pairs = []
+                    for key in keys:
+                        rows = [row for row in projection.get("files") or [] if row.get("file_key") == key]
+                        if len(rows) != 1 or rows[0].get("view") != "lef" or rows[0].get("identity_status") != "EXACT_RELATIVE_PATH":
+                            raise ValueError("LEF 文件不属于投影中的唯一配对")
+                        occurrences = rows[0].get("occurrences") or []
+                        old = [item.get("source_path") for item in occurrences if item.get("version") == base and item.get("source_path")]
+                        new = [item.get("source_path") for item in occurrences if item.get("version") == target and item.get("source_path")]
+                        if len(old) != 1 or len(new) != 1:
+                            raise ValueError("LEF 文件的基准或目标来源不唯一")
+                        batch_pairs.append({"pair_id": hashlib.sha256(key.encode()).hexdigest()[:24],
+                                            "file_key": key, "old_file": str(_resolve(old[0], config_dir)),
+                                            "new_file": str(_resolve(new[0], config_dir))})
+                    if checks_spec.get("lef_liberty_check"):
+                        raise ValueError("批量 LEF 与接口核查需分别运行，避免错误绑定")
+                    checks_spec = dict(checks_spec)
+                    checks_spec["lef_review"] = {"pairs": batch_pairs}
+                elif lef_spec.get("report_json"):
+                    report = _json_read(_resolve(lef_spec["report_json"], config_dir))
+                    sources = report.get("sources") or {}
+                    old_path = (sources.get("old") or {}).get("path")
+                    new_path = (sources.get("new") or {}).get("path")
+                else:
+                    old_path, new_path = lef_spec.get("old_file"), lef_spec.get("new_file")
+                base = str((projection.get("scope") or {}).get("base_version") or "")
+                if batch_pairs is None and (not old_path or not new_path or not base):
+                    raise ValueError("LEF 检查无法与投影基准和目标文件核对")
+                actual = (str(_resolve(old_path, config_dir)), str(_resolve(new_path, config_dir))) if batch_pairs is None else None
+                valid_pair = False
+                for row in projection.get("files") or []:
+                    if row.get("view") != "lef" or row.get("identity_status") != "EXACT_RELATIVE_PATH":
+                        continue
+                    occurrences = row.get("occurrences") or []
+                    old = [item.get("source_path") for item in occurrences if item.get("version") == base and item.get("source_path")]
+                    new = [item.get("source_path") for item in occurrences if item.get("version") == target and item.get("source_path")]
+                    if len(old) == len(new) == 1 and (str(_resolve(old[0], config_dir)), str(_resolve(new[0], config_dir))) == actual:
+                        valid_pair = True
+                        break
+                if batch_pairs is None and not valid_pair:
+                    raise ValueError("LEF 检查文件与投影中的唯一基准/目标配对不一致")
+            _json_write(evidence_dir / "file_version_projection.json", projection)
         lef_result = None
         runners = {
             "macro_index": lambda spec: _run_macro(spec, config_dir, evidence_dir, ip_id),
@@ -431,7 +501,7 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                     result = _run_lef_liberty(spec, config_dir, evidence_dir, ip_id, library_id, lef_result)
                 else:
                     result = runners[name](spec)
-                if name == "lef_review":
+                if name == "lef_review" and result.get("schema_version") != "batch_lef_review.v1":
                     lef_result = result
                     generated_lef_report = evidence_dir / "lef_review" / "lef_analysis.json"
                     if not generated_lef_report.is_file():
@@ -445,6 +515,8 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                         "lef_review": evidence_dir / "lef_review" / "lef_analysis.json",
                         "lef_liberty_check": evidence_dir / "lef_liberty_check" / "lef_liberty_check.json",
                     }.get(name)
+                    if name == "lef_review" and result.get("schema_version") == "batch_lef_review.v1":
+                        expected = evidence_dir / "lef_review.json"
                     report_path = str(expected or "")
                 snapshot_path = evidence_dir / f"{name}.json"
                 _json_write(snapshot_path, result)
@@ -453,6 +525,26 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                                        "report_path": report_path, "result_ref": f"evidence/{name}.json",
                                        "input_spec": dict(spec),
                                        "input_identity": _input_identity(name, spec, result)}
+                if name == "lef_review" and batch_pairs is not None:
+                    by_id = {pair["pair_id"]: pair["file_key"] for pair in batch_pairs}
+                    by_key = {row["file_key"]: row for row in projection["files"]}
+                    for pair in result.get("pairs") or []:
+                        row = by_key[by_id[pair["pair_id"]]]
+                        if pair.get("execution_status") != "COMPLETE":
+                            row["comparison"].update({"content_status": "NOT_COMPARED", "semantic_status": "FAILED"})
+                            continue
+                        comp = pair.get("comparison") or {}
+                        names = comp.get("macro_names") or {}
+                        changed = bool(comp.get("changes") or names.get("added") or names.get("removed"))
+                        semantic = "CHANGED" if changed else ("UNVERIFIED" if comp.get("unverified") else "SAME_WITHIN_SCOPE")
+                        row["comparison"].update({"content_status": (comp.get("content") or {}).get("status", "NOT_COMPARED"),
+                            "semantic_status": semantic, "unverified": comp.get("unverified") or [],
+                            "evidence_refs": [f"evidence/lef_batch/{pair['evidence_ref']}"]})
+                    projection["source_snapshot_id"] = projection["snapshot_id"]
+                    projection["snapshot_id"] = f"review_projection_{review_id}"
+                    projection["summary"]["not_compared"] = sum(row["comparison"]["content_status"] == "NOT_COMPARED" for row in projection["files"])
+                    projection["coverage"]["content_comparison"] = "PARTIAL"
+                    _json_write(evidence_dir / "file_version_projection.json", projection)
             except Exception as exc:
                 check_results[name] = {"selected": True, "status": "FAILED", "result_status": "FAILED",
                                        "error": str(exc), "result": {}, "report_path": "", "result_ref": "",
@@ -467,6 +559,7 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                         "context": context, "context_alignment": _context_alignment(check_results, ip.get("raw_version")),
                         "requested_checks": [name for name, item in check_results.items()
                                                                     if item.get("selected")],
+                        "file_version_projection": projection,
                         "checks": check_results, "run_dir": str(run_dir),
                         "library_dir": str(run_dir.parents[1])})
     return reviews
@@ -510,6 +603,10 @@ def _input_identity(name: str, spec: dict[str, Any], result: dict[str, Any]) -> 
             add("macro_source", version=version)
         add("macro_report", spec.get("report_json"))
     elif name == "lef_review":
+        if result.get("schema_version") == "batch_lef_review.v1":
+            for pair in result.get("pairs") or []:
+                for side, source in (pair.get("sources") or {}).items():
+                    add(f"lef_{side}:{pair.get('pair_id', '')}", source.get("path"), sha256=source.get("sha256"))
         for side, source in (result.get("sources") or {}).items():
             add(f"lef_{side}", source.get("path"), sha256=source.get("sha256"))
         if not sources:
@@ -584,6 +681,10 @@ def _check_summary(name: str, item: dict[str, Any]) -> tuple[str, str]:
         return f"Macro {macros} 个；未关联文件 {unmatched_files} 个；{object_summary}", \
             "按当前解析事实建立名称关联；未映射不等于交付缺失，索引完成不代表全部视图齐套。"
     if name == "lef_review":
+        if result.get("schema_version") == "batch_lef_review.v1":
+            pairs = result.get("pairs") or []
+            completed = sum(pair.get("execution_status") == "COMPLETE" for pair in pairs)
+            return f"LEF 配对 {len(pairs)} 组；执行完成 {completed} 组", "仅核查本次明确选择的文件对；不代表全库通过。"
         comparison = result.get("comparison") or {}
         names = comparison.get("macro_names") or {}
         content = comparison.get("content") or {}
@@ -961,7 +1062,19 @@ def _finding_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
                     f"{len(objects)} 个解析对象未与 LEF Macro 精确同名关联；示例：{sample_names}", "关联待确认",
                     "名称差异不等于缺交付；按需确认别名或对象层级", objects[0].get("file", ""),
                     kind="UNVERIFIED", count=len(objects))
-    lef = (_result(review, "lef_review") if _check_result(review, "lef_review").get("status") == "COMPLETE" else {})
+    lef_check = _check_result(review, "lef_review")
+    lef_result = _result(review, "lef_review")
+    if lef_result.get("schema_version") == "batch_lef_review.v1":
+        for pair in lef_result.get("pairs") or []:
+            if pair.get("execution_status") != "COMPLETE":
+                add("LEF批量检查", pair.get("pair_id", ""), "文件对执行失败", "证据不足",
+                    "核对文件路径和权限后重试", lef_check.get("result_ref") or "", kind="UNVERIFIED")
+                continue
+            pair_review = {"ip": ip, "checks": {"lef_review": {"selected": True, "status": "COMPLETE",
+                "result": {"comparison": pair.get("comparison") or {}},
+                "result_ref": f"evidence/lef_batch/{pair.get('evidence_ref', '')}"}}}
+            rows.extend(_finding_rows(pair_review))
+    lef = lef_result if lef_check.get("status") == "COMPLETE" and lef_result.get("schema_version") != "batch_lef_review.v1" else {}
     comp = lef.get("comparison") or {}
     lef_evidence = _check_result(review, "lef_review").get("result_ref") or ""
     names = comp.get("macro_names") or {}
@@ -1162,7 +1275,13 @@ def _qa_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
                          "来源报告": evidence("macro_index")})
     lef_check = _check_result(review, "lef_review")
     lef = _result(review, "lef_review")
-    if lef_check.get("selected") and lef_check.get("status") == "COMPLETE":
+    if lef_check.get("selected") and lef.get("schema_version") == "batch_lef_review.v1":
+        pairs = lef.get("pairs") or []
+        complete_count = sum(pair.get("execution_status") == "COMPLETE" for pair in pairs)
+        rows.append({"IP": label, "问题": "本次批量 LEF 检查了哪些文件？",
+                     "回答": f"共选择 {len(pairs)} 组；执行完成 {complete_count} 组，失败 {len(pairs) - complete_count} 组。",
+                     "证据范围": "各文件对的结果和解析限制分别记录；未选择文件未检查。", "来源报告": evidence("lef_review")})
+    if lef_check.get("selected") and lef_check.get("status") == "COMPLETE" and lef.get("schema_version") != "batch_lef_review.v1":
         comp = lef.get("comparison") or {}
         names = comp.get("macro_names") or {}
         content = comp.get("content") or {}
@@ -1280,7 +1399,8 @@ def _input_scope(review: dict[str, Any]) -> dict[str, Any]:
 
 
 def _input_scope_label(scope: dict[str, Any]) -> str:
-    check_names = [str(item.get("name") or "") for item in scope.get("checks") or []]
+    check_names = [CHECK_LABELS.get(str(item.get("name") or ""), str(item.get("name") or "未记录"))
+                   for item in scope.get("checks") or []]
     parts = ["检查：" + ("、".join(check_names) or "无")]
     if scope.get("target_raw_versions"):
         parts.append("RAW：" + "、".join(scope["target_raw_versions"]))
@@ -1302,9 +1422,12 @@ def _input_scope_label(scope: dict[str, Any]) -> str:
 
 def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """Flatten independently-scoped IP results into human-reviewable sheet rows."""
+    from .display_labels import projection_label
     selected_names = {name for review in reviews for name, item in (review.get("checks") or {}).items()
                       if item.get("selected")}
     sheet_names = ["00-概览", "01-工程检查", "02-执行记录", "03-问答", "04-关注项"]
+    if any(review.get("file_version_projection") for review in reviews):
+        sheet_names.insert(1, "文件版本矩阵")
     if "macro_index" in selected_names:
         sheet_names.extend(["05-MacroView", "06-MacroView文件"])
     sheet_names.append("07-正式文件")
@@ -1317,6 +1440,26 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
     for review in reviews:
         ip = review.get("ip") or {}
         label = ip.get("name") or ip.get("id") or "未命名IP"
+        projection = review.get("file_version_projection") or {}
+        if projection:
+            scope = projection.get("scope") or {}
+            for file in projection.get("files") or []:
+                comparison = file.get("comparison") or {}
+                formal = file.get("formal_usage") or {}
+                def unique_source(version):
+                    matches = [item.get("source_path") for item in file.get("occurrences") or []
+                               if item.get("version") == version]
+                    return matches[0] if version and len(matches) == 1 else ""
+                model["文件版本矩阵"].append({"IP": label, "View": file.get("view"), "文件键": file.get("file_key"),
+                    "文件名": file.get("display_name"), "基准版本": scope.get("base_version"),
+                    "目标版本": scope.get("target_version"), "基准路径": unique_source(scope.get("base_version")),
+                    "目标路径": unique_source(scope.get("target_version")), "基准存在性": projection_label(comparison.get("base_presence"), "presence"),
+                    "目标存在性": projection_label(comparison.get("target_presence"), "presence"), "身份状态": projection_label(file.get("identity_status"), "identity"),
+                    "内容状态": projection_label(comparison.get("content_status"), "content"), "语义状态": projection_label(comparison.get("semantic_status"), "semantic"),
+                    "正式阶段": formal.get("stage"), "正式来源": formal.get("source_path"),
+                    "批准状态": projection_label(formal.get("approved_effective_status"), "approval"),
+                    "RAW 覆盖": projection_label((projection.get("coverage") or {}).get("raw_inventory"), "coverage"),
+                    "快照 ID": projection.get("snapshot_id"), "投影证据": "evidence/file_version_projection.json"})
         selected = [(name, item) for name, item in (review.get("checks") or {}).items() if item.get("selected")]
         complete = sum(item.get("status") == "COMPLETE" for _, item in selected)
         failed = sum(item.get("status") == "FAILED" for _, item in selected)
@@ -1329,7 +1472,7 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
         revision = review.get("source_revision") or {}
         model["00-概览"].append({"IP": label, "库标识": ip.get("library_id") or ip.get("id", ""),
                                  "RAW版本": ip.get("raw_version", "未指定"), "正式阶段": stage or ip.get("formal_stage", "未检查"),
-                                 "已选检查": "、".join(name for name, _ in selected) or "无",
+                                 "已选检查": "、".join(CHECK_LABELS.get(name, name) for name, _ in selected) or "无",
                                  "执行完成项": complete, "执行失败项": failed,
                                  "质量判断": quality["label"], "Macro数": macro_count,
                                  "报告结论": quality["boundary"],
@@ -1343,8 +1486,8 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
             execution = {"COMPLETE": "执行完成", "INCOMPLETE": "结果不完整", "FAILED": "执行失败"}.get(
                 item.get("status"), "状态未知")
             identity_brief, input_brief = _input_brief(item)
-            model["02-执行记录"].append({"IP": label, "检查": name, "执行状态": execution,
-                                      "上下文关系": review.get("context_alignment", "INDEPENDENT"),
+            model["02-执行记录"].append({"IP": label, "检查": CHECK_LABELS.get(name, name), "执行状态": execution,
+                                      "上下文关系": {"INDEPENDENT": "输入关联未确认", "MIXED_EXPLICIT": "输入来自多个版本", "ALIGNED_EXPLICIT": "输入版本一致"}.get(review.get("context_alignment", "INDEPENDENT"), "输入关联待核实"),
                                       "结果摘要": summary, "范围说明": scope,
                                       "输入身份": identity_brief,
                                       "输入范围": input_brief,
@@ -1413,6 +1556,10 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                          "checks": serialized_checks,
                          "summary": summary,
                          "reports": {"xlsx": "ip_review.xlsx"}}
+        if review.get("file_version_projection"):
+            review_record["file_version_projection"] = {
+                "snapshot_id": review["file_version_projection"]["snapshot_id"],
+                "result_ref": "evidence/file_version_projection.json"}
         review["review_result"] = review_record
         review["review_result_ref"] = "review_result.json"
         model = build_workbook_model([review])
@@ -1444,6 +1591,7 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
             "library_id": review_record["library_id"],
             "status": "COMPLETE",
             "execution_status": review_record["execution_status"],
+            "quality_status": review_record["quality_status"],
             "requested_checks": requested,
             "submitted_at": run_started_at,
             "started_at": run_started_at,
