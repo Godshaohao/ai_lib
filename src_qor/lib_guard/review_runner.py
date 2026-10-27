@@ -339,6 +339,14 @@ def _run_lef_liberty(spec: dict[str, Any], config_dir: Path, out_dir: Path,
     if lef_result is not None:
         lef_report_path = out_dir / "lef_review" / "lef_analysis.json"
         expected_source = _lef_source(lef_result)
+        if spec.get("lef_file"):
+            expected_path, _ = _source_identity(expected_source)
+            supplied_path = str(_resolve(spec["lef_file"], config_dir).resolve())
+            if supplied_path != expected_path:
+                raise ValueError("接口核查 LEF 与 LEF 对比目标文件不一致；请统一输入或分别运行")
+        if spec.get("lef_analysis_json"):
+            supplied_report = _json_read(_resolve(spec["lef_analysis_json"], config_dir))
+            _require_same_lef_source(_lef_source(supplied_report), expected_source)
     elif spec.get("lef_analysis_json"):
         if str(spec.get("lef_library_id") or "") != library_id:
             raise ValueError("单独引用 LEF 报告时必须提供匹配当前 IP 的 lef_library_id")

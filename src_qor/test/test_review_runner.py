@@ -1252,6 +1252,50 @@ class ReviewRunnerTests(unittest.TestCase):
                              result["checks"]["lef_liberty_check"])
             self.assertTrue((Path(result["run_dir"]) / "evidence" / "lef_review" / "lef_analysis.json").is_file())
 
+    def test_runner_rejects_explicit_lef_different_from_review_target(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / "target.lef"
+            other = root / "other.lef"
+            target.write_text("MACRO TARGET\nEND TARGET\n", encoding="utf-8")
+            other.write_text("MACRO OTHER\nEND OTHER\n", encoding="utf-8")
+            liberty = root / "target.lib"
+            liberty.write_text("library (TT) {}", encoding="utf-8")
+            config = {"ips": [{"id": "IP_A", "checks": {
+                "lef_review": {"old_file": str(target), "new_file": str(target)},
+                "lef_liberty_check": {"lef_file": str(other), "liberty_files": [str(liberty)]},
+            }}]}
+
+            result = run_review(config, root / "output")[0]
+
+            self.assertEqual(result["checks"]["lef_liberty_check"]["status"], "FAILED")
+            self.assertIn("LEF", result["checks"]["lef_liberty_check"]["error"])
+            self.assertIn("不一致", result["checks"]["lef_liberty_check"]["error"])
+
+    def test_runner_rejects_explicit_lef_report_from_different_target(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            def report(path, source, digest):
+                path.write_text(__import__("json").dumps({
+                    "schema_version": "lef_analysis.v1",
+                    "sources": {"new": {"path": str(source), "sha256": digest * 64}},
+                    "extraction": {"new": {"data": {"macros": {}}}},
+                }), encoding="utf-8")
+            target_report = root / "target.json"
+            other_report = root / "other.json"
+            report(target_report, root / "target.lef", "a")
+            report(other_report, root / "other.lef", "b")
+            liberty = root / "target.lib"
+            liberty.write_text("library (TT) {}", encoding="utf-8")
+            config = {"ips": [{"id": "IP_A", "checks": {
+                "lef_review": {"report_json": str(target_report)},
+                "lef_liberty_check": {"lef_analysis_json": str(other_report), "lef_library_id": "IP_A",
+                                      "liberty_files": [str(liberty)]},
+            }}]}
+            result = run_review(config, root / "output")[0]
+            self.assertEqual(result["checks"]["lef_liberty_check"]["status"], "FAILED")
+            self.assertIn("LEF 来源不一致", result["checks"]["lef_liberty_check"]["error"])
+
     def test_runner_builds_target_lef_snapshot_for_single_version_linked_check(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

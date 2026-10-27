@@ -5,6 +5,39 @@ from pathlib import Path
 
 
 class LefFileStatusTests(unittest.TestCase):
+    def test_multiview_formal_and_raw_only_files_keep_distinct_corners(self):
+        from lib_guard.file_status import build_file_status, scan_registered_raw_files
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old, new = root / "20261001_full", root / "20261005_fix"
+            for path in (old / "LIB" / "phy_tt.lib", old / "LIB" / "phy_ff.lib",
+                         new / "LIB" / "phy_tt.lib", new / "GDS" / "phy.gds"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("test", encoding="utf-8")
+            versions = [{"id": p.name, "path": str(p)} for p in (old, new)]
+            formal = [{"view": "liberty", "published_path": f"/nl/LIB/{name}",
+                       "source_path": str(old / "LIB" / name)} for name in ("phy_tt.lib", "phy_ff.lib")]
+            result = build_file_status(formal, versions, scan_registered_raw_files(versions), context={})
+            rows = {row["display_name"]: row for row in result["files"]}
+            self.assertEqual(set(rows), {"phy_tt.lib", "phy_ff.lib", "phy.gds"})
+            self.assertEqual(rows["phy_tt.lib"]["recent_raw_source"]["delivery_label"], new.name)
+            self.assertEqual(rows["phy_ff.lib"]["delivery_relation"], "NO_LATER_DELIVERY_HINT")
+            self.assertEqual(rows["phy.gds"]["delivery_relation"], "RAW_ONLY")
+            self.assertIsNone(rows["phy.gds"]["nl_source"]["delivery_label"])
+
+    def test_raw_only_equal_date_does_not_guess_latest(self):
+        from lib_guard.file_status import build_file_status, scan_registered_raw_files
+        with tempfile.TemporaryDirectory() as temp:
+            roots = [Path(temp) / name for name in ("20261001_a", "20261001_b")]
+            for root in roots:
+                path = root / "LIB" / "phy_tt.lib"
+                path.parent.mkdir(parents=True)
+                path.write_text("fixture", encoding="utf-8")
+            versions = [{"id": root.name, "path": str(root)} for root in roots]
+            row = build_file_status([], versions, scan_registered_raw_files(versions), context={})["files"][0]
+            self.assertEqual(row["delivery_relation"], "RAW_ONLY")
+            self.assertIsNone(row["recent_raw_source"])
+
     def _build(self, formal_files, versions, inventories):
         from lib_guard.file_status import build_lef_file_status
 

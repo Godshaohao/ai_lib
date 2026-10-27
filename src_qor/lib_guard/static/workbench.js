@@ -626,20 +626,23 @@
   const fileStatusRows = [...document.querySelectorAll("[data-file-status-row]")];
   const fileStatusSearch = document.querySelector("[data-file-status-search]");
   const fileStatusFilter = document.querySelector("[data-file-status-filter]");
+  const fileStatusView = document.querySelector("[data-file-status-view]");
   const fileStatusCount = document.querySelector("[data-file-status-count]");
   function applyFileStatusFilters() {
     const query = (fileStatusSearch?.value || "").trim().toLocaleLowerCase();
     const relation = fileStatusFilter?.value || "";
     let visible = 0;
     fileStatusRows.forEach((row) => {
-      const show = row.dataset.search.includes(query) && (!relation || row.dataset.relation === relation);
+      const show = row.dataset.search.includes(query) && (!relation || row.dataset.relation === relation)
+        && (!fileStatusView?.value || row.dataset.view === fileStatusView.value);
       row.hidden = !show;
       if (show) visible += 1;
     });
-    if (fileStatusCount) fileStatusCount.textContent = `显示 ${visible} / ${fileStatusRows.length} 份 LEF`;
+    if (fileStatusCount) fileStatusCount.textContent = `显示 ${visible} / ${fileStatusRows.length} 个文件`;
   }
   fileStatusSearch?.addEventListener("input", applyFileStatusFilters);
   fileStatusFilter?.addEventListener("change", applyFileStatusFilters);
+  fileStatusView?.addEventListener("change", applyFileStatusFilters);
   applyFileStatusFilters();
 
   selectTab(document.body.dataset.activeTab || "catalog", "main");

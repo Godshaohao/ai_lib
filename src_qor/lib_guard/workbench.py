@@ -30,7 +30,7 @@ from .review_runner import (CHECK_NAMES, _json_read, _latest_complete_run, _libr
                            _load_saved_formal_inventory,
                            refresh_ip_overview, run)
 from .raw_discovery import discover_raw_report, write_discovery_artifacts
-from .file_status import build_lef_file_status, scan_registered_raw_lefs
+from .file_status import build_file_status, scan_registered_raw_files, TRACKED_VIEWS
 from . import effective_file_tracker
 from .effective_file_tracker import run as run_formal_nl
 
@@ -1172,12 +1172,12 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                        or item in scoped_stage_rows)), {})
                 stage_files = [file for file in ip_files
                                if str(file.get("stage") or "") == selected_stage
-                               and str(file.get("view") or "").casefold() == "lef"]
+                               and str(file.get("view") or "").casefold() in TRACKED_VIEWS]
                 versions = [{"id": str(item.get("id") or ""),
                              "path": _resolve_registry_path(str(item.get("path") or ""), registry_file)}
                             for item in entry.get("raw_versions") or []]
-                raw_inventory = scan_registered_raw_lefs(versions)
-                result = build_lef_file_status(
+                raw_inventory = scan_registered_raw_files(versions)
+                result = build_file_status(
                     stage_files, versions, raw_inventory,
                     context={"library_id": library_id, "stage": selected_stage,
                              "root": str(stage_row.get("root") or configured_root or ""),
@@ -1188,6 +1188,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                      or result["raw_scope"]["scan_status"] in {"PARTIAL", "INCOMPLETE"}
                                      else ("NO_LEF_IN_SCOPE" if not result["files"] else "COMPLETE"))
                 result["generated_at"] = datetime.now(timezone.utc).isoformat()
+                result["covered_views"] = sorted(TRACKED_VIEWS)
 
             result["registry_fingerprint"] = _formal_nl_config_fingerprint(registry)
             result["formal_snapshot_generated_at"] = str(formal_snapshot.get("generated_at") or "")
@@ -1230,7 +1231,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             message = "检查任务已提交到后台；可离开页面，完成后在运行记录中查看。" \
                 if request.args.get("submitted") == "1" else ""
             if request.args.get("file_status_refreshed") == "1":
-                message = "LEF 文件状态已刷新；来源和日期只提供交付线索，不代表内容变化或已生效。"
+                message = "文件状态已刷新；来源和日期只提供交付线索，不代表内容变化或已生效。"
             default_tab = "review" if ids or request.args.get("new") == "1" else "discover"
             requested_tab = request.args.get("tab") or default_tab
             if requested_tab not in {"review", "catalog", "discover", "formal-nl"}:
@@ -1526,6 +1527,13 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             previous = next((item for item in registry.get("ips", []) if item.get("id") == _text(request.form, "id")), None)
             entry = _entry_from_form(request.form, previous)
             _validate_for_run(entry)
+            lef_check = entry["checks"].get("lef_review") or {}
+            interface_check = entry["checks"].get("lef_liberty_check") or {}
+            if not lef_check.get("report_json") and lef_check.get("new_file") and interface_check.get("lef_file"):
+                target = _resolve_registry_path(lef_check["new_file"], registry_file)
+                interface = _resolve_registry_path(interface_check["lef_file"], registry_file)
+                if target != interface:
+                    raise ValueError("接口核查 LEF 与 LEF 对比目标文件不一致；请统一输入或分别运行")
             if previous and entry["library_id"] != previous["library_id"]:
                 raise ValueError("库标识与已登记记录不一致")
             lef_spec = entry.get("checks", {}).get("lef_review")

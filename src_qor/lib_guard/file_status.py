@@ -8,7 +8,9 @@ from pathlib import Path
 import re
 from typing import Any
 
-from .effective_file_tracker import _view_relative_key, longest_registered_path_match
+from .effective_file_tracker import _view_for_path, _view_relative_key, longest_registered_path_match
+
+TRACKED_VIEWS = frozenset({"lef", "liberty", "db", "gds", "oas", "verilog", "cdl", "spice"})
 
 _MAX_DIRECTORIES = 200
 _MAX_ENTRIES = 2000
@@ -34,8 +36,7 @@ def _path_identity(relative_path: str, view: str) -> tuple[str, tuple[str, ...]]
     return _view_relative_key(relative_path, view)
 
 
-def scan_registered_raw_lefs(registered_versions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Enumerate only LEF paths under registered version roots, with explicit limits."""
+def _scan_registered_raw(registered_versions: list[dict[str, Any]], views: frozenset[str]) -> list[dict[str, Any]]:
     inventories: list[dict[str, Any]] = []
     for version in registered_versions:
         version_id = str(version.get("id") or "")
@@ -67,7 +68,7 @@ def scan_registered_raw_lefs(registered_versions: list[dict[str, Any]]) -> list[
                 for name in sorted(names):
                     visited += 1
                     item = Path(current) / name
-                    if name.casefold().endswith((".lef", ".lef.gz")):
+                    if _view_for_path(item.relative_to(root)) in views:
                         try:
                             resolved_item = item.resolve(strict=True)
                             resolved_item.relative_to(root)
@@ -92,12 +93,23 @@ def scan_registered_raw_lefs(registered_versions: list[dict[str, Any]]) -> list[
     return inventories
 
 
+def scan_registered_raw_lefs(registered_versions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compatibility entry point for LEF-only inventory."""
+    return _scan_registered_raw(registered_versions, frozenset({"lef"}))
+
+
+def scan_registered_raw_files(registered_versions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Inventory supported views without reading file contents."""
+    return _scan_registered_raw(registered_versions, TRACKED_VIEWS)
+
+
 def build_lef_file_status(
     formal_files: list[dict[str, Any]],
     registered_versions: list[dict[str, Any]],
     raw_lef_inventory: list[dict[str, Any]],
     *,
     context: dict[str, Any],
+    include_raw_only: bool = False,
 ) -> dict[str, Any]:
     """Build a cacheable observation; it never establishes content or release status."""
     versions_by_root: dict[Path, list[dict[str, Any]]] = {}
@@ -121,6 +133,23 @@ def build_lef_file_status(
                         if ordering_known else [])
     order_index = {str(version.get("id") or ""): index
                    for index, version in enumerate(ordered_versions)}
+
+    raw_index: dict[tuple[str, tuple[str, ...]], dict[str, list[str]]] = {}
+    for version in registered_versions:
+        version_id = str(version.get("id") or "")
+        root = _resolved(version.get("path"))
+        if root is None:
+            continue
+        for raw_path in (inventory_by_id.get(version_id) or {}).get("files") or []:
+            candidate = _resolved(raw_path)
+            if candidate is None:
+                continue
+            try:
+                relative = candidate.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            view = _view_for_path(Path(relative))
+            raw_index.setdefault(_path_identity(relative, view), {}).setdefault(version_id, []).append(str(candidate))
 
     rows: list[dict[str, Any]] = []
     for formal in formal_files:
@@ -149,25 +178,13 @@ def build_lef_file_status(
                 relative_source = ""
                 identity_status = "UNREGISTERED_SOURCE"
 
-        identity = _path_identity(relative_source, "lef") if relative_source else None
+        identity = _path_identity(relative_source, view) if relative_source else None
         related: list[dict[str, Any]] = []
         duplicate_key = False
         if identity is not None:
             for version in registered_versions:
                 version_id = str(version.get("id") or "")
-                item = inventory_by_id.get(version_id) or {}
-                root = _resolved(version.get("path"))
-                occurrences = []
-                for raw_path in item.get("files") or []:
-                    candidate = _resolved(raw_path)
-                    if candidate is None or root is None:
-                        continue
-                    try:
-                        relative = candidate.relative_to(root).as_posix()
-                    except ValueError:
-                        continue
-                    if _path_identity(relative, "lef") == identity:
-                        occurrences.append(str(candidate))
+                occurrences = raw_index.get(identity, {}).get(version_id, [])
                 if len(occurrences) > 1:
                     duplicate_key = True
                 elif occurrences:
@@ -198,6 +215,7 @@ def build_lef_file_status(
             relation = "UNDETERMINED"
             history = [{**item, "order_status": "UNDETERMINED"} for item in related[:5]]
         rows.append({
+            "view": view,
             "file_key": "/".join(identity[1]) if identity else "",
             "display_name": Path(published_path or source_path).name or "未命名 LEF",
             "identity_status": identity_status,
@@ -214,6 +232,30 @@ def build_lef_file_status(
             "warnings": list(formal.get("warnings") or []),
         })
 
+    if include_raw_only:
+        known = {(row["view"], row["file_key"]) for row in rows if row["file_key"]}
+        groups: dict[tuple[str, str], list[dict[str, str]]] = {}
+        for (view, parts), versions in raw_index.items():
+            key = "/".join(parts)
+            if view not in TRACKED_VIEWS or (view, key) in known:
+                continue
+            for version_id, paths in versions.items():
+                for path in paths:
+                    groups.setdefault((view, key), []).append({"delivery_label": version_id,
+                                                                "source_path": path,
+                                                                "record_status": "APPEARED"})
+        for (view, key), records in groups.items():
+            unique_versions = len({item["delivery_label"] for item in records}) == len(records)
+            ordered = sorted(records, key=lambda item: order_index[item["delivery_label"]], reverse=True) if ordering_known else records
+            candidate = ordered[0] if ordering_known and unique_versions else None
+            rows.append({"view": view, "file_key": key, "display_name": Path(key).name,
+                         "identity_status": "RAW_UNMATCHED" if unique_versions else "AMBIGUOUS",
+                         "nl_source": {"published_path": "", "source_path": "", "delivery_label": None},
+                         "recent_raw_source": candidate, "older_observed_source": None,
+                         "accepted_effective_source": None, "delivery_relation": "RAW_ONLY",
+                         "effective_relation": "NOT_CONFIGURED", "content_check": "NOT_RUN",
+                         "compare_evidence": None, "history": ordered[:5], "warnings": []})
+
     rows.sort(key=lambda row: (row["display_name"].casefold(), row["file_key"].casefold(),
                                row["nl_source"]["published_path"].casefold()))
     return {
@@ -228,3 +270,9 @@ def build_lef_file_status(
                       "ordering_basis": "DATE_HINT" if ordering_known else "UNKNOWN"},
         "files": rows,
     }
+
+
+def build_file_status(formal_files: list[dict[str, Any]], registered_versions: list[dict[str, Any]],
+                      raw_inventory: list[dict[str, Any]], *, context: dict[str, Any]) -> dict[str, Any]:
+    return build_lef_file_status(formal_files, registered_versions, raw_inventory,
+                                 context=context, include_raw_only=True)

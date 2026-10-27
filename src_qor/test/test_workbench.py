@@ -1,10 +1,12 @@
 import json
+import importlib.util
 from pathlib import Path
 import re
 import tempfile
 from threading import Barrier
 import time
 import unittest
+import zipfile
 from unittest.mock import patch
 from werkzeug.datastructures import MultiDict
 
@@ -87,10 +89,18 @@ class WorkbenchTests(unittest.TestCase):
             for path in (old_lef, new_lef):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(path.parent.parent.name, encoding="utf-8")
+            old_lib = old_root / "LIB" / "z_tt.lib"
+            new_lib = new_root / "LIB" / "z_tt.lib"
+            new_gds = new_root / "GDS" / "z.gds"
+            for path in (old_lib, new_lib, new_gds):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture", encoding="utf-8")
             stage_ip = root / "formal" / "lib_NL2.5_3" / "IP"
             formal_link = stage_ip / "LEF" / "top.lef"
             formal_link.parent.mkdir(parents=True)
             formal_link.symlink_to(old_lef)
+            (stage_ip / "LIB").mkdir(parents=True)
+            (stage_ip / "LIB" / "z_tt.lib").symlink_to(old_lib)
             registry = root / "registry.yml"
             registry.write_text(
                 f"ips:\n  - id: IP_A\n    library_id: Vendor_A.IP_A\n"
@@ -103,7 +113,7 @@ class WorkbenchTests(unittest.TestCase):
             client = create_app(registry, output).test_client()
             self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
 
-            with patch("lib_guard.workbench.scan_registered_raw_lefs",
+            with patch("lib_guard.workbench.scan_registered_raw_files",
                        side_effect=AssertionError("GET must not scan RAW")):
                 page = client.get("/?ip=IP_A&tab=review")
             self.assertEqual(page.status_code, 200, page.get_data(as_text=True))
@@ -121,8 +131,12 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(status["files"][0]["nl_source"]["source_path"], str(old_lef.resolve()))
             self.assertEqual(status["files"][0]["recent_raw_source"]["source_path"], str(new_lef.resolve()))
             self.assertEqual(status["files"][0]["content_check"], "NOT_RUN")
+            rows = {item["display_name"]: item for item in status["files"]}
+            self.assertEqual(rows["z_tt.lib"]["view"], "liberty")
+            self.assertEqual(rows["z_tt.lib"]["recent_raw_source"]["source_path"], str(new_lib))
+            self.assertEqual(rows["z.gds"]["delivery_relation"], "RAW_ONLY")
             previous_status = status_path.read_bytes()
-            with patch("lib_guard.workbench.scan_registered_raw_lefs",
+            with patch("lib_guard.workbench.scan_registered_raw_files",
                        side_effect=OSError("controlled RAW scan failure")):
                 failed_refresh = client.post("/file-status/refresh", data={"ip": "IP_A"})
             self.assertEqual(failed_refresh.status_code, 303)
@@ -133,6 +147,9 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn("唯一归属".encode(), rendered.data)
             self.assertIn(str(formal_link).encode(), rendered.data)
             self.assertIn("较晚交付不等于内容变化".encode(), rendered.data)
+            self.assertIn(b'data-file-status-view', rendered.data)
+            self.assertIn(b'z_tt.lib', rendered.data)
+            self.assertIn(b'z.gds', rendered.data)
 
     def test_file_status_does_not_guess_between_multiple_formal_stages(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -155,7 +172,7 @@ class WorkbenchTests(unittest.TestCase):
             output = root / "output"
             client = create_app(registry, output).test_client()
             self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
-            with patch("lib_guard.workbench.scan_registered_raw_lefs",
+            with patch("lib_guard.workbench.scan_registered_raw_files",
                        side_effect=AssertionError("ambiguous context must stop before RAW scan")):
                 response = client.post("/file-status/refresh", data={"ip": "IP_A"}, follow_redirects=True)
             self.assertEqual(response.status_code, 200)
@@ -178,7 +195,7 @@ class WorkbenchTests(unittest.TestCase):
             output = root / "output"
             client = create_app(registry, output).test_client()
             self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
-            with patch("lib_guard.workbench.scan_registered_raw_lefs",
+            with patch("lib_guard.workbench.scan_registered_raw_files",
                        side_effect=AssertionError("unobserved stage must not scan RAW")):
                 response = client.post("/file-status/refresh", data={"ip": "IP_A"}, follow_redirects=True)
             self.assertEqual(response.status_code, 200)
@@ -1386,6 +1403,98 @@ class WorkbenchTests(unittest.TestCase):
             overview = (root / "output" / "ip_checks" / "index.html").read_text(encoding="utf-8")
             self.assertIn("IP A", overview)
             self.assertIn("尚无完整检查报告", overview)
+
+    def test_run_rejects_different_explicit_interface_lef_before_queueing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text("ips:\n  - {id: IP_A, library_id: vendor.ip_a, checks: {}}\n", encoding="utf-8")
+            client = create_app(registry, root / "output").test_client()
+            response = client.post("/run", data={
+                "id": "IP_A", "library_id": "vendor.ip_a",
+                "checks": ["lef_review", "lef_liberty_check"],
+                "lef_old_file": str(root / "old.lef"), "lef_new_file": str(root / "new.lef"),
+                "ll_lef_file": str(root / "different.lef"), "ll_liberty_files": str(root / "tt.lib"),
+            })
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("LEF", response.get_data(as_text=True))
+            self.assertIn("不一致", response.get_data(as_text=True))
+            self.assertFalse(list((root / "output").rglob("latest_attempt.json")))
+
+    @unittest.skipUnless(importlib.util.find_spec("xlsxwriter"), "需要已安装的 XlsxWriter")
+    def test_five_versions_mixed_formal_sources_through_review_and_excel(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            library_root = root / "raw" / "Vendor" / "IP_A"
+            versions = []
+            lef_text = "VERSION 5.8 ;\nMACRO TOP\n  CLASS BLOCK ;\n  SIZE 1 BY 2 ;\nEND TOP\nEND LIBRARY\n"
+            for number in range(1, 6):
+                version = f"V{number:02}"
+                version_root = library_root / version
+                lef = version_root / "LEF" / "top.lef"
+                lef.parent.mkdir(parents=True)
+                lef.write_text(lef_text, encoding="utf-8")
+                versions.append({"id": version, "path": str(version_root)})
+            for corner in ("TT", "SS"):
+                lib = library_root / "V05" / "LIB" / f"top_{corner}.lib"
+                lib.parent.mkdir(parents=True, exist_ok=True)
+                lib.write_text(f"library ({corner}) {{ cell (TOP) {{ }} }}", encoding="utf-8")
+            old_lib = library_root / "V03" / "LIB" / "top_TT.lib"
+            old_lib.parent.mkdir(parents=True)
+            old_lib.write_text("library (TT) { cell (TOP) {} }", encoding="utf-8")
+            formal = root / "lib_NL2.5_3" / "IP"
+            for view, name, source in (("LEF", "top.lef", library_root / "V01" / "LEF" / "top.lef"),
+                                       ("LIB", "top_TT.lib", old_lib)):
+                (formal / view).mkdir(parents=True, exist_ok=True)
+                (formal / view / name).symlink_to(source)
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"raw_root": str(root / "raw"), "ips": [{
+                "id": "IP_A", "library_id": "Vendor.IP_A", "vendor": "Vendor", "library_name": "IP_A",
+                "raw_root": str(library_root), "raw_versions": versions,
+                "formal_nl_root": str(formal), "formal_nl_stages": ["lib_NL2.5_3"], "checks": {},
+            }]}), encoding="utf-8")
+            output = root / "output"
+            client = create_app(registry, output).test_client()
+            refreshed = client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"})
+            self.assertEqual(refreshed.status_code, 302)
+            page = client.get(refreshed.headers["Location"]).get_data(as_text=True)
+            self.assertIn("V01", page)
+            self.assertIn("V03", page)
+            response = client.post("/run", data={
+                "id": "IP_A", "library_id": "Vendor.IP_A", "raw_version": "V05",
+                "checks": ["macro_index", "lef_review", "lef_liberty_check"],
+                "macro_root": str(library_root / "V05"), "macro_version": "V05",
+                "lef_old_file": str(library_root / "V04" / "LEF" / "top.lef"),
+                "lef_new_file": str(library_root / "V05" / "LEF" / "top.lef"),
+                "ll_lef_file": str(library_root / "V05" / "LEF" / "top.lef"),
+                "ll_liberty_files": "\n".join(str(library_root / "V05" / "LIB" / f"top_{c}.lib") for c in ("TT", "SS")),
+            }, follow_redirects=True)
+            self.assertEqual(response.status_code, 200)
+            task_match = re.search(rb'data-task-url="([^"]+)"', response.data)
+            self.assertIsNotNone(task_match)
+            task_url = task_match.group(1).decode().replace("&amp;", "&")
+            for _ in range(1000):
+                payload = client.get(task_url).get_json()
+                if payload["status"] in {"COMPLETE", "FAILED"}:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(payload["status"], "COMPLETE", payload)
+            review_path = next(output.rglob("review_result.json"))
+            record = json.loads(review_path.read_text(encoding="utf-8"))
+            self.assertEqual(record["context"]["target_raw_versions"], ["V05"])
+            self.assertEqual(set(record["requested_checks"]), {"macro_index", "lef_review", "lef_liberty_check"})
+            self.assertEqual(record["checks"]["lef_liberty_check"]["execution_status"], "COMPLETE")
+            self.assertTrue((review_path.parent / "ip_review.xlsx").is_file())
+            with zipfile.ZipFile(review_path.parent / "ip_review.xlsx") as workbook:
+                shared = workbook.read("xl/sharedStrings.xml").decode("utf-8")
+                self.assertIn("V05", shared)
+                self.assertIn("top_TT.lib", shared)
+                self.assertIn("top_SS.lib", shared)
+            cross = json.loads((review_path.parent / "evidence" / "lef_liberty_check.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(cross["files"]), 2)
+            self.assertEqual(Path(cross["lef_source"]["path"]), library_root / "V05" / "LEF" / "top.lef")
+            self.assertEqual((formal / "LEF" / "top.lef").resolve(), library_root / "V01" / "LEF" / "top.lef")
+            self.assertEqual((formal / "LIB" / "top_TT.lib").resolve(), old_lib)
 
     def test_run_executes_existing_runner_and_downloads_per_ip_workbook(self):
         with tempfile.TemporaryDirectory() as temp:
