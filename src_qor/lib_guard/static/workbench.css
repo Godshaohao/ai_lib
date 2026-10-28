@@ -437,7 +437,7 @@ td { font-size: 13px; }
 .file-status-filters > span { margin-left: auto; padding-bottom: 8px; color: var(--muted); font-size: 10px; white-space: nowrap; }
 .file-status-filters .matrix-selection { padding: 6px 8px; color: var(--teal-dark); background: var(--teal-soft); border: 1px solid #c9e0de; border-radius: 3px; font-weight: 750; }
 .matrix-actions .button:disabled { opacity: .45; cursor: not-allowed; }
-.matrix-actions { align-items: center; flex-wrap: wrap; }
+.matrix-actions { position: static; align-items: center; flex-wrap: wrap; }
 .matrix-actions > span { max-width: 520px; }
 .file-status-table-wrap { max-height: 620px; }
 .file-status-table { min-width: 920px; }
@@ -474,3 +474,25 @@ tr[data-file-status-row][hidden] { display: none; }
   .matrix-actions > span { margin: 0; }
 }
 [hidden] { display: none !important; }
+.task-tabs { display: flex; flex-wrap: wrap; gap: 3px; padding: 12px 16px 0; border-bottom: 1px solid var(--line); }
+.file-status-filters { flex-wrap: wrap; }
+.file-status-filters .button { flex-shrink: 0; white-space: nowrap; }
+.file-status-filters label:has([data-lookup-uncertain]) { display: flex; min-width: 0; align-items: center; }
+.task-tabs button { padding: 10px 16px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--soft); cursor: pointer; font-weight: 700; }
+.task-tabs button[aria-pressed="true"] { color: var(--teal-dark); border-bottom-color: var(--teal); background: var(--teal-soft); }
+.task-view-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 16px; }
+.task-view-head h3 { margin: 0; font-size: 16px; }
+.task-view-head p { margin: 5px 0 0; color: var(--muted); }
+.task-table-wrap { max-height: 620px; }
+.task-table { min-width: 650px; }
+.task-table details { min-width: 110px; }
+.task-table summary { color: var(--teal-dark); cursor: pointer; }
+.task-table code { overflow-wrap: anywhere; white-space: normal; }
+.advanced-nav { margin-top: 10px; color: var(--soft); }
+.advanced-nav > summary { cursor: pointer; font-size: 12px; font-weight: 700; }
+.advanced-nav .review-tabs { margin-top: 3px; }
+[data-lookup-uncertain] { width: 16px; height: 16px; min-width: 16px; margin: 0 5px 0 0; vertical-align: middle; accent-color: var(--teal); }
+.task-window.is-finished { position: static; display: none; }
+@media (max-width: 760px) { .task-tabs button { flex: 1; padding: 10px 6px; } .task-table { min-width: 0; } .task-table thead { display: none; } .task-table tr { display: grid; grid-template-columns: 1fr 1fr; padding: 10px; border-bottom: 1px solid var(--line); } .task-table td { min-width: 0; padding: 6px; border: 0; overflow-wrap: anywhere; } .task-table td:first-child, .task-table td:last-child { grid-column: 1 / -1; } .task-table td:nth-child(2)::before { content: '最新 RAW · '; color: var(--muted); } .task-table td:nth-child(3)::before { content: '次新 / 最新 RAW · '; color: var(--muted); } }
+@media (max-width: 760px) { .ip-list { max-height: 105px; } .file-status-table { min-width: 0; } .file-status-table thead { display: none; } .file-status-table tr[data-projection-row] { display: grid; grid-template-columns: 1fr 1fr; padding: 10px; border-bottom: 1px solid var(--line); } .file-status-table tr[data-projection-row] td { min-width: 0; padding: 6px; border: 0; overflow-wrap: anywhere; } .file-status-table tr[data-projection-row] td:first-child, .file-status-table tr[data-projection-row] td:last-child { grid-column: 1 / -1; } .file-status-table tr[data-projection-row] td:nth-child(2)::before { content: '交付 A · '; color: var(--muted); } .file-status-table tr[data-projection-row] td:nth-child(3)::before { content: '交付 B · '; color: var(--muted); } }
+@media (max-width: 760px) { [data-task-panel="formal"] .task-table td:nth-child(2)::before { content: '正式来源 · '; } [data-task-panel="formal"] .task-table td:nth-child(3)::before { content: '最新 RAW · '; } .file-status-evidence { min-width: 0; max-width: 100%; } }

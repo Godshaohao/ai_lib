@@ -1,4 +1,48 @@
 (() => {
+  const taskButtons = [...document.querySelectorAll('[data-task-view]')];
+  const taskPanels = [...document.querySelectorAll('[data-task-panel]')];
+  function selectTask(name) {
+    if (!['files', 'compare', 'formal'].includes(name)) name = 'files';
+    taskButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.taskView === name)));
+    taskPanels.forEach(panel => { panel.hidden = panel.dataset.taskPanel !== name; });
+    const url = new URL(window.location.href);
+    url.searchParams.set('view', name);
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+  taskButtons.forEach(button => button.addEventListener('click', () => selectTask(button.dataset.taskView)));
+  selectTask(new URL(window.location.href).searchParams.get('view') || 'files');
+  const lookupRows = [...document.querySelectorAll('[data-lookup-row]')];
+  const lookupSearch = document.querySelector('[data-lookup-search]');
+  const lookupView = document.querySelector('[data-lookup-view]');
+  const lookupUncertain = document.querySelector('[data-lookup-uncertain]');
+  function filterLookup() {
+    let visible = 0;
+    lookupRows.forEach(row => {
+      const show = row.dataset.search.includes((lookupSearch?.value || '').trim().toLocaleLowerCase()) && (!lookupView?.value || row.dataset.view === lookupView.value) && (!lookupUncertain?.checked || row.dataset.uncertain === 'true');
+      row.hidden = !show;
+      if (show) visible++;
+    });
+    const count = document.querySelector('[data-lookup-count]');
+    if (count) count.textContent = `显示 ${visible} / ${lookupRows.length} 个文件`;
+  }
+  lookupSearch?.addEventListener('input', filterLookup);
+  lookupView?.addEventListener('change', filterLookup);
+  lookupUncertain?.addEventListener('change', filterLookup);
+  filterLookup();
+  const selectedFileKey = new URL(window.location.href).searchParams.get('file_key');
+  if (selectedFileKey) {
+    const selectedRow = lookupRows.find(row => row.dataset.fileKey === selectedFileKey);
+    const detail = selectedRow?.querySelector('[data-file-detail]');
+    if (detail) detail.open = true;
+  }
+  document.querySelectorAll('[data-copy-path]').forEach(button => button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(button.dataset.copyPath);
+      button.textContent = '已复制';
+    } catch (_) {
+      button.textContent = '复制失败，请手动选择路径';
+    }
+  }));
   const tabs = [...document.querySelectorAll("[data-workbench-tab]")];
   const panels = [...document.querySelectorAll("[data-workbench-panel]")];
   const pageHeading = document.querySelector("[data-page-heading]");
@@ -619,6 +663,11 @@
         renderTask(task);
         if (["COMPLETE", "FAILED"].includes(task.status)) {
           if (refreshButton) refreshButton.hidden = false;
+          const url = new URL(window.location.href);
+          if (url.searchParams.get('submitted') === '1' && ['files', 'compare'].includes(url.searchParams.get('view'))) {
+            url.searchParams.delete('submitted');
+            window.location.replace(url.toString());
+          }
           return;
         }
       } catch (error) {
@@ -675,11 +724,12 @@
     projectionRows.forEach((row) => {
       const show = row.dataset.search.includes(query)
         && (!projectionView?.value || row.dataset.view === projectionView.value)
-        && (!projectionStatus?.value || row.dataset.content === projectionStatus.value || row.dataset.delivery === projectionStatus.value);
+        && (!projectionStatus?.value || (projectionStatus.value === 'COMPARABLE' ? row.dataset.canCompare === 'true' : row.dataset.content === projectionStatus.value || row.dataset.delivery === projectionStatus.value));
       row.hidden = !show;
       if (show) visible += 1;
     });
     if (projectionCount) projectionCount.textContent = `显示 ${visible} / ${projectionRows.length} 个文件`;
+    updateMatrixSelection();
   }
   projectionSearch?.addEventListener("input", filterProjection);
   projectionView?.addEventListener("change", filterProjection);
@@ -688,19 +738,28 @@
     const selected = matrixFiles.filter((item) => item.checked);
     const lefCount = selected.filter((item) => item.closest("[data-projection-row]")?.dataset.canLef === "true").length;
     const compareCount = selected.filter((item) => item.closest("[data-projection-row]")?.dataset.canCompare === "true").length;
-    if (matrixSelection) matrixSelection.textContent = `已选 ${selected.length} 个 · 可检查 LEF ${lefCount} 个 · 可比较 ${compareCount} 个`;
-    if (matrixRun) matrixRun.disabled = matrixRunLocked || selected.length === 0 || lefCount !== selected.length || (!pairScope && selected.length !== 1);
-    if (matrixCompare) matrixCompare.disabled = matrixCompareLocked || selected.length === 0 || compareCount !== selected.length;
+    const hiddenCount = selected.filter(item => item.closest('[data-projection-row]')?.hidden).length;
+    if (matrixSelection) matrixSelection.textContent = `已选 ${selected.length} 个 · LEF 可分析 ${lefCount} 个 · 可比较 ${compareCount} 个${hiddenCount ? ` · 筛选外 ${hiddenCount} 个` : ''}${selected.length > 50 ? ' · 最多选择 50 个' : ''}`;
+    if (matrixRun) matrixRun.disabled = matrixRunLocked || selected.length === 0 || selected.length > 50 || lefCount !== selected.length || !pairScope;
+    if (matrixCompare) matrixCompare.disabled = matrixCompareLocked || selected.length === 0 || selected.length > 50 || compareCount !== selected.length;
     if (matrixActionNote) {
       matrixActionNote.textContent = selected.length === 0
-        ? "单文件入口仅做 LEF–Liberty 接口核查；双文件才做 LEF 差异分析。内容差异不等于质量问题。"
+        ? "内容比较与 LEF 结构变化分开执行；内容不同不代表质量不合格。"
         : `${selected.length} 个文件已选；可检查 LEF ${lefCount} 个，可比较内容 ${compareCount} 个。${!pairScope && selected.length > 1 ? "单版本接口检查一次只能选择一个 LEF。" : lefCount !== selected.length || compareCount !== selected.length ? "请按 View 或能力筛选后再执行对应动作。" : ""}`;
     }
   }
   matrixFiles.forEach((item) => item.addEventListener("change", updateMatrixSelection));
   document.querySelector("[data-matrix-select]")?.addEventListener("click", () => {
-    setVisibleChecks("[data-matrix-file]", true);
+    const eligible = matrixFiles.filter(item => { const row = item.closest('[data-projection-row]'); return !row.hidden && row.dataset.canCompare === 'true'; });
+    matrixFiles.forEach(item => { item.checked = eligible.slice(0, 50).includes(item); });
     updateMatrixSelection();
+    if (eligible.length > 50 && matrixActionNote) matrixActionNote.textContent = `可比较 ${eligible.length} 个；已选择前 50 个，请分批处理。`;
+  });
+  document.querySelector("[data-select-lef]")?.addEventListener("click", () => {
+    const eligible = matrixFiles.filter(item => { const row = item.closest('[data-projection-row]'); return !row.hidden && row.dataset.canLef === 'true' && row.dataset.canCompare === 'true'; });
+    matrixFiles.forEach(item => { item.checked = eligible.slice(0, 50).includes(item); });
+    updateMatrixSelection();
+    if (eligible.length > 50 && matrixActionNote) matrixActionNote.textContent = `可分析 ${eligible.length} 个 LEF；已选择前 50 个，请分批处理。`;
   });
   document.querySelectorAll("[data-matrix-clear]").forEach((button) => button.addEventListener("click", () => {
     setVisibleChecks("[data-matrix-file]", false);

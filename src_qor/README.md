@@ -70,7 +70,9 @@ without modifying that source snapshot or the formal tree. Other Views remain no
 An incomplete batch retains completed pair evidence but does not replace the latest complete Excel.
 Batch LEF and LEF–Liberty interface checks run separately to prevent accidental cross-file binding.
 
-The matrix's **关联已保存的正式 NL 快照** action attaches the saved Formal NL inventory without rescanning RAW. When more than one Formal stage matches and no unique stage is configured, the action asks for an unambiguous stage instead of choosing one. **填入最近两次交付** is available only when the delivery order is known. A scope change clears the previous scope's comparison results from the new projection; historical snapshots remain available. `source_snapshot_id` identifies the original RAW inventory and `input_snapshot_id` identifies the immediate input projection.
+The **正式来源** view reads a saved Formal NL inventory without rescanning RAW. When more than one Formal stage matches, select the stage explicitly. In **交付对比**, the latest two deliveries are suggested only when their order is known. A scope change clears the previous scope's comparison results from the new projection; historical snapshots remain available. `source_snapshot_id` identifies the original RAW inventory and `input_snapshot_id` identifies the immediate input projection. The existing Formal-link API remains available for explicitly publishing a combined snapshot.
+
+The review workspace offers three independent views: **文件定位** shows each file's latest and previous observations and exposes its history in the row; **交付对比** shows what two packages supplied and runs selected content or LEF-structure comparisons; **正式来源** reads a saved Formal NL inventory and compares its observed reference with the latest RAW occurrence. The Formal view requires explicit stage selection when more than one stage is observed. Viewing a saved inventory does not publish a new projection or rescan the RAW or Formal directories. Advanced manual checks and run history remain under **高级检查和历史**.
 
 The normal user paths are:
 

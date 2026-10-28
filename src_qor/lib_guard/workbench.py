@@ -972,6 +972,35 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         lef_file_status = _read_lef_file_status(output, registry, selected, formal_overview)
         file_version_projection = _read_file_version_projection(
             output, str(selected.get("library_id") or selected.get("id") or ""), lef_file_status)
+        formal_projection = {}
+        formal_stage_choices = []
+        formal_stage_selected = str(request.args.get("source_stage") or "")
+        formal_snapshot_warning = ""
+        if selected:
+            formal_path = output / "formal_nl" / "overview" / "latest.json"
+            if formal_path.is_file():
+                try:
+                    formal_saved = _json_read(formal_path)
+                    formal_data = formal_saved.get("overview") or {}
+                    formal_files = [row for row in formal_data.get("files") or [] if str(row.get("library_id") or "") == str(selected.get("library_id") or selected.get("id") or "")]
+                    formal_stage_choices = sorted({str(row.get("stage")) for row in formal_files if row.get("stage")})
+                    if not formal_stage_selected and len(formal_stage_choices) == 1:
+                        formal_stage_selected = formal_stage_choices[0]
+                    if formal_stage_selected and formal_stage_selected not in formal_stage_choices:
+                        formal_stage_selected = ""
+                    if formal_saved.get("config_fingerprint") != _formal_nl_config_fingerprint(registry):
+                        formal_snapshot_warning = "正式 NL 快照已过期，以下仅供历史查看，请重新盘点。"
+                    if formal_stage_selected:
+                        versions = [{"id": str(item.get("id") or ""), "path": _resolve_registry_path(str(item.get("path") or ""), registry_file), **{key: item[key] for key in ("delivery_order", "delivery_date", "date") if key in item}} for item in selected.get("raw_versions") or []]
+                        source_projection = file_version_projection or {}
+                        inventories = [{"version_id": version["id"], "status": (source_projection.get("scope", {}).get("inventory_status") or {}).get(version["id"], "UNKNOWN"), "files": [occ.get("source_path") for row in source_projection.get("files") or [] for occ in row.get("occurrences") or [] if occ.get("version") == version["id"]]} for version in versions]
+                        formal_projection = build_projection(str(selected.get("library_id") or selected.get("id") or ""), versions, inventories, [row for row in formal_files if row.get("stage") == formal_stage_selected], formal_stage=formal_stage_selected)
+                        if formal_data.get("status") != "COMPLETE":
+                            for row in formal_projection["files"]:
+                                if row["formal_usage"].get("observation_status") == "NOT_OBSERVED":
+                                    row["formal_usage"]["observation_status"] = "UNKNOWN"
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    formal_snapshot_warning = "正式 NL 快照无法读取，请重新盘点。"
         matrix_source_snapshot_id = str(file_version_projection.get("snapshot_id") or "") if file_version_projection else ""
         requested_matrix_review = str(request.args.get("matrix_review") or "")
         matrix_historical = bool(requested_matrix_review)
@@ -994,6 +1023,28 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         else:
             matrix_review_id = ""
             matrix_historical = False
+        file_interface_results = {}
+        interface_review_id = str(latest_attempt.get("review_id") or "")
+        if file_version_projection and re.fullmatch(r"review_[A-Za-z0-9_-]+", interface_review_id):
+            try:
+                interface_result = _json_read(output / "libraries" / _library_dir(str(selected.get("library_id") or selected.get("id") or "")) / "runs" / interface_review_id / "review_result.json")
+                interface_projection = _json_read(output / "libraries" / _library_dir(str(selected.get("library_id") or selected.get("id") or "")) / "runs" / interface_review_id / "evidence" / "file_version_projection.json")
+                if (interface_projection.get("input_snapshot_id") or interface_projection.get("source_snapshot_id")) != matrix_source_snapshot_id:
+                    raise ValueError("历史检查不属于当前快照")
+                check = (interface_result.get("checks") or {}).get("lef_liberty_check") or {}
+                sources = (check.get("input_identity") or {}).get("sources") or []
+                paths = {str(source.get("path") or "") for source in sources if source.get("role") == "bound_lef"}
+                for row in file_version_projection.get("files") or []:
+                    if row.get("latest", {}).get("source_path") in paths and row.get("latest", {}).get("status") == "CONFIRMED":
+                        file_interface_results[row["file_key"]] = {"status": check.get("execution_status"), "quality": interface_result.get("quality_status"), "review_id": interface_review_id, "generated_at": interface_result.get("generated_at")}
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+        compare_projection = file_version_projection
+        if file_version_projection and not (file_version_projection.get("scope", {}).get("base_version") and file_version_projection.get("scope", {}).get("target_version")):
+            order = file_version_projection.get("version_order") or {}
+            ordered = order.get("ordered_ids") or []
+            if order.get("status") == "KNOWN" and len(ordered) >= 2:
+                compare_projection = reproject_projection(file_version_projection, base_version=ordered[-2], target_version=ordered[-1])
         file_status_error = request.args.get("file_status_error", "")
         active_review_tab = active_review_tab or request.args.get("review_tab", "files")
         if active_review_tab not in {"files", "config", "history"}:
@@ -1114,6 +1165,10 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                formal_overview=formal_overview,
                                lef_file_status=lef_file_status,
                                file_version_projection=file_version_projection, matrix_source_snapshot_id=matrix_source_snapshot_id,
+                               compare_projection=compare_projection,
+                               file_interface_results=file_interface_results,
+                               formal_projection=formal_projection, formal_stage_choices=formal_stage_choices,
+                               formal_stage_selected=formal_stage_selected, formal_snapshot_warning=formal_snapshot_warning,
                                matrix_historical=matrix_historical,
                                matrix_review_id=matrix_review_id,
                                file_status_error=file_status_error,
@@ -1507,12 +1562,12 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
 
                 publish_projection(projection_root, projected, before_publish=publish_range)
             return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
-                                    file_status_refreshed="1"), code=303)
+                                    view=_text(request.form, "view") or None, file_status_refreshed="1"), code=303)
         except HTTPException:
             raise
         except Exception as exc:
             return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
-                                    file_status_error=str(exc)), code=303)
+                                    view=_text(request.form, "view") or None, file_status_error=str(exc)), code=303)
 
     @blueprint.post("/file-status/compare")
     def compare_file_status():
@@ -1529,6 +1584,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             projection = _read_file_version_projection(output, library_id, status)
             if status.get("stale") or not projection or projection.get("snapshot_id") != _text(request.form, "snapshot_id"):
                 raise ValueError("文件矩阵快照已变化或过期；请刷新后重新选择")
+            if _text(request.form, "view") == "compare":
+                projection = reproject_projection(projection, base_version=_text(request.form, "base_version"), target_version=_text(request.form, "target_version"))
             keys = request.form.getlist("compare_file_key") or request.form.getlist("file_key")
             if not 1 <= len(keys) <= 50 or len(set(keys)) != len(keys):
                 raise ValueError("请选择 1 至 50 个唯一文件进行内容比较")
@@ -1540,6 +1597,12 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             projection["input_snapshot_id"] = projection["snapshot_id"]
             projection.setdefault("source_snapshot_id", projection["snapshot_id"])
             compare_projection_files(projection, selected_keys=keys)
+            compared_rows = [row for row in projection.get("files") or [] if row.get("file_key") in set(keys)]
+            statuses = [row.get("comparison", {}).get("content_status") for row in compared_rows]
+            projection.setdefault("summary", {})["last_comparison"] = {
+                "selected": len(keys), "succeeded": sum(status in {"BYTE_SAME", "BYTE_DIFFERENT"} for status in statuses),
+                "failed": statuses.count("FAILED"), "unverified": sum(status not in {"BYTE_SAME", "BYTE_DIFFERENT", "FAILED"} for status in statuses),
+                "generated_at": datetime.now(timezone.utc).isoformat()}
             projection_root = output / "file_versions" / _library_dir(library_id)
             status_path = _file_status_path(output, library_id)
             with (projection_root / ".publish.lock").open("a+") as lock:
@@ -1566,12 +1629,29 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
 
                 publish_projection(projection_root, projection, before_publish=publish_compare)
             return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
-                                    file_status_refreshed="1"), code=303)
+                                    view=_text(request.form, "view") or None, file_status_refreshed="1"), code=303)
         except HTTPException:
             raise
         except Exception as exc:
             return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
-                                    file_status_error=str(exc)), code=303)
+                                    view=_text(request.form, "view") or None, file_status_error=str(exc)), code=303)
+
+    @blueprint.get("/file-status/evidence")
+    def file_comparison_evidence():
+        registry = _read_registry(registry_file)
+        entry = next((item for item in registry.get("ips", []) if str(item.get("id")) == request.args.get("ip", "")), None)
+        if not entry:
+            abort(404)
+        library_id = str(entry.get("library_id") or entry.get("id") or "")
+        status = _read_lef_file_status(output, registry, entry, _read_formal_nl_snapshot(output, registry))
+        projection = _read_file_version_projection(output, library_id, status)
+        if status.get("stale") or not projection or projection.get("snapshot_id") != request.args.get("snapshot_id"):
+            abort(404)
+        rows = [row for row in projection.get("files") or [] if row.get("file_key") == request.args.get("file_key")]
+        if len(rows) != 1 or not rows[0].get("comparison", {}).get("comparison_evidence"):
+            abort(404)
+        return jsonify({"library_id": library_id, "file_key": rows[0]["file_key"], "snapshot_id": projection["snapshot_id"],
+                        "scope": projection.get("scope"), "comparison": rows[0]["comparison"]})
 
     @blueprint.get("/formal-nl/overview/files")
     def formal_nl_overview_files():
@@ -1658,6 +1738,9 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                    quick_checks={}, quick_notes=[], default_target_lef="", default_base_lef="",
                                    file_choices_limited=False,
                                    active_tab="catalog", active_review_tab="files",
+                                   formal_overview={}, formal_projection={}, formal_stage_choices=[],
+                                   formal_stage_selected="", formal_snapshot_warning="",
+                                   file_version_projection={}, compare_projection={}, file_interface_results={},
                                    lef_file_status={"status": "NOT_REFRESHED", "files": [], "stale": False,
                                                     "raw_scope": {}, "nl_context": {}},
                                    file_status_error=""), 400
@@ -1897,7 +1980,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         try:
             registry = _read_registry(registry_file)
             previous = next((item for item in registry.get("ips", []) if item.get("id") == _text(request.form, "id")), None)
-            if _text(request.form, "mode") == "matrix":
+            if _text(request.form, "mode") in {"matrix", "matrix_single"}:
                 if not previous or str(previous.get("library_id") or previous.get("id")) != _text(request.form, "library_id"):
                     raise ValueError("矩阵检查需要已登记且匹配的库")
                 library_id = str(previous.get("library_id") or previous.get("id"))
@@ -1906,6 +1989,11 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                 projection = _read_file_version_projection(output, library_id, status)
                 if status.get("stale") or not projection or projection.get("snapshot_id") != _text(request.form, "snapshot_id"):
                     raise ValueError("文件矩阵快照已变化或过期；请刷新后重新选择")
+                original_projection_id = projection["snapshot_id"]
+                if _text(request.form, "mode") == "matrix_single":
+                    projection = reproject_projection(projection, base_version="", target_version="")
+                elif _text(request.form, "view") == "compare":
+                    projection = reproject_projection(projection, base_version=_text(request.form, "base_version"), target_version=_text(request.form, "target_version"))
                 scope = projection.get("scope") or {}
                 base, target = str(scope.get("base_version") or ""), str(scope.get("target_version") or "")
                 keys = request.form.getlist("file_key")
@@ -1923,6 +2011,11 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                     for row in selected_rows:
                         if row.get("view") != "lef" or row.get("identity_status") != "EXACT_RELATIVE_PATH":
                             raise ValueError("所选 LEF 不是可确认的唯一配对；请重新选择")
+                    if _text(request.form, "view") == "compare":
+                        derived_path = output / "file_versions" / _library_dir(library_id) / "runs" / original_projection_id / f"selected_scope_{uuid4().hex}.json"
+                        projection["input_snapshot_id"] = original_projection_id
+                        _write_json(derived_path, projection)
+                        projection_ref = str(derived_path)
                     entry = {**previous, "raw_version": target, "formal_stage": scope.get("formal_stage") or "",
                              "projection_json": projection_ref,
                              "checks": {"lef_review": {"pairs": [{"file_key": key} for key in keys]}}}
@@ -2066,6 +2159,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                     raw_version=entry.get("raw_version") or None,
                                     base_raw_version=_text(request.form, "base_raw_version") or None,
                                     review_tab=review_tab,
+                                    view=_text(request.form, "view") or None,
+                                    file_key=request.form.get("file_key") if _text(request.form, "mode") == "matrix_single" else None,
                                     submitted="1"), code=303)
         except Exception as exc:
             if slot_reserved:

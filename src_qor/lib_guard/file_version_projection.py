@@ -389,6 +389,7 @@ def reproject_projection(projection: dict[str, Any], *, base_version: str = "",
     if scope_changed:
         result["coverage"] = {**(result.get("coverage") or {}), "content_comparison": "NOT_COMPARED"}
         result.setdefault("summary", {}).pop("content_compared", None)
+        result.setdefault("summary", {}).pop("last_comparison", None)
     result["summary"] = {**(result.get("summary") or {}),
                           "file_count": len(result.get("files") or []),
                           "not_compared": sum(row.get("comparison", {}).get("content_status") == "NOT_COMPARED" for row in result.get("files") or []),
