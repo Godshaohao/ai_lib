@@ -1147,7 +1147,7 @@ class ReviewRunnerTests(unittest.TestCase):
         self.assertNotIn("09-Liberty角", model)
         self.assertNotIn("10-Liberty单元", model)
 
-    def test_macro_file_mapping_and_nine_engineering_topics_are_filterable_rows(self):
+    def test_macro_file_mapping_and_ten_engineering_topics_are_filterable_rows(self):
         item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
         item["checks"]["macro_index"]["result"]["macro_index"]["macros"]["MACRO_A"]["liberty"] = [
             {"view": "liberty", "file": "lib/tt.lib.gz", "source_path": "/raw/V2/lib/tt.lib.gz",
@@ -1161,13 +1161,32 @@ class ReviewRunnerTests(unittest.TestCase):
         self.assertEqual((liberty_row["来源版本"], liberty_row["Corner/线索"], liberty_row["状态"]),
                          ("V2", "TT", "PARSED_OBJECT"))
         checklist = model["01-工程检查"]
-        self.assertEqual(len(checklist), 10)  # 9 current topics plus one legacy formal-NL row.
-        self.assertEqual(checklist[0]["工程检查主题"], "RAW 版本与文件索引")
-        self.assertIn("正式文件及 RAW 来源（旧版 Review）",
-                      [row["工程检查主题"] for row in checklist])
+        self.assertEqual(len(checklist), 10)
+        self.assertEqual(checklist[0]["工程检查主题"], "RAW 文件盘点")
+        self.assertIn("正式 NL 来源", [row["工程检查主题"] for row in checklist])
         self.assertEqual(checklist[-1]["工程检查主题"], "文档更新 Delta")
         self.assertIn("工程覆盖", checklist[0])
         self.assertIn("本次执行", checklist[0])
+
+    def test_engineering_checklist_uses_ten_source_topics_and_never_marks_unrun_as_pass(self):
+        item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
+        item["checks"].pop("formal_nl")
+        item["engineering_checklist"] = [
+            {"id": "raw_inventory", "topic": "RAW 文件盘点", "execution": "已执行",
+             "result": "2 个交付已盘点", "reason": "", "evidence": "evidence/file_version_projection.json"},
+            {"id": "corner_coverage", "topic": "Signoff Corner 覆盖", "execution": "未执行",
+             "result": "无结论", "reason": "未配置期望 Corner 集合", "evidence": ""},
+        ]
+
+        model = build_workbook_model([item])
+
+        rows = model["01-工程检查"]
+        self.assertEqual(len(rows), 10)
+        raw = next(row for row in rows if row["检查项ID"] == "raw_inventory")
+        corner = next(row for row in rows if row["检查项ID"] == "corner_coverage")
+        self.assertEqual((raw["本次执行"], raw["本次结果"]), ("已执行", "2 个交付已盘点"))
+        self.assertEqual((corner["本次执行"], corner["未完成原因"]), ("未执行", "未配置期望 Corner 集合"))
+        self.assertNotIn("通过", corner["本次结果"])
 
     def test_only_selected_checks_add_details_and_questions(self):
         item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")

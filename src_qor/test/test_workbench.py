@@ -11,10 +11,111 @@ from unittest.mock import patch
 from werkzeug.datastructures import MultiDict
 
 from lib_guard import workbench
-from lib_guard.workbench import _acquire_library_lock, _files_for_selection, _quick_linked_checks, _release_library_lock, _update_task, create_app
+from lib_guard.workbench import (_acquire_library_lock, _files_for_selection, _quick_linked_checks,
+                                 _release_library_lock, _tag_library_source_versions, _update_task, create_app)
 
 
 class WorkbenchTests(unittest.TestCase):
+    def test_cross_delivery_lef_liberty_sources_are_recorded_per_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lef = root / "V1" / "LEF" / "core.lef"
+            liberty = root / "V2" / "LIB" / "core_tt.lib"
+            lef.parent.mkdir(parents=True)
+            liberty.parent.mkdir(parents=True)
+            lef.touch()
+            liberty.touch()
+            registry_file = root / "registry.yml"
+            registry_file.write_text("{}", encoding="utf-8")
+            entry = {"raw_versions": [{"id": "V1", "path": str(root / "V1")},
+                                      {"id": "V2", "path": str(root / "V2")}],
+                     "checks": {"lef_liberty_check": {"lef_file": str(lef),
+                                                          "liberty_files": [str(liberty)]}}}
+
+            _tag_library_source_versions(entry, registry_file)
+
+            self.assertEqual(entry["checks"]["lef_liberty_check"]["source_versions"], {
+                "lef": "V1", "liberties": {str(liberty): "V2"}})
+
+    def test_one_click_generates_a_current_incomplete_workbook_without_replacing_latest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lef_text = """VERSION 5.8 ;
+MACRO core
+  CLASS BLOCK ;
+  ORIGIN 0 0 ;
+  SIZE 1 BY 1 ;
+  SYMMETRY X Y ;
+  PIN A
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 0 0 1 1 ;
+    END
+  END A
+END core
+END LIBRARY
+"""
+            liberty_text = """library (tt) {
+  operating_conditions (tt) { process : 1; voltage : 1.0; temperature : 25; }
+  cell (core) { area : 1; pin (A) { direction : input; } }
+}
+"""
+            versions = []
+            for version_id, order, lef_value in (("V1", 1, lef_text), ("V2", 2, lef_text.replace("1 BY 1", "2 BY 1"))):
+                version_root = root / version_id
+                (version_root / "LEF").mkdir(parents=True)
+                (version_root / "LIB").mkdir()
+                (version_root / "LEF" / "core.lef").write_text(lef_value, encoding="utf-8")
+                (version_root / "LIB" / "core_tt.lib").write_text(liberty_text, encoding="utf-8")
+                versions.append({"id": version_id, "path": str(version_root), "delivery_order": order})
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "A", "library_id": "V.A",
+                                                       "name": "IP A", "raw_versions": versions}]}), encoding="utf-8")
+            output = root / "out"
+            from lib_guard.review_runner import _library_dir
+            library_dir = output / "libraries" / _library_dir("V.A")
+            library_dir.mkdir(parents=True)
+            stable_workbook = library_dir / "latest.xlsx"
+            stable_workbook.write_bytes(b"previous-complete-workbook")
+            client = create_app(registry, output).test_client()
+
+            with patch.object(workbench._REVIEW_EXECUTOR, "submit", side_effect=lambda callback: callback()):
+                response = client.post("/run", data={"mode": "applicable", "id": "A", "library_id": "V.A"})
+
+            self.assertEqual(response.status_code, 303)
+            latest_attempt = json.loads((library_dir / "latest_attempt.json").read_text(encoding="utf-8"))
+            self.assertEqual(latest_attempt["status"], "COMPLETE", latest_attempt)
+            self.assertEqual(latest_attempt["execution_status"], "COMPLETE")
+            self.assertEqual(latest_attempt["coverage_status"], "INCOMPLETE")
+            review_id = latest_attempt["review_id"]
+            run_dir = library_dir / "runs" / review_id
+            self.assertTrue((run_dir / "ip_review.xlsx").is_file())
+            with zipfile.ZipFile(run_dir / "ip_review.xlsx") as workbook:
+                workbook_text = workbook.read("xl/sharedStrings.xml").decode("utf-8")
+            for header in ("Review ID", "检查覆盖", "RAW 盘点快照", "Formal 快照状态", "交付范围"):
+                self.assertIn(header, workbook_text)
+            for topic in ("RAW 文件盘点", "文件更新与清单 Delta", "正式 NL 来源", "Macro 清单、来源与变化",
+                          "Macro 六类文件齐套", "Signoff Corner 覆盖", "LEF 物理属性 Delta",
+                          "接口与跨 View 一致性", "其他 View 内部对象检查", "文档更新 Delta"):
+                self.assertIn(topic, workbook_text)
+            record = json.loads((run_dir / "review_result.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(record["engineering_checklist"]), 10, record)
+            self.assertTrue(record["one_click_applicable"])
+            self.assertEqual(record["coverage_status"], "INCOMPLETE")
+            lef_scope = next(item for item in record["input_scope"]["checks"] if item["name"] == "lef_review")
+            self.assertEqual(lef_scope["source_versions"], ["V1", "V2"])
+            delivery_scope = record["input_scope"]["delivery_scope"]
+            self.assertEqual((delivery_scope["base_version"], delivery_scope["target_version"], delivery_scope["formal_stage"]),
+                             ("V1", "V2", ""))
+            self.assertEqual(stable_workbook.read_bytes(), b"previous-complete-workbook")
+            page = client.get("/?ip=A&tab=review&review_tab=history").get_data(as_text=True)
+            self.assertIn("主题覆盖", page)
+            self.assertIn("不完整", page)
+            self.assertIn(review_id, page)
+            self.assertIn("下载 Excel", page)
+
     def test_scanned_ip_opens_three_task_views_and_defaults_to_file_lookup(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

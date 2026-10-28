@@ -267,8 +267,8 @@
   const libertySearch = document.querySelector("[data-lib-search]");
   const libertyCount = document.querySelector("[data-lib-count]");
   function syncLibertyInput(source = "从当前 RAW 文件列表勾选") {
-    if (libertyInput) libertyInput.value = [...document.querySelectorAll("[data-lib-file]:checked")]
-      .map((item) => item.value).join("\n");
+    if (libertyInput) libertyInput.value = [...document.querySelectorAll("[data-lib-file]:checked, [data-cross-lib-file]:checked")]
+      .map((item) => item.value).filter((value, index, all) => all.indexOf(value) === index).join("\n");
     if (libertyInput) libertyInput.dataset.inputSource = source;
   }
   function applyLibertyFilter() {
@@ -292,11 +292,25 @@
       updateScopeSummary();
     });
   });
+  document.querySelectorAll("[data-cross-lib-file]").forEach((choice) => {
+    choice.addEventListener("change", () => {
+      syncLibertyInput("显式选择的跨 RAW 交付来源");
+      updateScopeSummary();
+    });
+  });
   libertyInput?.addEventListener("input", (event) => {
-    document.querySelectorAll("[data-lib-file]").forEach((choice) => { choice.checked = false; });
+    document.querySelectorAll("[data-lib-file], [data-cross-lib-file]").forEach((choice) => { choice.checked = false; });
     if (event.isTrusted) libertyInput.dataset.inputSource = "手工指定";
     updateScopeSummary();
   });
+  document.querySelectorAll("[data-cross-lef-search]").forEach((search) => search.addEventListener("input", () => {
+    const query = search.value.trim().toLocaleLowerCase();
+    document.querySelectorAll("[data-cross-lef-row]").forEach((row) => { row.hidden = !row.dataset.crossLefPath.includes(query); });
+  }));
+  document.querySelectorAll("[data-cross-lib-search]").forEach((search) => search.addEventListener("input", () => {
+    const query = search.value.trim().toLocaleLowerCase();
+    document.querySelectorAll("[data-cross-lib-row]").forEach((row) => { row.hidden = !row.dataset.crossLibPath.includes(query); });
+  }));
 
   const reviewForm = document.querySelector("[data-review-form]");
   const suggestedButton = document.querySelector("[data-apply-suggested-checks]");

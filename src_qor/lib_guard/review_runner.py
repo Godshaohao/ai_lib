@@ -24,6 +24,7 @@ except ImportError:  # JSON configs remain usable without PyYAML.
     yaml = None
 
 from . import effective_file_tracker, lef_liberty_check, lef_review, macro_index
+from .applicable_review import ENGINEERING_TOPICS
 from .export_review_excel import export_review_excel
 from .ip_check_overview import render_overview
 
@@ -43,8 +44,12 @@ SHEET_HEADERS = {
                    "基准版本", "目标版本", "基准路径", "目标路径", "基准存在性", "目标存在性", "交付关系",
                    "身份状态", "内容状态", "语义状态", "正式阶段", "正式来源", "批准状态", "排序依据",
                    "RAW 覆盖", "快照 ID", "投影证据"],
-    "00-概览": ["IP", "库标识", "RAW版本", "正式阶段", "已选检查", "执行完成项", "执行失败项", "质量判断", "Macro数", "报告结论", "报告生成时间", "源提交", "工作区有改动", "输入范围"],
-    "01-工程检查": ["序号", "工程检查主题", "工程覆盖", "本次执行", "本次证据", "范围或缺口"],
+    "00-概览": ["IP", "库标识", "Review ID", "检查覆盖", "RAW 盘点快照", "比较范围快照",
+                 "Formal 快照状态", "Formal 快照时间", "交付范围", "RAW版本", "正式阶段", "已选检查",
+                 "执行完成项", "执行失败项", "质量判断", "Macro数", "报告结论", "报告生成时间",
+                 "源提交", "工作区有改动", "输入范围"],
+    "01-工程检查": ["序号", "检查项ID", "工程检查主题", "工程覆盖", "本次执行", "本次结果",
+                   "未完成原因", "本次证据", "证据引用", "范围或缺口"],
     "02-执行记录": ["IP", "检查", "执行状态", "上下文关系", "结果摘要", "范围说明", "输入身份", "输入范围", "报告路径"],
     "03-问答": ["IP", "问题", "回答", "证据范围", "来源报告"],
     "04-关注项": ["IP", "类别", "类型", "对象", "数量", "发现", "状态", "建议核对", "证据路径"],
@@ -57,17 +62,7 @@ SHEET_HEADERS = {
     "10-Liberty单元": ["IP", "Liberty文件", "Corner线索", "Cell", "LEF同名", "信号Pin数", "PG Pin数", "接口状态", "差异类型", "具体差异", "证据路径"],
 }
 
-ENGINEERING_CHECKLIST = (
-    ("RAW 版本与文件索引", ("macro_index",), "单次选定版本索引，不代表完整历史。"),
-    ("文件更新与清单 Delta", ("lef_review",), "限指定 LEF 对及当前 Parser 支持字段。"),
-    ("Macro 清单、来源与更新", ("macro_index",), "选定 FileMap 的对象与文件关联，不代表多版本演进已覆盖。"),
-    ("Macro 六类文件映射", ("macro_index",), "名称/解析证据映射；候选关联不是已确认齐套。"),
-    ("Signoff Corner 覆盖", ("lef_liberty_check",), "仅显示所选 Liberty 的角标线索；没有期望角集合时不判断齐套。"),
-    ("LEF 物理属性 Delta", ("lef_review",), "限指定 LEF 对及当前 Parser 支持字段。"),
-    ("接口与跨 View 一致性", ("macro_index", "lef_liberty_check"), "限已选择输入和当前解析字段；不推断未绑定视图。"),
-    ("其他 View 内部对象", ("macro_index",), "按已支持解析器提取；GDS/DB 仍为路径/文件名证据。"),
-    ("文档更新 Delta", (), "当前四个检查器没有执行 DOC 正文比较。"),
-)
+ENGINEERING_CHECKLIST = ENGINEERING_TOPICS
 
 
 def _load_config(path: str | Path) -> dict[str, Any]:
@@ -114,6 +109,7 @@ def _latest_complete_run(library_dir: Path) -> tuple[dict[str, Any], Path | None
         review_id = str(result.get("review_id") or result_path.parent.name)
         workbook = result_path.parent / "ip_review.xlsx"
         if (result.get("execution_status") == "COMPLETE"
+                and report_is_publishable(result)
                 and re.fullmatch(r"review_[A-Za-z0-9_-]+", review_id)
                 and workbook.is_file()):
             candidates.append((str(result.get("generated_at") or review_id), result, workbook))
@@ -121,6 +117,12 @@ def _latest_complete_run(library_dir: Path) -> tuple[dict[str, Any], Path | None
         return {}, None
     _, result, workbook = max(candidates, key=lambda item: (item[0], item[1].get("review_id", "")))
     return result, workbook
+
+
+def report_is_publishable(result: dict[str, Any]) -> bool:
+    """Keep partial one-click ledgers out of the stable complete-report slot."""
+    return (not result.get("one_click_applicable")
+            or result.get("coverage_status") == "COMPLETE")
 
 
 def _publish_cli_attempt_if_idle(path: Path, attempt: dict[str, Any]) -> bool:
@@ -345,7 +347,8 @@ def _run_lef_liberty(spec: dict[str, Any], config_dir: Path, out_dir: Path,
     lef_report_path = None
     expected_source = None
     if lef_result is not None:
-        lef_report_path = out_dir / "lef_review" / "lef_analysis.json"
+        lef_report_path = (_resolve(spec["lef_analysis_json"], config_dir)
+                           if spec.get("lef_analysis_json") else out_dir / "lef_review" / "lef_analysis.json")
         expected_source = _lef_source(lef_result)
         if spec.get("lef_file"):
             expected_path, _ = _source_identity(expected_source)
@@ -440,14 +443,18 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
             if lef_spec and lef_spec.get("enabled", True):
                 if lef_spec.get("pairs"):
                     requested = lef_spec["pairs"]
-                    if not isinstance(requested, list) or not 1 <= len(requested) <= 50:
-                        raise ValueError("LEF 批量检查需选择 1 至 50 个文件")
+                    if not isinstance(requested, list) or not requested:
+                        raise ValueError("LEF 批量检查至少需要一个文件")
                     keys = [str(item.get("file_key") or "") for item in requested if isinstance(item, dict)]
                     if len(keys) != len(requested) or len(set(keys)) != len(keys):
                         raise ValueError("LEF 文件选择无效或重复")
                     base = str((projection.get("scope") or {}).get("base_version") or "")
                     if not base:
                         raise ValueError("LEF 批量检查需要投影基准版本")
+                    source_versions_by_key = {
+                        str(item.get("file_key") or ""): item.get("source_versions") or {}
+                        for item in lef_spec.get("pairs") or [] if isinstance(item, dict)
+                    }
                     batch_pairs = []
                     for key in keys:
                         rows = [row for row in projection.get("files") or [] if row.get("file_key") == key]
@@ -460,9 +467,9 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                             raise ValueError("LEF 文件的基准或目标来源不唯一")
                         batch_pairs.append({"pair_id": hashlib.sha256(key.encode()).hexdigest()[:24],
                                             "file_key": key, "old_file": str(_resolve(old[0], config_dir)),
-                                            "new_file": str(_resolve(new[0], config_dir))})
-                    if checks_spec.get("lef_liberty_check"):
-                        raise ValueError("批量 LEF 与接口核查需分别运行，避免错误绑定")
+                                            "new_file": str(_resolve(new[0], config_dir)),
+                                            "source_versions": source_versions_by_key.get(key) or
+                                                {"old": base, "new": target}})
                     checks_spec = dict(checks_spec)
                     checks_spec["lef_review"] = {"pairs": batch_pairs}
                 elif lef_spec.get("report_json"):
@@ -500,7 +507,25 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                 continue
             try:
                 if name == "lef_liberty_check":
-                    result = _run_lef_liberty(spec, config_dir, evidence_dir, ip_id, library_id, lef_result)
+                    bound_lef_result = lef_result
+                    actual_spec = dict(spec)
+                    if bound_lef_result is None:
+                        batch_check = check_results.get("lef_review") or {}
+                        batch_result = batch_check.get("result") or {}
+                        if batch_result.get("schema_version") == "batch_lef_review.v1":
+                            lef_path = str(_resolve(spec.get("lef_file"), config_dir)) if spec.get("lef_file") else ""
+                            matching_pairs = [pair for pair in batch_result.get("pairs") or []
+                                              if str(_resolve(pair.get("new_file"), config_dir)) == lef_path]
+                            if len(matching_pairs) != 1:
+                                raise ValueError("接口核查 LEF 未唯一对应本次批量 LEF 目标；拒绝错误绑定")
+                            matching_pair = matching_pairs[0]
+                            if matching_pair.get("execution_status") != "COMPLETE" or not matching_pair.get("evidence_ref"):
+                                raise ValueError("对应 LEF 结构解析未完成；接口核查不能复用该输入")
+                            report_path = evidence_dir / "lef_batch" / str(matching_pair["evidence_ref"])
+                            bound_lef_result = _json_read(report_path)
+                            actual_spec["lef_analysis_json"] = str(report_path)
+                    result = _run_lef_liberty(actual_spec, config_dir, evidence_dir, ip_id, library_id,
+                                              bound_lef_result)
                 else:
                     result = runners[name](spec)
                 if name == "lef_review" and result.get("schema_version") != "batch_lef_review.v1":
@@ -564,7 +589,9 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                         "context": context, "context_alignment": _context_alignment(check_results, ip.get("raw_version")),
                         "requested_checks": [name for name, item in check_results.items()
                                                                     if item.get("selected")],
+                        "engineering_checklist": [dict(item) for item in ip.get("engineering_checklist") or []],
                         "file_version_projection": projection,
+                        "inventory_snapshot": ip.get("inventory_snapshot") or {},
                         "checks": check_results, "run_dir": str(run_dir),
                         "library_dir": str(run_dir.parents[1])})
     return reviews
@@ -608,10 +635,14 @@ def _input_identity(name: str, spec: dict[str, Any], result: dict[str, Any]) -> 
             add("macro_source", version=version)
         add("macro_report", spec.get("report_json"))
     elif name == "lef_review":
+        pair_versions = {str(item.get("pair_id") or ""): item.get("source_versions") or {}
+                         for item in spec.get("pairs") or []}
         if result.get("schema_version") == "batch_lef_review.v1":
             for pair in result.get("pairs") or []:
                 for side, source in (pair.get("sources") or {}).items():
-                    add(f"lef_{side}:{pair.get('pair_id', '')}", source.get("path"), sha256=source.get("sha256"))
+                    versions = pair_versions.get(str(pair.get("pair_id") or ""), {})
+                    add(f"lef_{side}:{pair.get('pair_id', '')}", source.get("path"),
+                        version=versions.get(side), sha256=source.get("sha256"))
         for side, source in (result.get("sources") or {}).items():
             add(f"lef_{side}", source.get("path"), sha256=source.get("sha256"))
         if not sources:
@@ -620,15 +651,21 @@ def _input_identity(name: str, spec: dict[str, Any], result: dict[str, Any]) -> 
         add("lef_report", spec.get("report_json"))
     elif name == "lef_liberty_check":
         lef_source = result.get("lef_source") or {}
-        add("bound_lef", lef_source.get("path"), sha256=lef_source.get("sha256"))
+        source_versions = spec.get("source_versions") or {}
+        add("bound_lef", lef_source.get("path"), version=source_versions.get("lef"),
+            sha256=lef_source.get("sha256"))
         if not lef_source:
             add("lef_report", spec.get("lef_analysis_json"))
         files = result.get("files") or []
+        liberty_versions = source_versions.get("liberties") or {}
         for item in files:
-            add("liberty", item.get("liberty_source"))
+            path = item.get("liberty_source")
+            add("liberty", path, version=liberty_versions.get(str(path)) or
+                liberty_versions.get(str(Path(str(path)).resolve())) if path else None)
         if not files:
             for path in spec.get("liberty_files") or []:
-                add("liberty", path)
+                add("liberty", path, version=liberty_versions.get(str(path)) or
+                    liberty_versions.get(str(Path(str(path)).resolve())))
         add("cross_view_report", spec.get("report_json"))
     versions = sorted({source["version"] for source in sources if source.get("version")})
     stages = sorted({source["stage"] for source in sources if source.get("stage")})
@@ -813,30 +850,110 @@ def _macro_file_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _engineering_check_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     checks = review.get("checks") or {}
+    supplied = {str(item.get("id") or ""): item for item in review.get("engineering_checklist") or []
+                if isinstance(item, dict)}
+    projection = review.get("file_version_projection") or {}
+    scope = projection.get("scope") or {}
+    content_status = (projection.get("coverage") or {}).get("content_comparison") or "NOT_COMPARED"
+    macro = _check_result(review, "macro_index")
+    lef = _check_result(review, "lef_review")
+    interface = _check_result(review, "lef_liberty_check")
+    formal = _inventory_snapshot(review)
+
+    def inferred(item_id: str) -> dict[str, str]:
+        if item_id == "raw_inventory":
+            coverage = (projection.get("coverage") or {}).get("raw_inventory")
+            if not projection:
+                return {"execution": "未执行", "result": "无结论", "reason": "本次没有 RAW 盘点快照", "evidence": ""}
+            status = "已执行" if coverage == "COMPLETE" else "部分覆盖"
+            return {"execution": status, "result": f"盘点文件 {len(projection.get('files') or [])} 个",
+                    "reason": "" if coverage == "COMPLETE" else "至少一个 RAW 交付盘点不完整",
+                    "evidence": "evidence/file_version_projection.json"}
+        if item_id == "file_delta":
+            if not scope.get("base_version") or not scope.get("target_version"):
+                return {"execution": "未执行", "result": "无结论", "reason": "未形成可信的两次交付范围", "evidence": ""}
+            if content_status == "COMPLETE":
+                return {"execution": "已执行", "result": "可比较文件内容已完成比较", "reason": "单侧文件只记录提供关系，不作内容变化结论", "evidence": "evidence/file_version_projection.json"}
+            return {"execution": "部分覆盖", "result": "部分文件已比较或仍有待比较项", "reason": "文件身份、盘点覆盖或内容读取未全部确认", "evidence": "evidence/file_version_projection.json"}
+        if item_id == "formal_source":
+            if formal:
+                stages = list((formal.get("report") or {}).get("inventories") or {})
+                status = "已执行" if len(stages) == 1 else "部分覆盖"
+                return {"execution": status, "result": f"Formal 快照阶段 {len(stages)} 个",
+                        "reason": "" if len(stages) == 1 else "Formal 阶段不唯一或快照不完整",
+                        "evidence": formal.get("report_ref", "")}
+            return {"execution": "未执行", "result": "无结论", "reason": "没有可复用的 Formal 来源快照", "evidence": ""}
+        if item_id in {"macro_provenance", "view_completeness", "other_view"} and macro.get("selected"):
+            status = "已执行" if macro.get("status") == "COMPLETE" and item_id == "macro_provenance" else "部分覆盖"
+            result = _check_summary("macro_index", macro)[0] if macro.get("status") == "COMPLETE" else "索引结果不完整"
+            reason = ("" if status == "已执行" else
+                      "尚无项目必需 View 规则，不能判断齐套" if item_id == "view_completeness" else
+                      "GDS/DB 等内部对象未由当前解析器验证" if item_id == "other_view" else "Macro 来源尚未覆盖多交付演进")
+            return {"execution": status, "result": result, "reason": reason, "evidence": macro.get("result_ref", "")}
+        if item_id == "corner_coverage":
+            if interface.get("selected") and interface.get("status") == "COMPLETE":
+                return {"execution": "部分覆盖", "result": "已观察 Liberty Corner/PVT 线索", "reason": "未配置期望 Corner 集合，不能判断齐套", "evidence": interface.get("result_ref", "")}
+            return {"execution": "未执行", "result": "无结论", "reason": "未配置期望 Corner 集合", "evidence": ""}
+        if item_id == "lef_delta" and lef.get("selected"):
+            status = "已执行" if lef.get("status") == "COMPLETE" else "部分覆盖"
+            return {"execution": status, "result": _check_summary("lef_review", lef)[0] if status == "已执行" else "LEF 结果不完整",
+                    "reason": "仅限本次成功解析的配对和支持字段", "evidence": lef.get("result_ref", "")}
+        if item_id == "cross_view" and interface.get("selected"):
+            status = "已执行" if interface.get("status") == "COMPLETE" else "部分覆盖"
+            return {"execution": status, "result": _check_summary("lef_liberty_check", interface)[0] if status == "已执行" else "接口结果不完整",
+                    "reason": "仅限明确绑定的 LEF–Liberty 输入，不覆盖未选择视图", "evidence": interface.get("result_ref", "")}
+        if item_id == "doc_delta":
+            return {"execution": "未执行", "result": "无结论", "reason": "当前没有文档正文差异检查器", "evidence": ""}
+        return {"execution": "未执行", "result": "无结论", "reason": "缺少本项适用输入", "evidence": ""}
+
     rows = []
-    checklist = list(ENGINEERING_CHECKLIST)
-    if "formal_nl" in checks:
-        checklist.insert(2, ("正式文件及 RAW 来源（旧版 Review）", ("formal_nl",),
-                             "正式目录链接统计已由独立页承担；此行仅保留历史检查记录。"))
-    for number, (topic, supporting_checks, limitation) in enumerate(checklist, 1):
-        selected = [(name, checks[name]) for name in supporting_checks if name in checks and checks[name].get("selected")]
-        if not selected:
-            coverage, execution, evidence = "未检查", "未选择相关检查", ""
-        else:
-            failed = [(name, item) for name, item in selected if item.get("status") != "COMPLETE"]
-            if failed:
-                coverage = "结果不可用"
-                execution = "；".join(f"{name}：{item.get('status')}" for name, item in failed)
-            else:
-                coverage = "部分覆盖"
-                execution = "；".join(f"{name}：执行完成" for name, _ in selected)
-            evidence = "；".join(
-                f"{name}：{_check_summary(name, item)[0]}" for name, item in selected
-                if item.get("status") == "COMPLETE")
-        rows.append({"序号": number, "工程检查主题": topic, "工程覆盖": coverage,
-                     "本次执行": execution, "本次证据": evidence,
-                     "范围或缺口": limitation})
+    for number, (item_id, topic, limitation) in enumerate(ENGINEERING_CHECKLIST, 1):
+        item = supplied.get(item_id) or inferred(item_id)
+        rows.append({"序号": number, "检查项ID": item_id, "工程检查主题": topic,
+                     "工程覆盖": item.get("coverage") or item.get("execution", "未执行"),
+                     "本次执行": item.get("execution", "未执行"),
+                     "本次结果": item.get("result", "无结论"),
+                     "未完成原因": item.get("reason", ""),
+                     "本次证据": item.get("evidence_summary", item.get("result", "")),
+                     "证据引用": item.get("evidence", ""),
+                     "范围或缺口": item.get("limitation") or limitation})
     return rows
+
+
+def _finalize_engineering_checklist(review: dict[str, Any]) -> None:
+    projection = review.get("file_version_projection") or {}
+    for item in review.get("engineering_checklist") or []:
+        if item.get("execution") != "计划执行":
+            continue
+        names = item.get("check_names") or []
+        if names == ["projection_content"]:
+            status = (projection.get("coverage") or {}).get("content_comparison")
+            item["execution"] = "已执行" if status == "COMPLETE" else "部分覆盖"
+            item["result"] = f"内容比较覆盖：{status or 'UNKNOWN'}"
+            if status != "COMPLETE":
+                item["reason"] = "部分文件身份不唯一、来源不可读或比较范围不完整"
+            continue
+        selected = [_check_result(review, name) for name in names]
+        selected = [check for check in selected if check.get("selected")]
+        if not selected:
+            item["execution"] = "未执行"
+            item["result"] = "无结论"
+            item["reason"] = item.get("reason") or "本次没有成功启动该检查"
+            continue
+        complete = sum(check.get("status") == "COMPLETE" for check in selected)
+        if complete == len(selected):
+            item["execution"] = "已执行"
+        elif complete:
+            item["execution"] = "部分覆盖"
+        else:
+            item["execution"] = "未执行"
+        if complete != len(selected):
+            errors = [str(check.get("error") or check.get("result_status") or "检查未完整")
+                      for check in selected if check.get("status") != "COMPLETE"]
+            item["reason"] = "；".join(errors) or item.get("reason") or "本项结果不完整"
+        item["evidence_summary"] = "；".join(
+            _check_summary(name, check)[0] for name, check in zip(names, selected)
+            if check.get("status") == "COMPLETE") or item.get("result", "")
 
 
 def _formal_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1414,9 +1531,13 @@ def _input_scope(review: dict[str, Any]) -> dict[str, Any]:
         "report_ref": str(snapshot.get("report_ref") or ""),
         "stages": sorted(str(stage) for stage in (snapshot_report.get("inventories") or {})),
     }
+    projection = review.get("file_version_projection") or {}
     return {"checks": checks, "target_raw_versions": raw_versions,
             "formal_stage": str(context.get("formal_stage") or ""), "source_count": source_count,
-            "formal_inventory_snapshot": formal_snapshot}
+            "formal_inventory_snapshot": formal_snapshot,
+            "raw_projection": {key: projection.get(key) for key in
+                               ("snapshot_id", "source_snapshot_id", "input_snapshot_id", "generated_at") if projection.get(key)},
+            "delivery_scope": dict(projection.get("scope") or {})}
 
 
 def _input_scope_label(scope: dict[str, Any]) -> str:
@@ -1438,6 +1559,15 @@ def _input_scope_label(scope: dict[str, Any]) -> str:
         parts.append(f"单 IP 正式盘点快照：{snapshot['generated_at']}（{stages}）")
     else:
         parts.append("单 IP 正式盘点快照：未找到")
+    raw = scope.get("raw_projection") or {}
+    if raw.get("source_snapshot_id"):
+        parts.append(f"RAW 盘点快照：{raw['source_snapshot_id']}")
+    if raw.get("snapshot_id"):
+        parts.append(f"比较范围快照：{raw['snapshot_id']}")
+    delivery = scope.get("delivery_scope") or {}
+    if delivery:
+        parts.append("交付范围：" + " → ".join(str(delivery.get(key) or "未指定")
+                                                for key in ("base_version", "target_version")))
     return "；".join(parts)
 
 
@@ -1497,7 +1627,20 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
         quality = _review_summary(review)["quality_assessment"]
         input_scope = review.get("input_scope") or _input_scope(review)
         revision = review.get("source_revision") or {}
+        one_click_applicable = bool((ip or {}).get("one_click_applicable"))
+        checklist = review.get("engineering_checklist") or []
+        coverage_status = ("COMPLETE" if checklist and all(
+            item.get("execution") == "已执行" for item in checklist
+        ) else "INCOMPLETE") if one_click_applicable else "NOT_ASSESSED"
         model["00-概览"].append({"IP": label, "库标识": ip.get("library_id") or ip.get("id", ""),
+                                 "Review ID": review.get("review_id") or "未记录",
+                                 "检查覆盖": {"COMPLETE": "完整", "INCOMPLETE": "不完整",
+                                              "NOT_ASSESSED": "未评估"}.get(coverage_status, coverage_status),
+                                 "RAW 盘点快照": (input_scope.get("raw_projection") or {}).get("source_snapshot_id", ""),
+                                 "比较范围快照": (input_scope.get("raw_projection") or {}).get("snapshot_id", ""),
+                                 "Formal 快照状态": (input_scope.get("formal_inventory_snapshot") or {}).get("status", "NOT_FOUND"),
+                                 "Formal 快照时间": (input_scope.get("formal_inventory_snapshot") or {}).get("generated_at", ""),
+                                 "交付范围": json.dumps(input_scope.get("delivery_scope") or {}, ensure_ascii=False, sort_keys=True),
                                  "RAW版本": ip.get("raw_version", "未指定"), "正式阶段": stage or ip.get("formal_stage", "未检查"),
                                  "已选检查": "、".join(CHECK_LABELS.get(name, name) for name, _ in selected) or "无",
                                  "执行完成项": complete, "执行失败项": failed,
@@ -1549,6 +1692,7 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
         library_id = str(ip_context.get("library_id") or ip_context.get("id") or "")
         if not _inventory_snapshot(review) and library_id:
             review["inventory_snapshot"] = _load_saved_formal_inventory(output, library_id)
+        _finalize_engineering_checklist(review)
         review["source_revision"] = source_revision
         review["input_scope"] = _input_scope(review)
         run_dir = Path(review["run_dir"])
@@ -1569,6 +1713,11 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                                        "input_identity": item.get("input_identity") or {},
                                        "error": item.get("error")}
         summary = _review_summary(review)
+        one_click_applicable = bool((review.get("ip") or {}).get("one_click_applicable"))
+        checklist = review.get("engineering_checklist") or []
+        coverage_status = ("COMPLETE" if checklist and all(
+            item.get("execution") == "已执行" for item in checklist
+        ) else "INCOMPLETE") if one_click_applicable else "NOT_ASSESSED"
         review_record = {"schema_version": "review_result.v1",
                          "library_id": (review.get("ip") or {}).get("library_id"),
                          "review_id": review.get("review_id"), "generated_at": review.get("generated_at"),
@@ -1577,6 +1726,9 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
                          "source_revision": source_revision,
                          "input_scope": review["input_scope"],
                          "requested_checks": requested,
+                         "engineering_checklist": review.get("engineering_checklist") or [],
+                         "one_click_applicable": one_click_applicable,
+                         "coverage_status": coverage_status,
                          "execution_status": "COMPLETE" if complete else ("FAILED" if any(
                              item.get("status") == "FAILED" for item in checks.values()) else "INCOMPLETE"),
                          "quality_status": summary["quality_assessment"]["status"],
@@ -1598,10 +1750,13 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
         revision_label = source_revision.get("commit") or "UNAVAILABLE"
         if source_revision.get("working_tree_dirty") is True:
             revision_label += "（工作区有改动）"
+        inventory_note = ("RAW 清单和可用 Formal 目录由本次一键任务刷新；Formal 来源仅表示链接盘点，不代表 EDA 工具实际加载。"
+                          if one_click_applicable else
+                          "NL/RAW盘点表复用该 IP 最近一次成功的正式目录快照；导出不重扫，也不验证源目录此后是否变化。")
         scope_note = (f"IP：{review_record['library_id']}；Review：{review_record['review_id']}；"
                       f"生成：{review_record['generated_at']}；源提交：{revision_label}；"
-                      f"{_input_scope_label(review_record['input_scope'])}；"
-                      "仅汇总本 IP、本次选择的检查。未选择不代表通过。NL/RAW盘点表复用该 IP 最近一次成功的正式目录快照；导出不重扫，也不验证源目录此后是否变化。")
+                      f"主题覆盖：{coverage_status}；{_input_scope_label(review_record['input_scope'])}；"
+                      f"仅汇总本 IP、本次选择的检查。未选择不代表通过。{inventory_note}")
         workbook_path = run_dir / "ip_review.xlsx"
         workbook_tmp = run_dir / f".ip_review.{review_record['review_id']}.tmp.xlsx"
         try:
@@ -1626,8 +1781,11 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
             "summary": summary,
         })
         latest_xlsx_ref = ""
-        if complete and _publish_latest_workbook(workbook_path, library_dir, review_record["review_id"],
-                                                 review_record["generated_at"]):
+        ledger_complete = all(item.get("execution") == "已执行"
+                              for item in review.get("engineering_checklist") or [])
+        is_one_click = bool((review.get("ip") or {}).get("one_click_applicable"))
+        if complete and (not is_one_click or ledger_complete) and _publish_latest_workbook(
+                workbook_path, library_dir, review_record["review_id"], review_record["generated_at"]):
             latest_xlsx_ref = "latest.xlsx"
         latest_ref = None
         if (review.get("ip") or {}).get("publish_latest") and complete:
