@@ -344,6 +344,53 @@ class FileVersionProjectionTests(unittest.TestCase):
         result = build_projection("IP_A", versions, inventories, [], target_version="V1")
         self.assertEqual(result["files"][0]["display_name"], "Cell_TT.lib")
 
+    def test_reproject_keeps_inventory_snapshot_and_changes_only_delivery_scope(self):
+        from lib_guard.file_version_projection import build_projection, reproject_projection
+
+        source = build_projection("IP_A", [
+            {"id": "V1", "path": "/raw/V1", "delivery_order": 1},
+            {"id": "V2", "path": "/raw/V2", "delivery_order": 2},
+            {"id": "V3", "path": "/raw/V3", "delivery_order": 3},
+        ], [
+            {"version_id": "V1", "status": "COMPLETE", "files": ["/raw/V1/LEF/core.lef"]},
+            {"version_id": "V2", "status": "COMPLETE", "files": []},
+            {"version_id": "V3", "status": "COMPLETE", "files": ["/raw/V3/LEF/core.lef"]},
+        ], [], base_version="V1", target_version="V2")
+        source["snapshot_id"] = "snapshot_inventory"
+
+        projected = reproject_projection(source, base_version="V1", target_version="V3")
+
+        self.assertEqual(projected["source_snapshot_id"], "snapshot_inventory")
+        self.assertEqual(projected["scope"]["base_version"], "V1")
+        self.assertEqual(projected["scope"]["target_version"], "V3")
+        self.assertEqual(projected["files"][0]["comparison"]["delivery_relation"], "READY_TO_COMPARE")
+        self.assertEqual(projected["files"][0]["occurrences"], source["files"][0]["occurrences"])
+
+    def test_file_capabilities_separate_locating_from_pair_comparison(self):
+        from lib_guard.file_version_projection import build_projection
+
+        versions = [
+            {"id": "V1", "path": "/raw/V1", "delivery_order": 1},
+            {"id": "V2", "path": "/raw/V2", "delivery_order": 2},
+        ]
+        inventories = [
+            {"version_id": "V1", "status": "COMPLETE", "files": ["/raw/V1/LEF/a.lef"]},
+            {"version_id": "V2", "status": "COMPLETE", "files": ["/raw/V2/LEF/a.lef"]},
+        ]
+
+        latest_only = build_projection("IP_A", versions, inventories, None)
+        paired = build_projection("IP_A", versions, inventories, None, base_version="V1", target_version="V2")
+
+        latest_caps = latest_only["files"][0]["capabilities"]
+        paired_caps = paired["files"][0]["capabilities"]
+        self.assertTrue(latest_caps["locatable"])
+        self.assertTrue(latest_caps["lef_checkable"])
+        self.assertFalse(latest_caps["content_comparable"])
+        self.assertEqual(latest_caps["reason"], "BASE_TARGET_REQUIRED")
+        self.assertTrue(paired_caps["locatable"])
+        self.assertTrue(paired_caps["lef_checkable"])
+        self.assertTrue(paired_caps["content_comparable"])
+
 
 if __name__ == "__main__":
     unittest.main()

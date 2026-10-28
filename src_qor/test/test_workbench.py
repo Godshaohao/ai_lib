@@ -15,6 +15,25 @@ from lib_guard.workbench import _acquire_library_lock, _files_for_selection, _qu
 
 
 class WorkbenchTests(unittest.TestCase):
+    def test_files_tab_first_run_is_raw_first_and_does_not_require_formal_nl(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw" / "V1"
+            (raw / "LEF").mkdir(parents=True)
+            (raw / "LEF" / "top.lef").write_text("lef", encoding="utf-8")
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "A", "library_id": "V.A",
+                                                       "library_name": "IP_A",
+                                                       "raw_versions": [{"id": "V1", "path": str(raw)}]}]}))
+            page = create_app(registry, root / "out").test_client().get(
+                "/?ip=A&tab=review&review_tab=files")
+            html = page.get_data(as_text=True)
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("文件资产矩阵", html)
+            self.assertIn("刷新 RAW 文件清单", html)
+            self.assertIn("正式 NL 是可选的来源维度", html)
+            self.assertNotIn("先在“正式 NL”页刷新正式目录盘点，再回到这里刷新文件状态", html)
+
     def test_raw_only_matrix_can_compare_selected_lef_and_liberty_content(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -52,6 +71,27 @@ class WorkbenchTests(unittest.TestCase):
             page = client.get("/?ip=IP_A&tab=review&review_tab=files").get_data(as_text=True)
             self.assertIn(f'name="snapshot_id" value="{updated["snapshot_id"]}"', page)
 
+    def test_content_compare_rejects_file_without_confirmed_pair(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            version = root / "V1"
+            (version / "VERILOG").mkdir(parents=True)
+            (version / "VERILOG" / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "A", "library_id": "V.A",
+                                                       "raw_versions": [{"id": "V1", "path": str(version)}]}]}))
+            client = create_app(registry, root / "out").test_client()
+            refreshed = client.post("/file-status/refresh", data={"ip": "A", "raw_only": "1"})
+            self.assertEqual(refreshed.status_code, 303)
+            from lib_guard.review_runner import _library_dir
+            projection_root = root / "out" / "file_versions" / _library_dir("V.A")
+            pointer = json.loads((projection_root / "latest.json").read_text())
+            response = client.post("/file-status/compare", data={"id": "A", "snapshot_id": pointer["snapshot_id"],
+                                                                    "compare_file_key": "verilog:top.v"},
+                                   follow_redirects=True)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("尚未形成唯一 Base / Target 配对", response.get_data(as_text=True))
+
     @unittest.skipUnless(importlib.util.find_spec("xlsxwriter"), "需要已安装的 XlsxWriter")
     def test_raw_only_matrix_without_formal_snapshot(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -78,6 +118,10 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn('data-matrix-selection', page)
             self.assertIn('data-matrix-compare', page)
             self.assertIn('data-matrix-file', page)
+            self.assertNotIn('data-compare-file', page)
+            self.assertIn('data-projection-status', page)
+            self.assertIn('内容比较', page)
+            self.assertIn('质量检查', page)
             from lib_guard.review_runner import _library_dir
             pointer = json.loads((root / 'out' / 'file_versions' / _library_dir('V.A') / 'latest.json').read_text())
             response = client.post('/run', data={'mode': 'matrix', 'id': 'A', 'library_id': 'V.A',
@@ -91,6 +135,73 @@ class WorkbenchTests(unittest.TestCase):
                     break
                 time.sleep(.01)
             self.assertEqual(task['execution_status'], 'COMPLETE', task)
+
+    def test_file_status_range_reprojects_without_rescanning_raw(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            versions = []
+            for number in (1, 2, 3):
+                folder = root / f"V{number}"
+                lef = folder / "LEF" / "a.lef"
+                lef.parent.mkdir(parents=True)
+                lef.write_text(f"version-{number}", encoding="utf-8")
+                versions.append({"id": f"V{number}", "path": str(folder), "delivery_order": number})
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "A", "library_id": "V.A", "raw_versions": versions}]}))
+            output = root / "out"
+            client = create_app(registry, output).test_client()
+            self.assertEqual(client.post("/file-status/refresh", data={"ip": "A", "raw_only": "1"}).status_code, 303)
+            from lib_guard.review_runner import _library_dir
+            projection_root = output / "file_versions" / _library_dir("V.A")
+            pointer = json.loads((projection_root / "latest.json").read_text())
+            source = json.loads((projection_root / pointer["projection_ref"]).read_text())
+
+            with patch("lib_guard.workbench.scan_registered_raw_files",
+                       side_effect=AssertionError("range selection must not rescan RAW")):
+                result = client.post("/file-status/range", data={
+                    "ip": "A", "snapshot_id": source["snapshot_id"],
+                    "base_version": "V1", "target_version": "V3",
+                })
+            self.assertEqual(result.status_code, 303)
+            updated_pointer = json.loads((projection_root / "latest.json").read_text())
+            updated = json.loads((projection_root / updated_pointer["projection_ref"]).read_text())
+            self.assertNotEqual(updated["snapshot_id"], source["snapshot_id"])
+            self.assertEqual(updated["source_snapshot_id"], source["snapshot_id"])
+            self.assertEqual(updated["scope"]["base_version"], "V1")
+            self.assertEqual(updated["scope"]["target_version"], "V3")
+            self.assertEqual(updated["files"][0]["occurrences"], source["files"][0]["occurrences"])
+
+    def test_matrix_can_run_single_latest_lef_check_without_base_target(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "V1"
+            lef = raw / "LEF" / "top.lef"
+            liberty = raw / "LIB" / "TT" / "top.lib"
+            lef.parent.mkdir(parents=True)
+            liberty.parent.mkdir(parents=True)
+            lef.write_text("VERSION 5.8 ;\nEND LIBRARY\n", encoding="utf-8")
+            liberty.write_text("library (top) { cell (top) { pin (A) { direction : input; } } }", encoding="utf-8")
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "A", "library_id": "V.A",
+                                                       "raw_versions": [{"id": "V1", "path": str(raw)}]}]}))
+            output = root / "out"
+            client = create_app(registry, output).test_client()
+            self.assertEqual(client.post("/file-status/refresh", data={"ip": "A", "raw_only": "1"}).status_code, 303)
+            from lib_guard.review_runner import _library_dir
+            projection_root = output / "file_versions" / _library_dir("V.A")
+            pointer = json.loads((projection_root / "latest.json").read_text())
+            response = client.post("/run", data={"mode": "matrix", "id": "A", "library_id": "V.A",
+                                                   "snapshot_id": pointer["snapshot_id"], "file_key": "lef:top.lef"},
+                                   follow_redirects=True)
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            match = re.search(rb'data-task-url="([^"]+)"', response.data)
+            self.assertIsNotNone(match)
+            for _ in range(1000):
+                task = client.get(match.group(1).decode().replace("&amp;", "&")).get_json()
+                if task["status"] in {"COMPLETE", "FAILED"}:
+                    break
+                time.sleep(.01)
+            self.assertEqual(task["execution_status"], "COMPLETE", task)
 
     @unittest.skipUnless(importlib.util.find_spec("xlsxwriter"), "需要已安装的 XlsxWriter")
     def test_matrix_selection_runs_batch_and_returns_same_projection_in_excel(self):

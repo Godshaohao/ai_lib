@@ -654,6 +654,7 @@
   const projectionRows = [...document.querySelectorAll("[data-projection-row]")];
   const projectionSearch = document.querySelector("[data-projection-search]");
   const projectionView = document.querySelector("[data-projection-view]");
+  const projectionStatus = document.querySelector("[data-projection-status]");
   const projectionCount = document.querySelector("[data-projection-count]");
   const matrixSelection = document.querySelector("[data-matrix-selection]");
   const matrixRun = document.querySelector("[data-matrix-run]");
@@ -661,12 +662,14 @@
   const matrixRunLocked = Boolean(matrixRun?.disabled);
   const matrixCompareLocked = Boolean(matrixCompare?.disabled);
   const matrixFiles = [...document.querySelectorAll("[data-matrix-file]")];
-  const compareFiles = [...document.querySelectorAll("[data-compare-file]")];
+  const matrixActionNote = document.querySelector("[data-matrix-action-note]");
   function filterProjection() {
     const query = (projectionSearch?.value || "").trim().toLocaleLowerCase();
     let visible = 0;
     projectionRows.forEach((row) => {
-      const show = row.dataset.search.includes(query) && (!projectionView?.value || row.dataset.view === projectionView.value);
+      const show = row.dataset.search.includes(query)
+        && (!projectionView?.value || row.dataset.view === projectionView.value)
+        && (!projectionStatus?.value || row.dataset.content === projectionStatus.value || row.dataset.delivery === projectionStatus.value);
       row.hidden = !show;
       if (show) visible += 1;
     });
@@ -674,24 +677,29 @@
   }
   projectionSearch?.addEventListener("input", filterProjection);
   projectionView?.addEventListener("change", filterProjection);
+  projectionStatus?.addEventListener("change", filterProjection);
   function updateMatrixSelection() {
-    const lefCount = matrixFiles.filter((item) => item.checked).length;
-    const compareCount = compareFiles.filter((item) => item.checked).length;
-    if (matrixSelection) matrixSelection.textContent = `已选 LEF ${lefCount} 个 · 内容比较 ${compareCount} 个`;
-    if (matrixRun) matrixRun.disabled = matrixRunLocked || lefCount === 0;
-    if (matrixCompare) matrixCompare.disabled = matrixCompareLocked || compareCount === 0;
+    const selected = matrixFiles.filter((item) => item.checked);
+    const lefCount = selected.filter((item) => item.closest("[data-projection-row]")?.dataset.canLef === "true").length;
+    const compareCount = selected.filter((item) => item.closest("[data-projection-row]")?.dataset.canCompare === "true").length;
+    if (matrixSelection) matrixSelection.textContent = `已选 ${selected.length} 个 · 可检查 LEF ${lefCount} 个 · 可比较 ${compareCount} 个`;
+    if (matrixRun) matrixRun.disabled = matrixRunLocked || selected.length === 0 || lefCount !== selected.length;
+    if (matrixCompare) matrixCompare.disabled = matrixCompareLocked || selected.length === 0 || compareCount !== selected.length;
+    if (matrixActionNote) {
+      matrixActionNote.textContent = selected.length === 0
+        ? "单文件入口仅做 LEF–Liberty 接口核查；双文件才做 LEF 差异分析。内容差异不等于质量问题。"
+        : `${selected.length} 个文件已选；可检查 LEF ${lefCount} 个，可比较内容 ${compareCount} 个。${lefCount !== selected.length || compareCount !== selected.length ? "请按 View 或能力筛选后再执行对应动作。" : ""}`;
+    }
   }
   matrixFiles.forEach((item) => item.addEventListener("change", updateMatrixSelection));
-  compareFiles.forEach((item) => item.addEventListener("change", updateMatrixSelection));
   document.querySelector("[data-matrix-select]")?.addEventListener("click", () => {
     setVisibleChecks("[data-matrix-file]", true);
     updateMatrixSelection();
   });
-  document.querySelector("[data-matrix-clear]")?.addEventListener("click", () => {
+  document.querySelectorAll("[data-matrix-clear]").forEach((button) => button.addEventListener("click", () => {
     setVisibleChecks("[data-matrix-file]", false);
-    setVisibleChecks("[data-compare-file]", false);
     updateMatrixSelection();
-  });
+  }));
   updateMatrixSelection();
   filterProjection();
 

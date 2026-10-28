@@ -31,7 +31,7 @@ from .review_runner import (CHECK_NAMES, _json_read, _latest_complete_run, _libr
                            refresh_ip_overview, run)
 from .raw_discovery import discover_raw_report, write_discovery_artifacts
 from .file_status import build_file_status, scan_registered_raw_files, TRACKED_VIEWS
-from .file_version_projection import build_projection, publish_projection
+from .file_version_projection import build_projection, derive_file_capabilities, publish_projection, reproject_projection
 from .content_compare import compare_projection_files
 from . import effective_file_tracker
 from .effective_file_tracker import run as run_formal_nl
@@ -771,6 +771,8 @@ def _read_file_version_projection(output: Path, library_id: str, status: dict[st
     if (projection.get("schema_version") not in {"file_version_projection.v1", "file_version_projection.v2"}
             or projection.get("snapshot_id") != snapshot_id or projection.get("library_id") != library_id):
         return {}
+    for row in projection.get("files") or []:
+        row.setdefault("capabilities", derive_file_capabilities(row))
     return projection
 
 
@@ -1172,6 +1174,13 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                 raw_inventory = scan_registered_raw_files(versions)
                 projection = build_projection(library_id, versions, raw_inventory, None,
                     base_version=_text(request.form, "base_version"), target_version=_text(request.form, "target_version"))
+                projection["sources"] = {
+                    "registry_ref": str(registry_file),
+                    "registry_fingerprint": _formal_nl_config_fingerprint(registry),
+                    "raw_inventory": [{"version_id": item.get("version_id"), "root": item.get("root"),
+                                       "status": item.get("status"), "errors": item.get("errors") or []}
+                                      for item in raw_inventory],
+                }
                 status_path = _file_status_path(output, library_id)
                 result = {"schema_version": "lef_file_status.v1", "library_id": library_id,
                           "generated_at": datetime.now(timezone.utc).isoformat(), "status": "COMPLETE" if projection["coverage"]["raw_inventory"] == "COMPLETE" else "INCOMPLETE",
@@ -1360,6 +1369,60 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
                                     file_status_error=str(exc)), code=303)
 
+    @blueprint.post("/file-status/range")
+    def reproject_file_status_range():
+        """Change Base/Target against the existing inventory snapshot only."""
+        if not _is_loopback_request():
+            abort(403)
+        ip_id = _text(request.form, "ip") or _text(request.form, "id")
+        try:
+            registry = _read_registry(registry_file)
+            entry = next((item for item in registry.get("ips", []) if str(item.get("id")) == ip_id), None)
+            if entry is None:
+                abort(404)
+            library_id = str(entry.get("library_id") or entry.get("id") or "")
+            status = _read_lef_file_status(output, registry, entry, _read_formal_nl_snapshot(output, registry))
+            snapshot_id = _text(request.form, "snapshot_id")
+            projection = _read_file_version_projection(output, library_id, status)
+            if status.get("stale") or not projection or projection.get("snapshot_id") != snapshot_id:
+                raise ValueError("文件矩阵快照已变化或过期；请刷新 RAW 文件清单后重新选择")
+            projected = reproject_projection(
+                projection,
+                base_version=_text(request.form, "base_version"),
+                target_version=_text(request.form, "target_version"),
+            )
+            projection_root = output / "file_versions" / _library_dir(library_id)
+            status_path = _file_status_path(output, library_id)
+            with (projection_root / ".publish.lock").open("a+") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                old_status = status_path.read_bytes() if status_path.is_file() else None
+
+                def publish_range(snapshot):
+                    saved = dict(status)
+                    saved["projection_snapshot_id"] = snapshot["snapshot_id"]
+                    _write_json(status_path, saved)
+
+                    def rollback():
+                        if old_status is None:
+                            status_path.unlink(missing_ok=True)
+                        else:
+                            temporary = status_path.with_name(f".{status_path.name}.{uuid4().hex}.tmp")
+                            try:
+                                temporary.write_bytes(old_status)
+                                temporary.replace(status_path)
+                            finally:
+                                temporary.unlink(missing_ok=True)
+                    return rollback
+
+                publish_projection(projection_root, projected, before_publish=publish_range)
+            return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
+                                    file_status_refreshed="1"), code=303)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
+                                    file_status_error=str(exc)), code=303)
+
     @blueprint.post("/file-status/compare")
     def compare_file_status():
         if not _is_loopback_request():
@@ -1375,12 +1438,14 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             projection = _read_file_version_projection(output, library_id, status)
             if status.get("stale") or not projection or projection.get("snapshot_id") != _text(request.form, "snapshot_id"):
                 raise ValueError("文件矩阵快照已变化或过期；请刷新后重新选择")
-            keys = request.form.getlist("compare_file_key")
+            keys = request.form.getlist("compare_file_key") or request.form.getlist("file_key")
             if not 1 <= len(keys) <= 50 or len(set(keys)) != len(keys):
                 raise ValueError("请选择 1 至 50 个唯一文件进行内容比较")
             selected_rows = [row for row in projection.get("files") or [] if row.get("file_key") in set(keys)]
             if len(selected_rows) != len(keys):
                 raise ValueError("所选文件不属于当前矩阵")
+            if any(not row.get("capabilities", {}).get("content_comparable") for row in selected_rows):
+                raise ValueError("所选文件尚未形成唯一 Base / Target 配对；请先应用交付范围")
             projection["source_snapshot_id"] = projection["snapshot_id"]
             compare_projection_files(projection, selected_keys=keys)
             projection_root = output / "file_versions" / _library_dir(library_id)
@@ -1752,16 +1817,51 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                 scope = projection.get("scope") or {}
                 base, target = str(scope.get("base_version") or ""), str(scope.get("target_version") or "")
                 keys = request.form.getlist("file_key")
-                if not base or not target or not 1 <= len(keys) <= 50 or len(set(keys)) != len(keys):
-                    raise ValueError("请选择基准、目标及 1 至 50 个唯一 LEF 文件对")
+                if not 1 <= len(keys) <= 50 or len(set(keys)) != len(keys):
+                    raise ValueError("请选择 1 至 50 个唯一文件")
+                selected_rows = []
                 for key in keys:
                     rows = [row for row in projection.get("files") or [] if row.get("file_key") == key]
-                    if len(rows) != 1 or rows[0].get("view") != "lef" or rows[0].get("identity_status") != "EXACT_RELATIVE_PATH":
-                        raise ValueError("所选 LEF 不是可确认的唯一配对；请重新选择")
-                entry = {**previous, "raw_version": target, "formal_stage": scope.get("formal_stage") or "",
-                         "projection_json": str(output / "file_versions" / _library_dir(library_id) /
-                                                "runs" / projection["snapshot_id"] / "projection.json"),
-                         "checks": {"lef_review": {"pairs": [{"file_key": key} for key in keys]}}}
+                    if len(rows) != 1:
+                        raise ValueError("所选文件不属于当前矩阵")
+                    selected_rows.append(rows[0])
+                projection_ref = str(output / "file_versions" / _library_dir(library_id) /
+                                     "runs" / projection["snapshot_id"] / "projection.json")
+                if base and target:
+                    for row in selected_rows:
+                        if row.get("view") != "lef" or row.get("identity_status") != "EXACT_RELATIVE_PATH":
+                            raise ValueError("所选 LEF 不是可确认的唯一配对；请重新选择")
+                    entry = {**previous, "raw_version": target, "formal_stage": scope.get("formal_stage") or "",
+                             "projection_json": projection_ref,
+                             "checks": {"lef_review": {"pairs": [{"file_key": key} for key in keys]}}}
+                else:
+                    if any(not row.get("capabilities", {}).get("lef_checkable") for row in selected_rows):
+                        raise ValueError("所选文件尚未形成可执行的单文件 LEF 检查目标；请先确认交付顺序或选择 Base / Target")
+                    target_versions = set()
+                    target_paths = []
+                    for row in selected_rows:
+                        latest = row.get("latest") or {}
+                        occurrence = latest if latest.get("version") else ((row.get("occurrences") or [None])[0] or {})
+                        target_versions.add(str(occurrence.get("version") or ""))
+                        target_paths.append(str(occurrence.get("source_path") or ""))
+                    target_versions.discard("")
+                    if len(target_versions) != 1 or any(not path for path in target_paths):
+                        raise ValueError("单文件 LEF 检查需要同一目标交付中的可定位文件")
+                    single_target = next(iter(target_versions))
+                    checks, _ = _quick_linked_checks(previous, single_target, "", target_paths[0], "")
+                    checks.pop("macro_index", None)
+                    if "lef_liberty_check" not in checks:
+                        raise ValueError("目标交付未发现可用于 LEF 接口检查的 Liberty 文件；可转到手动检查补充路径")
+                    single_projection = reproject_projection(
+                        projection, base_version="", target_version=single_target)
+                    single_projection["snapshot_id"] = f"{projection['snapshot_id']}_single_{uuid4().hex}"
+                    single_projection_path = (output / "file_versions" / _library_dir(library_id) /
+                                              "runs" / projection["snapshot_id"] /
+                                              f"single_target_{uuid4().hex}.json")
+                    _write_json(single_projection_path, single_projection)
+                    entry = {**previous, "raw_version": single_target, "formal_stage": scope.get("formal_stage") or "",
+                             "projection_json": str(single_projection_path),
+                             "checks": {"lef_liberty_check": checks["lef_liberty_check"]}}
             else:
                 entry = _entry_from_form(request.form, previous)
             _validate_for_run(entry)

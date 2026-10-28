@@ -11,6 +11,9 @@ _LABELS = {
     "previous": {"CONFIRMED": "无次新", "LATEST_OBSERVED": "当前已观察到", "UNKNOWN_COVERAGE": "覆盖范围未知", "UNKNOWN_ORDER": "顺序未知", "NONE": "无次新"},
     "delivery": {"READY_TO_COMPARE": "已准备比较", "NEWLY_PROVIDED": "本次新提供", "NOT_PROVIDED_IN_TARGET": "本次未提供", "NOT_PROVIDED_BOTH": "两次均未提供", "UNKNOWN_COVERAGE": "覆盖范围未知", "AMBIGUOUS": "对应关系不唯一", "CANDIDATE_MATCH": "候选对应", "NOT_SELECTED": "未选择版本"},
     "approval": {"NOT_CONFIGURED": "未核实批准状态"},
+    "capability": {"NO_UNIQUE_RAW_SOURCE": "没有唯一 RAW 来源", "BASE_TARGET_REQUIRED": "需要先选 Base / Target",
+                    "PAIR_NOT_CONFIRMED": "交付配对待确认", "ORDER_REQUIRED": "需要先确认交付顺序",
+                    "VIEW_NOT_LEF": "当前 View 不是 LEF"},
 }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import deepcopy
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -96,6 +97,48 @@ def rank_occurrences(occurrences: list[dict[str, Any]], version_order: dict[str,
         observed_previous = unique[ordered[1]]
         previous = {"status": status, "version": ordered[1], "source_path": observed_previous.get("source_path")}
     return latest, previous
+
+
+def derive_file_capabilities(row: dict[str, Any]) -> dict[str, Any]:
+    """Expose safe actions independently from the row's delivery identity."""
+    comparison = row.get("comparison") or {}
+    occurrences = row.get("occurrences") or []
+    identity = str(row.get("identity_status") or "")
+    latest = row.get("latest") or {}
+    locatable = bool(
+        (latest.get("source_path") or (latest.get("occurrences") or [])
+         or (row.get("previous") or {}).get("source_path")
+         or any(item.get("source_path") for item in occurrences))
+        and identity != "AMBIGUOUS"
+    )
+    content_comparable = bool(
+        identity == "EXACT_RELATIVE_PATH"
+        and comparison.get("base_presence") == "PRESENT"
+        and comparison.get("target_presence") == "PRESENT"
+        and comparison.get("base_version")
+        and comparison.get("target_version")
+    )
+    single_target = bool(
+        (latest.get("version") and latest.get("source_path"))
+        or (len(occurrences) == 1 and occurrences[0].get("version") and occurrences[0].get("source_path"))
+    )
+    lef_checkable = bool(
+        str(row.get("view") or "") == "lef"
+        and locatable
+        and (content_comparable or (not comparison.get("base_version") and single_target))
+    )
+    if not locatable:
+        reason = "NO_UNIQUE_RAW_SOURCE"
+    elif not comparison.get("base_version") or not comparison.get("target_version"):
+        reason = "BASE_TARGET_REQUIRED"
+    elif not content_comparable:
+        reason = "PAIR_NOT_CONFIRMED" if comparison.get("base_version") else "ORDER_REQUIRED"
+    elif str(row.get("view") or "") != "lef":
+        reason = "VIEW_NOT_LEF"
+    else:
+        reason = ""
+    return {"locatable": locatable, "content_comparable": content_comparable,
+            "lef_checkable": lef_checkable, "reason": reason}
 
 
 def publish_projection(output: str | Path, projection: dict[str, Any], *,
@@ -243,9 +286,13 @@ def build_projection(library_id: str, versions: list[dict[str, Any]],
                      "findings": []})
     coverage = ("NOT_AVAILABLE" if not version_ids else "COMPLETE" if all(
         (inventory_by_id.get(v) or {}).get("status") == "COMPLETE" for v in version_ids) else "PARTIAL")
+    for row in rows:
+        row["capabilities"] = derive_file_capabilities(row)
     return {"schema_version": "file_version_projection.v1", "library_id": library_id,
             "scope": {"base_version": base_version, "target_version": target_version,
-                      "formal_stage": formal_stage, "registered_versions": version_ids},
+                      "formal_stage": formal_stage, "registered_versions": version_ids,
+                      "inventory_status": {version_id: (inventory_by_id.get(version_id) or {}).get("status", "UNKNOWN")
+                                           for version_id in version_ids}},
             "version_order": version_order,
             "coverage": {"raw_inventory": coverage, "raw_freshness": "NOT_VERIFIED",
                          "formal_inventory": "SNAPSHOT_ONLY" if formal_files is not None else "NOT_AVAILABLE",
@@ -253,3 +300,80 @@ def build_projection(library_id: str, versions: list[dict[str, Any]],
             "unbound_formal_files": unbound, "files": rows,
             "summary": {"file_count": len(rows), "not_compared": len(rows),
                         "unresolved_identity": sum(row["identity_status"] != "EXACT_RELATIVE_PATH" for row in rows)}}
+
+
+def reproject_projection(projection: dict[str, Any], *, base_version: str = "",
+                         target_version: str = "") -> dict[str, Any]:
+    """Change only the delivery scope using an existing immutable inventory.
+
+    This deliberately does not inspect the filesystem.  The caller can publish the
+    returned view as a new projection snapshot while retaining ``source_snapshot_id``
+    as the RAW inventory evidence that was actually scanned.
+    """
+    result = deepcopy(projection)
+    scope = result.setdefault("scope", {})
+    registered = [str(value or "") for value in scope.get("registered_versions") or []]
+    if any(value and value not in registered for value in (base_version, target_version)):
+        raise ValueError("基准或目标版本未登记")
+    source_snapshot_id = str(result.get("source_snapshot_id") or result.get("snapshot_id") or "")
+    if source_snapshot_id:
+        result["source_snapshot_id"] = source_snapshot_id
+    scope["base_version"] = base_version
+    scope["target_version"] = target_version
+    inventory_status = {str(key): str(value or "UNKNOWN")
+                        for key, value in (scope.get("inventory_status") or {}).items()}
+
+    def presence(version: str, occurrences: list[dict[str, Any]]) -> str:
+        if not version:
+            return "NOT_SELECTED"
+        if any(str(item.get("version") or "") == version for item in occurrences):
+            return "PRESENT"
+        return "ABSENT_VERIFIED" if inventory_status.get(version) == "COMPLETE" else "UNKNOWN"
+
+    version_order = result.get("version_order") or {"status": "UNKNOWN", "ordered_ids": []}
+    for row in result.get("files") or []:
+        occurrences = row.get("occurrences") or []
+        counts = [sum(str(item.get("version") or "") == version for item in occurrences)
+                  for version in registered]
+        formal = row.get("formal_usage") or {}
+        formal_ambiguous = str(formal.get("observation_status") or "") == "AMBIGUOUS"
+        if any(count > 1 for count in counts) or formal_ambiguous:
+            identities = "AMBIGUOUS"
+        elif not base_version or not target_version:
+            identities = "OBSERVED_PATH"
+        elif presence(base_version, occurrences) == presence(target_version, occurrences) == "PRESENT":
+            identities = "EXACT_RELATIVE_PATH"
+        else:
+            identities = "UNRESOLVED"
+        base_presence = presence(base_version, occurrences)
+        target_presence = presence(target_version, occurrences)
+        if not base_version or not target_version:
+            delivery_relation = "NOT_SELECTED"
+        elif identities == "AMBIGUOUS":
+            delivery_relation = "AMBIGUOUS"
+        elif base_presence == target_presence == "PRESENT":
+            delivery_relation = "READY_TO_COMPARE" if identities == "EXACT_RELATIVE_PATH" else "CANDIDATE_MATCH"
+        elif base_presence == "ABSENT_VERIFIED" and target_presence == "PRESENT":
+            delivery_relation = "NEWLY_PROVIDED"
+        elif base_presence == "PRESENT" and target_presence == "ABSENT_VERIFIED":
+            delivery_relation = "NOT_PROVIDED_IN_TARGET"
+        elif base_presence == target_presence == "ABSENT_VERIFIED":
+            delivery_relation = "NOT_PROVIDED_BOTH"
+        else:
+            delivery_relation = "UNKNOWN_COVERAGE"
+        comparison = row.setdefault("comparison", {})
+        comparison.update({"base_version": base_version, "target_version": target_version,
+                           "base_presence": base_presence, "target_presence": target_presence,
+                           "delivery_relation": delivery_relation})
+        row["identity_status"] = identities
+        row["identity_evidence"] = "VIEW_AND_RELATIVE_PATH"
+        row["capabilities"] = derive_file_capabilities(row)
+    for row in result.get("files") or []:
+        row["capabilities"] = derive_file_capabilities(row)
+    result["coverage"] = {**(result.get("coverage") or {}), "content_comparison": "NOT_COMPARED"}
+    result["summary"] = {**(result.get("summary") or {}),
+                          "file_count": len(result.get("files") or []),
+                          "not_compared": len(result.get("files") or []),
+                          "unresolved_identity": sum(row.get("identity_status") != "EXACT_RELATIVE_PATH"
+                                                     for row in result.get("files") or [])}
+    return result
