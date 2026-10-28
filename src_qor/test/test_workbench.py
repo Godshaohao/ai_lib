@@ -15,6 +15,83 @@ from lib_guard.workbench import _acquire_library_lock, _files_for_selection, _qu
 
 
 class WorkbenchTests(unittest.TestCase):
+    def test_raw_only_matrix_can_compare_selected_lef_and_liberty_content(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            v1 = root / "V1"
+            v2 = root / "V2"
+            for version_root, text in ((v1, "same"), (v2, "different")):
+                lef = version_root / "LEF" / "core.lef"
+                liberty = version_root / "LIB" / "core_tt.lib"
+                lef.parent.mkdir(parents=True, exist_ok=True)
+                liberty.parent.mkdir(parents=True, exist_ok=True)
+                lef.write_text(text, encoding="utf-8")
+                liberty.write_text("same", encoding="utf-8")
+            registry = root / "registry.yml"
+            registry.write_text(
+                f"ips:\n  - id: IP_A\n    library_id: Vendor.IP_A\n"
+                f"    raw_versions:\n      - id: V1\n        path: {v1}\n        delivery_order: 1\n"
+                f"      - id: V2\n        path: {v2}\n        delivery_order: 2\n", encoding="utf-8")
+            output = root / "output"
+            client = create_app(registry, output).test_client()
+            refreshed = client.post("/file-status/refresh", data={"ip": "IP_A", "base_version": "V1",
+                                                                   "target_version": "V2", "raw_only": "1"})
+            self.assertEqual(refreshed.status_code, 303)
+            from lib_guard.review_runner import _library_dir
+            projection_root = output / "file_versions" / _library_dir("Vendor.IP_A")
+            pointer = json.loads((projection_root / "latest.json").read_text())
+            projection = json.loads((projection_root / pointer["projection_ref"]).read_text())
+            compare = client.post("/file-status/compare", data={"id": "IP_A", "snapshot_id": projection["snapshot_id"],
+                                                                "compare_file_key": ["lef:core.lef", "liberty:core_tt.lib"]})
+            self.assertEqual(compare.status_code, 303)
+            updated_pointer = json.loads((projection_root / "latest.json").read_text())
+            updated = json.loads((projection_root / updated_pointer["projection_ref"]).read_text())
+            rows = {row["file_key"]: row for row in updated["files"]}
+            self.assertEqual(rows["lef:core.lef"]["comparison"]["content_status"], "BYTE_DIFFERENT")
+            self.assertEqual(rows["liberty:core_tt.lib"]["comparison"]["content_status"], "BYTE_SAME")
+            page = client.get("/?ip=IP_A&tab=review&review_tab=files").get_data(as_text=True)
+            self.assertIn(f'name="snapshot_id" value="{updated["snapshot_id"]}"', page)
+
+    @unittest.skipUnless(importlib.util.find_spec("xlsxwriter"), "需要已安装的 XlsxWriter")
+    def test_raw_only_matrix_without_formal_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            versions = []
+            for version in ('V1', 'V2'):
+                folder = root / version
+                (folder / 'LEF').mkdir(parents=True)
+                (folder / 'LEF' / 'a.lef').write_text('VERSION 5.8 ;\nEND LIBRARY\n')
+                versions.append({'id': version, 'path': str(folder)})
+            registry = root / 'registry.yml'
+            registry.write_text(json.dumps({'ips': [{'id': 'A', 'library_id': 'V.A', 'library_name': 'IP_A', 'raw_versions': versions}]}))
+            client = create_app(registry, root / 'out').test_client()
+            result = client.post('/file-status/refresh', data={'ip': 'A', 'base_version': 'V1', 'target_version': 'V2', 'raw_only': '1'})
+            self.assertEqual(result.status_code, 303)
+            page = client.get('/?ip=A&tab=review&review_tab=files').get_data(as_text=True)
+            self.assertIn('a.lef', page)
+            self.assertIn('仅对比 RAW', page)
+            self.assertIn('IP_A', page)
+            self.assertIn('<h2 data-page-title>IP_A</h2>', page)
+            self.assertIn('当前只读取已登记 RAW 交付', page)
+            self.assertNotIn('先在“正式 NL”页刷新正式目录盘点', page)
+            self.assertNotIn('当前范围没有可列出的文件', page)
+            self.assertIn('data-matrix-selection', page)
+            self.assertIn('data-matrix-compare', page)
+            self.assertIn('data-matrix-file', page)
+            from lib_guard.review_runner import _library_dir
+            pointer = json.loads((root / 'out' / 'file_versions' / _library_dir('V.A') / 'latest.json').read_text())
+            response = client.post('/run', data={'mode': 'matrix', 'id': 'A', 'library_id': 'V.A',
+                'snapshot_id': pointer['snapshot_id'], 'file_key': 'lef:a.lef'}, follow_redirects=True)
+            self.assertEqual(response.status_code, 200)
+            match = re.search(rb'data-task-url="([^"]+)"', response.data)
+            self.assertIsNotNone(match)
+            for _ in range(1000):
+                task = client.get(match.group(1).decode().replace('&amp;', '&')).get_json()
+                if task['status'] in {'COMPLETE', 'FAILED'}:
+                    break
+                time.sleep(.01)
+            self.assertEqual(task['execution_status'], 'COMPLETE', task)
+
     @unittest.skipUnless(importlib.util.find_spec("xlsxwriter"), "需要已安装的 XlsxWriter")
     def test_matrix_selection_runs_batch_and_returns_same_projection_in_excel(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -61,7 +138,7 @@ class WorkbenchTests(unittest.TestCase):
             run_dir = output / "libraries" / _library_dir("Vendor.IP_A") / "runs" / payload["review_id"]
             projection = json.loads((run_dir / "evidence" / "file_version_projection.json").read_text())
             self.assertEqual(projection["source_snapshot_id"], pointer["snapshot_id"])
-            self.assertEqual([row["comparison"]["content_status"] for row in projection["files"]], ["DIFF", "DIFF", "NOT_COMPARED"])
+            self.assertEqual([row["comparison"]["content_status"] for row in projection["files"]], ["BYTE_DIFFERENT", "BYTE_DIFFERENT", "NOT_COMPARED"])
             pair_ref = projection["files"][0]["comparison"]["evidence_refs"][0]
             pair_id = Path(pair_ref).stem
             evidence = client.get(f"/review-evidence/{payload['review_id']}/{pair_id}",
@@ -79,10 +156,21 @@ class WorkbenchTests(unittest.TestCase):
                 self.assertNotIn(">INDEPENDENT<", strings)
             page = client.get("/?ip=IP_A&tab=review&review_tab=files").get_data(as_text=True)
             self.assertIn(projection["snapshot_id"], page)
+            self.assertIn(f'name="snapshot_id" value="{pointer["snapshot_id"]}"', page)
             self.assertIn("未发现", page)
             self.assertIn("已提供", page)
             self.assertNotIn("ABSENT_VERIFIED", page)
             self.assertNotIn(">DIFF / CHANGED", page)
+            attempt = output / 'libraries' / _library_dir('Vendor.IP_A') / 'latest_attempt.json'
+            latest = json.loads(attempt.read_text())
+            latest['review_id'] = 'review_newer_without_matrix'
+            attempt.write_text(json.dumps(latest))
+            historical = client.get('/',
+                query_string={'ip': 'IP_A', 'tab': 'review', 'review_tab': 'files', 'matrix_review': payload['review_id']}).get_data(as_text=True)
+            self.assertIn(projection['snapshot_id'], historical)
+            self.assertIn('历史检查结果', historical)
+            history_page = client.get('/?ip=IP_A&tab=review&review_tab=history').get_data(as_text=True)
+            self.assertIn('查看文件矩阵', history_page)
             self.assertEqual((formal / "LEF" / "a.lef").resolve(), old_root / "LEF" / "a.lef")
 
     def test_legacy_cli_task_uses_saved_quality_summary(self):
@@ -296,11 +384,11 @@ class WorkbenchTests(unittest.TestCase):
             output = root / "output"
             client = create_app(registry, output).test_client()
             self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
-            with patch("lib_guard.workbench.scan_registered_raw_files",
-                       side_effect=AssertionError("ambiguous context must stop before RAW scan")):
-                response = client.post("/file-status/refresh", data={"ip": "IP_A"}, follow_redirects=True)
+            response = client.post("/file-status/refresh", data={"ip": "IP_A"}, follow_redirects=True)
             self.assertEqual(response.status_code, 200)
             self.assertIn("当前 NL 阶段无法唯一确定".encode(), response.data)
+            self.assertIn("top.lef".encode(), response.data)
+            self.assertIn("文件版本矩阵".encode(), response.data)
 
     def test_formal_stage_hint_must_exist_in_the_refreshed_inventory(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -319,11 +407,11 @@ class WorkbenchTests(unittest.TestCase):
             output = root / "output"
             client = create_app(registry, output).test_client()
             self.assertEqual(client.post("/formal-nl/overview/refresh", data={"ip": "IP_A"}).status_code, 302)
-            with patch("lib_guard.workbench.scan_registered_raw_files",
-                       side_effect=AssertionError("unobserved stage must not scan RAW")):
-                response = client.post("/file-status/refresh", data={"ip": "IP_A"}, follow_redirects=True)
+            response = client.post("/file-status/refresh", data={"ip": "IP_A"}, follow_redirects=True)
             self.assertEqual(response.status_code, 200)
             self.assertIn("当前 NL 阶段无法唯一确定".encode(), response.data)
+            self.assertIn("top.lef".encode(), response.data)
+            self.assertIn("文件版本矩阵".encode(), response.data)
 
     def test_file_selection_reports_walk_permission_errors_as_truncation(self):
         with tempfile.TemporaryDirectory() as temp:

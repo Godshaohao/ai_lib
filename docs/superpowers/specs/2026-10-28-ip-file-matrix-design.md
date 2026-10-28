@@ -8,7 +8,7 @@
 
 ## 数据契约
 
-`file_version_projection.v1` 继续可读；新快照使用 `file_version_projection.v2`。v2 在同一文件行中保留 `file_key`、`view`、大小写敏感的规范化相对路径、`occurrences`、`formal_usage`、`comparison`、`quality_checks` 和证据引用，并增加：
+`file_version_projection.v1` 继续作为当前默认输出并保持可读；读取器同时接受向后兼容的 `file_version_projection.v2`。文件行保留 `file_key`、`view`、大小写敏感的规范化相对路径、`occurrences`、`formal_usage`、`comparison`、`quality_checks` 和证据引用，并增加：
 
 - `version_order`: `status`、`basis`、`ordered_ids`、`warnings`。
 - `coverage`: RAW 盘点、Formal 快照和内容比较的覆盖状态。

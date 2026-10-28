@@ -655,6 +655,13 @@
   const projectionSearch = document.querySelector("[data-projection-search]");
   const projectionView = document.querySelector("[data-projection-view]");
   const projectionCount = document.querySelector("[data-projection-count]");
+  const matrixSelection = document.querySelector("[data-matrix-selection]");
+  const matrixRun = document.querySelector("[data-matrix-run]");
+  const matrixCompare = document.querySelector("[data-matrix-compare]");
+  const matrixRunLocked = Boolean(matrixRun?.disabled);
+  const matrixCompareLocked = Boolean(matrixCompare?.disabled);
+  const matrixFiles = [...document.querySelectorAll("[data-matrix-file]")];
+  const compareFiles = [...document.querySelectorAll("[data-compare-file]")];
   function filterProjection() {
     const query = (projectionSearch?.value || "").trim().toLocaleLowerCase();
     let visible = 0;
@@ -667,8 +674,25 @@
   }
   projectionSearch?.addEventListener("input", filterProjection);
   projectionView?.addEventListener("change", filterProjection);
-  document.querySelector("[data-matrix-select]")?.addEventListener("click", () => setVisibleChecks("[data-matrix-file]", true));
-  document.querySelector("[data-matrix-clear]")?.addEventListener("click", () => setVisibleChecks("[data-matrix-file]", false));
+  function updateMatrixSelection() {
+    const lefCount = matrixFiles.filter((item) => item.checked).length;
+    const compareCount = compareFiles.filter((item) => item.checked).length;
+    if (matrixSelection) matrixSelection.textContent = `已选 LEF ${lefCount} 个 · 内容比较 ${compareCount} 个`;
+    if (matrixRun) matrixRun.disabled = matrixRunLocked || lefCount === 0;
+    if (matrixCompare) matrixCompare.disabled = matrixCompareLocked || compareCount === 0;
+  }
+  matrixFiles.forEach((item) => item.addEventListener("change", updateMatrixSelection));
+  compareFiles.forEach((item) => item.addEventListener("change", updateMatrixSelection));
+  document.querySelector("[data-matrix-select]")?.addEventListener("click", () => {
+    setVisibleChecks("[data-matrix-file]", true);
+    updateMatrixSelection();
+  });
+  document.querySelector("[data-matrix-clear]")?.addEventListener("click", () => {
+    setVisibleChecks("[data-matrix-file]", false);
+    setVisibleChecks("[data-compare-file]", false);
+    updateMatrixSelection();
+  });
+  updateMatrixSelection();
   filterProjection();
 
   selectTab(document.body.dataset.activeTab || "catalog", "main");

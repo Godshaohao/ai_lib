@@ -52,7 +52,7 @@ Choose a RAW version in the library list to open the review form with that versi
 
 In the review tab, choose target and optional baseline RAW versions to list their LEF files and the target's Liberty files. Selecting a LEF fills its corresponding path input; checking Liberty files fills the multiline input. File listing is bounded and marked when incomplete. The operator still selects which checks to execute, and may enter an external path directly.
 
-The review tab opens on **文件状态**. First refresh the read-only Formal NL inventory, then refresh file status to relate supported View files to the selected IP's registered RAW delivery roots. The page reads the saved projection only; it does not scan on GET. The explicit refresh is bounded and records scan limitations. Delivery order is shown only when registered version IDs have unique valid date hints. A later path occurrence is not a content comparison, replacement decision, or Effective/release conclusion. Multiple unresolved Formal NL stages require an explicit unambiguous registration context; the tool will not pick the highest stage. The source-tracking snapshot is stored at `<out-dir>/file_status/<library-id>/latest.json`. Choose **手动检查** for LEF/Liberty/Macro checks and **运行记录** for prior task results.
+The review tab opens on **文件状态**. Refreshing the matrix is a read-only scan of the selected IP's registered RAW delivery roots; it can run in RAW-only mode and does not require a Formal NL snapshot. The page reads the saved projection only; it does not scan on GET. Delivery order uses explicit `delivery_order` when complete and unique, then unique date hints; otherwise the order is UNKNOWN. The main matrix shows each file's latest and previous distinct delivery, Formal source, selected Base/Target relation, content status, and coverage. A later path occurrence is not a content comparison, replacement decision, or Effective/release conclusion. Multiple unresolved Formal NL stages affect only the Formal column; the tool will not pick the highest stage. Select unique rows and use **比较所选文件内容** for an on-demand byte/content comparison; `.gz` files compare decompressed content and report the comparison mode. The source-tracking snapshot is stored at `<out-dir>/file_status/<library-id>/latest.json`. Choose **手动检查** for LEF/Liberty/Macro checks and **运行记录** for prior task results.
 
 The file-status refresh also writes a separate `file_version_projection.v1` snapshot under
 `<out-dir>/file_versions/<library-id>/runs/<snapshot-id>/projection.json`, with an independent
@@ -63,11 +63,17 @@ scanning on GET. A CLI review may explicitly provide `projection_json` in its IP
 requires the IP and target RAW version to match and copies the projection into the review evidence.
 Only such explicitly bound reviews receive the Excel file-version matrix. In the workbench,
 select a base and target in 文件状态, refresh the matrix, and select up to 50 uniquely matched
-LEF pairs for one background review. The service revalidates every selection against the saved
+LEF pairs for one background review, or compare up to 50 uniquely bound files in the matrix. The service revalidates every selection against the saved
 source snapshot; batch results produce a separate review projection and individual evidence,
 without modifying that source snapshot or the formal tree. Other Views remain not compared.
 An incomplete batch retains completed pair evidence but does not replace the latest complete Excel.
 Batch LEF and LEF–Liberty interface checks run separately to prevent accidental cross-file binding.
+
+The normal user paths are:
+
+- First delivery without Formal NL: register IP/RAW versions, refresh **RAW-only**, inspect latest/previous, choose Base/Target, compare selected content, then run checks from the located LEF/Liberty files.
+- Existing Formal NL with a partial update: refresh RAW, optionally refresh/select one Formal stage, inspect latest/previous and Formal source in the same row, compare the selected deliveries, then run checks. A missing file in a partial package is not reported as deletion and the latest RAW source is not written as the Formal source.
+- Single-file lookup: open the IP, search by filename or View, and read latest/previous/Formal source without running a checker or exporting Excel.
 
 Each per-IP Review workbook also includes the most recent successful saved Formal NL and multi-version RAW file inventories in separate sheets (`07-正式文件`, `RAW文件清单`). These are read-only snapshot projections, not manual checks or quality findings; the workbook records snapshot time and report path. Export does not rescan the directories or establish whether their contents changed after that snapshot. If no matching snapshot exists, the sheets say so instead of reporting zero files.
 

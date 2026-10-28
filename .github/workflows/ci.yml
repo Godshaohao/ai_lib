@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, semantic-ir-mvp-20261014]
 
 jobs:
   contracts-and-tests:
@@ -25,3 +25,19 @@ jobs:
           python -m lib_guard.cli --help >/dev/null
           lg --help >/dev/null
           lib-guard --help >/dev/null
+
+  src-qor-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install src_qor dependencies
+        run: python -m pip install -r src_qor/requirements.txt
+      - name: Compile src_qor
+        run: python -m compileall -q src_qor/lib_guard
+      - name: Check frontend JavaScript
+        run: node --check src_qor/lib_guard/static/workbench.js
+      - name: Run src_qor tests
+        run: PYTHONPATH=src_qor python -m unittest discover -s src_qor/test -p 'test*.py' -q

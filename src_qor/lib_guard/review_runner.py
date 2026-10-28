@@ -30,6 +30,7 @@ from .ip_check_overview import render_overview
 
 CHECK_NAMES = {"macro_index", "lef_review", "lef_liberty_check"}
 LEGACY_CHECK_NAMES = {"formal_nl"}
+FILE_PROJECTION_SCHEMAS = {"file_version_projection.v1", "file_version_projection.v2"}
 CHECK_LABELS = {
     "formal_nl": "正式目录盘点（旧版 Review 记录）",
     "macro_index": "Macro / View 文件索引",
@@ -38,9 +39,10 @@ CHECK_LABELS = {
 }
 VIEW_NAMES = ("lef", "liberty", "gds", "cdl", "db", "verilog")
 SHEET_HEADERS = {
-    "文件版本矩阵": ["IP", "View", "文件键", "文件名", "基准版本", "目标版本", "基准路径", "目标路径",
-                   "基准存在性", "目标存在性", "身份状态", "内容状态", "语义状态", "正式阶段", "正式来源",
-                   "批准状态", "RAW 覆盖", "快照 ID", "投影证据"],
+    "文件版本矩阵": ["IP", "View", "文件键", "文件名", "最新版本", "最新路径", "次新版本", "次新路径",
+                   "基准版本", "目标版本", "基准路径", "目标路径", "基准存在性", "目标存在性", "交付关系",
+                   "身份状态", "内容状态", "语义状态", "正式阶段", "正式来源", "批准状态", "排序依据",
+                   "RAW 覆盖", "快照 ID", "投影证据"],
     "00-概览": ["IP", "库标识", "RAW版本", "正式阶段", "已选检查", "执行完成项", "执行失败项", "质量判断", "Macro数", "报告结论", "报告生成时间", "源提交", "工作区有改动", "输入范围"],
     "01-工程检查": ["序号", "工程检查主题", "工程覆盖", "本次执行", "本次证据", "范围或缺口"],
     "02-执行记录": ["IP", "检查", "执行状态", "上下文关系", "结果摘要", "范围说明", "输入身份", "输入范围", "报告路径"],
@@ -50,7 +52,7 @@ SHEET_HEADERS = {
     "06-MacroView文件": ["IP", "RAW版本", "Macro", "View", "Corner/线索", "来源版本", "文件名", "关联证据", "状态", "来源路径"],
     "07-正式文件": ["IP", "快照时间", "正式阶段", "相对路径", "View", "来源RAW版本", "来源路径", "正式路径", "盘点状态", "盘点报告"],
     "RAW文件清单": ["IP", "快照时间", "RAW版本", "RAW根目录", "版本盘点状态", "版本文件数", "View", "View文件数", "相对路径", "来源路径", "盘点报告"],
-    "08-LEF宏": ["IP", "LEF文件", "Macro", "类别", "Site", "宽度", "高度", "单位", "Pin数", "电源Pin", "地Pin", "OBS几何数", "解析范围"],
+    "08-LEF宏": ["IP", "文件键", "批次Pair", "LEF文件", "Macro", "类别", "Site", "宽度", "高度", "单位", "Pin数", "电源Pin", "地Pin", "OBS几何数", "解析范围"],
     "09-Liberty角": ["IP", "Liberty文件", "Library", "工艺角线索", "RC角线索", "条件", "Process", "Voltage (V)", "Temp (°C)", "文件Cell数", "同名Cell", "LEF有而本文件无", "本文件有而LEF无", "信号Pin对照", "信号Pin差异", "电源/地脚对照", "电源/地脚差异", "证据不足Cell数", "角标说明"],
     "10-Liberty单元": ["IP", "Liberty文件", "Corner线索", "Cell", "LEF同名", "信号Pin数", "PG Pin数", "接口状态", "差异类型", "具体差异", "证据路径"],
 }
@@ -427,7 +429,7 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
         batch_pairs = None
         if ip.get("projection_json"):
             projection = _json_read(_resolve(ip["projection_json"], config_dir))
-            if projection.get("schema_version") != "file_version_projection.v1" or not projection.get("snapshot_id"):
+            if projection.get("schema_version") not in FILE_PROJECTION_SCHEMAS or not projection.get("snapshot_id"):
                 raise ValueError("文件版本投影格式或快照标识无效")
             if str(projection.get("library_id") or "") != library_id:
                 raise ValueError("文件版本投影的库标识不一致")
@@ -537,7 +539,9 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                         names = comp.get("macro_names") or {}
                         changed = bool(comp.get("changes") or names.get("added") or names.get("removed"))
                         semantic = "CHANGED" if changed else ("UNVERIFIED" if comp.get("unverified") else "SAME_WITHIN_SCOPE")
-                        row["comparison"].update({"content_status": (comp.get("content") or {}).get("status", "NOT_COMPARED"),
+                        raw_content_status = (comp.get("content") or {}).get("status", "NOT_COMPARED")
+                        content_status = {"SAME": "BYTE_SAME", "DIFF": "BYTE_DIFFERENT"}.get(raw_content_status, raw_content_status)
+                        row["comparison"].update({"content_status": content_status,
                             "semantic_status": semantic, "unverified": comp.get("unverified") or [],
                             "evidence_refs": [f"evidence/lef_batch/{pair['evidence_ref']}"]})
                     projection["source_snapshot_id"] = projection["snapshot_id"]
@@ -912,6 +916,22 @@ def _raw_inventory_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
 def _lef_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     ip = review.get("ip") or {}
     result = _result(review, "lef_review")
+    if result.get("schema_version") == "batch_lef_review.v1":
+        rows = []
+        for pair in result.get("pairs") or []:
+            ref = str(pair.get("evidence_ref") or "")
+            if pair.get("execution_status") != "COMPLETE" or not re.fullmatch(r"[A-Za-z0-9_-]+\.json", ref):
+                continue
+            path = Path(review.get("run_dir") or "") / "evidence" / "lef_batch" / ref
+            if not path.is_file():
+                raise ValueError(f"批量 LEF 证据缺失：{ref}")
+            report = _json_read(path)
+            pair_rows = _lef_rows({"ip": ip, "checks": {"lef_review": {"selected": True, "status": "COMPLETE", "result": report}}})
+            for row in pair_rows:
+                row["文件键"] = pair.get("file_key") or ""
+                row["批次Pair"] = pair.get("pair_id") or ""
+            rows.extend(pair_rows)
+        return rows
     data = (((result.get("extraction") or {}).get("new") or {}).get("data") or {})
     source = (result.get("sources") or {}).get("new") or {}
     rows = []
@@ -919,7 +939,7 @@ def _lef_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
         pins = macro.get("pins") or {}
         uses = Counter(str(pin.get("use") or "SIGNAL").upper() for pin in pins.values())
         size = macro.get("size") or {}
-        rows.append({"IP": ip.get("name") or ip.get("id"), "LEF文件": source.get("path", ""),
+        rows.append({"IP": ip.get("name") or ip.get("id"), "文件键": "", "批次Pair": "", "LEF文件": source.get("path", ""),
                      "Macro": name, "类别": macro.get("class") or "未提供", "Site": macro.get("site") or "未提供",
                      "宽度": size.get("x", "未提取"), "高度": size.get("y", "未提取"),
                      "单位": "μm（源解析单位；具体覆盖见报告）", "Pin数": len(pins),
@@ -1446,18 +1466,24 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
             for file in projection.get("files") or []:
                 comparison = file.get("comparison") or {}
                 formal = file.get("formal_usage") or {}
+                latest = file.get("latest") or {}
+                previous = file.get("previous") or {}
                 def unique_source(version):
                     matches = [item.get("source_path") for item in file.get("occurrences") or []
                                if item.get("version") == version]
                     return matches[0] if version and len(matches) == 1 else ""
                 model["文件版本矩阵"].append({"IP": label, "View": file.get("view"), "文件键": file.get("file_key"),
-                    "文件名": file.get("display_name"), "基准版本": scope.get("base_version"),
+                    "文件名": file.get("display_name"), "最新版本": latest.get("version") or projection_label(latest.get("status"), "latest"),
+                    "最新路径": latest.get("source_path"), "次新版本": previous.get("version") or projection_label(previous.get("status"), "previous"),
+                    "次新路径": previous.get("source_path"), "基准版本": scope.get("base_version"),
                     "目标版本": scope.get("target_version"), "基准路径": unique_source(scope.get("base_version")),
                     "目标路径": unique_source(scope.get("target_version")), "基准存在性": projection_label(comparison.get("base_presence"), "presence"),
-                    "目标存在性": projection_label(comparison.get("target_presence"), "presence"), "身份状态": projection_label(file.get("identity_status"), "identity"),
+                    "目标存在性": projection_label(comparison.get("target_presence"), "presence"), "交付关系": projection_label(comparison.get("delivery_relation"), "delivery"),
+                    "身份状态": projection_label(file.get("identity_status"), "identity"),
                     "内容状态": projection_label(comparison.get("content_status"), "content"), "语义状态": projection_label(comparison.get("semantic_status"), "semantic"),
                     "正式阶段": formal.get("stage"), "正式来源": formal.get("source_path"),
                     "批准状态": projection_label(formal.get("approved_effective_status"), "approval"),
+                    "排序依据": projection.get("version_order", {}).get("basis"),
                     "RAW 覆盖": projection_label((projection.get("coverage") or {}).get("raw_inventory"), "coverage"),
                     "快照 ID": projection.get("snapshot_id"), "投影证据": "evidence/file_version_projection.json"})
         selected = [(name, item) for name, item in (review.get("checks") or {}).items() if item.get("selected")]

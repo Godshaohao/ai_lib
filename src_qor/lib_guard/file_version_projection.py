@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -18,6 +19,83 @@ def _identity(relative: str, view: str) -> tuple[str, tuple[str, ...]]:
     _, normalized_parts = _view_relative_key(relative, view)
     parts = Path(relative).parts
     return view, tuple(parts[-len(normalized_parts):]) if normalized_parts else ()
+
+
+def _version_date(version: dict[str, Any]) -> str | None:
+    value = str(version.get("delivery_date") or version.get("date") or version.get("id") or "")
+    match = re.search(r"(?<!\d)(20\d{2})[-/]?(\d{2})[-/]?(\d{2})(?!\d)", value)
+    if not match:
+        return None
+    try:
+        return datetime.strptime("".join(match.groups()), "%Y%m%d").date().isoformat()
+    except ValueError:
+        return None
+
+
+def resolve_version_order(versions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Resolve only explicit delivery order or unique date hints.
+
+    Registry order, path names without a date, filesystem mtime, and scan time
+    are intentionally excluded because they do not prove delivery order.
+    """
+    ids = [str(item.get("id") or "") for item in versions]
+    warnings: list[str] = []
+    explicit = [item.get("delivery_order") for item in versions]
+    if ids and all(value is not None and str(value) != "" for value in explicit):
+        try:
+            pairs = list(zip(ids, explicit))
+            values = [value for _, value in pairs]
+            if len(set(values)) != len(values):
+                raise ValueError("duplicate")
+            ordered = [item_id for item_id, _ in sorted(pairs, key=lambda pair: pair[1])]
+            return {"status": "KNOWN", "basis": "EXPLICIT", "ordered_ids": ordered, "warnings": []}
+        except (TypeError, ValueError):
+            warnings.append("EXPLICIT_ORDER_INVALID")
+    elif any(value is not None and str(value) != "" for value in explicit):
+        warnings.append("EXPLICIT_ORDER_INCOMPLETE")
+
+    dated = [(item_id, _version_date(version)) for item_id, version in zip(ids, versions)]
+    dates = [value for _, value in dated]
+    if ids and all(value is not None for value in dates) and len(set(dates)) == len(dates):
+        ordered = [item_id for item_id, _ in sorted(dated, key=lambda pair: pair[1])]
+        return {"status": "KNOWN", "basis": "DATE_HINT", "ordered_ids": ordered, "warnings": warnings}
+    if len(set(value for value in dates if value is not None)) != len([value for value in dates if value is not None]):
+        warnings.append("DATE_HINT_DUPLICATE")
+    elif any(value is None for value in dates):
+        warnings.append("DATE_HINT_MISSING")
+    return {"status": "UNKNOWN", "basis": "UNKNOWN", "ordered_ids": [], "warnings": warnings}
+
+
+def rank_occurrences(occurrences: list[dict[str, Any]], version_order: dict[str, Any],
+                     inventories: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return latest/previous without treating an incomplete later scan as absence."""
+    if version_order.get("status") != "KNOWN":
+        return ({"status": "UNKNOWN_ORDER", "occurrences": occurrences},
+                {"status": "UNKNOWN_ORDER", "occurrences": occurrences})
+    order_index = {version: index for index, version in enumerate(version_order.get("ordered_ids") or [])}
+    unique: dict[str, dict[str, Any]] = {}
+    for occurrence in occurrences:
+        version = str(occurrence.get("version") or "")
+        if version in order_index and version not in unique:
+            unique[version] = occurrence
+    ordered = sorted(unique, key=order_index.get, reverse=True)
+    if not ordered:
+        status = "NONE" if all(item.get("status") == "COMPLETE" for item in inventories.values()) else "UNKNOWN_COVERAGE"
+        empty = {"status": status}
+        return empty, {"status": "NONE" if status == "NONE" else "UNKNOWN_COVERAGE"}
+    observed_latest = unique[ordered[0]]
+    uncertain_later = any(
+        item.get("status") != "COMPLETE" and order_index.get(version, -1) > order_index[ordered[0]]
+        for version, item in inventories.items()
+    )
+    status = "UNKNOWN_COVERAGE" if uncertain_later else "CONFIRMED"
+    latest = {"status": status, "version": ordered[0], "source_path": observed_latest.get("source_path")}
+    if len(ordered) < 2:
+        previous = {"status": "NONE" if not uncertain_later else "UNKNOWN_COVERAGE"}
+    else:
+        observed_previous = unique[ordered[1]]
+        previous = {"status": status, "version": ordered[1], "source_path": observed_previous.get("source_path")}
+    return latest, previous
 
 
 def publish_projection(output: str | Path, projection: dict[str, Any], *,
@@ -104,6 +182,7 @@ def build_projection(library_id: str, versions: list[dict[str, Any]],
         inventory = inventory_by_id.get(version)
         return "ABSENT_VERIFIED" if inventory and inventory.get("status") == "COMPLETE" else "UNKNOWN"
 
+    version_order = resolve_version_order(versions)
     rows = []
     for key in sorted(set(files) | set(formal_by_key)):
         view, parts = key
@@ -118,26 +197,48 @@ def build_projection(library_id: str, versions: list[dict[str, Any]],
         else:
             identities = "UNRESOLVED"
         formal = formal_by_key.get(key, [])
+        latest, previous = rank_occurrences(occurrences, version_order, inventory_by_id)
+        if any(count > 1 for count in counts):
+            latest = {"status": "AMBIGUOUS", "occurrences": occurrences}
+            previous = {"status": "AMBIGUOUS", "occurrences": occurrences}
         display_path = (formal[0].get("published_path") if len(formal) == 1 else "") or (
             occurrences[0].get("source_path") if occurrences else "") or (parts[-1] if parts else "")
+        if not base_version or not target_version:
+            delivery_relation = "NOT_SELECTED"
+        elif identities == "AMBIGUOUS":
+            delivery_relation = "AMBIGUOUS"
+        elif presence(base_version, occurrences) == presence(target_version, occurrences) == "PRESENT":
+            delivery_relation = "READY_TO_COMPARE" if identities == "EXACT_RELATIVE_PATH" else "CANDIDATE_MATCH"
+        elif presence(base_version, occurrences) == "ABSENT_VERIFIED" and presence(target_version, occurrences) == "PRESENT":
+            delivery_relation = "NEWLY_PROVIDED"
+        elif presence(base_version, occurrences) == "PRESENT" and presence(target_version, occurrences) == "ABSENT_VERIFIED":
+            delivery_relation = "NOT_PROVIDED_IN_TARGET"
+        elif presence(base_version, occurrences) == presence(target_version, occurrences) == "ABSENT_VERIFIED":
+            delivery_relation = "NOT_PROVIDED_BOTH"
+        else:
+            delivery_relation = "UNKNOWN_COVERAGE"
         rows.append({"file_key": view + ":" + "/".join(parts), "view": view,
                      "display_name": Path(display_path).name, "identity_status": identities,
                      "identity_evidence": "VIEW_AND_RELATIVE_PATH", "occurrences": occurrences,
+                     "latest": latest, "previous": previous,
                      "formal_usage": formal[0] if len(formal) == 1 else {
                          "observation_status": "AMBIGUOUS" if formal else ("UNKNOWN" if formal_files is None else "NOT_OBSERVED"),
                          "approved_effective_status": "NOT_CONFIGURED"},
                      "comparison": {"base_version": base_version, "target_version": target_version,
                                     "base_presence": presence(base_version, occurrences),
                                     "target_presence": presence(target_version, occurrences),
+                                    "delivery_relation": delivery_relation,
                                     "content_status": "NOT_COMPARED", "semantic_status": "NOT_CHECKED", "evidence_refs": []},
                      "findings": []})
     for index, formal in enumerate(unbound):
         rows.append({"file_key": f"unresolved:{index}", "view": formal["view"],
                      "display_name": Path(formal.get("published_path") or formal.get("source_path") or "").name,
                      "identity_status": "UNRESOLVED", "identity_evidence": "FORMAL_SOURCE_UNBOUND",
-                     "occurrences": [], "formal_usage": formal,
+                     "occurrences": [], "latest": {"status": "NONE"}, "previous": {"status": "NONE"},
+                     "formal_usage": formal,
                      "comparison": {"base_version": base_version, "target_version": target_version,
                                     "base_presence": "UNKNOWN", "target_presence": "UNKNOWN",
+                                    "delivery_relation": "UNKNOWN_COVERAGE",
                                     "content_status": "NOT_COMPARED", "semantic_status": "NOT_CHECKED", "evidence_refs": []},
                      "findings": []})
     coverage = ("NOT_AVAILABLE" if not version_ids else "COMPLETE" if all(
@@ -145,6 +246,7 @@ def build_projection(library_id: str, versions: list[dict[str, Any]],
     return {"schema_version": "file_version_projection.v1", "library_id": library_id,
             "scope": {"base_version": base_version, "target_version": target_version,
                       "formal_stage": formal_stage, "registered_versions": version_ids},
+            "version_order": version_order,
             "coverage": {"raw_inventory": coverage, "raw_freshness": "NOT_VERIFIED",
                          "formal_inventory": "SNAPSHOT_ONLY" if formal_files is not None else "NOT_AVAILABLE",
                          "content_comparison": "NOT_COMPARED"},

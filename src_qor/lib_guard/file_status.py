@@ -33,7 +33,17 @@ def _version_date(version_id: str) -> datetime | None:
 
 
 def _path_identity(relative_path: str, view: str) -> tuple[str, tuple[str, ...]]:
-    return _view_relative_key(relative_path, view)
+    """Build a case-preserving identity for the formal/RAW reconciliation.
+
+    ``effective_file_tracker`` also has case-insensitive matching paths for
+    legacy discovery heuristics.  File-version reconciliation must keep the
+    original spelling: on a case-sensitive filesystem ``Top.lef`` and
+    ``top.lef`` are different files and must not become an artificial
+    duplicate or pair.
+    """
+    _, normalized_parts = _view_relative_key(relative_path, view)
+    parts = Path(relative_path).parts
+    return view, tuple(parts[-len(normalized_parts):]) if normalized_parts else ()
 
 
 def _scan_registered_raw(registered_versions: list[dict[str, Any]], views: frozenset[str]) -> list[dict[str, Any]]:
@@ -125,12 +135,25 @@ def build_lef_file_status(
     elif any(item.get("status") != "COMPLETE" for item in raw_lef_inventory):
         raw_scope_status = "PARTIAL" if any(item.get("status") == "PARTIAL" for item in raw_lef_inventory) else "INCOMPLETE"
 
+    explicit_versions = [(version, version.get("delivery_order")) for version in registered_versions]
+    explicit_values = [value for _, value in explicit_versions]
+    explicit_ordering = bool(explicit_values) and all(value is not None and str(value) != "" for value in explicit_values)
+    if explicit_ordering:
+        try:
+            explicit_ordering = len(set(explicit_values)) == len(explicit_values)
+            ordered_versions = [version for version, _ in sorted(explicit_versions, key=lambda item: item[1])]
+        except (TypeError, ValueError):
+            explicit_ordering = False
+            ordered_versions = []
+    else:
+        ordered_versions = []
     dated_versions = [(version, _version_date(str(version.get("id") or "")))
                       for version in registered_versions]
     dates = [date for _, date in dated_versions]
-    ordering_known = bool(dates) and all(date is not None for date in dates) and len(set(dates)) == len(dates)
-    ordered_versions = ([version for version, _ in sorted(dated_versions, key=lambda item: item[1])]
-                        if ordering_known else [])
+    date_ordering = bool(dates) and all(date is not None for date in dates) and len(set(dates)) == len(dates)
+    if not explicit_ordering and date_ordering:
+        ordered_versions = [version for version, _ in sorted(dated_versions, key=lambda item: item[1])]
+    ordering_known = explicit_ordering or date_ordering
     order_index = {str(version.get("id") or ""): index
                    for index, version in enumerate(ordered_versions)}
 
@@ -267,7 +290,7 @@ def build_lef_file_status(
                        "status": str(context.get("status") or "UNKNOWN")},
         "raw_scope": {"registered_deliveries": len(registered_versions),
                       "scan_status": raw_scope_status,
-                      "ordering_basis": "DATE_HINT" if ordering_known else "UNKNOWN"},
+                      "ordering_basis": "EXPLICIT" if explicit_ordering else ("DATE_HINT" if date_ordering else "UNKNOWN")},
         "files": rows,
     }
 

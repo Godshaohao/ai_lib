@@ -7,6 +7,90 @@ from pathlib import Path
 
 
 class FileVersionProjectionTests(unittest.TestCase):
+    def test_explicit_delivery_order_ranks_file_latest_and_previous_by_distinct_versions(self):
+        from lib_guard.file_version_projection import build_projection
+        versions = [
+            {"id": "V01", "path": "/raw/V01", "delivery_order": 1},
+            {"id": "V02", "path": "/raw/V02", "delivery_order": 2},
+            {"id": "V03", "path": "/raw/V03", "delivery_order": 3},
+            {"id": "V04", "path": "/raw/V04", "delivery_order": 4},
+            {"id": "V05", "path": "/raw/V05", "delivery_order": 5},
+        ]
+        inventories = [{"version_id": version["id"], "status": "COMPLETE", "files": []} for version in versions]
+        inventories[0]["files"] = ["/raw/V01/LEF/core.lef"]
+        inventories[2]["files"] = ["/raw/V03/LEF/core.lef"]
+        inventories[4]["files"] = ["/raw/V05/LEF/core.lef"]
+
+        result = build_projection("IP_A", versions, inventories, [])
+
+        row = result["files"][0]
+        self.assertEqual(result["version_order"]["basis"], "EXPLICIT")
+        self.assertEqual(row["latest"], {"status": "CONFIRMED", "version": "V05", "source_path": "/raw/V05/LEF/core.lef"})
+        self.assertEqual(row["previous"], {"status": "CONFIRMED", "version": "V03", "source_path": "/raw/V03/LEF/core.lef"})
+
+    def test_partial_later_delivery_does_not_claim_observed_file_is_confirmed_latest(self):
+        from lib_guard.file_version_projection import build_projection
+        versions = [
+            {"id": "V04", "path": "/raw/V04", "delivery_order": 4},
+            {"id": "V05", "path": "/raw/V05", "delivery_order": 5},
+        ]
+        result = build_projection("IP_A", versions, [
+            {"version_id": "V04", "status": "COMPLETE", "files": ["/raw/V04/LEF/sram.lef"]},
+            {"version_id": "V05", "status": "PARTIAL", "files": []},
+        ], [])
+
+        row = result["files"][0]
+        self.assertEqual(row["latest"]["status"], "UNKNOWN_COVERAGE")
+        self.assertEqual(row["latest"]["version"], "V04")
+
+    def test_date_hint_requires_unique_dates_and_does_not_use_registry_order(self):
+        from lib_guard.file_version_projection import build_projection
+        versions = [
+            {"id": "release_20261002", "path": "/raw/B"},
+            {"id": "release_20261001", "path": "/raw/A"},
+        ]
+        result = build_projection("IP_A", versions, [
+            {"version_id": "release_20261001", "status": "COMPLETE", "files": ["/raw/A/LEF/a.lef"]},
+            {"version_id": "release_20261002", "status": "COMPLETE", "files": ["/raw/B/LEF/a.lef"]},
+        ], [])
+        self.assertEqual(result["version_order"]["basis"], "DATE_HINT")
+        self.assertEqual(result["files"][0]["latest"]["version"], "release_20261002")
+
+    def test_same_day_versions_have_unknown_order_and_keep_all_occurrences(self):
+        from lib_guard.file_version_projection import build_projection
+        versions = [
+            {"id": "20261001_a", "path": "/raw/A"},
+            {"id": "20261001_b", "path": "/raw/B"},
+        ]
+        result = build_projection("IP_A", versions, [
+            {"version_id": "20261001_a", "status": "COMPLETE", "files": ["/raw/A/LEF/a.lef"]},
+            {"version_id": "20261001_b", "status": "COMPLETE", "files": ["/raw/B/LEF/a.lef"]},
+        ], [])
+        row = result["files"][0]
+        self.assertEqual(result["version_order"]["status"], "UNKNOWN")
+        self.assertEqual(row["latest"]["status"], "UNKNOWN_ORDER")
+        self.assertEqual([item["version"] for item in row["occurrences"]], ["20261001_a", "20261001_b"])
+
+    def test_only_one_occurrence_has_no_previous(self):
+        from lib_guard.file_version_projection import build_projection
+        result = build_projection("IP_A", [{"id": "V05", "path": "/raw/V05", "delivery_order": 5}], [
+            {"version_id": "V05", "status": "COMPLETE", "files": ["/raw/V05/LEF/new_io.lef"]},
+        ], [])
+        row = result["files"][0]
+        self.assertEqual(row["latest"]["status"], "CONFIRMED")
+        self.assertEqual(row["previous"]["status"], "NONE")
+
+    def test_duplicate_raw_occurrence_does_not_choose_latest_representative(self):
+        from lib_guard.file_version_projection import build_projection
+        result = build_projection("IP_A", [
+            {"id": "V1", "path": "/raw/V1", "delivery_order": 1},
+        ], [{"version_id": "V1", "status": "COMPLETE", "files": [
+            "/raw/V1/LEF/a.lef", "/raw/V1/LEF/a.lef"
+        ]}], [])
+        row = result["files"][0]
+        self.assertEqual(row["identity_status"], "AMBIGUOUS")
+        self.assertEqual(row["latest"]["status"], "AMBIGUOUS")
+
     def test_projection_display_labels_preserve_uncertainty(self):
         from lib_guard.display_labels import projection_label
         self.assertEqual(projection_label("PRESENT", "presence"), "已提供")
@@ -14,6 +98,7 @@ class FileVersionProjectionTests(unittest.TestCase):
         self.assertEqual(projection_label("UNKNOWN", "presence"), "无法确认")
         self.assertEqual(projection_label("NOT_SELECTED", "presence"), "未选择版本")
         self.assertEqual(projection_label("NOT_CHECKED", "semantic"), "未做技术检查")
+        self.assertEqual(projection_label("CONTEXT_REQUIRED", "coverage"), "需要指定正式阶段")
         self.assertEqual(projection_label("FAILED", "semantic"), "检查失败")
         self.assertEqual(projection_label("FUTURE_STATE", "presence"), "未识别状态（FUTURE_STATE）")
 
@@ -44,7 +129,7 @@ class FileVersionProjectionTests(unittest.TestCase):
             pairs = review["checks"]["lef_review"]["result"]["pairs"]
             self.assertEqual([pair["execution_status"] for pair in pairs], ["COMPLETE", "FAILED"])
             rows = review["file_version_projection"]["files"]
-            self.assertEqual(rows[0]["comparison"]["content_status"], "SAME")
+            self.assertEqual(rows[0]["comparison"]["content_status"], "BYTE_SAME")
             self.assertEqual(rows[1]["comparison"]["semantic_status"], "FAILED")
             self.assertFalse((Path(review["library_dir"]) / "latest.xlsx").exists())
 
@@ -77,13 +162,24 @@ class FileVersionProjectionTests(unittest.TestCase):
             updated = review["file_version_projection"]
             self.assertEqual(updated["source_snapshot_id"], source["snapshot_id"])
             self.assertNotEqual(updated["snapshot_id"], source["snapshot_id"])
-            self.assertEqual([row["comparison"]["content_status"] for row in updated["files"]], ["DIFF", "DIFF"])
+            self.assertEqual([row["comparison"]["content_status"] for row in updated["files"]], ["BYTE_DIFFERENT", "BYTE_DIFFERENT"])
             self.assertTrue(all(row["comparison"]["evidence_refs"] for row in updated["files"]))
             self.assertGreaterEqual(review["summary"]["confirmed_changes"], 2)
             self.assertNotEqual(review["quality_status"], "NO_FINDINGS_WITHIN_SCOPE")
             self.assertEqual(json.loads(source_path.read_text())["files"][0]["comparison"]["content_status"], "NOT_COMPARED")
+            from lib_guard.review_runner import _lef_rows
+            rows = _lef_rows(review)
+            self.assertEqual({row['LEF文件'] for row in rows}, {str(root / 'V2' / 'LEF' / 'a.lef'), str(root / 'V2' / 'LEF' / 'b.lef')})
+            from lib_guard.review_runner import build_workbook_model
+            macro_rows = build_workbook_model([review])["08-LEF宏"]
+            self.assertTrue(macro_rows)
+            self.assertEqual({row["文件键"] for row in macro_rows}, {"lef:a.lef", "lef:b.lef"})
+            self.assertTrue(all(row["批次Pair"] for row in macro_rows))
             with zipfile.ZipFile(Path(review["run_dir"]) / "ip_review.xlsx") as workbook:
-                self.assertIn(updated["snapshot_id"], workbook.read("xl/sharedStrings.xml").decode())
+                strings = workbook.read("xl/sharedStrings.xml").decode()
+                self.assertIn(updated["snapshot_id"], strings)
+                self.assertIn(str(root / 'V2' / 'LEF' / 'a.lef'), strings)
+                self.assertIn(str(root / 'V2' / 'LEF' / 'b.lef'), strings)
 
     @unittest.skipUnless(importlib.util.find_spec("xlsxwriter"), "需要已安装的 XlsxWriter")
     def test_explicit_projection_is_copied_into_review_and_excel(self):

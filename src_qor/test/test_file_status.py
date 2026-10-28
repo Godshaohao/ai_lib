@@ -38,6 +38,24 @@ class LefFileStatusTests(unittest.TestCase):
             self.assertEqual(row["delivery_relation"], "RAW_ONLY")
             self.assertIsNone(row["recent_raw_source"])
 
+    def test_raw_only_explicit_delivery_order_overrides_version_name_date_hint(self):
+        from lib_guard.file_status import build_file_status, scan_registered_raw_files
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old = root / "20261002_old"
+            new = root / "20261001_new"
+            old_file = old / "LIB" / "core_tt.lib"
+            new_file = new / "LIB" / "core_tt.lib"
+            old_file.parent.mkdir(parents=True)
+            new_file.parent.mkdir(parents=True)
+            old_file.write_text("old", encoding="utf-8")
+            new_file.write_text("new", encoding="utf-8")
+            versions = [{"id": old.name, "path": str(old), "delivery_order": 1},
+                        {"id": new.name, "path": str(new), "delivery_order": 2}]
+            result = build_file_status([], versions, scan_registered_raw_files(versions), context={})
+            self.assertEqual(result["raw_scope"]["ordering_basis"], "EXPLICIT")
+            self.assertEqual(result["files"][0]["recent_raw_source"]["delivery_label"], new.name)
+
     def _build(self, formal_files, versions, inventories):
         from lib_guard.file_status import build_lef_file_status
 
@@ -101,6 +119,25 @@ class LefFileStatusTests(unittest.TestCase):
             self.assertEqual(result["files"][0]["identity_status"], "UNIQUE")
             self.assertEqual([item["source_path"] for item in result["files"][0]["history"]],
                              [str(raw_a)])
+
+    def test_case_distinct_formal_and_raw_paths_remain_distinct_on_case_sensitive_fs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "20261001_v1"
+            formal = root / "LEF" / "Top.lef"
+            lower = root / "LEF" / "top.lef"
+            formal.parent.mkdir(parents=True)
+            formal.write_text("formal", encoding="utf-8")
+            lower.write_text("lower-case sibling", encoding="utf-8")
+            result = self._build(
+                [{"library_id": "Vendor.IP_A", "stage": "lib_NL2.5_3", "view": "lef",
+                  "published_path": "/formal/Top.lef", "source_path": str(formal)}],
+                [{"id": "20261001_v1", "path": str(root)}],
+                [{"version_id": "20261001_v1", "root": str(root),
+                  "files": [str(formal), str(lower)], "status": "COMPLETE"}],
+            )
+
+            self.assertEqual(result["files"][0]["identity_status"], "UNIQUE")
+            self.assertEqual([item["source_path"] for item in result["files"][0]["history"]], [str(formal)])
 
     def test_duplicate_date_hints_do_not_select_a_latest_delivery(self):
         with tempfile.TemporaryDirectory() as temp:
