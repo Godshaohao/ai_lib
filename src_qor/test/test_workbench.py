@@ -15,6 +15,52 @@ from lib_guard.workbench import _acquire_library_lock, _files_for_selection, _qu
 
 
 class WorkbenchTests(unittest.TestCase):
+    def test_single_version_rejects_multiple_lef_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "V1"
+            (raw / "LEF").mkdir(parents=True)
+            for name in ("a.lef", "b.lef"):
+                (raw / "LEF" / name).write_text("VERSION 5.8 ;\nEND LIBRARY\n")
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "A", "library_id": "V.A", "raw_versions": [{"id": "V1", "path": str(raw)}]}]}))
+            output = root / "out"
+            client = create_app(registry, output).test_client()
+            client.post("/file-status/refresh", data={"ip": "A", "raw_only": "1"})
+            from lib_guard.review_runner import _library_dir
+            pointer = json.loads((output / "file_versions" / _library_dir("V.A") / "latest.json").read_text())
+            response = client.post("/run", data={"mode": "matrix", "id": "A", "library_id": "V.A", "snapshot_id": pointer["snapshot_id"], "file_key": ["lef:a.lef", "lef:b.lef"]})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("一次只能选择一个 LEF", response.get_data(as_text=True))
+
+    def test_link_saved_formal_does_not_rescan_raw(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "V1"
+            (raw / "LEF").mkdir(parents=True)
+            lef = raw / "LEF" / "a.lef"
+            lef.write_text("VERSION 5.8 ;\nEND LIBRARY\n")
+            formal = root / "lib_NL1" / "IP"
+            (formal / "LEF").mkdir(parents=True)
+            (formal / "LEF" / "a.lef").symlink_to(lef)
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "A", "library_id": "V.A", "library_name": "A", "vendor": "V", "raw_versions": [{"id": "V1", "path": str(raw)}], "formal_nl_root": str(formal)}]}))
+            output = root / "out"
+            client = create_app(registry, output).test_client()
+            client.post("/file-status/refresh", data={"ip": "A", "raw_only": "1"})
+            from lib_guard.review_runner import _library_dir
+            projection_root = output / "file_versions" / _library_dir("V.A")
+            original = json.loads((projection_root / "latest.json").read_text())["snapshot_id"]
+            client.post("/formal-nl/overview/refresh", data={"ip": "A"})
+            with patch("lib_guard.workbench.scan_registered_raw_files", side_effect=AssertionError("RAW rescan")):
+                response = client.post("/file-status/link-formal", data={"ip": "A", "snapshot_id": original}, follow_redirects=True)
+            self.assertEqual(response.status_code, 200)
+            pointer = json.loads((projection_root / "latest.json").read_text())
+            self.assertNotEqual(pointer["snapshot_id"], original, response.get_data(as_text=True))
+            projection = json.loads((projection_root / pointer["projection_ref"]).read_text())
+            self.assertEqual(projection["source_snapshot_id"], original)
+            self.assertEqual(projection["files"][0]["formal_usage"]["source_version"], "V1")
+
     def test_files_tab_first_run_is_raw_first_and_does_not_require_formal_nl(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -60,11 +106,17 @@ class WorkbenchTests(unittest.TestCase):
             projection_root = output / "file_versions" / _library_dir("Vendor.IP_A")
             pointer = json.loads((projection_root / "latest.json").read_text())
             projection = json.loads((projection_root / pointer["projection_ref"]).read_text())
+            raw_snapshot = projection["snapshot_id"]
+            client.post("/file-status/range", data={"ip": "IP_A", "snapshot_id": raw_snapshot, "base_version": "V1", "target_version": "V2"})
+            pointer = json.loads((projection_root / "latest.json").read_text())
+            projection = json.loads((projection_root / pointer["projection_ref"]).read_text())
             compare = client.post("/file-status/compare", data={"id": "IP_A", "snapshot_id": projection["snapshot_id"],
                                                                 "compare_file_key": ["lef:core.lef", "liberty:core_tt.lib"]})
             self.assertEqual(compare.status_code, 303)
             updated_pointer = json.loads((projection_root / "latest.json").read_text())
             updated = json.loads((projection_root / updated_pointer["projection_ref"]).read_text())
+            self.assertEqual(updated["source_snapshot_id"], raw_snapshot)
+            self.assertEqual(updated["input_snapshot_id"], projection["snapshot_id"])
             rows = {row["file_key"]: row for row in updated["files"]}
             self.assertEqual(rows["lef:core.lef"]["comparison"]["content_status"], "BYTE_DIFFERENT")
             self.assertEqual(rows["liberty:core_tt.lib"]["comparison"]["content_status"], "BYTE_SAME")
@@ -112,7 +164,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn('仅对比 RAW', page)
             self.assertIn('IP_A', page)
             self.assertIn('<h2 data-page-title>IP_A</h2>', page)
-            self.assertIn('当前只读取已登记 RAW 交付', page)
+            self.assertIn('当前读取已登记 RAW 交付', page)
             self.assertNotIn('先在“正式 NL”页刷新正式目录盘点', page)
             self.assertNotIn('当前范围没有可列出的文件', page)
             self.assertIn('data-matrix-selection', page)

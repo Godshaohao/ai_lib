@@ -663,6 +663,12 @@
   const matrixCompareLocked = Boolean(matrixCompare?.disabled);
   const matrixFiles = [...document.querySelectorAll("[data-matrix-file]")];
   const matrixActionNote = document.querySelector("[data-matrix-action-note]");
+  const pairScope = document.querySelector("[data-matrix-form]")?.dataset.pairScope === "true";
+  document.querySelector("[data-latest-deliveries]")?.addEventListener("click", (event) => {
+    const button = event.currentTarget;
+    button.form.elements.base_version.value = button.dataset.base;
+    button.form.elements.target_version.value = button.dataset.target;
+  });
   function filterProjection() {
     const query = (projectionSearch?.value || "").trim().toLocaleLowerCase();
     let visible = 0;
@@ -683,12 +689,12 @@
     const lefCount = selected.filter((item) => item.closest("[data-projection-row]")?.dataset.canLef === "true").length;
     const compareCount = selected.filter((item) => item.closest("[data-projection-row]")?.dataset.canCompare === "true").length;
     if (matrixSelection) matrixSelection.textContent = `已选 ${selected.length} 个 · 可检查 LEF ${lefCount} 个 · 可比较 ${compareCount} 个`;
-    if (matrixRun) matrixRun.disabled = matrixRunLocked || selected.length === 0 || lefCount !== selected.length;
+    if (matrixRun) matrixRun.disabled = matrixRunLocked || selected.length === 0 || lefCount !== selected.length || (!pairScope && selected.length !== 1);
     if (matrixCompare) matrixCompare.disabled = matrixCompareLocked || selected.length === 0 || compareCount !== selected.length;
     if (matrixActionNote) {
       matrixActionNote.textContent = selected.length === 0
         ? "单文件入口仅做 LEF–Liberty 接口核查；双文件才做 LEF 差异分析。内容差异不等于质量问题。"
-        : `${selected.length} 个文件已选；可检查 LEF ${lefCount} 个，可比较内容 ${compareCount} 个。${lefCount !== selected.length || compareCount !== selected.length ? "请按 View 或能力筛选后再执行对应动作。" : ""}`;
+        : `${selected.length} 个文件已选；可检查 LEF ${lefCount} 个，可比较内容 ${compareCount} 个。${!pairScope && selected.length > 1 ? "单版本接口检查一次只能选择一个 LEF。" : lefCount !== selected.length || compareCount !== selected.length ? "请按 View 或能力筛选后再执行对应动作。" : ""}`;
     }
   }
   matrixFiles.forEach((item) => item.addEventListener("change", updateMatrixSelection));

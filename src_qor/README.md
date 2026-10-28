@@ -70,6 +70,8 @@ without modifying that source snapshot or the formal tree. Other Views remain no
 An incomplete batch retains completed pair evidence but does not replace the latest complete Excel.
 Batch LEF and LEF–Liberty interface checks run separately to prevent accidental cross-file binding.
 
+The matrix's **关联已保存的正式 NL 快照** action attaches the saved Formal NL inventory without rescanning RAW. When more than one Formal stage matches and no unique stage is configured, the action asks for an unambiguous stage instead of choosing one. **填入最近两次交付** is available only when the delivery order is known. A scope change clears the previous scope's comparison results from the new projection; historical snapshots remain available. `source_snapshot_id` identifies the original RAW inventory and `input_snapshot_id` identifies the immediate input projection.
+
 The normal user paths are:
 
 - First delivery without Formal NL: register IP/RAW versions, refresh **RAW 文件清单**, inspect latest/previous, optionally choose Base/Target without another scan, compare selected content, then run the applicable LEF/Liberty check from the matrix.

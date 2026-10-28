@@ -8,7 +8,7 @@ _LABELS = {
     "formal": {"OBSERVED": "已找到正式来源", "NOT_OBSERVED": "未找到正式链接", "UNKNOWN": "未盘点正式目录", "AMBIGUOUS": "正式来源不唯一", "UNRESOLVED": "正式来源待确认", "FORMAL_CONTEXT_REQUIRED": "需要指定正式阶段"},
     "coverage": {"COMPLETE": "已登记版本盘点完整", "PARTIAL": "部分盘点", "INCOMPLETE": "盘点不完整", "NOT_AVAILABLE": "未登记版本", "UNKNOWN_COVERAGE": "覆盖范围未知", "CONTEXT_REQUIRED": "需要指定正式阶段"},
     "latest": {"CONFIRMED": "已确认", "LATEST_OBSERVED": "当前已观察到", "UNKNOWN_COVERAGE": "覆盖范围未知", "UNKNOWN_ORDER": "顺序未知", "NONE": "无"},
-    "previous": {"CONFIRMED": "无次新", "LATEST_OBSERVED": "当前已观察到", "UNKNOWN_COVERAGE": "覆盖范围未知", "UNKNOWN_ORDER": "顺序未知", "NONE": "无次新"},
+    "previous": {"CONFIRMED": "已确认", "LATEST_OBSERVED": "当前已观察到", "UNKNOWN_COVERAGE": "覆盖范围未知", "UNKNOWN_ORDER": "顺序未知", "NONE": "无次新"},
     "delivery": {"READY_TO_COMPARE": "已准备比较", "NEWLY_PROVIDED": "本次新提供", "NOT_PROVIDED_IN_TARGET": "本次未提供", "NOT_PROVIDED_BOTH": "两次均未提供", "UNKNOWN_COVERAGE": "覆盖范围未知", "AMBIGUOUS": "对应关系不唯一", "CANDIDATE_MATCH": "候选对应", "NOT_SELECTED": "未选择版本"},
     "approval": {"NOT_CONFIGURED": "未核实批准状态"},
     "capability": {"NO_UNIQUE_RAW_SOURCE": "没有唯一 RAW 来源", "BASE_TARGET_REQUIRED": "需要先选 Base / Target",

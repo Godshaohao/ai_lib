@@ -7,6 +7,37 @@ from pathlib import Path
 
 
 class FileVersionProjectionTests(unittest.TestCase):
+    def test_previous_candidate_is_uncertain_when_intervening_inventory_is_partial(self):
+        from lib_guard.file_version_projection import build_projection
+        versions = [{"id": f"V{i}", "path": f"/raw/V{i}", "delivery_order": i} for i in (1, 2, 3)]
+        inventories = [{"version_id": "V1", "status": "COMPLETE", "files": ["/raw/V1/LEF/core.lef"]},
+                       {"version_id": "V2", "status": "PARTIAL", "files": []},
+                       {"version_id": "V3", "status": "COMPLETE", "files": ["/raw/V3/LEF/core.lef"]}]
+        row = build_projection("IP", versions, inventories, None)["files"][0]
+        self.assertEqual((row["latest"]["version"], row["latest"]["status"]), ("V3", "CONFIRMED"))
+        self.assertEqual((row["previous"]["version"], row["previous"]["status"]), ("V1", "UNKNOWN_COVERAGE"))
+        self.assertEqual(row["previous"]["uncertain_versions"], ["V2"])
+
+    def test_string_delivery_orders_are_sorted_numerically(self):
+        from lib_guard.file_version_projection import resolve_version_order
+        versions = [{"id": f"V{i}", "delivery_order": str(i)} for i in (1, 2, 10)]
+        self.assertEqual(resolve_version_order(versions)["ordered_ids"], ["V1", "V2", "V10"])
+
+    def test_scope_change_drops_old_comparison_and_evidence(self):
+        from lib_guard.file_version_projection import build_projection, reproject_projection
+        versions = [{"id": f"V{i}", "path": f"/raw/V{i}", "delivery_order": i} for i in (1, 2, 3)]
+        inventories = [{"version_id": f"V{i}", "status": "COMPLETE", "files": [f"/raw/V{i}/LEF/core.lef"]} for i in (1, 2, 3)]
+        original = build_projection("IP", versions, inventories, None, base_version="V1", target_version="V2")
+        original["snapshot_id"] = "raw-snapshot"
+        original["files"][0]["comparison"].update({"content_status": "BYTE_DIFFERENT", "semantic_status": "COMPLETE", "comparison_evidence": {"old": True}, "evidence_refs": ["old.json"]})
+        updated = reproject_projection(original, base_version="V2", target_version="V3")
+        comparison = updated["files"][0]["comparison"]
+        self.assertEqual(comparison["content_status"], "NOT_COMPARED")
+        self.assertEqual(comparison["semantic_status"], "NOT_CHECKED")
+        self.assertFalse(comparison.get("comparison_evidence"))
+        self.assertEqual(comparison["evidence_refs"], [])
+        self.assertEqual(original["files"][0]["comparison"]["content_status"], "BYTE_DIFFERENT")
+
     def test_explicit_delivery_order_ranks_file_latest_and_previous_by_distinct_versions(self):
         from lib_guard.file_version_projection import build_projection
         versions = [
@@ -98,6 +129,7 @@ class FileVersionProjectionTests(unittest.TestCase):
         self.assertEqual(projection_label("UNKNOWN", "presence"), "无法确认")
         self.assertEqual(projection_label("NOT_SELECTED", "presence"), "未选择版本")
         self.assertEqual(projection_label("NOT_CHECKED", "semantic"), "未做技术检查")
+        self.assertEqual(projection_label("CONFIRMED", "previous"), "已确认")
         self.assertEqual(projection_label("CONTEXT_REQUIRED", "coverage"), "需要指定正式阶段")
         self.assertEqual(projection_label("FAILED", "semantic"), "检查失败")
         self.assertEqual(projection_label("FUTURE_STATE", "presence"), "未识别状态（FUTURE_STATE）")
@@ -152,6 +184,8 @@ class FileVersionProjectionTests(unittest.TestCase):
                 inventories.append({"version_id": version, "root": str(version_root), "files": paths, "status": "COMPLETE"})
             source = publish_projection(root / "snapshots", build_projection("IP_A", versions, inventories, [], base_version="V1", target_version="V2"))
             source_path = root / "snapshots" / "runs" / source["snapshot_id"] / "projection.json"
+            source["source_snapshot_id"] = "original_raw_inventory"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
             config = {"ips": [{"id": "IP_A", "raw_version": "V2", "projection_json": str(source_path),
                 "checks": {"lef_review": {"pairs": [{"file_key": "lef:a.lef"}, {"file_key": "lef:b.lef"}]}}}]}
             reviews, _ = run(config, root / "output")
@@ -160,7 +194,8 @@ class FileVersionProjectionTests(unittest.TestCase):
             self.assertEqual(len(review["checks"]["lef_review"]["result"]["pairs"]), 2)
             self.assertEqual(len(review["checks"]["lef_review"]["input_identity"]["sources"]), 4)
             updated = review["file_version_projection"]
-            self.assertEqual(updated["source_snapshot_id"], source["snapshot_id"])
+            self.assertEqual(updated["source_snapshot_id"], "original_raw_inventory")
+            self.assertEqual(updated["input_snapshot_id"], source["snapshot_id"])
             self.assertNotEqual(updated["snapshot_id"], source["snapshot_id"])
             self.assertEqual([row["comparison"]["content_status"] for row in updated["files"]], ["BYTE_DIFFERENT", "BYTE_DIFFERENT"])
             self.assertTrue(all(row["comparison"]["evidence_refs"] for row in updated["files"]))

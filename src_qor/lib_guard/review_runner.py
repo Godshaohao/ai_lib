@@ -544,7 +544,8 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                         row["comparison"].update({"content_status": content_status,
                             "semantic_status": semantic, "unverified": comp.get("unverified") or [],
                             "evidence_refs": [f"evidence/lef_batch/{pair['evidence_ref']}"]})
-                    projection["source_snapshot_id"] = projection["snapshot_id"]
+                    projection["input_snapshot_id"] = projection["snapshot_id"]
+                    projection.setdefault("source_snapshot_id", projection["snapshot_id"])
                     projection["snapshot_id"] = f"review_projection_{review_id}"
                     projection["summary"]["not_compared"] = sum(row["comparison"]["content_status"] == "NOT_COMPARED" for row in projection["files"])
                     projection["coverage"]["content_comparison"] = "PARTIAL"

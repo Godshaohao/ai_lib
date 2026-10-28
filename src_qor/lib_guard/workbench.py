@@ -982,8 +982,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             try:
                 reviewed = _json_read(evidence)
                 if (reviewed.get("library_id") == library_id and reviewed.get("schema_version") in {"file_version_projection.v1", "file_version_projection.v2"}
-                        and (matrix_historical or reviewed.get("source_snapshot_id") == file_version_projection.get("snapshot_id"))):
-                    matrix_source_snapshot_id = str(reviewed.get("source_snapshot_id") or matrix_source_snapshot_id)
+                        and (matrix_historical or (reviewed.get("input_snapshot_id") or reviewed.get("source_snapshot_id")) == file_version_projection.get("snapshot_id"))):
+                    matrix_source_snapshot_id = str(reviewed.get("input_snapshot_id") or reviewed.get("source_snapshot_id") or matrix_source_snapshot_id)
                     file_version_projection = reviewed
                 else:
                     matrix_review_id = ""
@@ -1369,6 +1369,97 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
             return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files",
                                     file_status_error=str(exc)), code=303)
 
+    @blueprint.post("/file-status/link-formal")
+    def link_saved_formal():
+        if not _is_loopback_request():
+            abort(403)
+        ip_id = _text(request.form, "ip")
+        try:
+            registry = _read_registry(registry_file)
+            entry = next((item for item in registry.get("ips", []) if str(item.get("id")) == ip_id), None)
+            if entry is None:
+                abort(404)
+            library_id = str(entry.get("library_id") or entry.get("id") or "")
+            status = _read_lef_file_status(output, registry, entry, _read_formal_nl_snapshot(output, registry))
+            projection = _read_file_version_projection(output, library_id, status)
+            pointer = _json_read(output / "file_versions" / _library_dir(library_id) / "latest.json")
+            if (status.get("registry_fingerprint") != _formal_nl_config_fingerprint(registry)
+                    or not projection or projection.get("snapshot_id") != _text(request.form, "snapshot_id")
+                    or pointer.get("snapshot_id") != projection.get("snapshot_id")):
+                raise ValueError("RAW 快照已变化或过期，请先刷新 RAW 文件清单")
+            snapshot_path = output / "formal_nl" / "overview" / "latest.json"
+            if not snapshot_path.is_file():
+                raise ValueError("尚无正式 NL 快照，请先在正式 NL 页面刷新")
+            snapshot = _json_read(snapshot_path)
+            if snapshot.get("config_fingerprint") != _formal_nl_config_fingerprint(registry):
+                raise ValueError("正式 NL 快照已过期，请先刷新正式 NL")
+            overview = snapshot.get("overview") or {}
+            if not isinstance(overview.get("files"), list):
+                raise ValueError("正式 NL 快照缺少文件明细")
+            ip_files = [item for item in overview["files"] if str(item.get("library_id") or "") == library_id]
+            stages = {str(item.get("stage") or "") for item in ip_files if item.get("stage")}
+            configured = set(str(item) for item in entry.get("formal_nl_stages") or [])
+            stage = next(iter(stages)) if len(stages) == 1 else next(iter(stages & configured)) if len(stages & configured) == 1 else ""
+            if len(stages) > 1 and not stage:
+                raise ValueError("正式 NL 包含多个阶段，无法确定来源；请先明确阶段")
+            versions = [{"id": str(item.get("id") or ""), "path": _resolve_registry_path(str(item.get("path") or ""), registry_file),
+                         **{key: item[key] for key in ("delivery_order", "delivery_date", "date") if key in item}}
+                        for item in entry.get("raw_versions") or []]
+            by_version = {item["id"]: [] for item in versions}
+            for row in projection.get("files") or []:
+                for occurrence in row.get("occurrences") or []:
+                    if occurrence.get("version") in by_version:
+                        by_version[occurrence["version"]].append(occurrence.get("source_path"))
+            inventory_status = projection.get("scope", {}).get("inventory_status") or {}
+            inventories = [{"version_id": version, "files": paths, "status": inventory_status.get(version, "UNKNOWN")}
+                           for version, paths in by_version.items()]
+            scope = projection.get("scope") or {}
+            linked = build_projection(library_id, versions, inventories, [item for item in ip_files if not stage or item.get("stage") == stage],
+                                      base_version=scope.get("base_version") or "", target_version=scope.get("target_version") or "", formal_stage=stage)
+            linked_rows = {row["file_key"]: row for row in linked["files"]}
+            existing = {row["file_key"] for row in projection["files"]}
+            for row in projection["files"]:
+                if row["file_key"] in linked_rows:
+                    row["formal_usage"] = linked_rows[row["file_key"]]["formal_usage"]
+                    if overview.get("status") != "COMPLETE" and row["formal_usage"].get("observation_status") == "NOT_OBSERVED":
+                        row["formal_usage"]["observation_status"] = "UNKNOWN"
+                    if row["formal_usage"].get("observation_status") == "AMBIGUOUS":
+                        row["identity_status"] = "AMBIGUOUS"
+                    row["capabilities"] = derive_file_capabilities(row)
+            projection["files"].extend(row for row in linked["files"] if row["file_key"] not in existing)
+            projection["unbound_formal_files"] = linked["unbound_formal_files"]
+            projection["coverage"]["formal_inventory"] = "SNAPSHOT_ONLY"
+            projection["scope"]["formal_stage"] = stage
+            projection.setdefault("source_snapshot_id", projection["snapshot_id"])
+            projection["input_snapshot_id"] = projection["snapshot_id"]
+            projection.setdefault("sources", {}).update({"formal_snapshot_generated_at": snapshot.get("generated_at"), "formal_snapshot_ref": str(snapshot_path)})
+            projection_root = output / "file_versions" / _library_dir(library_id)
+            status_path = _file_status_path(output, library_id)
+            with (projection_root / ".publish.lock").open("a+") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                old_status = status_path.read_bytes()
+                def publish_link(saved_projection):
+                    saved = dict(status)
+                    saved["projection_snapshot_id"] = saved_projection["snapshot_id"]
+                    saved["raw_only"] = True
+                    if saved.get("status") == "STALE":
+                        saved["status"] = "COMPLETE" if projection.get("coverage", {}).get("raw_inventory") == "COMPLETE" else "INCOMPLETE"
+                    _write_json(status_path, saved)
+                    def rollback():
+                        temporary = status_path.with_name(f".{status_path.name}.{uuid4().hex}.tmp")
+                        try:
+                            temporary.write_bytes(old_status)
+                            temporary.replace(status_path)
+                        finally:
+                            temporary.unlink(missing_ok=True)
+                    return rollback
+                publish_projection(projection_root, projection, before_publish=publish_link)
+            return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files", file_status_refreshed="1"), code=303)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return redirect(url_for("ip_review.index", ip=ip_id, tab="review", review_tab="files", file_status_error=str(exc)), code=303)
+
     @blueprint.post("/file-status/range")
     def reproject_file_status_range():
         """Change Base/Target against the existing inventory snapshot only."""
@@ -1446,7 +1537,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                 raise ValueError("所选文件不属于当前矩阵")
             if any(not row.get("capabilities", {}).get("content_comparable") for row in selected_rows):
                 raise ValueError("所选文件尚未形成唯一 Base / Target 配对；请先应用交付范围")
-            projection["source_snapshot_id"] = projection["snapshot_id"]
+            projection["input_snapshot_id"] = projection["snapshot_id"]
+            projection.setdefault("source_snapshot_id", projection["snapshot_id"])
             compare_projection_files(projection, selected_keys=keys)
             projection_root = output / "file_versions" / _library_dir(library_id)
             status_path = _file_status_path(output, library_id)
@@ -1835,6 +1927,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                              "projection_json": projection_ref,
                              "checks": {"lef_review": {"pairs": [{"file_key": key} for key in keys]}}}
                 else:
+                    if len(keys) != 1:
+                        raise ValueError("单版本 LEF–Liberty 接口检查一次只能选择一个 LEF 文件")
                     if any(not row.get("capabilities", {}).get("lef_checkable") for row in selected_rows):
                         raise ValueError("所选文件尚未形成可执行的单文件 LEF 检查目标；请先确认交付顺序或选择 Base / Target")
                     target_versions = set()
@@ -1854,6 +1948,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                         raise ValueError("目标交付未发现可用于 LEF 接口检查的 Liberty 文件；可转到手动检查补充路径")
                     single_projection = reproject_projection(
                         projection, base_version="", target_version=single_target)
+                    single_projection["input_snapshot_id"] = projection["snapshot_id"]
                     single_projection["snapshot_id"] = f"{projection['snapshot_id']}_single_{uuid4().hex}"
                     single_projection_path = (output / "file_versions" / _library_dir(library_id) /
                                               "runs" / projection["snapshot_id"] /

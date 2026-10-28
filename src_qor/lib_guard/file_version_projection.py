@@ -44,16 +44,21 @@ def resolve_version_order(versions: list[dict[str, Any]]) -> dict[str, Any]:
     explicit = [item.get("delivery_order") for item in versions]
     if ids and all(value is not None and str(value) != "" for value in explicit):
         try:
-            pairs = list(zip(ids, explicit))
+            if any(isinstance(value, bool) or not re.fullmatch(r"[+-]?\d+", str(value).strip()) for value in explicit):
+                raise ValueError("invalid order")
+            pairs = list(zip(ids, [int(str(value).strip()) for value in explicit]))
             values = [value for _, value in pairs]
             if len(set(values)) != len(values):
                 raise ValueError("duplicate")
             ordered = [item_id for item_id, _ in sorted(pairs, key=lambda pair: pair[1])]
             return {"status": "KNOWN", "basis": "EXPLICIT", "ordered_ids": ordered, "warnings": []}
         except (TypeError, ValueError):
-            warnings.append("EXPLICIT_ORDER_INVALID")
+            return {"status": "UNKNOWN", "basis": "UNKNOWN", "ordered_ids": [], "warnings": ["EXPLICIT_ORDER_INVALID"]}
     elif any(value is not None and str(value) != "" for value in explicit):
-        warnings.append("EXPLICIT_ORDER_INCOMPLETE")
+        return {"status": "UNKNOWN", "basis": "UNKNOWN", "ordered_ids": [], "warnings": ["EXPLICIT_ORDER_INCOMPLETE"]}
+
+    if len(ids) == 1:
+        return {"status": "KNOWN", "basis": "SINGLE", "ordered_ids": ids, "warnings": []}
 
     dated = [(item_id, _version_date(version)) for item_id, version in zip(ids, versions)]
     dates = [value for _, value in dated]
@@ -92,10 +97,16 @@ def rank_occurrences(occurrences: list[dict[str, Any]], version_order: dict[str,
     status = "UNKNOWN_COVERAGE" if uncertain_later else "CONFIRMED"
     latest = {"status": status, "version": ordered[0], "source_path": observed_latest.get("source_path")}
     if len(ordered) < 2:
-        previous = {"status": "NONE" if not uncertain_later else "UNKNOWN_COVERAGE"}
+        uncertain_earlier = any(item.get("status") != "COMPLETE" and order_index.get(version, -1) < order_index[ordered[0]]
+                                for version, item in inventories.items() if version in order_index)
+        previous = {"status": "UNKNOWN_COVERAGE" if uncertain_later or uncertain_earlier else "NONE"}
     else:
         observed_previous = unique[ordered[1]]
-        previous = {"status": status, "version": ordered[1], "source_path": observed_previous.get("source_path")}
+        uncertain_versions = [version for version, item in inventories.items() if item.get("status") != "COMPLETE" and order_index[ordered[1]] < order_index.get(version, -1) < order_index[ordered[0]]]
+        uncertain_between = bool(uncertain_versions)
+        previous = {"status": "UNKNOWN_COVERAGE" if uncertain_later or uncertain_between else "CONFIRMED", "version": ordered[1], "source_path": observed_previous.get("source_path")}
+        if uncertain_versions:
+            previous["uncertain_versions"] = uncertain_versions
     return latest, previous
 
 
@@ -119,8 +130,7 @@ def derive_file_capabilities(row: dict[str, Any]) -> dict[str, Any]:
         and comparison.get("target_version")
     )
     single_target = bool(
-        (latest.get("version") and latest.get("source_path"))
-        or (len(occurrences) == 1 and occurrences[0].get("version") and occurrences[0].get("source_path"))
+        latest.get("status") == "CONFIRMED" and latest.get("version") and latest.get("source_path")
     )
     lef_checkable = bool(
         str(row.get("view") or "") == "lef"
@@ -312,12 +322,15 @@ def reproject_projection(projection: dict[str, Any], *, base_version: str = "",
     """
     result = deepcopy(projection)
     scope = result.setdefault("scope", {})
+    scope_changed = (str(scope.get("base_version") or ""), str(scope.get("target_version") or "")) != (base_version, target_version)
     registered = [str(value or "") for value in scope.get("registered_versions") or []]
     if any(value and value not in registered for value in (base_version, target_version)):
         raise ValueError("基准或目标版本未登记")
     source_snapshot_id = str(result.get("source_snapshot_id") or result.get("snapshot_id") or "")
     if source_snapshot_id:
         result["source_snapshot_id"] = source_snapshot_id
+    if result.get("snapshot_id"):
+        result["input_snapshot_id"] = result["snapshot_id"]
     scope["base_version"] = base_version
     scope["target_version"] = target_version
     inventory_status = {str(key): str(value or "UNKNOWN")
@@ -362,18 +375,23 @@ def reproject_projection(projection: dict[str, Any], *, base_version: str = "",
         else:
             delivery_relation = "UNKNOWN_COVERAGE"
         comparison = row.setdefault("comparison", {})
+        if scope_changed:
+            for key in ("comparison_evidence", "comparison_mode", "comparison_reason", "unverified"):
+                comparison.pop(key, None)
+            comparison.update({"content_status": "NOT_COMPARED", "semantic_status": "NOT_CHECKED", "evidence_refs": []})
+            row["findings"] = []
         comparison.update({"base_version": base_version, "target_version": target_version,
                            "base_presence": base_presence, "target_presence": target_presence,
                            "delivery_relation": delivery_relation})
         row["identity_status"] = identities
         row["identity_evidence"] = "VIEW_AND_RELATIVE_PATH"
         row["capabilities"] = derive_file_capabilities(row)
-    for row in result.get("files") or []:
-        row["capabilities"] = derive_file_capabilities(row)
-    result["coverage"] = {**(result.get("coverage") or {}), "content_comparison": "NOT_COMPARED"}
+    if scope_changed:
+        result["coverage"] = {**(result.get("coverage") or {}), "content_comparison": "NOT_COMPARED"}
+        result.setdefault("summary", {}).pop("content_compared", None)
     result["summary"] = {**(result.get("summary") or {}),
                           "file_count": len(result.get("files") or []),
-                          "not_compared": len(result.get("files") or []),
+                          "not_compared": sum(row.get("comparison", {}).get("content_status") == "NOT_COMPARED" for row in result.get("files") or []),
                           "unresolved_identity": sum(row.get("identity_status") != "EXACT_RELATIVE_PATH"
                                                      for row in result.get("files") or [])}
     return result
