@@ -34,8 +34,9 @@ from .raw_discovery import discover_raw_report, write_discovery_artifacts
 from .file_status import build_file_status, scan_registered_raw_files, TRACKED_VIEWS
 from .file_version_projection import build_projection, derive_file_capabilities, publish_projection, reproject_projection
 from .content_compare import compare_projection_files
-from . import effective_file_tracker
+from . import effective_file_tracker, macro_index
 from .effective_file_tracker import run as run_formal_nl
+from .current_library_set import build_current_file_set, build_interface_groups
 
 
 _REVIEW_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ip-review")
@@ -100,7 +101,9 @@ def _prepare_applicable_review(entry: dict[str, Any], registry: dict[str, Any],
     library_id = str(entry.get("library_id") or entry.get("id") or "")
     versions = [{"id": str(item.get("id") or ""),
                  "path": _resolve_registry_path(str(item.get("path") or ""), registry_file),
-                 **{key: item[key] for key in ("delivery_order", "delivery_date", "date") if key in item}}
+                 **{key: item[key] for key in (
+                     "delivery_order", "delivery_date", "date", "package_type",
+                     "previous_effective_version", "base_full_version") if key in item}}
                 for item in entry.get("raw_versions") or []]
     inventories = scan_registered_raw_files(versions)
 
@@ -155,9 +158,31 @@ def _prepare_applicable_review(entry: dict[str, Any], registry: dict[str, Any],
         "formal_snapshot_generated_at": formal_state.get("generated_at") or "",
         "formal_snapshot_ref": str(formal_path) if overview else "",
     }
+    current_file_set = build_current_file_set(versions, inventories)
+    current_filemap = {
+        "library_id": library_id,
+        "context": {"type": "RAW_CURRENT_FILE_SET", "candidate_version": current_file_set.get("candidate_version")},
+        "files": [{"view": item.get("view"), "relative_path": item.get("relative_path"),
+                   "source_path": item.get("source_path"), "source_version": item.get("source_version")}
+                  for item in current_file_set.get("files") or []],
+    }
+    current_filemap["files"] = [item for item in current_filemap["files"] if item.get("source_path")]
+    current_set_dir = output / "current_file_sets" / _library_dir(library_id)
+    current_set_dir.mkdir(parents=True, exist_ok=True)
+    current_set_path = current_set_dir / "latest.json"
+    current_filemap_path = current_set_dir / "macro_filemap.json"
+    _write_json(current_set_path, current_file_set)
+    _write_json(current_filemap_path, current_filemap)
+    parser_facts = macro_index.build_parser_facts(current_filemap)
+    interface_groups = build_interface_groups(current_file_set, parser_facts)
     plan = build_applicable_plan(projection,
                                  {item["id"]: item["path"] for item in versions if item["id"]},
-                                 formal_state={**formal_state, "stages": formal_stages})
+                                 formal_state={**formal_state, "stages": formal_stages},
+                                 current_file_set=current_file_set,
+                                 interface_groups=interface_groups,
+                                 current_filemap_json=str(current_filemap_path))
+    if plan["checks"].get("lef_liberty_check"):
+        plan["checks"]["lef_liberty_check"]["current_file_set"] = current_file_set
     scoped_projection = plan["projection"]
     if plan["content_keys"]:
         compare_projection_files(scoped_projection, selected_keys=plan["content_keys"])
@@ -2374,6 +2399,7 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                     _update_task(task_path, latest_attempt_path, finished)
                     _refresh_overview(registry_file, output)
                 except Exception as exc:
+                    _LOG.exception("检查任务失败 library_id=%s task_id=%s", library_id, task.get("task_id"))
                     failed = _task_event({
                         **running, "status": "FAILED", "execution_status": "FAILED",
                         "finished_at": datetime.now(timezone.utc).isoformat(), "error": str(exc),

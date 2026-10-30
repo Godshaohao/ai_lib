@@ -10,7 +10,7 @@ from typing import Any
 
 from .effective_file_tracker import _view_for_path, _view_relative_key, longest_registered_path_match
 
-TRACKED_VIEWS = frozenset({"lef", "liberty", "db", "gds", "oas", "verilog", "cdl", "spice"})
+TRACKED_VIEWS = frozenset({"lef", "liberty", "db", "gds", "oas", "verilog", "cdl", "spice", "doc"})
 
 _MAX_DIRECTORIES = 200
 _MAX_ENTRIES = 2000

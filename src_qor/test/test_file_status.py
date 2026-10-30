@@ -5,6 +5,23 @@ from pathlib import Path
 
 
 class LefFileStatusTests(unittest.TestCase):
+    def test_document_files_are_included_in_raw_file_inventory(self):
+        from lib_guard.effective_file_tracker import _view_for_path
+        from lib_guard.file_status import scan_registered_raw_files
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "V1"
+            (root / "DOC").mkdir(parents=True)
+            (root / "DOC" / "README.md").write_text("User guide", encoding="utf-8")
+            (root / "DOC" / "datasheet.pdf").write_bytes(b"%PDF")
+            versions = [{"id": "V1", "path": str(root)}]
+            inventory = scan_registered_raw_files(versions)
+
+        self.assertEqual(_view_for_path(Path("DOC/README.md")), "doc")
+        self.assertEqual(_view_for_path(Path("DOC/datasheet.pdf")), "doc")
+        self.assertEqual(inventory[0]["status"], "COMPLETE")
+        self.assertEqual({Path(item).suffix for item in inventory[0]["files"]}, {".md", ".pdf"})
+
     def test_multiview_formal_and_raw_only_files_keep_distinct_corners(self):
         from lib_guard.file_status import build_file_status, scan_registered_raw_files
         with tempfile.TemporaryDirectory() as temp:

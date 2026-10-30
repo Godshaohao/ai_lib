@@ -217,6 +217,32 @@ class FileVersionProjectionTests(unittest.TestCase):
                 self.assertIn(str(root / 'V2' / 'LEF' / 'b.lef'), strings)
 
     @unittest.skipUnless(importlib.util.find_spec("xlsxwriter"), "需要已安装的 XlsxWriter")
+    def test_unknown_delivery_order_allows_report_without_scoped_checks(self):
+        from lib_guard.review_runner import run
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            projection = root / "projection.json"
+            projection.write_text(json.dumps({
+                "schema_version": "file_version_projection.v2",
+                "snapshot_id": "snapshot_unknown_order",
+                "library_id": "IP_A",
+                "scope": {"base_version": "", "target_version": ""},
+                "version_order": {"status": "UNKNOWN", "ordered_ids": []},
+                "coverage": {"raw_inventory": "COMPLETE"},
+                "files": [],
+            }), encoding="utf-8")
+
+            reviews, _ = run({"ips": [{
+                "id": "IP_A", "library_id": "IP_A", "raw_version": "",
+                "projection_json": str(projection), "checks": {},
+            }]}, root / "out")
+
+            self.assertEqual(len(reviews), 1)
+            self.assertEqual(reviews[0]["file_version_projection"]["snapshot_id"], "snapshot_unknown_order")
+            self.assertEqual(reviews[0]["execution_status"], "INCOMPLETE")
+
+    @unittest.skipUnless(importlib.util.find_spec("xlsxwriter"), "需要已安装的 XlsxWriter")
     def test_explicit_projection_is_copied_into_review_and_excel(self):
         from lib_guard.review_runner import run
         with tempfile.TemporaryDirectory() as temp:

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from lib_guard.review_runner import (_finding_rows, _publish_latest_workbook, _qa_rows, _review_summary,
                                     _input_identity, _input_scope, _input_scope_label,
-                                    _run_formal, _source_revision,
+                                    _finalize_engineering_checklist, _run_formal, _source_revision,
                                     _write_latest_if_newer, build_workbook_model, run, run_review)
 
 
@@ -257,6 +257,18 @@ class ReviewRunnerTests(unittest.TestCase):
                 self.assertEqual(axes["process_corner"], label)
                 self.assertEqual(axes["process_corner_candidates"], [label])
                 self.assertFalse(axes["conflict"])
+
+    def test_ssg_process_corner_is_extracted_from_operating_condition_name(self):
+        axes = _corner_axes(Path("generic_slow.lib"), ["generic_slow"], ["ssg_0p72v_125c"])
+        self.assertEqual(axes["process_corner"], "SSG")
+        self.assertEqual(axes["process_corner_candidates"], ["SSG"])
+
+    def test_pvt_coverage_does_not_require_numeric_liberty_process_attribute(self):
+        from lib_guard.review_runner import _file_has_pvt_observation
+
+        item = {"source_path": "/raw/LIB/model.lib", "operating_conditions": {
+            "model": {"ssg_0p72v_125c": {"process": None, "voltage": "0.72", "temperature": "125"}}}}
+        self.assertTrue(_file_has_pvt_observation(item))
 
     def test_interface_mismatch_rollup_counts_instances_by_combined_reason(self):
         cells = []
@@ -1161,14 +1173,26 @@ class ReviewRunnerTests(unittest.TestCase):
         self.assertEqual((liberty_row["来源版本"], liberty_row["Corner/线索"], liberty_row["状态"]),
                          ("V2", "TT", "PARSED_OBJECT"))
         checklist = model["01-工程检查"]
-        self.assertEqual(len(checklist), 10)
+        self.assertEqual(len(checklist), 9)
         self.assertEqual(checklist[0]["工程检查主题"], "RAW 文件盘点")
         self.assertIn("正式 NL 来源", [row["工程检查主题"] for row in checklist])
-        self.assertEqual(checklist[-1]["工程检查主题"], "文档更新 Delta")
+        self.assertNotIn("doc_delta", {row["检查项ID"] for row in checklist})
         self.assertIn("工程覆盖", checklist[0])
         self.assertIn("本次执行", checklist[0])
 
-    def test_engineering_checklist_uses_ten_source_topics_and_never_marks_unrun_as_pass(self):
+    def test_raw_document_files_remain_visible_without_a_document_delta_check(self):
+        item = {"ip": {"id": "IP_A"}}
+        item["inventory_snapshot"] = {"report": {"raw_library": {
+            "versions": [{"version_id": "V1", "path": "/raw/V1", "inventory_status": "COMPLETE"}],
+            "inventories": {"V1": {"status": "COMPLETE", "files": [
+                {"view": "doc", "relative_path": "DOC/README.md", "source_path": "/raw/V1/DOC/README.md"}],
+                "view_counts": {"doc": 1}}}}}}
+        model = build_workbook_model([item])
+        self.assertEqual(len(model["RAW文件清单"]), 1)
+        self.assertEqual(model["RAW文件清单"][0]["View"], "文档")
+        self.assertEqual(model["RAW文件清单"][0]["相对路径"], "DOC/README.md")
+
+    def test_engineering_checklist_uses_nine_source_topics_and_never_marks_unrun_as_pass(self):
         item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
         item["checks"].pop("formal_nl")
         item["engineering_checklist"] = [
@@ -1181,12 +1205,74 @@ class ReviewRunnerTests(unittest.TestCase):
         model = build_workbook_model([item])
 
         rows = model["01-工程检查"]
-        self.assertEqual(len(rows), 10)
+        self.assertEqual(len(rows), 9)
         raw = next(row for row in rows if row["检查项ID"] == "raw_inventory")
         corner = next(row for row in rows if row["检查项ID"] == "corner_coverage")
         self.assertEqual((raw["本次执行"], raw["本次结果"]), ("已执行", "2 个交付已盘点"))
         self.assertEqual((corner["本次执行"], corner["未完成原因"]), ("未执行", "未配置期望 Corner 集合"))
         self.assertNotIn("通过", corner["本次结果"])
+
+    def test_view_inventory_is_executed_and_reports_observed_views_without_claiming_completeness(self):
+        item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")
+        item["checks"].pop("formal_nl")
+        item["checks"]["macro_index"]["result"]["filemap"] = {"files": [
+            {"view": "lef", "relative_path": "LEF/a.lef"},
+            {"view": "liberty", "relative_path": "LIB/tt.lib"},
+            {"view": "gds", "relative_path": "GDS/a.gds"},
+        ]}
+        item["engineering_checklist"] = [{
+            "id": "view_completeness", "topic": "Macro 六类文件齐套", "execution": "计划执行",
+            "result": "盘点当前 View", "reason": "无项目必需 View 规则",
+            "evidence": "evidence/macro_index.json", "check_names": ["macro_index"]}]
+
+        _finalize_engineering_checklist(item)
+        row = item["engineering_checklist"][0]
+        self.assertEqual(row["execution"], "已执行")
+        self.assertIn("LEF×1", row["result"])
+        self.assertIn("Liberty×1", row["result"])
+        self.assertIn("GDS×1", row["result"])
+        self.assertIn("尚无项目必需 View 规则", row["reason"])
+        self.assertNotIn("齐套通过", row["result"])
+
+    def test_corner_checklist_lists_observed_corner_counts_and_links_per_liberty_pvt(self):
+        item = {"ip": {"id": "IP_A"}, "engineering_checklist": [{
+            "id": "corner_coverage", "topic": "Signoff Corner 覆盖", "execution": "部分覆盖",
+            "result": "将观察 3 个 Liberty 的 Corner/PVT",
+            "reason": "未配置期望 Corner 集合；报告观察结果，不判断齐套",
+            "evidence": "evidence/lef_liberty_check.json"}],
+            "checks": {"lef_liberty_check": {
+            "selected": True, "status": "COMPLETE", "result_ref": "evidence/lef_liberty_check.json",
+            "result": {"summary": {"liberty_file_count": 3,
+                "process_corner_file_counts": {"FF": 1, "SS": 1, "TT": 1},
+                "files_with_unknown_process_corner": 0, "files_with_unknown_rc_corner": 3}, "files": [
+                {"liberty_source": f"/raw/V2/{corner}.lib", "library_names": [f"lib_{corner.lower()}"],
+                 "corner_axes": {"process_corner": corner, "rc_corner": "未识别"},
+                 "operating_conditions": {f"lib_{corner.lower()}": {"nominal": {
+                     "process": process, "voltage": voltage, "temperature": temperature}}},
+                 "liberty_inventory": {"cell_count": 1}, "summary": {"matched_macro_count": 1}, "cells": []}
+                for corner, process, voltage, temperature in (
+                    ("FF", "1", "1.32", "-55"), ("SS", "2", "1.08", "125"),
+                    ("TT", "1", "1.20", "25"))]}}}}
+
+        _finalize_engineering_checklist(item)
+        self.assertIn("FF×1", item["engineering_checklist"][0]["result"])
+        self.assertIn("RC角未识别 3 个文件", item["engineering_checklist"][0]["result"])
+        model = build_workbook_model([item])
+
+        corner = next(row for row in model["01-工程检查"] if row["检查项ID"] == "corner_coverage")
+        self.assertIn("3 个 Liberty", corner["本次结果"])
+        for label in ("FF×1", "SS×1", "TT×1"):
+            self.assertIn(label, corner["本次结果"])
+        self.assertIn("未配置期望 Corner", corner["未完成原因"])
+        self.assertNotIn("输入组合待确认", corner["未完成原因"])
+        detail = model["09-Liberty角"]
+        self.assertEqual({row["PVT Process"] for row in detail}, {"FF", "SS", "TT"})
+        self.assertNotIn("工艺角线索", detail[0])
+        self.assertNotIn("Liberty process attr", detail[0])
+        self.assertEqual({row["Voltage (V)"] for row in detail}, {1.32, 1.08, 1.2})
+        self.assertEqual({row["Temp (°C)"] for row in detail}, {-55, 125, 25})
+        self.assertEqual({Path(row["Liberty文件"]).name for row in detail},
+                         {"FF.lib", "SS.lib", "TT.lib"})
 
     def test_only_selected_checks_add_details_and_questions(self):
         item = review("IP_A", "MACRO_A", "/raw/a/LEF/a.lef")

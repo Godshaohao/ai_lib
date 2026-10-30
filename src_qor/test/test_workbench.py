@@ -87,7 +87,7 @@ END LIBRARY
             self.assertEqual(response.status_code, 303)
             latest_attempt = json.loads((library_dir / "latest_attempt.json").read_text(encoding="utf-8"))
             self.assertEqual(latest_attempt["status"], "COMPLETE", latest_attempt)
-            self.assertEqual(latest_attempt["execution_status"], "COMPLETE")
+            self.assertEqual(latest_attempt["execution_status"], "COMPLETE", latest_attempt)
             self.assertEqual(latest_attempt["coverage_status"], "INCOMPLETE")
             review_id = latest_attempt["review_id"]
             run_dir = library_dir / "runs" / review_id
@@ -97,11 +97,11 @@ END LIBRARY
             for header in ("Review ID", "检查覆盖", "RAW 盘点快照", "Formal 快照状态", "交付范围"):
                 self.assertIn(header, workbook_text)
             for topic in ("RAW 文件盘点", "文件更新与清单 Delta", "正式 NL 来源", "Macro 清单、来源与变化",
-                          "Macro 六类文件齐套", "Signoff Corner 覆盖", "LEF 物理属性 Delta",
-                          "接口与跨 View 一致性", "其他 View 内部对象检查", "文档更新 Delta"):
+                          "View 清单与齐套观察", "Signoff Corner 覆盖", "LEF 物理属性 Delta",
+                          "接口与跨 View 一致性", "其他 View 内部对象检查"):
                 self.assertIn(topic, workbook_text)
             record = json.loads((run_dir / "review_result.json").read_text(encoding="utf-8"))
-            self.assertEqual(len(record["engineering_checklist"]), 10, record)
+            self.assertEqual(len(record["engineering_checklist"]), 9, record)
             self.assertTrue(record["one_click_applicable"])
             self.assertEqual(record["coverage_status"], "INCOMPLETE")
             lef_scope = next(item for item in record["input_scope"]["checks"] if item["name"] == "lef_review")
@@ -115,6 +115,65 @@ END LIBRARY
             self.assertIn("不完整", page)
             self.assertIn(review_id, page)
             self.assertIn("下载 Excel", page)
+
+    def test_one_click_single_delivery_runs_with_matching_projection_target(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            version_root = root / "V1"
+            version_root.mkdir()
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "A", "library_id": "V.A",
+                "name": "IP A", "raw_versions": [{"id": "V1", "path": str(version_root)}]}]}),
+                encoding="utf-8")
+            output = root / "out"
+            client = create_app(registry, output).test_client()
+            from lib_guard.review_runner import _library_dir
+            library_dir = output / "libraries" / _library_dir("V.A")
+
+            with patch.object(workbench._REVIEW_EXECUTOR, "submit", side_effect=lambda callback: callback()):
+                response = client.post("/run", data={"mode": "applicable", "id": "A", "library_id": "V.A"})
+
+            self.assertEqual(response.status_code, 303)
+            attempt = json.loads((library_dir / "latest_attempt.json").read_text(encoding="utf-8"))
+            self.assertEqual(attempt["status"], "COMPLETE", attempt)
+            self.assertEqual(attempt["requested_checks"], ["macro_index"])
+            run_dir = library_dir / "runs" / attempt["review_id"]
+            record = json.loads((run_dir / "review_result.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["execution_status"], "COMPLETE")
+            self.assertEqual(record["input_scope"]["delivery_scope"]["target_version"], "V1")
+            projection = json.loads((run_dir / "evidence" / "file_version_projection.json").read_text(encoding="utf-8"))
+            self.assertEqual(projection["scope"]["target_version"], "V1")
+
+    def test_task_failure_keeps_version_context_and_logs_traceback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "registry.yml"
+            registry.write_text(json.dumps({"ips": [{"id": "A", "library_id": "V.A",
+                "raw_versions": []}]}), encoding="utf-8")
+            projection = root / "projection.json"
+            projection.write_text(json.dumps({"schema_version": "file_version_projection.v1",
+                "snapshot_id": "s1", "library_id": "V.A",
+                "scope": {"base_version": "", "target_version": "V1"}, "files": []}),
+                encoding="utf-8")
+            run_entry = {"id": "A", "library_id": "V.A", "raw_version": "V2",
+                         "projection_json": str(projection),
+                         "checks": {"macro_index": {"root": str(root), "version": "V2"}}}
+            output = root / "out"
+            client = create_app(registry, output).test_client()
+            from lib_guard.review_runner import _library_dir
+            library_dir = output / "libraries" / _library_dir("V.A")
+
+            with patch.object(workbench._REVIEW_EXECUTOR, "submit", side_effect=lambda callback: callback()), \
+                 patch.object(workbench, "_prepare_applicable_review", return_value=run_entry), \
+                 self.assertLogs(workbench._LOG, level="ERROR") as captured:
+                response = client.post("/run", data={"mode": "applicable", "id": "A", "library_id": "V.A"})
+
+            self.assertEqual(response.status_code, 303)
+            attempt = json.loads((library_dir / "latest_attempt.json").read_text(encoding="utf-8"))
+            self.assertEqual(attempt["status"], "FAILED")
+            self.assertIn("V1", attempt["error"])
+            self.assertIn("V2", attempt["error"])
+            self.assertIn("Traceback", "\n".join(captured.output))
 
     def test_scanned_ip_opens_three_task_views_and_defaults_to_file_lookup(self):
         with tempfile.TemporaryDirectory() as temp:

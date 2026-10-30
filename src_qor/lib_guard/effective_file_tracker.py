@@ -16,7 +16,7 @@ from typing import Any
 NL_VERSION_RE = re.compile(r"^lib_NL(?P<version>.+)$", re.IGNORECASE)
 NUMBERS_RE = re.compile(r"\d+")
 PROCESS_CORNER_RE = re.compile(
-    r"(?:^|[_.-])(FFPG|SSPG|TTNOMINAL|FAST|SLOW|TYP|TT|SS|FF|SF|FS)(?=$|[_.-])",
+    r"(?:^|[_.-])(SSG|FFG|TTG|FFPG|SSPG|TTNOMINAL|FAST|SLOW|TYP|TT|SS|FF|SF|FS)(?=$|[_.-])",
     re.IGNORECASE,
 )
 RC_CORNER_RE = re.compile(r"(?:^|[_.-])(SIGRCMIN|SIGRCMAX)(?=$|[_.-])", re.IGNORECASE)
@@ -26,8 +26,12 @@ VIEW_DIRECTORIES = {
     "VERILOG": "verilog", "RTL": "verilog", "CDL": "cdl",
     "SPICE": "spice", "SPEF": "spef", "SDF": "sdf", "NDM": "ndm",
     "NDM_WO_LIB": "ndm", "QRC": "qrc", "TECHNOLOGY": "technology",
+    "DOC": "doc", "DOCS": "doc", "DOCUMENT": "doc", "DOCUMENTS": "doc",
+    "DOCUMENTATION": "doc",
 }
 VIEW_SUFFIXES = (
+    (".docx", "doc"), (".doc", "doc"), (".pdf", "doc"), (".md", "doc"),
+    (".rst", "doc"), (".rtf", "doc"), (".adoc", "doc"), (".txt", "doc"),
     (".lib.gz", "liberty"), (".lib", "liberty"), (".lef.gz", "lef"), (".lef", "lef"),
     (".gds", "gds"), (".gds.gz", "gds"), (".oas", "oas"),
     (".db", "db"), (".v", "verilog"), (".sv", "verilog"),
@@ -185,9 +189,9 @@ def _view_for_path(relative: Path) -> str:
     for suffix, view in VIEW_SUFFIXES:
         if name.endswith(suffix):
             return view
-    if name.startswith(("readme", "license", "copying")) or name.endswith(
-        (".md", ".txt", ".tcl", ".json", ".yml", ".yaml", ".cfg", ".sdc", ".sh", ".csh")
-    ):
+    if name.startswith(("readme", "license", "copying")):
+        return "doc"
+    if name.endswith((".tcl", ".json", ".yml", ".yaml", ".cfg", ".sdc", ".sh", ".csh")):
         return "other"
     if len(relative.parts) > 1:
         view = next(

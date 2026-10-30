@@ -15,7 +15,7 @@ OUTPUT_MD = 'lef_liberty_check.md'
 LIBERTY_PARSER_VERSION = 'standalone-interface-2'
 _POWER_TYPES = {'primary_power', 'backup_power', 'internal_power'}
 _GROUND_TYPES = {'primary_ground', 'backup_ground', 'internal_ground'}
-_PROCESS_CORNER_RE = re.compile(r'(?:^|[_.-])(FFPG|SSPG|TTNOMINAL|FAST|SLOW|TYP|TT|SS|FF|SF|FS)(?=$|[_.-])', re.IGNORECASE)
+_PROCESS_CORNER_RE = re.compile(r'(?:^|[_.-])(SSG|FFG|TTG|FFPG|SSPG|TTNOMINAL|FAST|SLOW|TYP|TT|SS|FF|SF|FS)(?=$|[_.-])', re.IGNORECASE)
 _RC_CORNER_RE = re.compile(r'(?:^|[_.-])(SIGRCMIN|SIGRCMAX)(?=$|[_.-])', re.IGNORECASE)
 _RE_ATTR = re.compile(r'^\s*([A-Za-z_][\w]*)\s*:\s*([^;]+)\s*;')
 _STREAM_MARKER = re.compile(r'[{};"/\\*\n]')
@@ -286,11 +286,17 @@ def _expected_pg_type(use: str) -> str:
     return 'POWER' if use == 'POWER' else 'GROUND'
 
 
-def _corner_axes(path: Path, library_names: list[str]) -> dict:
-    process = set()
+def _corner_axes(path: Path, library_names: list[str], condition_names: list[str] | None = None) -> dict:
+    condition_process = {match.group(1).upper()
+                         for source in (condition_names or [])
+                         for match in _PROCESS_CORNER_RE.finditer(source)}
+    process = condition_process or {
+        match.group(1).upper()
+        for source in (path.name, *library_names)
+        for match in _PROCESS_CORNER_RE.finditer(source)
+    }
     rc = set()
-    for source in (path.name, *library_names):
-        process.update(match.group(1).upper() for match in _PROCESS_CORNER_RE.finditer(source))
+    for source in (path.name, *library_names, *(condition_names or [])):
         rc.update(match.group(1).upper() for match in _RC_CORNER_RE.finditer(source))
     return {
         'process_corner': next(iter(process)) if len(process) == 1 else None,
@@ -299,6 +305,13 @@ def _corner_axes(path: Path, library_names: list[str]) -> dict:
         'rc_corner_candidates': sorted(rc),
         'conflict': len(process) > 1 or len(rc) > 1,
     }
+
+
+def _pvt_process_corner(path: Path, library_name: str, condition_name: str) -> str | None:
+    condition_axes = _corner_axes(Path(""), [], [condition_name])
+    if condition_axes["process_corner_candidates"]:
+        return condition_axes["process_corner"]
+    return _corner_axes(path, [library_name])["process_corner"]
 
 
 def _corner_labels(axes: dict) -> list[str]:
@@ -491,7 +504,8 @@ def _load_lef_report(lef_analysis_path: str | Path) -> tuple[Path, dict]:
 
 
 def _analyze_loaded(lef_path: Path, lef_report: dict, liberty_path: str | Path,
-                    *, keep_matching_cells: bool = True) -> dict:
+                    *, keep_matching_cells: bool = True,
+                    expected_macro_names: set[str] | None = None) -> dict:
     lib_path = Path(liberty_path).expanduser().resolve()
     if not lib_path.is_file() or not lib_path.name.lower().endswith(('.lib', '.lib.gz')):
         raise ValueError(f'找不到 Liberty 文件或扩展名不受支持: {lib_path}')
@@ -499,6 +513,9 @@ def _analyze_loaded(lef_path: Path, lef_report: dict, liberty_path: str | Path,
     target = lef_report.get('extraction', {}).get('new', {})
     lef_data = target.get('data') or {}
     lef_macros = lef_data.get('macros') or {}
+    if expected_macro_names is not None:
+        lef_macros = {name: value for name, value in lef_macros.items()
+                      if name in expected_macro_names}
     lef_stats = lef_report.get('statistics', {}).get('new', {})
     liberty_data = parse_liberty_interface_data_file(lib_path)
     liberty_parser_stats = liberty_data.get('stats') or {}
@@ -544,12 +561,16 @@ def _analyze_loaded(lef_path: Path, lef_report: dict, liberty_path: str | Path,
     }
     if not keep_matching_cells:
         cells = [row for row in cells if row['status'] != 'MATCH']
-    corner_axes = _corner_axes(lib_path, sorted(liberty_data.get('libraries') or {}))
+    libraries = liberty_data.get('libraries') or {}
+    condition_names = [str(name) for library in libraries.values() if isinstance(library, dict)
+                       for name in (library.get('operating_conditions') or {})]
+    corner_axes = _corner_axes(lib_path, sorted(libraries), condition_names)
     return {
         'schema_version': SCHEMA_VERSION,
         'lef_analysis': str(lef_path),
         'lef_source': (lef_report.get('sources') or {}).get('new') or {},
         'liberty_source': str(lib_path),
+        'macro_scope': sorted(expected_macro_names) if expected_macro_names is not None else None,
         'library_names': sorted(liberty_data.get('libraries') or {}),
         'corner_axes': corner_axes,
         'corner_labels': _corner_labels(corner_axes),
@@ -582,12 +603,16 @@ def analyze(lef_analysis_path: str | Path, liberty_path: str | Path) -> dict:
 
 def analyze_many(
     lef_analysis_path: str | Path, liberty_paths: list[str | Path], *, keep_matching_cells: bool = False,
+    macro_scopes: dict[str, list[str]] | None = None,
 ) -> dict:
     if not liberty_paths:
         raise ValueError('至少指定一个 .lib 或 .lib.gz 文件')
     lef_path, lef_report = _load_lef_report(lef_analysis_path)
     lef_stats = lef_report.get('statistics', {}).get('new', {})
-    files = [_analyze_loaded(lef_path, lef_report, path, keep_matching_cells=keep_matching_cells)
+    scope_by_path = {str(Path(path).expanduser().resolve()): set(names)
+                     for path, names in (macro_scopes or {}).items()}
+    files = [_analyze_loaded(lef_path, lef_report, path, keep_matching_cells=keep_matching_cells,
+                             expected_macro_names=scope_by_path.get(str(Path(path).expanduser().resolve())))
              for path in liberty_paths]
     corner_labels = sorted({label for item in files for label in item['corner_labels']})
     corner_file_counts = {
@@ -648,7 +673,7 @@ def analyze_many(
             'context_status': 'LABEL_CONFLICT' if _conflict_key else (
                 'UNIDENTIFIED' if process == '未识别' and rc == '未识别' else 'LABEL_BASED'
             ),
-            'scope': '仅本次传入且归入此标签组的 Liberty 文件；标签是文件名/Library 名线索，不是人工确认',
+            'scope': '仅本次传入且归入此标签组的 Liberty 文件；工艺角标签来自文件名、Library 名或 Operating Conditions 名称，不是人工确认',
             'liberty_files': [item['liberty_source'] for item in grouped_files],
             'liberty_file_count': len(grouped_files),
             'lef_macro_count': len(lef_macro_names) if lef_set_complete else None,
@@ -718,6 +743,57 @@ def analyze_many(
 
 
 def render_markdown(result: dict) -> str:
+    if result.get('schema_version') == 'lef_liberty_auto_groups.v1':
+        summary = result.get('summary') or {}
+        lines = [
+            '# 当前 RAW 文件集 LEF–Liberty 自动核查', '',
+            f"- 候选文件集状态：{result.get('candidate_status', 'UNKNOWN')}",
+            f"- LEF 文件组：{summary.get('lef_file_count', 0)} 个；当前 Liberty：{summary.get('liberty_file_count', 0)} 个。",
+            f"- 观察 Corner：{', '.join(summary.get('recognized_corners') or []) or '未识别'}；"
+            f"未识别工艺角 {summary.get('files_with_unknown_process_corner', 0)} 个文件，"
+            f"未识别 RC 角 {summary.get('files_with_unknown_rc_corner', 0)} 个文件。", '',
+            '## 当前 Liberty 文件与 PVT 观察', '',
+        ]
+        for item in result.get('observed_liberties') or []:
+            axes = item.get('corner_axes') or {}
+            pvt = []
+            for library, conditions in (item.get('operating_conditions') or {}).items():
+                for condition, values in (conditions or {}).items():
+                    values = values if isinstance(values, dict) else {}
+                    pvt.append(f"{library}/{condition}: Process={axes.get('process_corner') or '未识别'} "
+                               f"V={values.get('voltage', '?')} T={values.get('temperature', '?')}")
+            lines.append(f"- `{item.get('source_path', '')}` · {item.get('source_version') or '来源未知'} · "
+                         f"工艺角={axes.get('process_corner') or '未识别'} / RC角={axes.get('rc_corner') or '未识别'} · "
+                         f"Cell={len(item.get('liberty_inventory', {}).get('cell_names') or [])} · "
+                         f"PVT={'；'.join(pvt) or '未声明'}")
+        lines.extend([
+            '', '## 按 LEF 和对象关联分组', '',
+        ])
+        for group in result.get('groups') or []:
+            lines.extend([
+                f"### `{group.get('lef_file', '')}`（来源 {group.get('source_versions', {}).get('lef', '未知')}）", '',
+                f"- Macro：{', '.join(group.get('macro_names') or []) or '无'}",
+                f"- Liberty 文件：{len(group.get('files') or [])} 个；"
+                f"来源版本：{', '.join(sorted(set((group.get('source_versions') or {}).get('liberties', {}).values()))) or '未知'}",
+            ])
+            for item in group.get('files') or []:
+                axes = item.get('corner_axes') or {}
+                pvt = item.get('operating_conditions') or {}
+                lines.append(f"  - `{item.get('liberty_source', '')}` · {item.get('source_version') or '来源未知'} · "
+                             f"Process={axes.get('process_corner') or '未识别'} / RC={axes.get('rc_corner') or '未识别'} · "
+                             f"Operating Conditions={', '.join(sorted(pvt)) or '未解析'} · "
+                             f"Pin 差异={item.get('summary', {}).get('mismatch_cell_count', 0)} 个 Cell")
+            lines.append('')
+        if result.get('ambiguous_objects'):
+            lines.extend(['## 未自动判定对象', ''])
+            for item in result['ambiguous_objects']:
+                lines.append(f"- `{item.get('macro', '未知')}`：{item.get('reason', 'AMBIGUOUS')}；"
+                             f"来源 {', '.join(item.get('sources') or [])}")
+        if result.get('unresolved'):
+            lines.extend(['', '## 未解析输入', ''])
+            for item in result['unresolved']:
+                lines.append(f"- `{item.get('source_path', '')}`：{item.get('reason', 'UNKNOWN')}")
+        return '\n'.join(lines) + '\n'
     if result.get('schema_version') == 'lef_liberty_batch.v1':
         summary = result['summary']
         lef_inventory = result.get('lef_inventory') or {}
@@ -742,7 +818,7 @@ def render_markdown(result: dict) -> str:
             f'工艺角未识别 {summary.get("files_with_unknown_process_corner", 0)} 个，'
             f'未标 RC 角 {summary.get("files_with_unknown_rc_corner", 0)} 个；'
             f'标签冲突 {summary.get("files_with_corner_label_conflict", 0)} 个文件。',
-            '- 工艺角和 RC 角仅按文件名/Library 名标注；不代表角条件完整，也不代替人工确认。',
+            '- 工艺角和 RC 角仅按文件名、Library 名或 Operating Conditions 名称标注；不代表角条件完整，也不代替人工确认。',
             f'- 同名 Cell 接口存在已确认不一致：{summary["files_with_mismatches"]} 个文件。',
             f'- 同名 Cell 接口核查有证据不足：{summary["files_with_unverified"]} 个文件。', '',
             f'- 单个 Liberty 文件未覆盖全部 LEF 名称：{summary["files_with_scope_gaps"]} 个；'

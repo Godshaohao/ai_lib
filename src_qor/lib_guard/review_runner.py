@@ -58,7 +58,7 @@ SHEET_HEADERS = {
     "07-正式文件": ["IP", "快照时间", "正式阶段", "相对路径", "View", "来源RAW版本", "来源路径", "正式路径", "盘点状态", "盘点报告"],
     "RAW文件清单": ["IP", "快照时间", "RAW版本", "RAW根目录", "版本盘点状态", "版本文件数", "View", "View文件数", "相对路径", "来源路径", "盘点报告"],
     "08-LEF宏": ["IP", "文件键", "批次Pair", "LEF文件", "Macro", "类别", "Site", "宽度", "高度", "单位", "Pin数", "电源Pin", "地Pin", "OBS几何数", "解析范围"],
-    "09-Liberty角": ["IP", "Liberty文件", "Library", "工艺角线索", "RC角线索", "条件", "Process", "Voltage (V)", "Temp (°C)", "文件Cell数", "同名Cell", "LEF有而本文件无", "本文件有而LEF无", "信号Pin对照", "信号Pin差异", "电源/地脚对照", "电源/地脚差异", "证据不足Cell数", "角标说明"],
+    "09-Liberty角": ["IP", "Liberty文件", "来源版本", "Library", "PVT Process", "RC角线索", "条件", "Voltage (V)", "Temp (°C)", "文件Cell数", "同名Cell", "LEF有而本文件无", "本文件有而LEF无", "信号Pin对照", "信号Pin差异", "电源/地脚对照", "电源/地脚差异", "证据不足Cell数", "角标说明"],
     "10-Liberty单元": ["IP", "Liberty文件", "Corner线索", "Cell", "LEF同名", "信号Pin数", "PG Pin数", "接口状态", "差异类型", "具体差异", "证据路径"],
 }
 
@@ -291,7 +291,9 @@ def _filemap_from_root(spec: dict[str, Any], config_dir: Path) -> dict[str, Any]
 def _run_macro(spec: dict[str, Any], config_dir: Path, out_dir: Path, ip_id: str) -> dict[str, Any]:
     if spec.get("report_json"):
         return _json_read(_resolve(spec["report_json"], config_dir))
-    if spec.get("filemap_json"):
+    if isinstance(spec.get("filemap"), dict):
+        filemap = spec["filemap"]
+    elif spec.get("filemap_json"):
         filemap = _json_read(_resolve(spec["filemap_json"], config_dir))
     elif spec.get("root"):
         filemap = _filemap_from_root(spec, config_dir)
@@ -344,6 +346,89 @@ def _require_same_lef_source(actual: dict[str, Any], expected: dict[str, Any]) -
 def _run_lef_liberty(spec: dict[str, Any], config_dir: Path, out_dir: Path,
                      ip_id: str, library_id: str,
                      lef_result: dict[str, Any] | None) -> dict[str, Any]:
+    if "groups" in spec:
+        group_results = []
+        all_files = []
+        for index, group in enumerate(spec["groups"], 1):
+            lef_path = _resolve(group["lef_file"], config_dir)
+            if not lef_path.is_file():
+                raise ValueError(f"当前 LEF 文件不存在：{lef_path}")
+            snapshot = lef_review.analyze(lef_path, lef_path)
+            snapshot["analysis_mode"] = "CURRENT_FILE_SET_SNAPSHOT"
+            snapshot_path = out_dir / "lef_liberty_check" / f"lef_group_{index:03d}.json"
+            _json_write(snapshot_path, snapshot)
+            liberty_paths = [_resolve(item, config_dir) for item in group.get("liberty_files") or []]
+            if not liberty_paths:
+                continue
+            macro_scopes: dict[str, list[str]] = {}
+            for item in group.get("objects") or []:
+                path = str(Path(str(item.get("liberty_file") or "")).expanduser().resolve())
+                macro_scopes.setdefault(path, []).append(str(item.get("macro") or ""))
+            report = lef_liberty_check.analyze_many(
+                snapshot_path, liberty_paths, keep_matching_cells=bool(spec.get("include_matching_cells", True)),
+                macro_scopes=macro_scopes)
+            report.update({"lef_file": str(lef_path), "source_versions": group.get("source_versions") or {},
+                           "macro_names": group.get("macro_names") or []})
+            version_by_path = {str(Path(path).expanduser().resolve()): version
+                               for path, version in (group.get("source_versions") or {}).get("liberties", {}).items()}
+            for item in report.get("files") or []:
+                item["source_version"] = version_by_path.get(str(Path(item.get("liberty_source") or "").resolve()), "")
+                item["lef_source_version"] = (group.get("source_versions") or {}).get("lef", "")
+            group_results.append(report)
+            all_files.extend(report.get("files") or [])
+        observed_liberties = spec.get("observed_liberties") or []
+        unique_paths = {str(item.get("source_path") or "") for item in observed_liberties}
+        if not unique_paths:
+            unique_paths = {str(item.get("liberty_source") or "") for item in all_files}
+        candidate_status = str(spec.get("candidate_status") or "PARTIAL")
+        observed_by_path = {str(item.get("source_path") or ""): item for item in observed_liberties}
+        if not observed_by_path:
+            observed_by_path = {str(item.get("liberty_source") or ""): item for item in all_files}
+        process_counts: dict[str, int] = {}
+        rc_counts: dict[str, int] = {}
+        for item in observed_by_path.values():
+            axes = item.get("corner_axes") or {}
+            for labels, key in ((process_counts, "process_corner"), (rc_counts, "rc_corner")):
+                label = axes.get(key)
+                if label:
+                    labels[str(label)] = labels.get(str(label), 0) + 1
+        summary = {
+            "lef_file_count": len(group_results),
+            "liberty_file_count": len(unique_paths),
+            "files_with_mismatches": sum(bool((item.get("summary") or {}).get("mismatch_cell_count")) for item in all_files),
+            "files_with_unverified": sum(bool((item.get("summary") or {}).get("unverified_cell_count")) for item in all_files),
+            "files_with_scope_gaps": sum(bool((item.get("comparison") or {}).get("lef_only_macros")
+                                                  or (item.get("comparison") or {}).get("liberty_only_cells"))
+                                          for item in all_files),
+            "recognized_corners": sorted({str((item.get("corner_axes") or {}).get(axis))
+                                           for item in observed_by_path.values()
+                                           for axis in ("process_corner", "rc_corner")
+                                           if (item.get("corner_axes") or {}).get(axis)}),
+            "recognized_corner_count": len({str((item.get("corner_axes") or {}).get(axis))
+                                             for item in observed_by_path.values()
+                                             for axis in ("process_corner", "rc_corner")
+                                             if (item.get("corner_axes") or {}).get(axis)}),
+            "process_corner_file_counts": process_counts, "rc_corner_file_counts": rc_counts,
+            "files_with_unknown_process_corner": sum(not (item.get("corner_axes") or {}).get("process_corner") for item in observed_by_path.values()),
+            "files_with_unknown_rc_corner": sum(not (item.get("corner_axes") or {}).get("rc_corner") for item in observed_by_path.values()),
+            "files_with_corner_label_conflict": sum(bool((item.get("corner_axes") or {}).get("conflict")) for item in observed_by_path.values()),
+            "files_with_incomplete_signal_pin_coverage": sum(not (item.get("summary") or {}).get("signal_pin_coverage_complete") for item in all_files),
+            "files_with_incomplete_power_ground_coverage": sum(not (item.get("summary") or {}).get("power_ground_coverage_complete") for item in all_files),
+        }
+        result = {"schema_version": "lef_liberty_auto_groups.v1",
+                  "status": "COMPLETE",
+                  "candidate_status": candidate_status, "summary": summary,
+                  "groups": group_results, "files": all_files,
+                  "observed_liberties": observed_liberties,
+                  "ambiguous_objects": spec.get("ambiguous_objects") or [],
+                  "unresolved": spec.get("unresolved") or [],
+                  "current_file_set": spec.get("current_file_set") or {},
+                  "source_versions": [group.get("source_versions") or {} for group in spec["groups"]]}
+        target = out_dir / "lef_liberty_check"
+        _json_write(target / "lef_liberty_check.json", result)
+        (target / "lef_liberty_check.md").write_text(lef_liberty_check.render_markdown(result), encoding="utf-8")
+        return result
+
     lef_report_path = None
     expected_source = None
     if lef_result is not None:
@@ -428,6 +513,10 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
             raise ValueError(f"{ip_id}: 不支持的检查名：{', '.join(sorted(unknown))}")
         check_results: dict[str, dict[str, Any]] = {}
         evidence_dir.mkdir(parents=True, exist_ok=True)
+        for check_spec in checks_spec.values():
+            if isinstance(check_spec, dict) and isinstance(check_spec.get("current_file_set"), dict):
+                _json_write(evidence_dir / "current_file_set.json", check_spec["current_file_set"])
+                break
         projection = None
         batch_pairs = None
         if ip.get("projection_json"):
@@ -437,8 +526,13 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
             if str(projection.get("library_id") or "") != library_id:
                 raise ValueError("文件版本投影的库标识不一致")
             target = str((projection.get("scope") or {}).get("target_version") or "")
-            if not target or target != str(ip.get("raw_version") or ""):
-                raise ValueError("文件版本投影的目标版本与本次检查不一致")
+            has_enabled_checks = any(
+                isinstance(spec, dict) and spec.get("enabled", True) is not False
+                for spec in checks_spec.values()
+            )
+            raw_version = str(ip.get("raw_version") or "")
+            if target != raw_version or (has_enabled_checks and not target):
+                raise ValueError(f"文件版本投影的目标版本与本次检查不一致（投影：{target or '未设置'}；检查：{raw_version or '未设置'}）")
             lef_spec = checks_spec.get("lef_review") or {}
             if lef_spec and lef_spec.get("enabled", True):
                 if lef_spec.get("pairs"):
@@ -509,7 +603,7 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                 if name == "lef_liberty_check":
                     bound_lef_result = lef_result
                     actual_spec = dict(spec)
-                    if bound_lef_result is None:
+                    if bound_lef_result is None and "groups" not in actual_spec:
                         batch_check = check_results.get("lef_review") or {}
                         batch_result = batch_check.get("result") or {}
                         if batch_result.get("schema_version") == "batch_lef_review.v1":
@@ -848,6 +942,69 @@ def _macro_file_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _corner_coverage_observation(review: dict[str, Any]) -> dict[str, str] | None:
+    interface = _check_result(review, "lef_liberty_check")
+    if not interface.get("selected"):
+        return None
+    evidence = interface.get("result_ref", "")
+    if interface.get("status") != "COMPLETE":
+        status = "部分覆盖" if interface.get("status") != "FAILED" else "未执行"
+        return {"execution": status, "result": "Corner/PVT 解析结果不完整",
+                "reason": interface.get("error") or "LEF–Liberty 分析未完成", "evidence": evidence}
+
+    observed = _result(review, "lef_liberty_check")
+    summary = observed.get("summary") or {}
+    files = observed.get("files") or observed.get("observed_liberties") or []
+    file_count = summary.get("liberty_file_count", len(files))
+    process_counts = summary.get("process_corner_file_counts") or {}
+    process_text = "、".join(f"{name}×{count}" for name, count in sorted(process_counts.items()))
+    unknown = summary.get("files_with_unknown_process_corner", 0)
+    detail = f"工艺角 {len(process_counts)} 类（{process_text}）" if process_text else "工艺角未识别"
+    if unknown:
+        detail += f"；未识别工艺角 {unknown} 个文件"
+    rc_counts = summary.get("rc_corner_file_counts") or {}
+    if rc_counts:
+        detail += "；RC角 " + "、".join(f"{name}×{count}" for name, count in sorted(rc_counts.items()))
+    unknown_rc = summary.get("files_with_unknown_rc_corner", 0)
+    if unknown_rc:
+        detail += f"；RC角未识别 {unknown_rc} 个文件"
+    pvt_files = sum(_file_has_pvt_observation(item) for item in files)
+    detail += f"；PVT 声明 {pvt_files}/{file_count} 个文件"
+    return {"execution": "部分覆盖",
+            "result": f"观察 {file_count} 个 Liberty 文件；{detail}；逐文件 PVT 与 Liberty 对应见 09-Liberty角",
+            "reason": "未配置期望 Corner 集合；仅报告观察结果，不据此判断齐套",
+            "evidence": evidence}
+
+
+def _file_has_pvt_observation(item: dict[str, Any]) -> bool:
+    path = Path(item.get("source_path") or item.get("liberty_source") or "")
+    for library, conditions in (item.get("operating_conditions") or {}).items():
+        for condition, values in (conditions or {}).items():
+            if not isinstance(values, dict):
+                continue
+            process = lef_liberty_check._pvt_process_corner(path, str(library), str(condition))
+            if (process and values.get("voltage") not in (None, "")
+                    and values.get("temperature") not in (None, "")):
+                return True
+    return False
+
+
+def _view_inventory_summary(macro_check: dict[str, Any]) -> str:
+    result = _result({"checks": {"macro_index": macro_check}}, "macro_index")
+    files = (result.get("filemap") or {}).get("files") or []
+    labels = {"lef": "LEF", "liberty": "Liberty", "gds": "GDS", "db": "DB",
+              "cdl": "CDL", "verilog": "Verilog", "oas": "OAS", "spice": "SPICE",
+              "doc": "文档", "other": "其他"}
+    counts: dict[str, int] = {}
+    for file in files:
+        view = str(file.get("view") or "other").strip().lower()
+        counts[view] = counts.get(view, 0) + 1
+    ordered = [view for view in labels if counts.get(view)]
+    ordered.extend(sorted(view for view, count in counts.items() if count and view not in labels))
+    summary = "、".join(f"{labels.get(view, view)}×{counts[view]}" for view in ordered)
+    return f"已盘点 {len(files)} 个当前文件；View：{summary or '未发现文件'}"
+
+
 def _engineering_check_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     checks = review.get("checks") or {}
     supplied = {str(item.get("id") or ""): item for item in review.get("engineering_checklist") or []
@@ -884,31 +1041,38 @@ def _engineering_check_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
                         "evidence": formal.get("report_ref", "")}
             return {"execution": "未执行", "result": "无结论", "reason": "没有可复用的 Formal 来源快照", "evidence": ""}
         if item_id in {"macro_provenance", "view_completeness", "other_view"} and macro.get("selected"):
-            status = "已执行" if macro.get("status") == "COMPLETE" and item_id == "macro_provenance" else "部分覆盖"
-            result = _check_summary("macro_index", macro)[0] if macro.get("status") == "COMPLETE" else "索引结果不完整"
+            status = "已执行" if macro.get("status") == "COMPLETE" and item_id in {"macro_provenance", "view_completeness"} else "部分覆盖"
+            result = (_view_inventory_summary(macro) if item_id == "view_completeness" else
+                      _check_summary("macro_index", macro)[0]) if macro.get("status") == "COMPLETE" else "索引结果不完整"
             reason = ("" if status == "已执行" else
-                      "尚无项目必需 View 规则，不能判断齐套" if item_id == "view_completeness" else
+                      "已执行文件清单盘点；尚无项目必需 View 规则，不能判断齐套" if item_id == "view_completeness" else
                       "GDS/DB 等内部对象未由当前解析器验证" if item_id == "other_view" else "Macro 来源尚未覆盖多交付演进")
             return {"execution": status, "result": result, "reason": reason, "evidence": macro.get("result_ref", "")}
         if item_id == "corner_coverage":
-            if interface.get("selected") and interface.get("status") == "COMPLETE":
-                return {"execution": "部分覆盖", "result": "已观察 Liberty Corner/PVT 线索", "reason": "未配置期望 Corner 集合，不能判断齐套", "evidence": interface.get("result_ref", "")}
-            return {"execution": "未执行", "result": "无结论", "reason": "未配置期望 Corner 集合", "evidence": ""}
+            observation = _corner_coverage_observation(review)
+            if observation:
+                return observation
+            return {"execution": "未执行", "result": "未形成 Liberty 观察结果",
+                    "reason": "本次未执行 LEF–Liberty 输入分析；期望集合不影响已观察 Corner 的记录",
+                    "evidence": ""}
         if item_id == "lef_delta" and lef.get("selected"):
             status = "已执行" if lef.get("status") == "COMPLETE" else "部分覆盖"
             return {"execution": status, "result": _check_summary("lef_review", lef)[0] if status == "已执行" else "LEF 结果不完整",
                     "reason": "仅限本次成功解析的配对和支持字段", "evidence": lef.get("result_ref", "")}
         if item_id == "cross_view" and interface.get("selected"):
+            interface_result = _result(review, "lef_liberty_check")
+            if interface_result.get("schema_version") == "lef_liberty_auto_groups.v1" and not interface_result.get("groups"):
+                return {"execution": "部分覆盖", "result": "已观察当前 Liberty，但未形成 LEF–Liberty 对象组",
+                        "reason": "没有可唯一关联的当前 Macro/Cell 对象；不构造人为组合",
+                        "evidence": interface.get("result_ref", "")}
             status = "已执行" if interface.get("status") == "COMPLETE" else "部分覆盖"
             return {"execution": status, "result": _check_summary("lef_liberty_check", interface)[0] if status == "已执行" else "接口结果不完整",
                     "reason": "仅限明确绑定的 LEF–Liberty 输入，不覆盖未选择视图", "evidence": interface.get("result_ref", "")}
-        if item_id == "doc_delta":
-            return {"execution": "未执行", "result": "无结论", "reason": "当前没有文档正文差异检查器", "evidence": ""}
         return {"execution": "未执行", "result": "无结论", "reason": "缺少本项适用输入", "evidence": ""}
 
     rows = []
     for number, (item_id, topic, limitation) in enumerate(ENGINEERING_CHECKLIST, 1):
-        item = supplied.get(item_id) or inferred(item_id)
+        item = (_corner_coverage_observation(review) if item_id == "corner_coverage" else None) or supplied.get(item_id) or inferred(item_id)
         rows.append({"序号": number, "检查项ID": item_id, "工程检查主题": topic,
                      "工程覆盖": item.get("coverage") or item.get("execution", "未执行"),
                      "本次执行": item.get("execution", "未执行"),
@@ -923,6 +1087,11 @@ def _engineering_check_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
 def _finalize_engineering_checklist(review: dict[str, Any]) -> None:
     projection = review.get("file_version_projection") or {}
     for item in review.get("engineering_checklist") or []:
+        if item.get("id") == "corner_coverage":
+            observation = _corner_coverage_observation(review)
+            if observation:
+                item.update(observation)
+            continue
         if item.get("execution") != "计划执行":
             continue
         names = item.get("check_names") or []
@@ -939,6 +1108,17 @@ def _finalize_engineering_checklist(review: dict[str, Any]) -> None:
             item["execution"] = "未执行"
             item["result"] = "无结论"
             item["reason"] = item.get("reason") or "本次没有成功启动该检查"
+            continue
+        if item.get("id") == "view_completeness":
+            macro_check = _check_result(review, "macro_index")
+            item["execution"] = "已执行" if macro_check.get("status") == "COMPLETE" else (
+                "部分覆盖" if macro_check.get("selected") else "未执行")
+            item["result"] = (_view_inventory_summary(macro_check) if macro_check.get("status") == "COMPLETE"
+                              else "View 清单未完整生成")
+            item["reason"] = ("已盘点并展示当前文件集的 View；尚无项目必需 View 规则，不能判断齐套"
+                              if macro_check.get("status") == "COMPLETE" else
+                              str(macro_check.get("error") or "View 清单检查未成功完成"))
+            item["evidence_summary"] = _check_summary("macro_index", macro_check)[0]
             continue
         complete = sum(check.get("status") == "COMPLETE" for check in selected)
         if complete == len(selected):
@@ -1011,7 +1191,8 @@ def _raw_inventory_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
         if files:
             for item in files:
                 view = str(item.get("view") or "other")
-                rows.append({**common, "View": view, "View文件数": view_counts.get(view, "未统计"),
+                rows.append({**common, "View": "文档" if view.lower() == "doc" else view,
+                             "View文件数": view_counts.get(view, "未统计"),
                              "相对路径": item.get("relative_path", ""),
                              "来源路径": item.get("source_path") or item.get("published_path", "")})
         else:
@@ -1072,12 +1253,12 @@ def _liberty_rows(review: dict[str, Any]) -> tuple[list[dict[str, Any]], list[di
     result = _result(review, "lef_liberty_check")
     corner_rows, cell_rows = [], []
     evidence = _check_result(review, "lef_liberty_check").get("result_ref") or ""
-    for item in result.get("files") or []:
+    for item in result.get("files") or result.get("observed_liberties") or []:
         axes = item.get("corner_axes") or {}
         summary = item.get("summary") or {}
         inventory = item.get("liberty_inventory") or {}
         comparison = item.get("comparison") or {}
-        path = item.get("liberty_source", "")
+        path = item.get("liberty_source") or item.get("source_path", "")
         corner = axes.get("process_corner") or "未识别"
         conditions = item.get("operating_conditions") or {}
         libraries = sorted(set(item.get("library_names") or []) | set(conditions)) or ["未识别"]
@@ -1086,10 +1267,12 @@ def _liberty_rows(review: dict[str, Any]) -> tuple[list[dict[str, Any]], list[di
             for condition_name, values in (operating.items() if operating else [("未提供", {})]):
                 values = values if isinstance(values, dict) else {}
                 corner_rows.append({"IP": ip.get("name") or ip.get("id"), "Liberty文件": path,
+                            "来源版本": item.get("source_version") or "未确认",
                             "Library": library,
-                            "工艺角线索": corner, "RC角线索": axes.get("rc_corner") or "未识别",
+            "PVT Process": (lef_liberty_check._pvt_process_corner(Path(path), library, str(condition_name))
+                            or corner),
+            "RC角线索": axes.get("rc_corner") or "未识别",
                             "条件": condition_name,
-                            "Process": _numeric_condition(values.get("process")),
                             "Voltage (V)": _numeric_condition(values.get("voltage")),
                             "Temp (°C)": _numeric_condition(values.get("temperature")),
                             "文件Cell数": inventory.get("cell_count", "未确认"),
@@ -1103,7 +1286,7 @@ def _liberty_rows(review: dict[str, Any]) -> tuple[list[dict[str, Any]], list[di
                             "电源/地脚差异": (summary.get("power_ground_missing_count", 0) + summary.get("power_ground_extra_count", 0)
                                               + summary.get("power_ground_wrong_type_count", 0)),
                             "证据不足Cell数": summary.get("unverified_cell_count", "未统计"),
-                            "角标说明": "工艺角仅为名称线索；P/V/T 为 Liberty 声明值，不代表签核确认"})
+                            "角标说明": "PVT Process 从文件名、Library 或 Operating Conditions 名称提取；Liberty process 数值属性不作为工艺角"})
         for cell in item.get("cells") or []:
             issues = _cell_issues(cell)
             cell_rows.append({"IP": ip.get("name") or ip.get("id"), "Liberty文件": path,
@@ -1446,7 +1629,7 @@ def _qa_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
                      "来源报告": evidence("lef_liberty_check")})
         rows.append({"IP": label, "问题": "本次 Liberty 识别到哪些工艺角线索？",
                      "回答": corners + f"；未识别工艺角文件 {summary.get('files_with_unknown_process_corner', '未统计')} 个。",
-                     "证据范围": "角标由文件名/Library 名提取，不代表已确认 Signoff 条件。",
+                     "证据范围": "工艺角从文件名、Library 名或 Operating Conditions 名称提取，不代表已确认 Signoff 条件。",
                      "来源报告": evidence("lef_liberty_check")})
         mismatch_groups = [row for row in _finding_rows(review) if row["类别"] == "LEF-Liberty接口"]
         if mismatch_groups:
