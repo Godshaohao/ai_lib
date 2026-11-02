@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from .file_version_projection import reproject_projection
+from .file_version_projection import rank_occurrences, reproject_projection
 from .lef_liberty_check import _pvt_process_corner
 
 
@@ -69,31 +69,49 @@ def build_applicable_plan(projection: dict[str, Any], version_roots: dict[str, s
             f"{len(content_keys)} 个唯一文件对可比较",
             "" if content_keys else "没有形成可确认的双边文件对；单侧文件只保留提供关系",
             "evidence/file_version_projection.json", ("projection_content",))
-        lef_pairs = []
-        for item in projection.get("files") or []:
-            if (item.get("view") != "lef" or item.get("identity_status") != "EXACT_RELATIVE_PATH"
-                    or item.get("comparison", {}).get("delivery_relation") != "READY_TO_COMPARE"):
-                continue
-            occurrences = item.get("occurrences") or []
-            old = [row.get("source_path") for row in occurrences if row.get("version") == base and row.get("source_path")]
-            new = [row.get("source_path") for row in occurrences if row.get("version") == target and row.get("source_path")]
-            if len(old) == 1 and len(new) == 1:
-                key = str(item.get("file_key") or "")
-                pair_id = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
-                lef_pairs.append({"pair_id": pair_id, "file_key": key,
-                                  "old_file": old[0], "new_file": new[0],
-                                  "source_versions": {"old": base, "new": target}})
-        if lef_pairs:
-            checks["lef_review"] = {"pairs": lef_pairs}
-            row("lef_delta", "计划执行", f"{len(lef_pairs)} 对唯一配对 LEF",
-                "", "evidence/lef_review.json", ("lef_review",))
-        else:
-            row("lef_delta", "未执行", "无结论", "两次交付没有唯一配对的 LEF")
     else:
         content_keys = []
         reason = "交付顺序未确认" if not known else "只有一个已登记交付"
         row("file_delta", "未执行", "无结论", f"{reason}，不猜测 Base/Target")
-        row("lef_delta", "未执行", "无结论", f"{reason}，无法确认 LEF 差异范围")
+
+    lef_pairs = []
+    uncertain_lefs = []
+    current_lef_paths = {str(item.get("source_path") or "") for item in (current_file_set or {}).get("files") or []
+                         if item.get("view") == "lef" and item.get("source_path")}
+    inventories = {version: {"status": ((projection.get("scope") or {}).get("inventory_status") or {}).get(version, "UNKNOWN")}
+                   for version in ordered}
+    for item in projection.get("files") or []:
+        if item.get("view") != "lef" or not item.get("occurrences"):
+            continue
+        key = str(item.get("file_key") or "")
+        if item.get("identity_status") == "AMBIGUOUS":
+            uncertain_lefs.append(key)
+            continue
+        latest, previous = rank_occurrences(item["occurrences"], order, inventories)
+        if current_file_set is not None and latest.get("source_path") not in current_lef_paths:
+            if current_file_set.get("status") != "COMPLETE":
+                uncertain_lefs.append(key)
+            continue
+        if latest.get("status") != "CONFIRMED" or previous.get("status") not in {"CONFIRMED", "NONE"}:
+            uncertain_lefs.append(key)
+            continue
+        if previous.get("status") == "NONE":
+            continue
+        pair_id = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+        lef_pairs.append({"pair_id": pair_id, "file_key": key,
+                          "old_file": previous["source_path"], "new_file": latest["source_path"],
+                          "source_versions": {"old": previous["version"], "new": latest["version"]}})
+    if lef_pairs:
+        checks["lef_review"] = {"pairs": lef_pairs}
+        reason = f"{len(uncertain_lefs)} 个 LEF 的文件身份或最新/次新不确定" if uncertain_lefs else ""
+        row("lef_delta", "计划执行", f"{len(lef_pairs)} 对文件各自的最新/次新 LEF", reason,
+            "evidence/lef_review.json", ("lef_review",))
+        if reason:
+            rows["lef_delta"]["partial_reason"] = reason
+    else:
+        reason = (f"{len(uncertain_lefs)} 个 LEF 的文件身份或最新/次新不确定" if uncertain_lefs else
+                  "没有可确认的最新/次新 LEF 文件对")
+        row("lef_delta", "部分覆盖" if uncertain_lefs else "未执行", "无结论", reason)
 
     formal = formal_state or {}
     formal_stages = list(formal.get("stages") or [])
@@ -160,6 +178,7 @@ def build_applicable_plan(projection: dict[str, Any], version_roots: dict[str, s
             "ambiguous_objects": interface_groups.get("ambiguous_objects") or [],
             "unresolved": interface_groups.get("unresolved") or [],
             "observed_liberties": interface_groups.get("observed_liberties") or [],
+            "corner_observation_status": interface_groups.get("corner_observation_status", "PARTIAL"),
         }
         group_state = str(interface_groups.get("status") or "PARTIAL")
         row("cross_view", "计划执行" if group_state == "COMPLETE" else "部分覆盖",
@@ -185,6 +204,7 @@ def build_applicable_plan(projection: dict[str, Any], version_roots: dict[str, s
             "ambiguous_objects": interface_groups.get("ambiguous_objects") or [],
             "unresolved": interface_groups.get("unresolved") or [],
             "observed_liberties": interface_groups.get("observed_liberties") or [],
+            "corner_observation_status": interface_groups.get("corner_observation_status", "PARTIAL"),
         }
         row("cross_view", "部分覆盖", "没有可唯一关联的 LEF–Liberty 对象组",
             reason or "当前文件集中没有可确认的同名 Macro/Cell 对象", "evidence/current_file_set.json")

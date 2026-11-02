@@ -11,7 +11,7 @@ class RawDiscoveryTests(unittest.TestCase):
     def test_maximum_depth_is_reported_as_partial_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "raw"
-            version = root / "Vendor_A" / "group" / "nested" / "ip" / "V01" / "LEF"
+            version = root / "Vendor_A" / "ip" / "V01" / "one" / "two" / "three" / "LEF"
             version.mkdir(parents=True)
             (version / "macro.lef").touch()
 
@@ -19,7 +19,7 @@ class RawDiscoveryTests(unittest.TestCase):
                 report = raw_discovery.discover_raw_report(root)
 
             self.assertTrue(report["partial_discovery"])
-            self.assertIn(str(root / "Vendor_A" / "group"), report["depth_limited_paths"])
+            self.assertIn(str(root / "Vendor_A" / "ip" / "V01"), report["depth_limited_paths"])
             self.assertTrue(any("达到目录深度上限" in item for item in report["warnings"]))
 
     def test_permission_errors_are_reported_as_incomplete_discovery(self):
@@ -60,13 +60,13 @@ class RawDiscoveryTests(unittest.TestCase):
     def test_reports_colliding_library_ids(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "raw"
-            for relative in ("Vendor_A/foo.bar/ip/V01", "Vendor_A/foo/bar/ip/V01"):
+            for relative in ("Vendor_A/foo@bar/V01", "Vendor_A/foo#bar/V01"):
                 version = root / relative
-                version.mkdir(parents=True)
-                (version / "cell.lef").touch()
+                (version / "LEF").mkdir(parents=True)
+                (version / "LEF" / "cell.lef").touch()
             report = raw_discovery.discover_raw_report(root)
             self.assertEqual(len(report["candidates"]), 2)
-            self.assertIn("Vendor_A.foo.bar.ip", report["identity_conflicts"])
+            self.assertIn("Vendor_A.foo_bar", report["identity_conflicts"])
 
     def test_discovers_vendor_library_and_single_version(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -120,12 +120,13 @@ class RawDiscoveryTests(unittest.TestCase):
             self.assertEqual(result[0]["versions"][0]["path"], str(version))
             self.assertEqual(result[0]["view_types"], ["DEF", "SPICE", "VERILOG"])
 
-    def test_date_release_with_cell_subdirectories_groups_versions_by_cell(self):
+    def test_product_line_candidate_keeps_date_named_root_and_does_not_split_cells(self):
         with tempfile.TemporaryDirectory() as temp:
             raw = Path(temp) / "raw"
+            product_line = "20261001_DTCO"
             cell = "ln04lpp_sc_hvt_c54104"
-            for release in ("20260917_DTCO", "20261001_DTCO"):
-                version = raw / "Metax" / "DTCO" / release / "elf" / "psls" / cell
+            for release in ("20260917", "20261001"):
+                version = raw / "Metax" / product_line / release / "elf" / "psls" / cell
                 for relative in ("LEF/cell.lef", "CDL/cell.cdl"):
                     path = version / relative
                     path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,15 +136,64 @@ class RawDiscoveryTests(unittest.TestCase):
 
             self.assertEqual(len(result), 1)
             candidate = result[0]
-            self.assertEqual(candidate["library_id"], f"Metax.DTCO.elf.psls.{cell}")
-            self.assertEqual(candidate["library_name"], cell)
-            self.assertEqual(candidate["middle_path"], "DTCO/elf/psls")
-            self.assertEqual(candidate["version_names"], ["20260917_DTCO", "20261001_DTCO"])
-            self.assertEqual(candidate["versions"][0]["path"],
-                             str(raw / "Metax" / "DTCO" / "20260917_DTCO" / "elf" / "psls" / cell))
+            self.assertEqual(candidate["library_id"], f"Metax.{product_line}")
+            self.assertEqual(candidate["library_name"], product_line)
+            self.assertEqual(candidate["middle_path"], "")
+            self.assertEqual(candidate["version_names"], ["20260917", "20261001"])
+            self.assertEqual(candidate["root_abs"], str(raw / "Metax" / product_line))
             self.assertEqual(candidate["view_types"], ["CDL", "LEF"])
 
-    def test_repeated_source_package_is_not_a_cell_library(self):
+    def test_flat_product_line_is_a_single_self_delivery(self):
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "raw"
+            product_line = raw / "Vendor_A" / "flat_ip"
+            (product_line / "LEF").mkdir(parents=True)
+            (product_line / "LEF" / "flat.lef").touch()
+
+            result = discover_raw_libraries(raw)
+
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["library_id"], "Vendor_A.flat_ip")
+            self.assertEqual(result[0]["version_count"], 1)
+            self.assertEqual(result[0]["versions"][0]["id"], "flat_ip")
+            self.assertEqual(result[0]["versions"][0]["path"], str(product_line))
+            self.assertEqual(result[0]["view_types"], ["LEF"])
+
+    def test_deep_view_scan_ignores_hack_lef_and_drops_all_other_candidate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "raw"
+            version = raw / "Vendor_A" / "real_ip" / "v01"
+            deep_lef = version / "payload" / "release" / "views" / "LEF"
+            deep_lef.mkdir(parents=True)
+            (deep_lef / "core.lef").touch()
+            hack = version / "hack_lef"
+            hack.mkdir()
+            (hack / "debug.gds").touch()
+            other = raw / "Vendor_A" / "docs_only" / "v01"
+            other.mkdir(parents=True)
+            (other / "readme.xyz").touch()
+
+            result = discover_raw_libraries(raw)
+
+            self.assertEqual([item["library_id"] for item in result], ["Vendor_A.real_ip"])
+            self.assertEqual(result[0]["view_types"], ["LEF"])
+
+    def test_deep_view_scan_reaches_max_depth(self):
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "raw"
+            view = raw / "Vendor_A" / "deep_ip" / "v01"
+            for part in ("one", "two", "three", "four", "five"):
+                view = view / part
+            view = view / "LEF"
+            view.mkdir(parents=True)
+            (view / "core.lef").touch()
+
+            result = discover_raw_libraries(raw)
+
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["view_types"], ["LEF"])
+
+    def test_nested_source_package_views_stay_under_product_line(self):
         with tempfile.TemporaryDirectory() as temp:
             raw = Path(temp) / "raw"
             for release in ("20260917", "20261001"):
@@ -166,10 +216,10 @@ class RawDiscoveryTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 discover_raw_libraries(raw / "missing")
 
-    def test_discovers_nested_library_roots_and_preserves_catalog_hierarchy(self):
+    def test_discovers_vendor_product_line_and_preserves_views(self):
         with tempfile.TemporaryDirectory() as temp:
             raw = Path(temp) / "raw"
-            version = raw / "Vendor_D" / "memory" / "sram" / "sram_256x16" / "20261024_drop"
+            version = raw / "Vendor_D" / "sram_256x16" / "20261024_drop"
             (version / "LIB" / "NLDM").mkdir(parents=True)
             (version / "LIB" / "NLDM" / "sram.lib.gz").touch()
             (version / "LEF").mkdir()
@@ -180,13 +230,13 @@ class RawDiscoveryTests(unittest.TestCase):
             self.assertEqual(len(result), 1)
             candidate = result[0]
             self.assertEqual(candidate["vendor"], "Vendor_D")
-            self.assertEqual(candidate["middle_path"], "memory/sram")
+            self.assertEqual(candidate["middle_path"], "")
             self.assertEqual(candidate["library_name"], "sram_256x16")
-            self.assertEqual(candidate["library_id"], "Vendor_D.memory.sram.sram_256x16")
+            self.assertEqual(candidate["library_id"], "Vendor_D.sram_256x16")
             self.assertEqual(candidate["versions"][0]["id"], "20261024_drop")
             self.assertEqual(candidate["versions"][0]["views"], ["LEF", "LIB"])
 
-    def test_ignores_non_library_trees_and_does_not_promote_version_views(self):
+    def test_ignores_non_library_trees_and_nested_product_lines(self):
         with tempfile.TemporaryDirectory() as temp:
             raw = Path(temp) / "raw"
             # These files resemble deliveries, but are documentation/report noise.
@@ -194,14 +244,14 @@ class RawDiscoveryTests(unittest.TestCase):
                 path = raw / directory
                 path.mkdir(parents=True)
                 (path / "noise.lef").touch()
-            # A view directory inside the actual version is not another library.
+            # Product candidates are only immediate Vendor children; nested IPs stay out of scope.
             version = raw / "Vendor_E" / "group" / "ip_e" / "20261024"
             (version / "LEF").mkdir(parents=True)
             (version / "LEF" / "macro.lef").touch()
 
             result = discover_raw_libraries(raw)
 
-            self.assertEqual([(item["library_name"], item["middle_path"]) for item in result], [("ip_e", "group")])
+            self.assertEqual(result, [])
 
     def test_simulation_subtree_is_not_mixed_into_real_raw_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -220,7 +270,7 @@ class RawDiscoveryTests(unittest.TestCase):
     def test_discover_report_preserves_legacy_candidate_fields_and_writes_review_artifacts(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "raw"
-            version = root / "Vendor_F" / "category" / "phy_ip" / "20261024_drop"
+            version = root / "Vendor_F" / "phy_ip" / "20261024_drop"
             for relative in ("LEF/phy.lef", "LIB/NLDM/phy.lib.gz"):
                 path = version / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -234,12 +284,12 @@ class RawDiscoveryTests(unittest.TestCase):
             self.assertEqual(candidate["status"], "REVIEW")
             self.assertEqual(candidate["display_name"], "phy_ip")
             self.assertEqual(candidate["vendor"], "Vendor_F")
-            self.assertEqual(candidate["middle_path"], "category")
+            self.assertEqual(candidate["middle_path"], "")
             self.assertEqual(candidate["version_count"], 1)
             self.assertEqual(candidate["version_names"], ["20261024_drop"])
             self.assertEqual(candidate["view_types"], ["LEF", "LIB"])
             self.assertEqual(candidate["example_versions"], ["20261024_drop"])
-            self.assertEqual(candidate["root_abs"], str(root / "Vendor_F" / "category" / "phy_ip"))
+            self.assertEqual(candidate["root_abs"], str(root / "Vendor_F" / "phy_ip"))
             self.assertEqual(set(artifacts), {"json"})
             self.assertIn('"visited_dirs"', artifacts["json"].read_text(encoding="utf-8"))
             self.assertFalse((Path(temp) / "out" / "library.list").exists())
@@ -251,6 +301,19 @@ class RawDiscoveryTests(unittest.TestCase):
             self.assertIn("待确认", exported["html"].read_text(encoding="utf-8"))
             after = sorted(str(path.relative_to(root)) for path in root.rglob("*"))
             self.assertEqual(after, before)
+
+    def test_hack_lef_directory_does_not_contribute_view_types(self):
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "raw"
+            version = raw / "Vendor_A" / "phy_ip" / "v01"
+            (version / "LEF").mkdir(parents=True)
+            (version / "LEF" / "core.lef").touch()
+            (version / "hack_lef").mkdir()
+            (version / "hack_lef" / "debug.gds").touch()
+
+            result = discover_raw_libraries(raw)
+
+            self.assertEqual(result[0]["view_types"], ["LEF"])
 
 
 if __name__ == "__main__":

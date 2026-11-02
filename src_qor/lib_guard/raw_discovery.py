@@ -20,14 +20,8 @@ _VIEW_SUFFIXES = {
 }
 _IGNORED_DIRS = {
     ".git", ".svn", "__pycache__", "catalog", "diff", "reports", "release_area", "scan_out",
-    "work", "tmp", "temp", "_simulation", "configs", "config",
+    "work", "tmp", "temp", "_simulation", "configs", "config", "hack_lef",
 }
-_VIEW_DIR_NAMES = {
-    "lef", "lib", "db", "gds", "oas", "cdl", "spice", "verilog", "rtl", "timing", "spef",
-    "sdc", "upf", "cpf", "nldm", "ccs", "ecsm", "ccs_lvf", "netlist", "spi",
-    "def", "ndm", "hack_lef",
-}
-_PACKAGING_DIR_NAMES = {"package", "source_package", "delivery_package", "release_package"}
 _IGNORED_PREFIXES = ("upstream_",)
 _VERSION_NAME = re.compile(
     r"(?:\d{2,8}(?:[._-]\d+)*.*|\d{4}q[1-4].*|v\d+.*|r\d+.*|rev.*|beta.*|release.*|final.*|"
@@ -36,7 +30,6 @@ _VERSION_NAME = re.compile(
 )
 _MAX_DEPTH = 8
 _MAX_DIRS = 5000
-_HINT_DEPTH = 4
 _HINT_ENTRIES = 400
 
 
@@ -77,74 +70,53 @@ def _children(path: Path, errors: list[dict[str, str]] | None = None) -> list[Pa
         return []
 
 
-def _view_hints(path: Path, errors: list[dict[str, str]] | None = None) -> tuple[set[str], bool]:
-    """Inspect bounded filenames only; never follows directory symlinks."""
+_VIEW_DIR_TYPES = {
+    "lef": "LEF", "lib": "LIB", "db": "DB", "gds": "GDS", "oas": "OAS",
+    "cdl": "CDL", "spice": "SPICE", "verilog": "VERILOG", "rtl": "VERILOG",
+    "timing": "OTHER", "spef": "SPEF", "sdc": "SDC", "upf": "UPF",
+    "cpf": "CPF", "nldm": "LIB", "ccs": "LIB", "ecsm": "LIB",
+    "ccs_lvf": "LIB", "netlist": "VERILOG", "spi": "SPICE", "def": "DEF",
+    "ndm": "NDM", "gdsii": "GDS",
+}
+
+
+def _dir_views_deep(path: Path, errors: list[dict[str, str]] | None = None) -> tuple[set[str], bool, bool]:
+    """Find View folders and file suffixes through MAX_DEPTH, without following symlinks."""
     views: set[str] = set()
     queue: list[tuple[Path, int]] = [(path, 0)]
-    visited = 0
-    while queue and visited < _HINT_ENTRIES:
+    visited_entries = 0
+    truncated = False
+    depth_limited = False
+    while queue:
         current, depth = queue.pop(0)
         try:
-            with os.scandir(current) as entries:
-                for entry in entries:
-                    visited += 1
-                    if visited > _HINT_ENTRIES:
-                        break
-                    if entry.is_dir(follow_symlinks=False):
-                        if depth < _HINT_DEPTH and not _ignored(entry.name):
-                            queue.append((Path(entry.path), depth + 1))
-                    elif entry.is_file(follow_symlinks=False):
-                        view = _view_for_name(entry.name)
-                        if view:
-                            views.add(view)
+            with os.scandir(current) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name.casefold())
+            for entry in entries:
+                visited_entries += 1
+                if visited_entries > _HINT_ENTRIES:
+                    truncated = True
+                    queue.clear()
+                    break
+                if entry.is_dir(follow_symlinks=False):
+                    if _ignored(entry.name):
+                        continue
+                    view = _VIEW_DIR_TYPES.get(entry.name.casefold())
+                    if view:
+                        views.add(view)
+                    elif depth < _MAX_DEPTH:
+                        queue.append((Path(entry.path), depth + 1))
+                    else:
+                        truncated = True
+                        depth_limited = True
+                elif entry.is_file(follow_symlinks=False):
+                    suffix = Path(entry.name.lower()).suffix
+                    if entry.name.casefold() not in {"readme", "license", "notice", "changelog"} \
+                            and suffix not in {".md", ".txt", ".rst", ".pdf", ".html", ".htm"}:
+                        views.add(_view_for_name(entry.name) or "OTHER")
         except OSError as exc:
             _record_access_error(errors, current, exc)
-            continue
-    return views, bool(queue or visited >= _HINT_ENTRIES)
-
-
-def _is_delivery(path: Path, errors: list[dict[str, str]] | None = None) -> tuple[bool, set[str], bool]:
-    if _ignored(path.name) or path.name.lower() in _VIEW_DIR_NAMES:
-        return False, set(), False
-    children = _children(path, errors)
-    # A named release container is not a version when it contains release directories.
-    if not _VERSION_NAME.fullmatch(path.name) and any(_VERSION_NAME.fullmatch(item.name) for item in children):
-        return False, set(), False
-    hints, truncated = _view_hints(path, errors)
-    return bool(hints), hints, truncated
-
-
-def _direct_view_payload(path: Path, errors: list[dict[str, str]]) -> bool:
-    """A version's own View files/directories, excluding nested Cell packages."""
-    try:
-        with os.scandir(path) as entries:
-            return any(
-                (entry.is_file(follow_symlinks=False) and _view_for_name(entry.name))
-                or (entry.is_dir(follow_symlinks=False) and entry.name.lower() in _VIEW_DIR_NAMES)
-                for entry in entries
-            )
-    except OSError as exc:
-        _record_access_error(errors, path, exc)
-        return False
-
-
-def _cell_view_roots(version: Path, errors: list[dict[str, str]]) -> tuple[list[tuple[Path, set[str], bool]], bool]:
-    """Find bounded Cell/View leaves below a release, without descending into Views."""
-    roots: list[tuple[Path, set[str], bool]] = []
-    queue: list[tuple[Path, int]] = [(version, 0)]
-    visited = 0
-    while queue and visited < _HINT_ENTRIES:
-        path, depth = queue.pop(0)
-        visited += 1
-        if depth and _direct_view_payload(path, errors):
-            views, truncated = _view_hints(path, errors)
-            if views:
-                roots.append((path, views, truncated))
-            continue
-        if depth < _HINT_DEPTH:
-            queue.extend((child, depth + 1) for child in _children(path, errors)
-                         if child.name.lower() not in _VIEW_DIR_NAMES)
-    return roots, bool(queue)
+    return views, truncated, depth_limited
 
 
 def _candidate(root: Path, relative_parts: tuple[str, ...], deliveries: list[dict[str, Any]],
@@ -183,63 +155,58 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
     while stack and visited < _MAX_DIRS:
         path, depth = stack.pop()
         visited += 1
-        if depth:
+        if depth == 2:
             relative = path.relative_to(root)
-            is_top_vendor = len(relative.parts) == 1 and relative.parts[0].lower().startswith("vendor")
-            if (not is_top_vendor and not _VERSION_NAME.fullmatch(path.name)
-                    and not any(_VERSION_NAME.fullmatch(part) for part in relative.parts[:-1])):
-                deliveries = []
-                cell_deliveries: dict[tuple[str, ...], list[dict[str, Any]]] = {}
-                nested_by_version: dict[str, list[tuple[Path, set[str], bool]]] = {}
-                for child in _children(path, scan_errors):
-                    if _VERSION_NAME.fullmatch(child.name) and not _direct_view_payload(child, scan_errors):
-                        nested, truncated = _cell_view_roots(child, scan_errors)
-                        if truncated:
-                            truncated_hints.append(str(child))
-                        nested_by_version[child.name] = nested
-                nested_names = Counter(
-                    leaf.relative_to(path / version).as_posix()
-                    for version, leaves in nested_by_version.items() for leaf, _, _ in leaves
-                )
-                for child in _children(path, scan_errors):
-                    nested = nested_by_version.get(child.name, [])
-                    # One packaging wrapper is ambiguous. Repeated Cell identities,
-                    # deeper Cell paths, or multiple Cells establish this layout.
-                    confirmed = [item for item in nested if (
-                        item[0].name.lower() not in _PACKAGING_DIR_NAMES
-                        and (len(nested) > 1 or len(item[0].relative_to(child).parts) > 1
-                             or nested_names[item[0].relative_to(child).as_posix()] > 1)
-                    )]
-                    if confirmed:
-                        for leaf, views, hints_truncated in confirmed:
-                            key = leaf.relative_to(child).parts
-                            cell_deliveries.setdefault(key, []).append({
-                                "id": child.name, "path": str(leaf.resolve()), "views": sorted(views),
-                                "hints_truncated": hints_truncated,
-                                "detection_basis": "日期发布/Cell/View",
-                            })
-                        continue
-                    is_delivery, views, hints_truncated = _is_delivery(child, scan_errors)
-                    if hints_truncated:
-                        truncated_hints.append(str(child))
-                    if is_delivery and views:
-                        deliveries.append({"id": child.name, "path": str(child.resolve()), "views": sorted(views),
-                                           "hints_truncated": hints_truncated,
-                                           "detection_basis": "文件名后缀与直接子目录"})
-                if deliveries:
-                    results.append(_candidate(path, relative.parts, deliveries))
-                for cell_parts, versions in cell_deliveries.items():
-                    results.append(_candidate(path, relative.parts + cell_parts, versions,
-                                              basis="日期发布/Cell/View"))
-        if depth >= _MAX_DEPTH:
-            if not _ignored(path.name) and not _VERSION_NAME.fullmatch(path.name):
-                unvisited = [child for child in _children(path, scan_errors)
-                             if child.name.lower() not in _VIEW_DIR_NAMES
-                             and not _VERSION_NAME.fullmatch(child.name)]
-                if unvisited:
-                    depth_limited_paths.append(str(path))
+            versions = []
+            named_versions = [child for child in _children(path, scan_errors)
+                              if _VERSION_NAME.fullmatch(child.name)]
+            if named_versions:
+                for version in named_versions:
+                    views, truncated, depth_limited = _dir_views_deep(version, scan_errors)
+                    if truncated:
+                        truncated_hints.append(str(version))
+                    if depth_limited:
+                        depth_limited_paths.append(str(version))
+                    versions.append({
+                        "id": version.name, "path": str(version.resolve()),
+                        "views": sorted(views), "hints_truncated": truncated,
+                        "detection_basis": "版本目录名与深层 View 扫描",
+                    })
+            else:
+                direct_payload = False
+                try:
+                    with os.scandir(path) as iterator:
+                        for entry in iterator:
+                            if entry.is_dir(follow_symlinks=False):
+                                direct_payload = entry.name.casefold() in _VIEW_DIR_TYPES
+                            elif entry.is_file(follow_symlinks=False):
+                                suffix = Path(entry.name.lower()).suffix
+                                direct_payload = (
+                                    entry.name.casefold() not in {"readme", "license", "notice", "changelog"}
+                                    and suffix not in {".md", ".txt", ".rst", ".pdf", ".html", ".htm"}
+                                )
+                            if direct_payload:
+                                break
+                except OSError as exc:
+                    _record_access_error(scan_errors, path, exc)
+                views, truncated, depth_limited = _dir_views_deep(path, scan_errors) if direct_payload else (set(), False, False)
+                if direct_payload and (views or not named_versions):
+                    if truncated:
+                        truncated_hints.append(str(path))
+                    if depth_limited:
+                        depth_limited_paths.append(str(path))
+                    versions.append({
+                        "id": path.name, "path": str(path.resolve()),
+                        "views": sorted(views), "hints_truncated": truncated,
+                        "detection_basis": "产品线目录自身交付",
+                    })
+            view_types = sorted({view for item in versions for view in item["views"]})
+            if not versions or not view_types or view_types == ["OTHER"]:
+                continue
+            results.append(_candidate(path, relative.parts, versions,
+                                      basis="Vendor/产品线与深层 View 目录"))
             continue
-        if _ignored(path.name) or _VERSION_NAME.fullmatch(path.name):
+        if depth >= 2 or _ignored(path.name):
             continue
         for child in reversed(_children(path, scan_errors)):
             try:
@@ -247,12 +214,9 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
             except (OSError, ValueError):
                 continue
             stack.append((child, depth + 1))
+    if stack:
+        depth_limited_paths.extend(str(path) for path, depth in stack if depth >= _MAX_DEPTH)
 
-    candidate_paths = [Path(item["root_abs"]) for item in results]
-    results = [item for item in results if not any(
-        Path(item["root_abs"]) != other and Path(item["root_abs"]) in other.parents
-        for other in candidate_paths
-    )]
     results.sort(key=lambda item: (item["vendor"].casefold(), item["middle_path"].casefold(),
                                    item["display_name"].casefold(), item["root_abs"].casefold()))
     id_counts = Counter(item["library_id"] for item in results)
@@ -285,12 +249,7 @@ def discover_raw_report(raw_root: str | Path) -> dict[str, Any]:
 
 
 def discover_raw_libraries(raw_root: str | Path) -> list[dict[str, Any]]:
-    """Find Catalog-style library roots at any depth under a RAW root.
-
-    Candidate roots are directories with one or more direct delivery/version
-    children. The relative path is retained as Vendor, middle_path and library;
-    only filenames are inspected to summarize views.
-    """
+    """Find Vendor/product-line roots with named versions or a flat self-delivery."""
     return discover_raw_report(raw_root)["candidates"]
 
 

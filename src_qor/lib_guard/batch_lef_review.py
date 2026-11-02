@@ -20,7 +20,7 @@ def analyze_pairs(pairs: list[dict[str, Any]], evidence_dir: str | Path) -> dict
     for pair, pair_id in zip(pairs, ids):
         entry = {"pair_id": pair_id, "file_key": str(pair.get("file_key") or ""),
                  "old_file": str(pair.get("old_file") or ""),
-                 "new_file": str(pair.get("new_file") or ""), "evidence_ref": None}
+                 "new_file": str(pair.get("new_file") or ""), "source_versions": pair.get("source_versions") or {}, "evidence_ref": None}
         try:
             if not entry["old_file"] or not entry["new_file"]:
                 raise ValueError("配对必须指定两份 LEF")

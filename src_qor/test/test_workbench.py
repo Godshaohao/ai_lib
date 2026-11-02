@@ -115,6 +115,12 @@ END LIBRARY
             self.assertIn("不完整", page)
             self.assertIn(review_id, page)
             self.assertIn("下载 Excel", page)
+            current_file_page = client.get("/?ip=A&tab=review&review_tab=files").get_data(as_text=True)
+            self.assertIn("比较此文件最近两次出现", current_file_page)
+            historical_page = client.get(
+                f"/?ip=A&tab=review&review_tab=files&matrix_review={review_id}"
+            ).get_data(as_text=True)
+            self.assertNotIn("比较此文件最近两次出现", historical_page)
 
     def test_one_click_single_delivery_runs_with_matching_projection_target(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -2399,19 +2405,19 @@ END LIBRARY
             self.assertEqual([item["id"] for item in updated["raw_versions"]], ["V01", "V02", "V03"])
             self.assertEqual(updated["checks"]["macro_index"]["root"], "/kept/input")
 
-    def test_register_date_cell_layout_keeps_real_version_paths(self):
+    def test_register_product_line_keeps_real_version_paths(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             raw = root / "raw"
-            cell = "ln04lpp_sc_hvt_c54104"
+            product_line = "DTCO"
             for release in ("20260917_DTCO", "20261001_DTCO"):
-                view = raw / "Metax" / "DTCO" / release / "elf" / "psls" / cell / "LEF"
+                view = raw / "Metax" / product_line / release / "elf" / "psls" / "LEF"
                 view.mkdir(parents=True)
                 (view / "cell.lef").touch()
             registry = root / "registry.yml"
             registry.write_text("ips: []\n", encoding="utf-8")
             client = create_app(registry, root / "output").test_client()
-            library_id = f"Metax.DTCO.elf.psls.{cell}"
+            library_id = f"Metax.{product_line}"
 
             response = client.post("/register-discovered", data={
                 "raw_root": str(raw), "library_ids": [library_id]
@@ -2420,11 +2426,11 @@ END LIBRARY
             self.assertEqual(response.status_code, 303)
             entry = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
             self.assertEqual(entry["library_id"], library_id)
-            self.assertEqual(entry["middle_path"], "DTCO/elf/psls")
+            self.assertEqual(entry["middle_path"], "")
             self.assertEqual([item["id"] for item in entry["raw_versions"]],
                              ["20260917_DTCO", "20261001_DTCO"])
             self.assertEqual(entry["raw_versions"][0]["path"],
-                             str(raw / "Metax" / "DTCO" / "20260917_DTCO" / "elf" / "psls" / cell))
+                             str(raw / "Metax" / product_line / "20260917_DTCO"))
 
     def test_discovery_supports_single_row_registration_and_catalog_edit_remove_actions(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -2511,11 +2517,11 @@ END LIBRARY
             self.assertIn(b"data-lib-search", script.data)
             script.close()
 
-    def test_register_discovered_keeps_middle_path_as_catalog_metadata(self):
+    def test_register_discovered_uses_vendor_product_line_identity(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             raw = root / "raw"
-            view = raw / "Vendor_A" / "memory" / "sram" / "phy_ip" / "20261024" / "LEF"
+            view = raw / "Vendor_A" / "phy_ip" / "20261024" / "LEF"
             view.mkdir(parents=True)
             (view / "phy.lef").touch()
             registry = root / "registry.yml"
@@ -2523,13 +2529,13 @@ END LIBRARY
             app = create_app(registry, root / "output")
 
             response = app.test_client().post("/register-discovered", data={
-                "raw_root": str(raw), "library_ids": ["Vendor_A.memory.sram.phy_ip"]
+                "raw_root": str(raw), "library_ids": ["Vendor_A.phy_ip"]
             })
 
             self.assertEqual(response.status_code, 303)
             entry = __import__("yaml").safe_load(registry.read_text(encoding="utf-8"))["ips"][0]
             self.assertEqual(entry["vendor"], "Vendor_A")
-            self.assertEqual(entry["middle_path"], "memory/sram")
+            self.assertEqual(entry["middle_path"], "")
             self.assertEqual(entry["library_name"], "phy_ip")
 
     def test_raw_discovery_rejects_invalid_path(self):
@@ -2715,11 +2721,11 @@ END LIBRARY
             self.assertIn(b"LIBERTY 1", catalog_response.data)
             self.assertIn(b"GDS 1", catalog_response.data)
 
-    def test_formal_nl_source_mapping_uses_raw_discovery_middle_path(self):
+    def test_formal_nl_source_mapping_uses_vendor_product_line_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             raw_root = root / "raw"
-            source = raw_root / "Vendor_A" / "memory" / "sram" / "SRAM_A" / "V50" / "LEF" / "sram.lef"
+            source = raw_root / "Vendor_A" / "SRAM_A" / "V50" / "LEF" / "sram.lef"
             source.parent.mkdir(parents=True)
             source.write_text("LEF", encoding="utf-8")
             formal_ip = root / "formal" / "lib_NL2.5_3" / "IP"
@@ -2736,7 +2742,7 @@ END LIBRARY
 
             self.assertEqual(overview["library_count"], 1)
             self.assertEqual(overview["libraries"][0]["vendor"], "Vendor_A")
-            self.assertEqual(overview["libraries"][0]["middle_path"], "memory/sram")
+            self.assertEqual(overview["libraries"][0]["middle_path"], "")
             self.assertEqual(overview["libraries"][0]["library_name"], "SRAM_A")
             self.assertEqual(overview["libraries"][0]["versions"], ["V50"])
             self.assertEqual(overview["unmapped_file_count"], 0)

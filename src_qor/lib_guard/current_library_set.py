@@ -114,7 +114,7 @@ def build_current_file_set(versions: list[dict[str, Any]],
                 "unresolved": [] if status == "COMPLETE" else [
                     {"reason": "ACTIVE_CHAIN_SCAN_INCOMPLETE"}], "warnings": []}
 
-    chain = _active_chain(versions, candidate) if len(package_metadata) == len(versions) else None
+    chain = _active_chain(versions, candidate)
     if chain:
         raw_library = {"inventories": {key: records.get(key, {"status": "UNKNOWN", "files": []})
                                         for key in chain}}
@@ -201,6 +201,7 @@ def build_interface_groups(file_set: dict[str, Any],
 
     files = [item for item in file_set.get("files") or [] if isinstance(item, dict)]
     incomplete = str(file_set.get("status") or "") != "COMPLETE"
+    corner_incomplete = incomplete
     unresolved: list[dict[str, Any]] = []
     lef_records: list[dict[str, Any]] = []
     observed_liberties: list[dict[str, Any]] = []
@@ -215,6 +216,8 @@ def build_interface_groups(file_set: dict[str, Any],
         fact = facts_by_path.get(path)
         fact_state = _fact_state(fact) if fact else ""
         if not fact or not fact_state.startswith("PASS"):
+            if view == "liberty":
+                corner_incomplete = True
             unresolved.append({"view": view, "source_path": path,
                                "source_version": item.get("source_version"),
                                "reason": "PARSER_FACT_MISSING_OR_FAILED"})
@@ -222,6 +225,8 @@ def build_interface_groups(file_set: dict[str, Any],
             continue
         if fact_state != "PASS":
             incomplete = True
+            if view == "liberty":
+                corner_incomplete = True
         data = fact.get("data") if isinstance(fact.get("data"), dict) else {}
         if view == "lef":
             macros = data.get("macros") if isinstance(data.get("macros"), dict) else {}
@@ -242,6 +247,7 @@ def build_interface_groups(file_set: dict[str, Any],
                                    "operating_conditions": conditions_by_library,
                                    "liberty_inventory": {"cell_count": len(cell_names), "cell_names": cell_names}})
         if axes.get("conflict"):
+            corner_incomplete = True
             unresolved.append({"view": view, "source_path": path,
                                "source_version": item.get("source_version"),
                                "reason": "CORNER_LABEL_CONFLICT"})
@@ -336,6 +342,7 @@ def build_interface_groups(file_set: dict[str, Any],
     return {"schema_version": "lef_liberty_object_groups.v1",
             "status": "PARTIAL" if incomplete or ambiguous_objects else "COMPLETE",
             "candidate_set_status": file_set.get("status"),
+            "corner_observation_status": "PARTIAL" if corner_incomplete else "COMPLETE",
             "groups": sorted(groups, key=lambda item: item["lef_file"]),
             "observed_liberties": observed_liberties,
             "ambiguous_objects": ambiguous_objects, "unresolved": unresolved}
