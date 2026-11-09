@@ -118,6 +118,9 @@ def build_applicable_plan(projection: dict[str, Any], version_roots: dict[str, s
     if formal.get("status") == "COMPLETE" and len(formal_stages) == 1:
         row("formal_source", "已执行", f"正式阶段 {formal_stages[0]} 已盘点",
             "链接来源不等于工具实际加载来源", "formal_nl/overview/latest.json")
+    elif len(formal_stages) == 1:
+        row("formal_source", "部分覆盖", f"正式阶段 {formal_stages[0]} 已发现",
+            formal.get("reason") or "正式目录盘点不完整，部分文件或来源待核实", "formal_nl/overview/latest.json")
     elif formal_stages:
         row("formal_source", "部分覆盖", f"发现 {len(formal_stages)} 个正式阶段",
             "阶段不唯一；需要用户确认正式阶段", "formal_nl/overview/latest.json")

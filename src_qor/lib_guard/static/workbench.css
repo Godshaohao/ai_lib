@@ -213,6 +213,11 @@ tr[data-discovery-row][hidden] { display: none; }
 .version-list > div strong, .version-list > div span { font-size: 10px; }
 .muted { color: var(--muted); }
 .discover-form { display: flex; align-items: end; gap: 10px; padding: 15px 16px; border-bottom: 1px solid var(--line-soft); }
+.history-config-fields label { display: grid; gap: 6px; color: var(--soft); font-size: 13px; font-weight: 700; }
+.history-config-path { margin: 0; padding: 0 16px 14px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.history-test-results { padding: 0 16px 16px; }
+.history-test-results .candidate-head { padding: 12px 0; }
+.history-test-results .candidate-head span { display: block; margin-top: 5px; color: var(--muted); }
 .discover-form label { display: grid; min-width: 0; flex: 1; gap: 5px; color: var(--soft); font-size: 11px; font-weight: 700; }
 .candidate-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; }
 .candidate-head > div { display: grid; gap: 4px; }

@@ -1,0 +1,18 @@
+#dwc_128g_phy_pma_ns_cm_serdes_top#
+dwc_128g_phy_pma_ns_cm_serdes_top_merged.lef IP/LEF/
+dwc_128g_phy_pma_ns_cm_serdes_top_tt0p75v25c_Nominal_pg.lib.gz IP/LIB/
+dwc_128g_phy_pma_ns_cm_serdes_top_ff0p825vm40c_RCmax_pg.lib.gz IP/LIB/
+dwc_128g_phy_pma_ns_cm_serdes_top_ss0p675v125c_RCmin_pg.lib.gz IP/LIB/
+dwc_128g_phy_pma_ns_cm_serdes_top_tt0p75v25c_Nominal_pg.db IP/DB/
+dwc_128g_phy_pma_ns_cm_serdes_top_gate_level.v IP/VERILOG/
+dwc_128g_phy_pma_ns_cm_serdes_top.gds.gz IP/GDS/
+dwc_128g_phy_pma_ns_cm_serdes_top.cdl IP/SPICE/
+dwc_128g_phy_pma_ns_cm_serdes_top_merged.ndm IP/NDM/
+#dwc_128g_phy_pma_ns_txrx_top#
+dwc_128g_phy_pma_ns_txrx_top_merged.lef IP/LEF/
+dwc_128g_phy_pma_ns_txrx_top_tt0p75v25c_Nominal_pg.lib.gz IP/LIB/
+dwc_128g_phy_pma_ns_txrx_top_ff0p825vm40c_RCmax_pg.db IP/DB/
+#MXCML2CMOS#
+MXCML2CMOS.lef IP/LEF/
+#dwc_hdmi21_dp21_tx_phy_x4#
+dwc_hdmi21_dp21_tx_phy_x4_merged.lef IP/LEF/

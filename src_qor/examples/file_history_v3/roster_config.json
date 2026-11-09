@@ -1,0 +1,6 @@
+{
+  "ip_list": "ipall.list",
+  "raw_root": "example_data",
+  "formal_manifest": "example_formal.list",
+  "formal_root": "example_data/formal_stage"
+}

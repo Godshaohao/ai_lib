@@ -44,9 +44,9 @@ SHEET_HEADERS = {
     "文件版本矩阵": ["IP", "View", "文件键", "文件名", "最新版本", "最新路径", "次新版本", "次新路径",
                    "基准版本", "目标版本", "基准路径", "目标路径", "基准存在性", "目标存在性", "交付关系",
                    "身份状态", "内容状态", "语义状态", "正式阶段", "正式来源", "批准状态", "排序依据",
-                   "RAW 覆盖", "快照 ID", "投影证据"],
+                   "Formal 与 RAW 排名", "排名说明", "RAW 覆盖", "快照 ID", "投影证据"],
     "00-概览": ["IP", "库标识", "Review ID", "检查覆盖", "RAW 盘点快照", "比较范围快照",
-                 "Formal 快照状态", "Formal 快照时间", "交付范围", "RAW版本", "正式阶段", "已选检查",
+                 "Formal 快照状态", "Formal 快照时间", "正式清单状态", "正式清单SHA256", "正式清单分组", "清单证据", "交付范围", "RAW版本", "正式阶段", "已选检查",
                  "执行完成项", "执行失败项", "质量判断", "Macro数", "报告结论", "报告生成时间",
                  "源提交", "工作区有改动", "输入范围"],
     "01-工程检查": ["序号", "检查项ID", "工程检查主题", "工程覆盖", "本次执行", "本次结果",
@@ -56,7 +56,7 @@ SHEET_HEADERS = {
     "04-关注项": ["IP", "类别", "类型", "对象", "数量", "发现", "状态", "建议核对", "证据路径"],
     "05-MacroView": ["IP", "RAW版本", "Macro", "LEF", "Liberty", "GDS", "CDL", "DB", "Verilog", "基准状态", "证据说明"],
     "06-MacroView文件": ["IP", "RAW版本", "Macro", "View", "Corner/线索", "来源版本", "文件名", "关联证据", "状态", "来源路径"],
-    "07-正式文件": ["IP", "快照时间", "正式阶段", "相对路径", "View", "来源RAW版本", "来源路径", "正式路径", "盘点状态", "盘点报告"],
+    "07-正式文件": ["IP", "记录类型", "清单分组", "清单行号", "清单核对", "RAW最新版本", "RAW次新版本", "清单SHA256", "快照时间", "正式阶段", "相对路径", "View", "来源RAW版本", "Formal 与 RAW 排名", "排名说明", "来源路径", "正式路径", "盘点状态", "盘点报告"],
     "RAW文件清单": ["IP", "快照时间", "RAW版本", "RAW根目录", "版本盘点状态", "版本文件数", "View", "View文件数", "相对路径", "来源路径", "盘点报告"],
     "08-LEF宏": ["IP", "文件键", "批次Pair", "LEF文件", "Macro", "类别", "Site", "宽度", "高度", "单位", "Pin数", "电源Pin", "地Pin", "OBS几何数", "解析范围"],
     "09-Liberty角": ["IP", "Liberty文件", "来源版本", "Library", "PVT Process", "RC角线索", "条件", "Voltage (V)", "Temp (°C)", "文件Cell数", "同名Cell", "LEF有而本文件无", "本文件有而LEF无", "信号Pin对照", "信号Pin差异", "电源/地脚对照", "电源/地脚差异", "证据不足Cell数", "角标说明"],
@@ -515,6 +515,9 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
             raise ValueError(f"{ip_id}: 不支持的检查名：{', '.join(sorted(unknown))}")
         check_results: dict[str, dict[str, Any]] = {}
         evidence_dir.mkdir(parents=True, exist_ok=True)
+        manifest_snapshot = ip.get("formal_manifest_snapshot") or {"status": "NOT_CONFIGURED", "records": []}
+        if manifest_snapshot.get("status") != "NOT_CONFIGURED":
+            _json_write(evidence_dir / "formal_manifest.json", manifest_snapshot)
         for check_spec in checks_spec.values():
             if isinstance(check_spec, dict) and isinstance(check_spec.get("current_file_set"), dict):
                 _json_write(evidence_dir / "current_file_set.json", check_spec["current_file_set"])
@@ -708,6 +711,7 @@ def run_review(config: dict[str, Any], out_dir: str | Path) -> list[dict[str, An
                         "engineering_checklist": [dict(item) for item in ip.get("engineering_checklist") or []],
                         "file_version_projection": projection,
                         "inventory_snapshot": ip.get("inventory_snapshot") or {},
+                        "formal_manifest_snapshot": manifest_snapshot,
                         "checks": check_results, "run_dir": str(run_dir),
                         "library_dir": str(run_dir.parents[1])})
     return reviews
@@ -1161,12 +1165,21 @@ def _finalize_engineering_checklist(review: dict[str, Any]) -> None:
 
 
 def _formal_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
+    from .display_labels import projection_label
+
     ip = review.get("ip") or {}
     snapshot = _inventory_snapshot(review)
     formal = snapshot.get("report") or {}
     label = ip.get("name") or ip.get("id") or "未命名IP"
     report_ref = snapshot.get("report_ref") or ""
     snapshot_at = snapshot.get("generated_at") or "未记录"
+    projection_rows = {}
+    for file in (review.get("file_version_projection") or {}).get("files") or []:
+        usage = file.get("formal_usage") or {}
+        key = (str(usage.get("source_path") or ""), str(usage.get("published_path") or ""),
+               str(usage.get("source_version") or ""))
+        if any(key):
+            projection_rows[key] = usage
     rows = []
     inventories = formal.get("inventories") or {}
     selected_stage = str(ip.get("formal_stage") or "")
@@ -1174,18 +1187,46 @@ def _formal_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
         list(inventories.items()) if not selected_stage else [])
     for stage, inventory in stages:
         for item in inventory.get("files") or []:
-            rows.append({"IP": label, "快照时间": snapshot_at, "正式阶段": stage,
+            source_path = str(item.get("source_path") or "")
+            published_path = str(item.get("published_path") or "")
+            raw_version = str(item.get("raw_version") or "")
+            usage = projection_rows.get((source_path, published_path, raw_version), {})
+            rows.append({"IP": label, "记录类型": "正式目录观察", "快照时间": snapshot_at, "正式阶段": stage,
                          "相对路径": item.get("relative_path", ""), "View": item.get("view", "other"),
-                         "来源RAW版本": item.get("raw_version", "未映射"),
-                         "来源路径": item.get("source_path", ""),
-                         "正式路径": item.get("published_path", ""),
+                         "来源RAW版本": raw_version or "未映射",
+                         "Formal 与 RAW 排名": projection_label(usage.get("raw_version_relation") or "UNVERIFIED", "formal_raw_rank"),
+                         "排名说明": usage.get("raw_version_relation_reason", "未匹配到可核对的正式来源投影"),
+                         "来源路径": source_path,
+                         "正式路径": published_path,
                          "盘点状态": inventory.get("status", formal.get("status", "未知")),
                          "盘点报告": report_ref})
     if not rows:
-        rows.append({"IP": label, "快照时间": snapshot_at, "正式阶段": selected_stage or "未指定",
+        rows.append({"IP": label, "记录类型": "正式目录状态", "快照时间": snapshot_at, "正式阶段": selected_stage or "未指定",
                      "相对路径": "", "View": "", "来源RAW版本": "", "来源路径": "",
                      "正式路径": "", "盘点状态": "未附盘点" if not snapshot else "无匹配阶段或无文件记录",
                      "盘点报告": report_ref or "未找到该 IP 已保存的正式 NL 盘点报告"})
+    manifest = review.get("formal_manifest_snapshot") or {}
+    status_labels = {"SOURCE_PATH_CONFIRMED": "来源路径已确认", "PUBLISHED_FILE_MISSING": "正式文件缺失",
+                     "PUBLISHED_FOUND_SOURCE_UNKNOWN": "来源未确认（可能为复制件）",
+                     "PUBLISHED_FILE_UNREADABLE": "正式文件不可读取", "SOURCE_PATH_AMBIGUOUS": "来源路径不唯一",
+                     "NAME_ONLY_CANDIDATE": "仅文件名候选", "AMBIGUOUS_NAME": "同名候选不唯一",
+                     "HISTORICAL_NAME_ONLY": "仅发现历史同名", "NOT_FOUND_IN_RAW_HISTORY": "RAW 历史未发现"}
+    for item in manifest.get("records") or []:
+        rows.append({"IP": label, "记录类型": "清单声明", "清单分组": item.get("group"),
+                     "清单行号": item.get("line"), "清单核对": status_labels.get(item.get("status"), item.get("status")),
+                     "RAW最新版本": item.get("raw_latest_version"), "RAW次新版本": item.get("raw_previous_version"),
+                     "清单SHA256": manifest.get("sha256"), "快照时间": manifest.get("generated_at"),
+                     "正式阶段": selected_stage, "相对路径": str(Path(str(item.get("directory") or "")) / str(item.get("filename") or "")),
+                     "View": item.get("view"), "来源RAW版本": item.get("observed_source_version"),
+                     "Formal 与 RAW 排名": projection_label(item.get("formal_relation") or "UNVERIFIED", "formal_raw_rank"),
+                     "排名说明": item.get("relation_note"), "来源路径": item.get("observed_source"),
+                     "正式路径": item.get("published_path"), "盘点状态": manifest.get("status"),
+                     "盘点报告": "evidence/formal_manifest.json"})
+    if not manifest.get("records") and manifest.get("status") not in (None, "NOT_CONFIGURED"):
+        rows.append({"IP": label, "记录类型": "清单状态", "清单核对": "清单未完整核对",
+                     "排名说明": "；".join(str(value) for value in manifest.get("errors") or []),
+                     "清单SHA256": manifest.get("sha256"), "盘点状态": manifest.get("status") or "NOT_CONFIGURED",
+                     "盘点报告": "evidence/formal_manifest.json" if manifest.get("status") not in (None, "NOT_CONFIGURED") else ""})
     return rows
 
 
@@ -1405,6 +1446,18 @@ def _finding_rows(review: dict[str, Any]) -> list[dict[str, Any]]:
     for item in formal.get("ambiguous_versions") or []:
         add("正式来源", item.get("nl_version", ""), "同一阶段发现多个来源目标", "待确认",
             "人工确认应使用的来源", formal.get("formal_nl_root", ""), kind="UNVERIFIED")
+    manifest = review.get("formal_manifest_snapshot") or {}
+    for item in manifest.get("records") or []:
+        if item.get("status") != "SOURCE_PATH_CONFIRMED" or item.get("formal_relation") not in {"LATEST", "PREVIOUS", "OLDER"}:
+            detail = ("清单声明的正式文件未找到或不可访问" if item.get("status") == "PUBLISHED_FILE_MISSING"
+                      else "正式来源版本排名未确认" if item.get("status") == "SOURCE_PATH_CONFIRMED"
+                      else "正式文件来源未能确认")
+            add("正式清单", str(item.get("filename") or ""), detail, "待核实",
+                "核对正式清单、文件路径及链接来源", "evidence/formal_manifest.json", kind="UNVERIFIED")
+    for error in manifest.get("errors") or []:
+        if manifest.get("status") != "NOT_CONFIGURED":
+            add("正式清单", str(manifest.get("source_path") or ""), str(error), "待核实",
+                "核对清单及本次盘点范围", "evidence/formal_manifest.json", kind="UNVERIFIED")
     macro_result = (_result(review, "macro_index") if _check_result(review, "macro_index").get("status") == "COMPLETE" else {})
     index = macro_result.get("macro_index") or macro_result
     for item in index.get("unmatched_files") or []:
@@ -1758,6 +1811,8 @@ def _input_scope(review: dict[str, Any]) -> dict[str, Any]:
     return {"checks": checks, "target_raw_versions": raw_versions,
             "formal_stage": str(context.get("formal_stage") or ""), "source_count": source_count,
             "formal_inventory_snapshot": formal_snapshot,
+            "formal_manifest": {key: (review.get("formal_manifest_snapshot") or {}).get(key)
+                                for key in ("status", "source_path", "sha256", "groups", "generated_at")},
             "raw_projection": {key: projection.get(key) for key in
                                ("snapshot_id", "source_snapshot_id", "input_snapshot_id", "generated_at") if projection.get(key)},
             "delivery_scope": dict(projection.get("scope") or {})}
@@ -1836,6 +1891,8 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
                     "身份状态": projection_label(file.get("identity_status"), "identity"),
                     "内容状态": projection_label(comparison.get("content_status"), "content"), "语义状态": projection_label(comparison.get("semantic_status"), "semantic"),
                     "正式阶段": formal.get("stage"), "正式来源": formal.get("source_path"),
+                    "Formal 与 RAW 排名": projection_label(formal.get("raw_version_relation"), "formal_raw_rank"),
+                    "排名说明": formal.get("raw_version_relation_reason"),
                     "批准状态": projection_label(formal.get("approved_effective_status"), "approval"),
                     "排序依据": projection.get("version_order", {}).get("basis"),
                     "RAW 覆盖": projection_label((projection.get("coverage") or {}).get("raw_inventory"), "coverage"),
@@ -1863,6 +1920,10 @@ def build_workbook_model(reviews: list[dict[str, Any]]) -> dict[str, list[dict[s
                                  "比较范围快照": (input_scope.get("raw_projection") or {}).get("snapshot_id", ""),
                                  "Formal 快照状态": (input_scope.get("formal_inventory_snapshot") or {}).get("status", "NOT_FOUND"),
                                  "Formal 快照时间": (input_scope.get("formal_inventory_snapshot") or {}).get("generated_at", ""),
+                                 "正式清单状态": (input_scope.get("formal_manifest") or {}).get("status") or "NOT_CONFIGURED",
+                                 "正式清单SHA256": (input_scope.get("formal_manifest") or {}).get("sha256") or "",
+                                 "正式清单分组": "、".join((input_scope.get("formal_manifest") or {}).get("groups") or []),
+                                 "清单证据": "evidence/formal_manifest.json" if (input_scope.get("formal_manifest") or {}).get("status") not in (None, "NOT_CONFIGURED") else "",
                                  "交付范围": json.dumps(input_scope.get("delivery_scope") or {}, ensure_ascii=False, sort_keys=True),
                                  "RAW版本": ip.get("raw_version", "未指定"), "正式阶段": stage or ip.get("formal_stage", "未检查"),
                                  "已选检查": "、".join(CHECK_LABELS.get(name, name) for name, _ in selected) or "无",
@@ -1962,6 +2023,11 @@ def run(config: dict[str, Any], out_dir: str | Path) -> tuple[list[dict[str, Any
             review_record["file_version_projection"] = {
                 "snapshot_id": review["file_version_projection"]["snapshot_id"],
                 "result_ref": "evidence/file_version_projection.json"}
+        manifest = review.get("formal_manifest_snapshot") or {}
+        if manifest.get("status") and manifest.get("status") != "NOT_CONFIGURED":
+            review_record["formal_manifest"] = {"status": manifest.get("status"),
+                "sha256": manifest.get("sha256"), "source_path": manifest.get("source_path"),
+                "groups": manifest.get("groups"), "result_ref": "evidence/formal_manifest.json"}
         review["review_result"] = review_record
         review["review_result_ref"] = "review_result.json"
         model = build_workbook_model([review])

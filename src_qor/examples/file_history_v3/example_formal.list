@@ -1,0 +1,5 @@
+#dwc_128g_phy_pma_ns_txrx_top#
+core.lef IP/LEF/
+tt.lib.gz IP/LIB/
+ff.lib.gz IP/LIB/
+ss.lib.gz IP/LIB/

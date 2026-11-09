@@ -34,7 +34,7 @@ VIEW_SUFFIXES = (
     (".rst", "doc"), (".rtf", "doc"), (".adoc", "doc"), (".txt", "doc"),
     (".lib.gz", "liberty"), (".lib", "liberty"), (".lef.gz", "lef"), (".lef", "lef"),
     (".gds", "gds"), (".gds.gz", "gds"), (".oas", "oas"),
-    (".db", "db"), (".v", "verilog"), (".sv", "verilog"),
+    (".db", "db"), (".ndm", "ndm"), (".v", "verilog"), (".sv", "verilog"),
     (".cdl", "cdl"), (".spice.gz", "spice"), (".spice", "spice"),
     (".spi.gz", "spice"), (".spi", "spice"), (".sp.gz", "spice"), (".sp", "spice"),
 )

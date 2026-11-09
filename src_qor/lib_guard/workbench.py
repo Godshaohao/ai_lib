@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import tempfile
 from threading import BoundedSemaphore, Lock
 from typing import Any
 from urllib.parse import urlsplit
@@ -95,6 +96,94 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _formal_manifest_snapshot(entry: dict[str, Any], registry_file: Path,
+                              projection: dict[str, Any], formal_root: Path | None) -> dict[str, Any]:
+    """Bind the declared list to this review's already-scanned RAW projection."""
+    name = str(entry.get("formal_manifest") or "").strip()
+    if not name:
+        return {"status": "NOT_CONFIGURED", "records": [], "errors": ["未配置正式文件清单"]}
+    groups = entry.get("formal_groups") or ([entry["business_ip"]] if entry.get("business_ip") else [])
+    if not isinstance(groups, list) or not groups or not all(isinstance(value, str) and value for value in groups):
+        return {"status": "FAILED", "records": [], "errors": ["未明确指定正式清单分组"]}
+    source = Path(_resolve_registry_path(name, registry_file))
+    try:
+        content = source.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        histories = []
+        for row in projection.get("files") or []:
+            if not row.get("occurrences"):
+                continue
+            file_id = str(row.get("file_key") or "")
+            view = str(row.get("view") or "").upper()
+            view = "LIB" if view == "LIBERTY" else view
+            occurrences = [{"file_id": file_id, "version": str(item.get("version") or ""),
+                            "resolved_path": str(Path(str(item.get("source_path") or "")).resolve())}
+                           for item in row["occurrences"] if item.get("source_path")]
+            latest = row.get("latest") or {}
+            previous = row.get("previous") or {}
+            histories.append({"file_id": file_id, "view": view,
+                              "identity_path": file_id.split(":", 1)[-1],
+                              "latest": latest if latest.get("version") else None,
+                              "previous": previous if previous.get("version") else None,
+                              "latest_status": latest.get("status") if latest.get("status") in {"CONFIRMED", "AMBIGUOUS"} else "UNCERTAIN",
+                              "previous_status": previous.get("status") if previous.get("status") in {"CONFIRMED", "NONE", "AMBIGUOUS"} else "UNCERTAIN",
+                              "occurrences": occurrences})
+        from .ip_file_history import check_formal_manifest
+        with tempfile.TemporaryDirectory(prefix="ai-lib-manifest-") as temp:
+            copied = Path(temp) / "formal_files.list"
+            copied.write_bytes(content)
+            records, errors = check_formal_manifest({"ip_name": str(entry.get("business_ip") or ""),
+                "formal_manifest": str(copied), "formal_groups": groups,
+                "formal_root": str(formal_root) if formal_root else None}, Path(temp), histories)
+        if not formal_root:
+            errors.append("正式阶段未唯一确定；仅记录清单声明")
+        if (projection.get("coverage") or {}).get("raw_inventory") != "COMPLETE":
+            errors.append("RAW 盘点不完整；文件排名可能不确定")
+        return {"status": "PARTIAL" if errors else "COMPLETE", "source_path": str(source),
+                "sha256": digest, "groups": groups, "formal_root": str(formal_root or ""),
+                "generated_at": datetime.now(timezone.utc).isoformat(), "records": records, "errors": errors}
+    except (OSError, ValueError, TypeError, UnicodeError) as exc:
+        return {"status": "FAILED", "source_path": str(source), "groups": groups,
+                "records": [], "errors": [str(exc)]}
+
+
+def _bind_web_manifest(entry: dict[str, Any], registry_file: Path, output: Path) -> tuple[dict[str, Any], str]:
+    """Use the current web configuration only for an explicitly bound business IP."""
+    business_ip = str(entry.get("business_ip") or "").strip()
+    config_path = output / "file_history" / "roster_config.json"
+    if not business_ip or not config_path.is_file():
+        return entry, ""
+    try:
+        from .ip_file_history import read_ip_roster
+        config = _json_read(config_path)
+        if not isinstance(config, dict) or not config.get("ip_list") or not config.get("formal_manifest"):
+            return entry, "网页清单配置不完整，无法绑定本次正式清单"
+        roster = Path(_resolve_registry_path(str(config["ip_list"]), config_path))
+        if business_ip not in read_ip_roster(roster):
+            return entry, f"业务 IP {business_ip} 不在当前网页配置的 IP 清单中"
+        configured_root = str(config.get("formal_root") or "").strip()
+        registered_root = str(entry.get("formal_nl_root") or "").strip()
+        if configured_root and registered_root:
+            left = Path(_resolve_registry_path(configured_root, config_path))
+            right = Path(_resolve_registry_path(registered_root, registry_file))
+            left = left.parent if left.name.casefold() == "ip" else left
+            right = right.parent if right.name.casefold() == "ip" else right
+            if left != right:
+                return entry, "网页正式阶段目录与当前库登记目录不一致，未绑定清单"
+        group_map = config.get("formal_group_map") or {}
+        if not isinstance(group_map, dict):
+            return entry, "formal_group_map 必须为对象"
+        groups = group_map.get(business_ip, [business_ip])
+        if isinstance(groups, str):
+            groups = [groups]
+        if not isinstance(groups, list) or not groups or not all(isinstance(value, str) and value for value in groups):
+            return entry, "正式清单分组配置无效"
+        return {**entry, "formal_manifest": _resolve_registry_path(str(config["formal_manifest"]), config_path),
+                "formal_groups": list(dict.fromkeys(groups))}, ""
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return entry, f"网页清单配置无法绑定：{exc}"
+
+
 def _prepare_applicable_review(entry: dict[str, Any], registry: dict[str, Any],
                                registry_file: Path, output: Path) -> dict[str, Any]:
     """Refresh evidence and build one conservative, per-IP automatic review plan."""
@@ -146,8 +235,26 @@ def _prepare_applicable_review(entry: dict[str, Any], registry: dict[str, Any],
                     if formal_stage else None)
     projection = build_projection(library_id, versions, inventories, formal_files,
                                   formal_stage=formal_stage)
+    manifest_root = None
+    root_value = str(entry.get("formal_nl_root") or "").strip()
+    if root_value:
+        candidate = Path(_resolve_registry_path(root_value, registry_file))
+        stage_root = candidate.parent if candidate.name.casefold() == "ip" else candidate
+        if re.fullmatch(r"lib_NL[A-Za-z0-9_.-]+", stage_root.name, re.IGNORECASE) and stage_root.is_dir():
+            manifest_root = stage_root
+    if manifest_root is None and formal_stage:
+        matching_roots = [Path(str(item.get("root"))) for item in overview.get("stages") or []
+                          if str(item.get("stage") or "") == formal_stage and item.get("root")]
+        if len(matching_roots) == 1:
+            manifest_root = matching_roots[0].parent if matching_roots[0].name.casefold() == "ip" else matching_roots[0]
+    manifest_entry, manifest_binding_error = _bind_web_manifest(entry, registry_file, output)
+    manifest_snapshot = ({"status": "UNBOUND", "records": [], "errors": [manifest_binding_error]}
+                         if manifest_binding_error else
+                         _formal_manifest_snapshot(manifest_entry, registry_file, projection, manifest_root))
     projection_root = output / "file_versions" / _library_dir(library_id)
     raw_snapshot = publish_projection(projection_root, projection)
+    manifest_snapshot["raw_projection_snapshot_id"] = raw_snapshot["snapshot_id"]
+    manifest_snapshot["formal_snapshot_generated_at"] = formal_state.get("generated_at") or ""
     projection = dict(raw_snapshot)
     projection["sources"] = {
         "registry_ref": str(registry_file),
@@ -181,6 +288,17 @@ def _prepare_applicable_review(entry: dict[str, Any], registry: dict[str, Any],
                                  current_file_set=current_file_set,
                                  interface_groups=interface_groups,
                                  current_filemap_json=str(current_filemap_path))
+    for item in plan["engineering_checklist"]:
+        if item.get("id") == "formal_source" and manifest_snapshot["status"] != "NOT_CONFIGURED":
+            item["result"] += f"；正式清单 {len(manifest_snapshot.get('records') or [])} 条"
+            item["evidence"] = "evidence/formal_manifest.json"
+            unresolved = sum(record.get("status") != "SOURCE_PATH_CONFIRMED"
+                             or record.get("formal_relation") not in {"LATEST", "PREVIOUS", "OLDER"}
+                             for record in manifest_snapshot.get("records") or [])
+            if manifest_snapshot["status"] != "COMPLETE" or unresolved:
+                item["execution"] = "部分覆盖"
+                item["reason"] = "；".join(filter(None, [item.get("reason"), *manifest_snapshot.get("errors", []),
+                    f"{unresolved} 条清单文件、来源或排名待核实" if unresolved else ""]))
     if plan["checks"].get("lef_liberty_check"):
         plan["checks"]["lef_liberty_check"]["current_file_set"] = current_file_set
     scoped_projection = plan["projection"]
@@ -241,6 +359,7 @@ def _prepare_applicable_review(entry: dict[str, Any], registry: dict[str, Any],
     versions_ordered = (plan["scope"].get("target_version") or "")
     return {**entry, "raw_version": versions_ordered, "formal_stage": formal_stage,
             "formal_snapshot_id": formal_state.get("generated_at") or "",
+            "formal_manifest_snapshot": manifest_snapshot,
             "projection_json": str(final_path), "file_version_projection": final_snapshot,
             "checks": plan["checks"], "engineering_checklist": plan["engineering_checklist"],
             "inventory_snapshot": inventory_snapshot, "one_click_applicable": True,
@@ -535,7 +654,7 @@ def _entry_from_form(form: Any, previous: dict[str, Any] | None = None) -> dict[
         entry["checks"][check_name] = spec
     if previous:
         entry["context_type"] = previous.get("context_type", "LIBRARY_REVIEW")
-        for key in ("vendor", "middle_path", "library_name", "raw_root", "raw_versions", "formal_nl_root",
+        for key in ("vendor", "middle_path", "library_name", "business_ip", "formal_manifest", "formal_groups", "mapping_basis", "raw_root", "raw_versions", "formal_nl_root",
                     "formal_nl_stages", "formal_nl_scan_at", "formal_nl_report_status"):
             if key in previous:
                 entry[key] = previous[key]
@@ -1051,6 +1170,9 @@ def _is_loopback_request() -> bool:
 def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Blueprint:
     registry_file = Path(registry_path).expanduser().resolve()
     output = Path(output_dir).expanduser().resolve()
+    history_root = output / "file_history"
+    history_config_path = history_root / "roster_config.json"
+    history_test_path = history_root / "latest_test.json"
     _refresh_overview(registry_file, output)
     blueprint = Blueprint("ip_review", __name__, template_folder="templates")
     from .display_labels import projection_label
@@ -1062,6 +1184,25 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
              discovery_artifacts: bool = False,
              identity_conflicts: list[str] | None = None, partial_discovery: bool = False,
              discovery_warnings: list[str] | None = None):
+        history_config = {}
+        history_test = {}
+        history_config_error = ""
+        try:
+            if history_config_path.is_file():
+                history_config = _json_read(history_config_path)
+                if not isinstance(history_config, dict):
+                    raise ValueError("文件历史配置必须是 JSON 对象")
+            if history_test_path.is_file():
+                history_test = _json_read(history_test_path)
+                if not isinstance(history_test, dict):
+                    raise ValueError("文件历史测试结果必须是 JSON 对象")
+                current_hash = hashlib.sha256(json.dumps(history_config, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                history_test["stale"] = history_test.get("config_fingerprint") != current_hash
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            history_config_error = str(exc)
+            if not isinstance(history_config, dict):
+                history_config = {}
+            history_test = {}
         registry = _read_registry(registry_file)
         ips = registry.get("ips") or []
         catalog_ips = []
@@ -1382,6 +1523,8 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                                history=records, latest_attempt=latest_attempt,
                                submitted_checks=submitted_checks,
                                message=message, error=error, run_record=run_record,
+                               history_config=history_config, history_config_path=str(history_config_path),
+                               history_config_error=history_config_error, history_test=history_test,
                                checks=sorted(CHECK_NAMES), discovered=discovered or [], raw_root=raw_root,
                                active_tab=active_tab, discovery_artifacts=discovery_artifacts,
                                environment_label=environment_label, formal_nl=formal_nl, vendors=vendors,
@@ -1924,6 +2067,10 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
                 message = "已移除库登记；RAW 文件和历史检查结果均未删除。"
             if request.args.get("formal_scanned") == "1":
                 message = "正式 NL 目录盘点已完成；本次只读检查结果已保存。"
+            if request.args.get("history_saved") == "1":
+                message = "文件历史路径配置已保存。"
+            if request.args.get("history_tested") == "1":
+                message = "文件历史配置测试已结束，请查看下方关联结果。"
 
             discovered = []
             discovery_artifacts = False
@@ -1998,6 +2145,72 @@ def create_blueprint(registry_path: str | Path, output_dir: str | Path) -> Bluep
         except Exception as exc:
             return page(_text(request.form, "id"), error=str(exc), active_tab="review",
                         active_review_tab=_text(request.form, "review_tab") or "config"), 400
+
+    @blueprint.post("/file-history/config")
+    def save_file_history_config():
+        if not _is_loopback_request():
+            abort(403)
+        action = _text(request.form, "action")
+        if action not in {"save", "test"}:
+            abort(400)
+        try:
+            config = _json_read(history_config_path) if history_config_path.is_file() else {}
+            if not isinstance(config, dict):
+                raise ValueError("文件历史配置必须是 JSON 对象")
+            for key in ("ip_list", "formal_manifest", "raw_root", "formal_root"):
+                config[key] = _text(request.form, key)
+            _write_json(history_config_path, config)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return page(error=f"配置无法保存：{exc}", active_tab="discover"), 400
+        if action == "save":
+            return redirect(url_for("ip_review.index", tab="discover", history_saved="1"), code=303)
+        fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        run_id = f"run_{uuid4().hex}"
+        run_dir = history_root / "runs" / run_id
+        snapshot_path = history_root / f".{run_id}.json"
+        try:
+            if not config.get("ip_list") or not config.get("formal_manifest"):
+                raise ValueError("请填写业务 IP 清单和正式文件清单路径")
+            if not config.get("raw_root") and not config.get("libraries"):
+                raise ValueError("请填写 RAW 根目录，或在配置文件中登记 libraries")
+            for key, label in (("ip_list", "业务 IP 清单"), ("formal_manifest", "正式文件清单")):
+                path = Path(_resolve_registry_path(str(config[key]), history_config_path))
+                if not path.is_file():
+                    raise ValueError(f"{label}不存在或不是文件：{path}")
+            for key, label in (("raw_root", "RAW 根目录"), ("formal_root", "正式阶段目录")):
+                if config.get(key):
+                    path = Path(_resolve_registry_path(str(config[key]), history_config_path))
+                    if not path.is_dir():
+                        raise ValueError(f"{label}不存在或不是目录：{path}")
+            from .ip_file_history import run_roster
+            _write_json(snapshot_path, config)
+            summary = run_roster(snapshot_path, run_dir, compare=False)
+            report = _json_read(run_dir / "ip_overview.json")
+            state = {"status": "COMPLETE", "run_id": run_id, "summary": summary,
+                     "ip_results": [{key: item.get(key) for key in
+                                      ("ip", "status", "mapping_basis", "libraries", "formal_records", "warnings")}
+                                     for item in report.get("ip_results") or []],
+                     "registry_issues": report.get("workbench_registry_issues") or [],
+                     "config_fingerprint": fingerprint,
+                     "generated_at": datetime.now(timezone.utc).isoformat()}
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            state = {"status": "FAILED", "error": str(exc), "config_fingerprint": fingerprint,
+                     "generated_at": datetime.now(timezone.utc).isoformat()}
+        finally:
+            snapshot_path.unlink(missing_ok=True)
+        _write_json(history_test_path, state)
+        return redirect(url_for("ip_review.index", tab="discover", history_tested="1"), code=303)
+
+    @blueprint.get("/file-history/results/<run_id>/<filename>")
+    def file_history_result(run_id: str, filename: str):
+        if not _is_loopback_request():
+            abort(403)
+        if not re.fullmatch(r"run_[0-9a-f]{32}", run_id) or filename not in {"ip_overview.csv", "workbench_registry.json"}:
+            abort(404)
+        target = history_root / "runs" / run_id / filename
+        if not target.is_file():
+            abort(404)
+        return send_file(target, as_attachment=True)
 
     @blueprint.post("/discover")
     def discover():

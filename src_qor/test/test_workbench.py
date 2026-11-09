@@ -16,6 +16,113 @@ from lib_guard.workbench import (_acquire_library_lock, _files_for_selection, _q
 
 
 class WorkbenchTests(unittest.TestCase):
+    def test_saving_existing_ip_preserves_formal_manifest_binding(self):
+        previous = {'id': 'A', 'library_id': 'Vendor.IP', 'business_ip': 'business',
+                    'formal_manifest': '/lists/formal.list', 'formal_groups': ['group'],
+                    'mapping_basis': 'FORMAL_REAL_SOURCE'}
+        result = workbench._entry_from_form(MultiDict({'id': 'A', 'library_id': 'Vendor.IP'}), previous)
+        for key in ('business_ip', 'formal_manifest', 'formal_groups', 'mapping_basis'):
+            self.assertEqual(result[key], previous[key])
+
+    def test_existing_business_ip_uses_web_manifest_configuration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / 'RAW' / 'Vendor' / 'physical' / 'V01' / 'LEF'
+            raw.mkdir(parents=True)
+            (raw / 'core.lef').write_text('lef')
+            formal = root / 'lib_NL1' / 'IP' / 'LEF'
+            formal.mkdir(parents=True)
+            (formal / 'core.lef').symlink_to(raw / 'core.lef')
+            (root / 'ipall.list').write_text('business_ip\n')
+            (root / 'formal.list').write_text('#formal_group#\ncore.lef IP/LEF/\n')
+            entry = {'id': 'A', 'library_id': 'Vendor.physical', 'business_ip': 'business_ip',
+                     'vendor': 'Vendor', 'library_name': 'physical', 'formal_nl_root': str(root / 'lib_NL1'),
+                     'raw_versions': [{'id': 'V01', 'path': str(raw.parent.parent), 'delivery_order': 1}]}
+            registry_path = root / 'registry.json'
+            registry_path.write_text(json.dumps({'ips': [entry]}))
+            output = root / 'out'
+            config_path = output / 'file_history/roster_config.json'
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(json.dumps({'ip_list': str(root / 'ipall.list'),
+                'formal_manifest': str(root / 'formal.list'), 'formal_root': str(root / 'lib_NL1'),
+                'formal_group_map': {'business_ip': ['formal_group']}}))
+            result = workbench._prepare_applicable_review(entry, {'ips': [entry]}, registry_path, output)
+            self.assertEqual(result['formal_manifest_snapshot']['groups'], ['formal_group'])
+            self.assertEqual(result['formal_manifest_snapshot']['records'][0]['formal_relation'], 'LATEST')
+            (root / 'ipall.list').write_text('another_ip\n')
+            result = workbench._prepare_applicable_review(entry, {'ips': [entry]}, registry_path, output)
+            self.assertEqual(result['formal_manifest_snapshot']['status'], 'UNBOUND')
+            self.assertIn('不在', result['formal_manifest_snapshot']['errors'][0])
+
+    def test_file_history_config_can_be_saved_and_tested_from_web(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / 'RAW' / 'Vendor' / 'physical' / 'V01' / 'LEF'
+            raw.mkdir(parents=True)
+            (raw / 'core.lef').write_text('lef')
+            formal = root / 'lib_NL1' / 'IP' / 'LEF'
+            formal.mkdir(parents=True)
+            (formal / 'core.lef').symlink_to(raw / 'core.lef')
+            (root / 'ipall.list').write_text('business_ip\nunknown_ip\n')
+            (root / 'formal.list').write_text('#business_ip#\ncore.lef IP/LEF/\n')
+            registry = root / 'registry.json'
+            registry.write_text('{"ips": []}')
+            output = root / 'out'
+            config_path = output / 'file_history' / 'roster_config.json'
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(json.dumps({'ip_library_map': {'business_ip': ['Vendor.physical']}}))
+            client = create_app(registry, output).test_client()
+            values = {'ip_list': str(root / 'ipall.list'), 'formal_manifest': str(root / 'formal.list'),
+                      'raw_root': str(root / 'RAW'), 'formal_root': str(root / 'lib_NL1')}
+            saved = client.post('/file-history/config', data={**values, 'action': 'save'}, follow_redirects=True)
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(json.loads(config_path.read_text())['ip_library_map']['business_ip'], ['Vendor.physical'])
+            response = client.post('/file-history/config', data={**values, 'action': 'test'}, follow_redirects=True)
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            self.assertIn('business_ip', html)
+            self.assertIn('unknown_ip', html)
+            self.assertIn('Vendor.physical', html)
+            state = json.loads((output / 'file_history' / 'latest_test.json').read_text())
+            self.assertEqual(state['status'], 'COMPLETE')
+            self.assertEqual(state['summary']['requested_ip_count'], 2)
+            download = client.get('/file-history/results/' + state['run_id'] + '/ip_overview.csv')
+            self.assertEqual(download.status_code, 200)
+            download.close()
+            changed = client.post('/file-history/config', data={**values, 'raw_root': str(root / 'other'),
+                                   'action': 'save'}, follow_redirects=True)
+            self.assertIn('旧配置的测试结果', changed.get_data(as_text=True))
+            denied = client.post('/file-history/config', data={**values, 'action': 'save'},
+                                 environ_base={'REMOTE_ADDR': '192.0.2.1'})
+            self.assertEqual(denied.status_code, 403)
+            self.assertEqual(client.get('/file-history/results/../roster_config.json').status_code, 404)
+
+    def test_file_history_bad_config_reports_failure_and_does_not_show_old_result_as_current(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / 'registry.json'
+            registry.write_text('{"ips": []}')
+            client = create_app(registry, root / 'out').test_client()
+            response = client.post('/file-history/config', data={'action': 'test', 'ip_list': str(root / 'missing'),
+                'formal_manifest': str(root / 'missing-formal'), 'raw_root': str(root / 'missing-raw')}, follow_redirects=True)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('失败', response.get_data(as_text=True))
+            state = json.loads((root / 'out' / 'file_history' / 'latest_test.json').read_text())
+            self.assertEqual(state['status'], 'FAILED')
+
+    def test_file_history_invalid_formal_directory_is_reported(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'ipall.list').write_text('ip\n')
+            (root / 'formal.list').write_text('#ip#\nx.lef IP/LEF/\n')
+            (root / 'RAW').mkdir()
+            (root / 'registry.json').write_text('{"ips": []}')
+            client = create_app(root / 'registry.json', root / 'out').test_client()
+            response = client.post('/file-history/config', data={'action': 'test',
+                'ip_list': str(root / 'ipall.list'), 'formal_manifest': str(root / 'formal.list'),
+                'raw_root': str(root / 'RAW'), 'formal_root': str(root / 'missing')}, follow_redirects=True)
+            self.assertIn('正式阶段目录不存在', response.get_data(as_text=True))
+
     def test_cross_delivery_lef_liberty_sources_are_recorded_per_path(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

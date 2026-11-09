@@ -6,6 +6,14 @@ from lib_guard.applicable_review import build_applicable_plan
 
 
 class ApplicableReviewPlanTests(unittest.TestCase):
+    def test_single_formal_stage_with_incomplete_inventory_reports_actual_reason(self):
+        plan = build_applicable_plan(self.projection(), {}, formal_state={
+            'status': 'INCOMPLETE', 'stages': ['lib_NL_demo']})
+        row = next(item for item in plan['engineering_checklist'] if item['id'] == 'formal_source')
+        self.assertEqual(row['execution'], '部分覆盖')
+        self.assertIn('不完整', row['reason'])
+        self.assertNotIn('阶段不唯一', row['reason'])
+
     def projection(self, *, ordered=("V1", "V2"), lef_rows=None, lib_rows=None):
         rows = []
         for file_key, view, name, occurrences in (lef_rows or []) + (lib_rows or []):

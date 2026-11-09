@@ -196,6 +196,12 @@
   document.querySelector("[data-main-tab]")?.addEventListener("click", (event) => {
     selectTab(event.currentTarget.dataset.mainTab, "main");
   });
+  document.querySelector("[data-history-config-form]")?.addEventListener("submit", (event) => {
+    if (event.submitter?.value === "test") {
+      const progress = document.querySelector("[data-history-test-progress]");
+      if (progress) progress.textContent = "正在读取清单并测试关联，请等待结果…";
+    }
+  });
   const discoveryRows = [...document.querySelectorAll("[data-discovery-row]")];
   const discoverySearch = document.querySelector("[data-discovery-search]");
   const discoveryVendor = document.querySelector("[data-discovery-vendor]");

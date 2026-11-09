@@ -2,6 +2,44 @@
 
 `src_qor` contains standalone IP library review scripts, a per-IP report runner, and an independent local review workbench. The workbench owns its Flask app, templates, CSS, and JavaScript; it does not mount into or import the legacy Catalog/Web application and does not run or expose the old Scan or Diff commands.
 
+## 批量配置业务 IP 清单与正式文件清单
+
+`lib_guard.ip_file_history` 接收业务 IP 名单、正式文件清单和 RAW 目录，输出每个 IP 的文件历史及可供工作台使用的登记候选。它读取现有目录，不修改 RAW 和正式链接。名单以 `ipall.list` 为准，未关联的 IP 也会出现在总览中。
+
+复制 `src_qor/examples/file_history_v3/` 到工作目录，使用真实文件替换两份示例 `.list`，并修改 `roster_config.json`：
+
+```json
+{
+  "ip_list": "/project/config/ipall.list",
+  "formal_manifest": "/project/config/formal_files.list",
+  "raw_root": "/project/RAW",
+  "formal_root": "/project/formal/lib_NL2.5_3",
+  "ip_library_map": {"business_ip": ["Vendor.product_line"]},
+  "formal_group_map": {"business_ip": ["manifest_group"]}
+}
+```
+
+`ip_library_map` 和 `formal_group_map` 是可选的；只对已经确认且不能自动匹配的名称填写。`formal_root` 是具体正式阶段的根目录，清单中 `IP/LEF/` 等相对路径从该目录拼接；缺少正式目录时可去掉该字段，但无法确认正式文件的实际来源。相对路径以 JSON 配置文件所在目录为基准。
+
+工作台也可统一维护这四个路径：打开 **发现 / 登记 RAW → 业务 IP 与正式文件清单配置**，填写后选择 **保存配置** 或 **保存并测试关联**。配置保存在 `<out-dir>/file_history/roster_config.json`；已有 `libraries`、`ip_library_map`、`formal_group_map` 等字段会保留，需要时可直接编辑该 JSON。测试仅读取清单、扫描目录和验证链接，不比较文件正文；页面会显示每个 IP 的关联状态、原因和下载入口。修改配置后，旧测试结果会标记为旧配置。测试生成的工作台登记候选需核对后另存并作为启动参数使用，不会自动覆盖当前登记。
+
+登记候选会保存业务 IP、正式清单路径和清单分组；对于已有 `business_ip` 的登记，工作台会使用当前网页清单配置，并核对 IP 名单及正式阶段范围。缺少明确业务 IP 绑定的旧登记需要重新加载已核对的登记候选，或在登记中明确填写 `business_ip`、`formal_manifest` 和 `formal_groups`，不会按相似名称猜测。
+
+一键检查时，系统从当前 RAW 盘点投影与指定正式阶段重新核对清单，并将该次清单 SHA-256、分组、逐行结果写入 `evidence/formal_manifest.json`。Excel 的 `07-正式文件` 分别列出“正式目录观察”和“清单声明”；缺失文件、复制件、未确认来源、未唯一确定的阶段与读取错误不会变成通过。`00-概览` 记录清单状态和哈希，`04-关注项` 汇总待核实的声明。历史 Excel 和证据不会随原清单后续修改而变化。清单记录只核对当前 Library 的 RAW 投影；一个业务 IP 包含多个 Library 时，各 Library 的报告需分别查看。
+
+自动关联按显式映射、正式链接目标、唯一完整名称匹配的顺序执行。来源有歧义或无法确认时，先查看 `ip_overview.csv` 和 `ip_overview.json` 中的原因，再填写明确映射；普通复制文件、相似文件名或内容相同都不证明来源。自动 RAW 发现只支持 `RAW/Vendor/Library/V01/...` 等简单目录，复杂目录或不可确认顺序应使用配置中的 `libraries` 和每次交付的整数 `order` 显式登记。它表示文件最近观察版本，并不推断 FULL/PATCH 或批准状态。
+
+从仓库根目录执行：
+
+```bash
+PYTHONPATH=src_qor python3 -m lib_guard.ip_file_history \
+  --config /project/config/roster_config.json --out /project/work/file_history
+```
+
+总览为 `ip_overview.csv` 和 `ip_overview.json`，已关联 IP 的 `ips/<目录>/` 中有 `files.csv`、`formal.csv` 和 `inventories.csv`。`workbench_registry.json` 是单独生成的登记候选，业务 IP 对应多个 Library 时按 Library 分条；一个 Library 若对应多个业务 IP，会在总览 JSON 的 `workbench_registry_issues` 中说明并跳过该库。检查候选后复制到单独位置，作为工作台的 `--registry` 使用；同一输出目录再次批量运行会更新候选文件。工作台正式目录扫描要求可识别的 `lib_NL.../IP` 阶段目录。进入工作台后仍需执行既有的一键适用检查，才能生成 LEF–Liberty 检查和 Excel。
+
+示例演示可先将 `src_qor/examples/file_history_v3` 复制到临时目录，再在副本中执行 `python3 make_demo.py`，然后使用副本的 `roster_config.json` 运行上述批量命令。生成器会重写副本中的示例配置和名单，不应对真实名单执行。
+
 ## Scope
 
 The runner selects only the checks listed for each IP in YAML:

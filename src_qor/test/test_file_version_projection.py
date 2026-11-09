@@ -7,6 +7,36 @@ from pathlib import Path
 
 
 class FileVersionProjectionTests(unittest.TestCase):
+    def test_formal_ranking_uses_same_file_history_and_preserves_uncertainty(self):
+        from lib_guard.file_version_projection import build_projection
+        versions = [{'id': f'V{i}', 'path': f'/raw/V{i}', 'delivery_order': i} for i in (1, 2, 3)]
+        inventories = [{'version_id': f'V{i}', 'status': 'COMPLETE',
+                        'files': [f'/raw/V{i}/LEF/core.lef']} for i in (1, 2, 3)]
+        for source, expected in [('V3', 'LATEST'), ('V2', 'PREVIOUS'), ('V1', 'OLDER')]:
+            with self.subTest(source=source):
+                formal = [{'source_path': f'/raw/{source}/LEF/core.lef', 'view': 'lef'}]
+                row = build_projection('IP', versions, inventories, formal)['files'][0]
+                self.assertEqual(row['formal_usage']['raw_version_relation'], expected)
+        inventories[1].update(status='PARTIAL', files=[])
+        formal = [{'source_path': '/raw/V1/LEF/core.lef', 'view': 'lef'}]
+        row = build_projection('IP', versions, inventories, formal)['files'][0]
+        self.assertEqual(row['formal_usage']['raw_version_relation'], 'RANK_UNCERTAIN')
+        formal = [{'source_path': '/formal/copied/core.lef', 'view': 'lef'}]
+        rows = build_projection('IP', versions, inventories, formal)['files']
+        unbound = next(row for row in rows if row['file_key'].startswith('unresolved:'))
+        self.assertEqual(unbound['formal_usage']['raw_version_relation'], 'UNVERIFIED')
+
+    def test_formal_source_missing_from_inventory_does_not_get_a_rank(self):
+        from lib_guard.file_version_projection import build_projection
+        versions = [{'id': f'V{i}', 'path': f'/raw/V{i}', 'delivery_order': i} for i in (1, 2, 3)]
+        inventories = [{'version_id': 'V1', 'status': 'COMPLETE', 'files': []},
+                       {'version_id': 'V2', 'status': 'COMPLETE', 'files': ['/raw/V2/LEF/core.lef']},
+                       {'version_id': 'V3', 'status': 'COMPLETE', 'files': []}]
+        formal = [{'source_path': '/raw/V3/LEF/core.lef', 'published_path': '/formal/core.lef', 'view': 'lef'}]
+        row = build_projection('IP', versions, inventories, formal)['files'][0]
+        self.assertEqual(row['formal_usage']['source_version'], 'V3')
+        self.assertEqual(row['formal_usage']['raw_version_relation'], 'RANK_UNCERTAIN')
+
     def test_previous_candidate_is_uncertain_when_intervening_inventory_is_partial(self):
         from lib_guard.file_version_projection import build_projection
         versions = [{"id": f"V{i}", "path": f"/raw/V{i}", "delivery_order": i} for i in (1, 2, 3)]

@@ -110,6 +110,51 @@ def rank_occurrences(occurrences: list[dict[str, Any]], version_order: dict[str,
     return latest, previous
 
 
+def formal_raw_version_relation(formal: dict[str, Any], latest: dict[str, Any],
+                                previous: dict[str, Any], version_order: dict[str, Any],
+                                inventory_status: dict[str, str],
+                                occurrences: list[dict[str, Any]]) -> tuple[str, str]:
+    """Rank a confirmed Formal source against this file's RAW history."""
+    source_version = str(formal.get("source_version") or "")
+    if (formal.get("observation_status") != "OBSERVED" or not source_version
+            or not formal.get("source_path")):
+        return "UNVERIFIED", "正式文件没有可确认的 RAW 来源路径"
+    source_path = Path(str(formal["source_path"])).expanduser().resolve()
+    if not any(str(item.get("version") or "") == source_version
+               and item.get("source_path")
+               and Path(str(item["source_path"])).expanduser().resolve() == source_path
+               for item in occurrences):
+        return "RANK_UNCERTAIN", "正式来源未包含在 RAW 盘点记录中，无法确认其排名"
+    if version_order.get("status") != "KNOWN":
+        return "RANK_UNCERTAIN", "RAW 交付顺序无法确认"
+    ordered = [str(value) for value in version_order.get("ordered_ids") or []]
+    if source_version not in ordered:
+        return "RANK_UNCERTAIN", "正式来源版本不在当前 RAW 排序范围内"
+    if latest.get("status") != "CONFIRMED":
+        return "RANK_UNCERTAIN", "RAW 最新版本或覆盖范围无法确认"
+    if str(latest.get("version") or "") not in ordered:
+        return "RANK_UNCERTAIN", "RAW 最新版本不在当前排序范围内"
+    if source_version == str(latest.get("version") or ""):
+        return "LATEST", "正式来源对应该文件已确认的 RAW 最新版本"
+    if source_version == str(previous.get("version") or ""):
+        if previous.get("status") == "CONFIRMED":
+            return "PREVIOUS", "正式来源对应该文件已确认的 RAW 次新版本"
+        return "RANK_UNCERTAIN", "RAW 次新候选受不完整交付影响"
+    if previous.get("status") != "CONFIRMED" or str(previous.get("version") or "") not in ordered:
+        return "RANK_UNCERTAIN", "RAW 次新版本无法确认"
+    order_index = {version: index for index, version in enumerate(ordered)}
+    source_index = order_index[source_version]
+    latest_index = order_index[str(latest.get("version") or "")]
+    if source_index >= order_index[str(previous["version"])]:
+        return "RANK_UNCERTAIN", "正式来源与 RAW 排名记录不一致"
+    uncertain_after_source = [version for version, status in inventory_status.items()
+                              if status != "COMPLETE" and version in order_index
+                              and source_index < order_index[version] <= latest_index]
+    if uncertain_after_source:
+        return "RANK_UNCERTAIN", "来源之后存在盘点不完整的交付，无法确认其排名"
+    return "OLDER", "正式来源早于该文件已确认的 RAW 次新版本"
+
+
 def derive_file_capabilities(row: dict[str, Any]) -> dict[str, Any]:
     """Expose safe actions independently from the row's delivery identity."""
     comparison = row.get("comparison") or {}
@@ -225,6 +270,8 @@ def build_projection(library_id: str, versions: list[dict[str, Any]],
                             "view": str(item.get("view") or "other").casefold(),
                             "source_version": None, "published_path": item.get("published_path"),
                             "observation_status": "AMBIGUOUS" if ambiguous else "UNRESOLVED",
+                            "raw_version_relation": "UNVERIFIED",
+                            "raw_version_relation_reason": "正式文件没有可确认的 RAW 来源路径",
                             "approved_effective_status": "NOT_CONFIGURED"})
 
     def presence(version: str, occurrences: list[dict[str, Any]]) -> str:
@@ -254,6 +301,13 @@ def build_projection(library_id: str, versions: list[dict[str, Any]],
         if any(count > 1 for count in counts):
             latest = {"status": "AMBIGUOUS", "occurrences": occurrences}
             previous = {"status": "AMBIGUOUS", "occurrences": occurrences}
+        formal_usage = formal[0] if len(formal) == 1 else {
+            "observation_status": "AMBIGUOUS" if formal else ("UNKNOWN" if formal_files is None else "NOT_OBSERVED"),
+            "approved_effective_status": "NOT_CONFIGURED"}
+        formal_usage["raw_version_relation"], formal_usage["raw_version_relation_reason"] = formal_raw_version_relation(
+            formal_usage, latest, previous, version_order,
+            {version_id: str((inventory_by_id.get(version_id) or {}).get("status") or "UNKNOWN")
+             for version_id in version_ids}, occurrences)
         display_path = (formal[0].get("published_path") if len(formal) == 1 else "") or (
             occurrences[0].get("source_path") if occurrences else "") or (parts[-1] if parts else "")
         if not base_version or not target_version:
@@ -274,9 +328,7 @@ def build_projection(library_id: str, versions: list[dict[str, Any]],
                      "display_name": Path(display_path).name, "identity_status": identities,
                      "identity_evidence": "VIEW_AND_RELATIVE_PATH", "occurrences": occurrences,
                      "latest": latest, "previous": previous,
-                     "formal_usage": formal[0] if len(formal) == 1 else {
-                         "observation_status": "AMBIGUOUS" if formal else ("UNKNOWN" if formal_files is None else "NOT_OBSERVED"),
-                         "approved_effective_status": "NOT_CONFIGURED"},
+                     "formal_usage": formal_usage,
                      "comparison": {"base_version": base_version, "target_version": target_version,
                                     "base_presence": presence(base_version, occurrences),
                                     "target_presence": presence(target_version, occurrences),
@@ -349,6 +401,8 @@ def reproject_projection(projection: dict[str, Any], *, base_version: str = "",
         counts = [sum(str(item.get("version") or "") == version for item in occurrences)
                   for version in registered]
         formal = row.get("formal_usage") or {}
+        formal["raw_version_relation"], formal["raw_version_relation_reason"] = formal_raw_version_relation(
+            formal, row.get("latest") or {}, row.get("previous") or {}, version_order, inventory_status, occurrences)
         formal_ambiguous = str(formal.get("observation_status") or "") == "AMBIGUOUS"
         if any(count > 1 for count in counts) or formal_ambiguous:
             identities = "AMBIGUOUS"
