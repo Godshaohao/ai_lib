@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai_lib_qor/effective_index.schema.json",
+  "$comment": "Design contract only. Validate against production parsers before migration.",
+  "title": "effective_index",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "effective_index.v1"
+    },
+    "effective_set_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "owner": {
+      "type": "object",
+      "properties": {
+        "owner_type": {
+          "type": "string",
+          "enum": [
+            "BUSINESS_IP",
+            "SOURCE_LIBRARY"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "home_source_library_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "owner_type",
+        "owner_id",
+        "home_source_library_id"
+      ],
+      "additionalProperties": false
+    },
+    "latest_calculated_revision": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "current_accepted_revision": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "updated_at": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "effective_set_id",
+    "owner",
+    "latest_calculated_revision",
+    "current_accepted_revision",
+    "updated_at"
+  ],
+  "additionalProperties": false
+}

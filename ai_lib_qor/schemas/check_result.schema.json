@@ -1,0 +1,405 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai_lib_qor/check_result.schema.json",
+  "$comment": "Design contract only. Validate against production parsers before migration.",
+  "title": "check_result",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "check_result.v1"
+    },
+    "check_run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "EFFECTIVE_REVISION",
+            "RAW_DELIVERY"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "baseline": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EFFECTIVE_REVISION",
+                "RAW_DELIVERY"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "effective_set_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "run_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ruleset_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "file_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "old_source_ref": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "delivery_file"
+                      },
+                      "source_library_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "delivery_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "file_id": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "source_library_id",
+                      "delivery_id",
+                      "file_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "formal_file"
+                      },
+                      "formal_nl_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "formal_snapshot_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "file_id": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "formal_nl_id",
+                      "formal_snapshot_id",
+                      "file_id"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "new_source_ref": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "delivery_file"
+                      },
+                      "source_library_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "delivery_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "file_id": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "source_library_id",
+                      "delivery_id",
+                      "file_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "formal_file"
+                      },
+                      "formal_nl_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "formal_snapshot_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "file_id": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "formal_nl_id",
+                      "formal_snapshot_id",
+                      "file_id"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_changed": {
+            "type": "boolean"
+          },
+          "content_status": {
+            "type": "string",
+            "enum": [
+              "CHANGED",
+              "UNCHANGED",
+              "UNKNOWN",
+              "NOT_CHECKED"
+            ]
+          },
+          "object_changes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "object_type": {
+                  "type": "string",
+                  "enum": [
+                    "MACRO",
+                    "PIN",
+                    "CELL",
+                    "ATTRIBUTE",
+                    "OTHER"
+                  ]
+                },
+                "object_name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "attribute": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "old_value": {},
+                "new_value": {},
+                "unit": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "facts_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "required": [
+                "object_type",
+                "object_name",
+                "attribute",
+                "old_value",
+                "new_value",
+                "unit",
+                "facts_refs"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "file_key",
+          "old_source_ref",
+          "new_source_ref",
+          "source_changed",
+          "content_status",
+          "object_changes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "quality_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "check_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope_file_keys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "FAIL",
+              "INCONCLUSIVE",
+              "NOT_RUN"
+            ]
+          },
+          "coverage": {
+            "type": "string",
+            "enum": [
+              "COMPLETE",
+              "PARTIAL",
+              "UNKNOWN"
+            ]
+          },
+          "facts_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "check_id",
+          "scope_file_keys",
+          "result",
+          "coverage",
+          "facts_refs",
+          "detail"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "files_with_new_source": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_with_confirmed_content_change": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed_checks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inconclusive_checks": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "files_with_new_source",
+        "files_with_confirmed_content_change",
+        "failed_checks",
+        "inconclusive_checks"
+      ],
+      "additionalProperties": false
+    },
+    "evidence_note": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "check_run_id",
+    "target",
+    "baseline",
+    "effective_set_id",
+    "run_at",
+    "ruleset_id",
+    "file_changes",
+    "quality_checks",
+    "summary",
+    "evidence_note"
+  ],
+  "additionalProperties": false
+}

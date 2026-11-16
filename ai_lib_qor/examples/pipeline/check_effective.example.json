@@ -1,0 +1,14 @@
+{
+  "target_revision": "examples/work/vendors/vendor_orion/libraries/lib_rtavfs/ips/rtavfs/effective/versions/rev_0002.json",
+  "baseline_revision": "examples/work/vendors/vendor_orion/libraries/lib_rtavfs/ips/rtavfs/effective/versions/rev_0001.json",
+  "formal_snapshots": ["examples/work/formal_nl/NL2.5.3/snapshots/snap_nl253_0001.json"],
+  "run_id": "run_demo_001",
+  "ruleset_id": "demo_lef_pin_v1",
+  "run_at": "2026-10-20T14:00:00+08:00",
+  "comparisons": [
+    {"file_key": "lib_rtavfs:lef:core", "old_facts": "examples/file_facts/facts_core_v07.json", "new_facts": "examples/file_facts/facts_core_v08.json"}
+  ],
+  "pin_pairs": [
+    {"lef_key": "lib_rtavfs:lef:core", "liberty_key": "lib_rtavfs:liberty:func_tt", "lef_facts": "examples/file_facts/facts_core_v08.json", "liberty_facts": "examples/file_facts/facts_tt_v08.json"}
+  ]
+}

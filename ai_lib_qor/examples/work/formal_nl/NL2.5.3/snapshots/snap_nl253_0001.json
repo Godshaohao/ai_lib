@@ -1,0 +1,60 @@
+{
+  "schema_version": "formal_snapshot.v1",
+  "formal_nl_id": "NL2.5.3",
+  "formal_snapshot_id": "snap_nl253_0001",
+  "previous_snapshot_id": null,
+  "observed_at": "2026-09-09T10:00:00+08:00",
+  "source_root": "/example/library/lib_NL2.5.3",
+  "coverage": "COMPLETE_IN_SCOPE",
+  "scope": {
+    "source_library_ids": [
+      "lib_rtavfs"
+    ],
+    "views": [
+      "LEF",
+      "LIBERTY"
+    ],
+    "note": "本示例只扫描该 SourceLibrary 的 LEF 与 func Liberty"
+  },
+  "linked_files": [
+    {
+      "file_id": "nf001",
+      "file_key": "lib_rtavfs:lef:core",
+      "link_path": "lef/core.lef",
+      "resolved_path": "/example/raw/vendor_orion/lib_rtavfs/V07/lef/core.lef",
+      "source_match": "MATCHED_RAW",
+      "source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20260907_001",
+        "file_id": "f001"
+      }
+    },
+    {
+      "file_id": "nf002",
+      "file_key": "lib_rtavfs:liberty:func_tt",
+      "link_path": "lib/func_tt.lib",
+      "resolved_path": "/example/raw/vendor_orion/lib_rtavfs/V07/lib/func_tt.lib",
+      "source_match": "MATCHED_RAW",
+      "source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20260907_001",
+        "file_id": "f002"
+      }
+    },
+    {
+      "file_id": "nf003",
+      "file_key": "lib_rtavfs:liberty:func_ff",
+      "link_path": "lib/func_ff.lib",
+      "resolved_path": "/example/raw/vendor_orion/lib_rtavfs/V07/lib/func_ff.lib",
+      "source_match": "MATCHED_RAW",
+      "source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20260907_001",
+        "file_id": "f003"
+      }
+    }
+  ]
+}

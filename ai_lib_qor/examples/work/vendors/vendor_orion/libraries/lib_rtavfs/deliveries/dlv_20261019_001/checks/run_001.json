@@ -1,0 +1,80 @@
+{
+  "schema_version": "check_result.v1",
+  "check_run_id": "run_001",
+  "target": {
+    "kind": "RAW_DELIVERY",
+    "id": "dlv_20261019_001"
+  },
+  "baseline": {
+    "kind": "RAW_DELIVERY",
+    "id": "dlv_20260907_001"
+  },
+  "effective_set_id": null,
+  "run_at": "2026-10-19T18:00:00+08:00",
+  "ruleset_id": "qor_rules_202610",
+  "file_changes": [
+    {
+      "file_key": "lib_rtavfs:lef:core",
+      "old_source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20260907_001",
+        "file_id": "f001"
+      },
+      "new_source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20261019_001",
+        "file_id": "f001"
+      },
+      "source_changed": true,
+      "content_status": "CHANGED",
+      "object_changes": [
+        {
+          "object_type": "MACRO",
+          "object_name": "MAC_A",
+          "attribute": "SIZE",
+          "old_value": [
+            120.0,
+            80.0
+          ],
+          "new_value": [
+            124.0,
+            80.0
+          ],
+          "unit": "um",
+          "facts_refs": [
+            "facts_core_v07",
+            "facts_core_v08"
+          ]
+        }
+      ]
+    },
+    {
+      "file_key": "lib_rtavfs:liberty:func_tt",
+      "old_source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20260907_001",
+        "file_id": "f002"
+      },
+      "new_source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20261019_001",
+        "file_id": "f002"
+      },
+      "source_changed": true,
+      "content_status": "UNKNOWN",
+      "object_changes": []
+    }
+  ],
+  "quality_checks": [],
+  "summary": {
+    "files_with_new_source": 2,
+    "files_with_confirmed_content_change": 1,
+    "failed_checks": 0,
+    "inconclusive_checks": 0
+  },
+  "evidence_note": "交付前来源对比，不代表文件已进入有效版本"
+}

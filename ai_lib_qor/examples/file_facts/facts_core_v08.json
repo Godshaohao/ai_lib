@@ -1,0 +1,50 @@
+{
+  "schema_version": "file_facts.v1",
+  "facts_id": "facts_core_v08",
+  "source_ref": {
+    "kind": "delivery_file",
+    "source_library_id": "lib_rtavfs",
+    "delivery_id": "dlv_20261019_001",
+    "file_id": "f001"
+  },
+  "view": "LEF",
+  "parser": {
+    "name": "lef_parser",
+    "version": "demo-1"
+  },
+  "parse_status": "COMPLETE",
+  "covered_sections": [
+    "MACRO_NAME",
+    "MACRO_SIZE",
+    "PIN_NAME",
+    "PIN_DIRECTION"
+  ],
+  "units": {
+    "distance": "um"
+  },
+  "objects": {
+    "macros": [
+      {
+        "name": "MAC_A",
+        "size_um": [
+          124.0,
+          80.0
+        ],
+        "pins": [
+          {
+            "name": "A",
+            "direction": "INPUT"
+          },
+          {
+            "name": "B",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "C",
+            "direction": "INPUT"
+          }
+        ]
+      }
+    ]
+  }
+}

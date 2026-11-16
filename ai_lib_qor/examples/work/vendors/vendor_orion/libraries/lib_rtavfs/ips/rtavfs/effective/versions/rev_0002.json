@@ -1,0 +1,79 @@
+{
+  "schema_version": "effective_version.v1",
+  "effective_set_id": "rtavfs_primary",
+  "owner": {
+    "owner_type": "BUSINESS_IP",
+    "owner_id": "rtavfs",
+    "home_source_library_id": "lib_rtavfs"
+  },
+  "revision_id": "rev_0002",
+  "parent_revision_id": "rev_0001",
+  "created_at": "2026-10-20T11:00:00+08:00",
+  "reason": {
+    "kind": "RAW_DELIVERY",
+    "ref_id": "dlv_20261019_001"
+  },
+  "members": [
+    {
+      "file_key": "lib_rtavfs:lef:core",
+      "source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20261019_001",
+        "file_id": "f001"
+      }
+    },
+    {
+      "file_key": "lib_rtavfs:liberty:func_tt",
+      "source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20261019_001",
+        "file_id": "f002"
+      }
+    },
+    {
+      "file_key": "lib_rtavfs:liberty:func_ff",
+      "source_ref": {
+        "kind": "formal_file",
+        "formal_nl_id": "NL2.5.3",
+        "formal_snapshot_id": "snap_nl253_0001",
+        "file_id": "nf003"
+      }
+    }
+  ],
+  "changes": [
+    {
+      "file_key": "lib_rtavfs:lef:core",
+      "action": "REPLACED",
+      "old_source_ref": {
+        "kind": "formal_file",
+        "formal_nl_id": "NL2.5.3",
+        "formal_snapshot_id": "snap_nl253_0001",
+        "file_id": "nf001"
+      },
+      "new_source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20261019_001",
+        "file_id": "f001"
+      }
+    },
+    {
+      "file_key": "lib_rtavfs:liberty:func_tt",
+      "action": "REPLACED",
+      "old_source_ref": {
+        "kind": "formal_file",
+        "formal_nl_id": "NL2.5.3",
+        "formal_snapshot_id": "snap_nl253_0001",
+        "file_id": "nf002"
+      },
+      "new_source_ref": {
+        "kind": "delivery_file",
+        "source_library_id": "lib_rtavfs",
+        "delivery_id": "dlv_20261019_001",
+        "file_id": "f002"
+      }
+    }
+  ]
+}

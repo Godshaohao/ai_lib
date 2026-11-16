@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai_lib_qor/acceptance_event.schema.json",
+  "$comment": "Design contract only. Validate against production parsers before migration.",
+  "title": "acceptance_event",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "acceptance_event.v1"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "effective_set_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "ACCEPT",
+        "ROLLBACK",
+        "REVOKE"
+      ]
+    },
+    "revision_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "acted_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "event_id",
+    "effective_set_id",
+    "action",
+    "revision_id",
+    "acted_at",
+    "actor",
+    "reason"
+  ],
+  "additionalProperties": false
+}

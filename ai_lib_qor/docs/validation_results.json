@@ -1,0 +1,43 @@
+{
+  "schema_examples": {
+    "delivery": 2,
+    "formal_snapshot": 2,
+    "effective_version": 2,
+    "check_result": 2,
+    "file_facts": 3,
+    "effective_index": 1,
+    "acceptance_event": 1
+  },
+  "cross_record_checks": {
+    "delivery_records": 2,
+    "formal_snapshots": 2,
+    "effective_versions": 2,
+    "check_runs": 2,
+    "parser_facts": 3,
+    "index_files": 1,
+    "acceptance_events": 1
+  },
+  "negative_tests_detected": [
+    "invalid_delivery_ref",
+    "duplicate_member",
+    "missing_parent",
+    "bad_version_delta",
+    "invalid_formal_link",
+    "wrong_file_key",
+    "bad_change_counts",
+    "false_PASS",
+    "acceptance_pointer_wrong",
+    "missing_fact",
+    "unmatched_marked_matched",
+    "false_macro_size_value",
+    "false_pin_presence",
+    "false_pin_match_PASS",
+    "parser_claims_wrong_source",
+    "duplicate_file_key_delivery"
+  ],
+  "in_memory_boundary_scenarios": [
+    "raw_only_source_library_initial_revision",
+    "cross_library_member_with_single_home"
+  ],
+  "status": "PASS"
+}

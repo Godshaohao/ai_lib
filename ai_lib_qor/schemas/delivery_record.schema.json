@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai_lib_qor/delivery_record.schema.json",
+  "$comment": "Design contract only. Validate against production parsers before migration.",
+  "title": "delivery_record",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "delivery_record.v1"
+    },
+    "delivery_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "vendor_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_library_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supplier_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "delivery_order": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "received_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "package_mode": {
+      "type": "string",
+      "enum": [
+        "FULL",
+        "INCREMENTAL",
+        "PATCH",
+        "UNKNOWN"
+      ]
+    },
+    "package_scope": {
+      "type": "object",
+      "properties": {
+        "file_keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "scope_confirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "file_keys",
+        "scope_confirmed"
+      ],
+      "additionalProperties": false
+    },
+    "explicit_removed_file_keys": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "file_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "RESOLVED",
+              "UNRESOLVED"
+            ]
+          },
+          "relative_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "LEF",
+              "LIBERTY",
+              "VERILOG",
+              "CDL",
+              "SDC",
+              "UPF",
+              "CPF",
+              "SPEF",
+              "DB",
+              "GDS",
+              "OTHER"
+            ]
+          },
+          "corner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "file_key",
+          "classification",
+          "relative_path",
+          "view",
+          "corner",
+          "mode"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "delivery_id",
+    "vendor_id",
+    "source_library_id",
+    "supplier_version",
+    "delivery_order",
+    "received_at",
+    "source_root",
+    "package_mode",
+    "package_scope",
+    "explicit_removed_file_keys",
+    "files"
+  ],
+  "additionalProperties": false
+}
