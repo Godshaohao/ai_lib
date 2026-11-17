@@ -37,6 +37,7 @@ def load_catalog(work_root):
         for path in sorted((index_path.parent / 'versions').glob('*.json')):
             item = _read(path, 'effective_version', warnings)
             if item and item['effective_set_id'] == index['effective_set_id'] and item['owner'] == owner: versions.append(item)
+        versions.sort(key=lambda item: int(item['revision_id'][4:]) if item['revision_id'].startswith('rev_') and item['revision_id'][4:].isdigit() else -1)
         try:
             event_path = index_path.parent / 'acceptance.jsonl'
             if event_path.is_symlink(): raise ValueError('采纳日志为符号链接')

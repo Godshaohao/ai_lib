@@ -10,6 +10,7 @@ from .service import ARTIFACTS, execute, execute_evidence, execute_ip_batch, his
 from .catalog import load_catalog, file_rows, compare_rows, member_rows, formal_comparison
 from .scans import sources, observations, run_scan
 from .registration import registered_deliveries
+from .read_models import build_file_matrix, result_matches
 
 RUN_ID = re.compile(r'run_[0-9a-f]{32}\Z')
 
@@ -43,7 +44,7 @@ def create_app(plan_root, runs_root, work_root=None):
                 history_rows = observations(runs,x)
                 latest = history_rows[0] if history_rows else None
                 versions = sorted({f['path'].split('/',1)[0] for f in latest['files'] if '/' in f['path']}) if latest and latest['status']=='COMPLETE' else []
-                scan_rows.append({'source':x, 'observations':history_rows, 'candidate_dirs':versions, 'deliveries':registered_deliveries(work_root,x)})
+                scan_rows.append({'source':x, 'observations':history_rows, 'candidate_dirs':versions, 'last_success':next((item for item in history_rows if item['status']=='COMPLETE'),None), 'deliveries':registered_deliveries(work_root,x)})
         except (ValueError, KeyError, OSError, TypeError) as exc:
             scan_rows = []; warnings.append(f'扫描配置错误: {exc}')
         sidebar = {}
@@ -57,7 +58,7 @@ def create_app(plan_root, runs_root, work_root=None):
         chosen = tuple(request.args.get(x, '') for x in ('vendor', 'library', 'ip'))
         selected = next((e for e in entries if (e['vendor'], e['library'], e['ip']) == chosen), None)
         if any(chosen) and selected is None: abort(400)
-        if selected is None and entries: selected = entries[0]
+        if selected is None and entries and request.args.get('view') in ('files','compare','deliveries','versions','formal','history','checks','catalog','manual'): selected = entries[0]
         deliveries = selected['deliveries'] if selected else []
         snapshot_id = request.args.get('snapshot', '')
         snapshot_counts = {}
@@ -76,9 +77,9 @@ def create_app(plan_root, runs_root, work_root=None):
         if not revision_id and selected: revision_id = selected['index']['latest_calculated_revision'] or ''
         revision = next((r for r in versions if r['revision_id'] == revision_id), None)
         if request.args.get('revision') and revision is None: abort(400)
-        requested_view = request.args.get('view', 'files')
+        requested_view = request.args.get('view', 'overview' if selected else 'discover')
         view = {'catalog':'checks', 'manual':'checks'}.get(requested_view, requested_view)
-        if view not in ('files', 'compare', 'deliveries', 'formal', 'history', 'checks', 'discover', 'versions'): abort(400)
+        if view not in ('files', 'compare', 'deliveries', 'formal', 'history', 'checks', 'discover', 'versions', 'overview', 'analysis'): abort(400)
         all_members = member_rows(revision, deliveries, snapshots)
         filters = {k: request.args.get(k, '').strip() for k in ('q', 'source', 'file_view', 'change', 'corner')}
         if filters['source'] not in ('', 'RAW', 'FORMAL') or filters['change'] not in ('', 'ADDED', 'REPLACED', 'UNCHANGED'):
@@ -115,6 +116,41 @@ def create_app(plan_root, runs_root, work_root=None):
         selected_runs = [r for r in runs_list if selected and r.get('owner') == {k:selected[k] for k in ('vendor','library','ip')}]
         overall_runs = [r for r in selected_runs if r.get('target_kind') == 'IP_VERSION_BATCH']
         revision_runs = {v['revision_id']: [r for r in selected_runs if r.get('target_kind') != 'IP_VERSION_BATCH' and (r.get('expected_revision') or r.get('target')) == v['revision_id']] for v in versions}
+        baseline_arg = request.args.get('baseline', '')
+        baseline_id = baseline_arg or (revision.get('parent_revision_id') if revision else None)
+        baseline = next((r for r in versions if r['revision_id'] == baseline_id), None)
+        if baseline_arg and (not baseline or not revision or versions.index(baseline) >= versions.index(revision)): abort(400)
+        baseline_missing = bool(baseline_id and baseline is None)
+        baseline_options = versions[:versions.index(revision)] if revision else []
+        matching_result = None
+        if revision and not baseline_missing and view in ('overview','analysis','checks'):
+            from ai_lib_qor.versions.store import read_json
+            from ai_lib_qor.checks.evidence import validate_check_result
+            for run in revision_runs.get(revision['revision_id'], []):
+                if run.get('state') != 'SUCCEEDED' or not RUN_ID.fullmatch(run['id']): continue
+                folder = runs/run['id']; check_path=folder/'check.json'; plan_path=folder/'input_plan.json'
+                if any(x.is_symlink() or not x.is_file() for x in (check_path,plan_path)): continue
+                try:
+                    result=read_json(check_path,'check_result'); validate_check_result(result)
+                    plan=json.loads(plan_path.read_text(encoding='utf-8'))
+                    if read_json(plan['target_revision'],'effective_version') != revision: continue
+                    plan_base=read_json(plan['baseline_revision'],'effective_version') if plan.get('baseline_revision') else None
+                    if plan_base != baseline or result['check_run_id'] != run['id'] or not result_matches(result,revision,baseline): continue
+                    matching_result=result; break
+                except (OSError, ValueError, KeyError, TypeError): continue
+        matrix=build_file_matrix(revision,baseline,deliveries,snapshots,matching_result,home_library=selected['library'] if selected else None,formal_snapshot=snapshot if view=='analysis' else None)
+        matrix_filters={key:request.args.get('matrix_'+key,'').strip() for key in ('q','view','corner','source','content','check')}
+        matrix_all=matrix['rows']
+        matrix_views=sorted({r['view'] for r in matrix_all})
+        matrix_corners=sorted({r['corner'] for r in matrix_all if r['corner']})
+        if view=='analysis':
+            matrix['rows']=[r for r in matrix_all if (not matrix_filters['q'] or matrix_filters['q'].casefold() in r['file_key'].casefold())
+                and (not matrix_filters['view'] or r['view']==matrix_filters['view'])
+                and (not matrix_filters['corner'] or r['corner']==matrix_filters['corner'])
+                and (not matrix_filters['source'] or r['source_relation']==matrix_filters['source'])
+                and (not matrix_filters['content'] or r['content_status']==matrix_filters['content'])
+                and (not matrix_filters['check'] or (matrix_filters['check']=='NOT_RUN' and not r['checks']) or any(q['result']==matrix_filters['check'] for q in r['checks']))]
+            keys={r['file_key'] for r in matrix['rows']};matrix['objects']=[x for x in matrix['objects'] if x['file_key'] in keys]
         file_filter = request.args.get('file_q', '').strip().casefold()
         file_view = request.args.get('file_kind', '').strip()
         location_rows = file_rows(deliveries)
@@ -127,7 +163,7 @@ def create_app(plan_root, runs_root, work_root=None):
         shown_runs = selected_runs if history_scope == 'ip' else runs_list
         return render_template('index.html', entries=entries, selected=selected, snapshots=snapshots, snapshot=snapshot,
                                warnings=warnings, snapshot_counts=snapshot_counts, formal_files=formal_files, formal_query=formal_query, formal_match=formal_match, revision=revision, members=members, member_total=len(all_members), file_views=file_views, corners=corners, filters=filters, rows=shown_rows, file_total=len(location_rows), file_filter=file_filter, file_kind=file_view, file_kinds=file_kinds, unresolved_count=unresolved_count, history_scope=history_scope, shown_runs=shown_runs, compare=compare_rows(deliveries, request.args.get('base'), request.args.get('target')),
-                               view=view, scan_rows=scan_rows, sidebar_libraries=sidebar_libraries, version_views=version_views, plan_baselines=plan_baselines, nl_rows=nl_rows, plans=plans_in(plans), runs=runs_list, selected_runs=selected_runs, overall_runs=overall_runs, revision_runs=revision_runs, plan_readiness=plan_readiness, plan_root=str(plans), matching_plans=matching_plans, output_root=str(runs), csrf=session['csrf'], work_root=work_root)
+                               view=view, baseline=baseline, baseline_missing=baseline_missing, baseline_options=baseline_options, matrix=matrix, matrix_filters=matrix_filters, matrix_views=matrix_views, matrix_corners=matrix_corners, scan_rows=scan_rows, sidebar_libraries=sidebar_libraries, version_views=version_views, plan_baselines=plan_baselines, nl_rows=nl_rows, plans=plans_in(plans), runs=runs_list, selected_runs=selected_runs, overall_runs=overall_runs, revision_runs=revision_runs, plan_readiness=plan_readiness, plan_root=str(plans), matching_plans=matching_plans, output_root=str(runs), csrf=session['csrf'], work_root=work_root)
 
     @app.route('/registration', methods=['GET','POST'])
     def registration():

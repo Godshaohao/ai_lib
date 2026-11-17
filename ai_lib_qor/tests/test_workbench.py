@@ -71,8 +71,27 @@ class CatalogTests(unittest.TestCase):
         response = self.client.get('/?vendor=vendor_orion&library=lib_rtavfs&ip=rtavfs')
         self.assertEqual(response.status_code, 200)
         text = response.get_data(as_text=True)
-        for value in ('库与 IP', '库与交付', '检查与报告', '正式库快照', '文件定位', 'lib_rtavfs:lef:core', 'dlv_20261019_001', 'rev_0002', 'rev_0001'):
+        for value in ('库与 IP', 'IP 总览', '检查与验收', '正式库快照', '文件出现历史', 'lib_rtavfs:lef:core', 'dlv_20261019_001', 'rev_0002', 'rev_0001'):
             self.assertIn(value, text)
+
+    def test_primary_navigation_preserves_selected_revision(self):
+        from html.parser import HTMLParser
+        from urllib.parse import parse_qs, urlparse
+
+        class Links(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.hrefs = []; self.in_primary = False
+            def handle_starttag(self, tag, attrs):
+                if tag == 'nav' and dict(attrs).get('aria-label') == '工作台功能': self.in_primary = True
+                if tag == 'a' and self.in_primary: self.hrefs.append(dict(attrs).get('href', ''))
+            def handle_endtag(self, tag):
+                if tag == 'nav': self.in_primary = False
+
+        page = self.client.get('/?view=overview&vendor=vendor_orion&library=lib_rtavfs&ip=rtavfs&revision=rev_0001')
+        links = Links(); links.feed(page.get_data(as_text=True))
+        for view in ('overview', 'analysis', 'checks'):
+            candidates = [parse_qs(urlparse(href).query) for href in links.hrefs]
+            self.assertTrue(any(q.get('view') == [view] and q.get('revision') == ['rev_0001'] for q in candidates), view)
 
     def test_delivery_comparison_and_formal_are_explicit(self):
         url = '/?vendor=vendor_orion&library=lib_rtavfs&ip=rtavfs'
@@ -161,6 +180,20 @@ class CatalogTests(unittest.TestCase):
         self.assertIn('lib_other:lef:core',body)
         self.assertNotIn('lib_rtavfs:lef:core',body)
         self.assertIn('aria-current="page"',body)
+
+        from html.parser import HTMLParser
+        class Groups(HTMLParser):
+            def __init__(self): super().__init__(); self.groups = {}
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'details' and ('data-vendor' in attrs or 'data-library' in attrs):
+                    self.groups[attrs.get('data-vendor', attrs.get('data-library'))] = 'open' in attrs
+        groups = Groups(); groups.feed(body)
+        self.assertFalse(groups.groups['vendor_orion'])
+        self.assertTrue(groups.groups['vendor_vega'])
+        self.assertTrue(groups.groups['lib_other'])
+        groups = Groups(); groups.feed(client.get('/?view=discover').get_data(as_text=True))
+        self.assertFalse(any(groups.groups.values()))
 
     def test_version_corner_filter_uses_recorded_delivery_mapping(self):
         base='/?vendor=vendor_orion&library=lib_rtavfs&ip=rtavfs&view=versions&revision=rev_0002'
@@ -314,7 +347,7 @@ class CatalogTests(unittest.TestCase):
     def test_task_navigation_groups_without_duplicate_entries(self):
         url='/?vendor=vendor_orion&library=lib_rtavfs&ip=rtavfs'
         page=self.client.get(url+'&view=files').get_data(as_text=True)
-        for label in ('库与交付','IP 有效版本','正式库快照','检查与报告','已登记交付'):
+        for label in ('库更新中心','IP 总览','文件与 Macro','检查与验收','已登记交付'):
             self.assertIn(label,page)
         for label in ('检查工作区','正式 NL','库与版本','正式来源'):
             self.assertNotIn('>'+label+'</a>',page)
@@ -349,6 +382,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(response.status_code,303)
         detail=self.client.get(response.location).get_data(as_text=True)
         self.assertIn('report.xlsx',detail);self.assertIn('输出目录',detail)
+        self.assertIn('view=checks&amp;revision=rev_0002&amp;vendor=vendor_orion', detail)
         excel=self.client.get(response.location+'/artifacts/report.xlsx')
         self.assertEqual(excel.status_code,200)
         workbook=load_workbook(BytesIO(excel.data),read_only=True,data_only=True)
@@ -512,7 +546,7 @@ class LibraryFlowNavigationTest(unittest.TestCase):
                 response=client.get('/?view='+view)
                 self.assertEqual(response.status_code,200)
                 body=response.get_data(as_text=True)
-                for label in ('01 库与交付','02 IP 有效版本','03 检查与报告','01 库更新','02 待确认交付','03 已登记交付','04 文件与版本'):
+                for label in ('库更新中心','01 IP 总览','02 文件与 Macro','03 检查与验收','01 库更新','02 待确认交付','03 已登记交付','04 文件与版本'):
                     self.assertIn(label,body)
             body=client.get('/?view=discover').get_data(as_text=True)
             self.assertIn('扫描本身不会自动生成交付',body)

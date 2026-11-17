@@ -54,6 +54,15 @@ class MultiVersionCorners(unittest.TestCase):
         members={x['file_key']:x['source_ref'] for x in rev3['members']}
         self.assertEqual({key:members['lib:liberty:'+key]['delivery_id'] for key in ('tt','ff','ss')},{'tt':'delivery_08','ff':'delivery_07','ss':'delivery_09'})
         self.assertEqual(index['latest_calculated_revision'],'rev_0003');self.assertEqual(index['current_accepted_revision'],'rev_0001')
+        from ai_lib_qor.workbench.read_models import build_file_matrix
+        projection=build_file_matrix(rev3,rev2,self.records,[],home_library='lib')
+        rows={r['file_key']:r for r in projection['rows']}
+        self.assertEqual({c:rows['lib:liberty:'+c]['target']['version'] for c in ('tt','ff','ss')},{'tt':'V08','ff':'V07','ss':'V09'})
+        self.assertEqual(rows['lib:liberty:ff']['source_relation'],'UNCHANGED')
+        self.assertEqual(rows['lib:liberty:ss']['source_relation'],'ADDED')
+        rev1=json.loads((self.effective/'versions/rev_0001.json').read_text())
+        older={r['file_key']:r for r in build_file_matrix(rev3,rev1,self.records,[],home_library='lib')['rows']}
+        self.assertEqual(older['lib:liberty:tt']['source_relation'],'REPLACED')
         old=self.fact(d8,'lib:lef:core');new=self.fact(d9,'lib:lef:core')
         corners=[self.fact(d8,'lib:liberty:tt'),self.fact(d7,'lib:liberty:ff'),self.fact(d9,'lib:liberty:ss')]
         inputs=[{'file_key':'lib:lef:core','facts':new}]+[{'file_key':f'lib:liberty:{key}','facts':f} for key,f in zip(('tt','ff','ss'),corners)]
