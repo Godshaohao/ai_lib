@@ -546,10 +546,13 @@ class LibraryFlowNavigationTest(unittest.TestCase):
                 response=client.get('/?view='+view)
                 self.assertEqual(response.status_code,200)
                 body=response.get_data(as_text=True)
-                for label in ('库更新中心','01 IP 总览','02 文件与 Macro','03 检查与验收','01 库更新','02 待确认交付','03 已登记交付','04 文件与版本'):
-                    self.assertIn(label,body)
+                self.assertIn('库更新中心',body)
+                if view != 'discover':
+                    for label in ('01 IP 总览','02 文件与 Macro','03 检查与验收'): self.assertIn(label,body)
+                    for label in ('01 库更新','03 已登记交付','04 文件与版本'): self.assertIn(label,body)
             body=client.get('/?view=discover').get_data(as_text=True)
-            self.assertIn('扫描本身不会自动生成交付',body)
+            self.assertIn('Formal NL 来源',body)
+            self.assertNotIn('选择目录确认登记',body)
             self.assertNotIn('>数据登记</a>',body)
 
 class ComponentReviewTests(unittest.TestCase):
@@ -589,6 +592,6 @@ class SourceSidebarTests(unittest.TestCase):
             (work/'scan_sources.json').write_text(json.dumps({'sources':[{'vendor_id':'vendor_other','source_library_id':'lib_new','root':str(root/'raw')},{'vendor_id':'vendor_orion','source_library_id':'lib_rtavfs','root':str(root/'raw')}]},ensure_ascii=False))
             client=create_app(ROOT/'examples/pipeline',root/'runs',work).test_client()
             body=client.get('/?view=discover&scan_q=vendor_other+lib_new').get_data(as_text=True)
-            for value in ('库与 IP','vendor_other','lib_new','未登记 IP','rtavfs','scan_q=vendor_other+lib_new'):
+            for value in ('库与 IP','vendor_other','lib_new','未登记 IP','rtavfs','/library?vendor=vendor_other&amp;library=lib_new'):
                 self.assertIn(value,body)
             self.assertIn('value="vendor_other lib_new"',body)

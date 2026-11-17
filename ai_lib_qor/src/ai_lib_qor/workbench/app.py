@@ -8,9 +8,10 @@ from pathlib import Path
 from flask import Flask, abort, redirect, render_template, request, send_file, session, url_for
 from .service import ARTIFACTS, execute, execute_evidence, execute_ip_batch, history, plans_in, select_plan, plans_for_revision
 from .catalog import load_catalog, file_rows, compare_rows, member_rows, formal_comparison
-from .scans import sources, observations, run_scan
+from .scans import sources, observations, run_scan_and_ingest, ingest_result
 from .registration import registered_deliveries
 from .read_models import build_file_matrix, result_matches
+from ai_lib_qor.sources.formal_sync import formal_sources, formal_history
 
 RUN_ID = re.compile(r'run_[0-9a-f]{32}\Z')
 
@@ -43,10 +44,22 @@ def create_app(plan_root, runs_root, work_root=None):
             for x in scan_sources:
                 history_rows = observations(runs,x)
                 latest = history_rows[0] if history_rows else None
-                versions = sorted({f['path'].split('/',1)[0] for f in latest['files'] if '/' in f['path']}) if latest and latest['status']=='COMPLETE' else []
-                scan_rows.append({'source':x, 'observations':history_rows, 'candidate_dirs':versions, 'last_success':next((item for item in history_rows if item['status']=='COMPLETE'),None), 'deliveries':registered_deliveries(work_root,x)})
+                scan_rows.append({'source':x, 'observations':history_rows, 'candidate_dirs':[], 'last_success':next((item for item in history_rows if item['status']=='COMPLETE'),None), 'deliveries':registered_deliveries(work_root,x), 'ingest':ingest_result(runs,latest)})
         except (ValueError, KeyError, OSError, TypeError) as exc:
             scan_rows = []; warnings.append(f'扫描配置错误: {exc}')
+        formal_rows=[]
+        if work_root:
+            try:
+                for config in formal_sources(work_root):
+                    items=formal_history(runs,config)
+                    groups={};unmatched=[]
+                    for file in items[0]['files'] if items else []:
+                        if file['source']:
+                            key=(file['source']['vendor'],file['source']['library'])
+                            groups.setdefault(key,[]).append(file)
+                        else: unmatched.append(file)
+                    formal_rows.append({'source':config,'observations':items,'last_success':next((x for x in items if x['status']=='COMPLETE'),None),'groups':groups,'unmatched':unmatched})
+            except (ValueError, KeyError, OSError, TypeError) as exc: warnings.append(f'正式来源配置错误: {exc}')
         sidebar = {}
         for entry in entries:
             key = (entry['vendor'], entry['library'])
@@ -163,7 +176,21 @@ def create_app(plan_root, runs_root, work_root=None):
         shown_runs = selected_runs if history_scope == 'ip' else runs_list
         return render_template('index.html', entries=entries, selected=selected, snapshots=snapshots, snapshot=snapshot,
                                warnings=warnings, snapshot_counts=snapshot_counts, formal_files=formal_files, formal_query=formal_query, formal_match=formal_match, revision=revision, members=members, member_total=len(all_members), file_views=file_views, corners=corners, filters=filters, rows=shown_rows, file_total=len(location_rows), file_filter=file_filter, file_kind=file_view, file_kinds=file_kinds, unresolved_count=unresolved_count, history_scope=history_scope, shown_runs=shown_runs, compare=compare_rows(deliveries, request.args.get('base'), request.args.get('target')),
-                               view=view, baseline=baseline, baseline_missing=baseline_missing, baseline_options=baseline_options, matrix=matrix, matrix_filters=matrix_filters, matrix_views=matrix_views, matrix_corners=matrix_corners, scan_rows=scan_rows, sidebar_libraries=sidebar_libraries, version_views=version_views, plan_baselines=plan_baselines, nl_rows=nl_rows, plans=plans_in(plans), runs=runs_list, selected_runs=selected_runs, overall_runs=overall_runs, revision_runs=revision_runs, plan_readiness=plan_readiness, plan_root=str(plans), matching_plans=matching_plans, output_root=str(runs), csrf=session['csrf'], work_root=work_root)
+                               view=view, baseline=baseline, baseline_missing=baseline_missing, baseline_options=baseline_options, matrix=matrix, matrix_filters=matrix_filters, matrix_views=matrix_views, matrix_corners=matrix_corners, scan_rows=scan_rows, formal_rows=formal_rows, sidebar_libraries=sidebar_libraries, version_views=version_views, plan_baselines=plan_baselines, nl_rows=nl_rows, plans=plans_in(plans), runs=runs_list, selected_runs=selected_runs, overall_runs=overall_runs, revision_runs=revision_runs, plan_readiness=plan_readiness, plan_root=str(plans), matching_plans=matching_plans, output_root=str(runs), csrf=session['csrf'], work_root=work_root)
+
+    @app.get('/library')
+    def library_workspace():
+        vendor=request.args.get('vendor',''); library=request.args.get('library','')
+        entries, _, warnings=load_catalog(work_root)
+        ips=[entry for entry in entries if entry['vendor']==vendor and entry['library']==library]
+        configured=[source for source in sources(work_root) if source['vendor_id']==vendor and source['source_library_id']==library]
+        if not configured and not ips: abort(404)
+        source=configured[0] if configured else None
+        deliveries=registered_deliveries(work_root,source) if source else ips[0]['deliveries']
+        scans=observations(runs,source) if source else []
+        latest=scans[0] if scans else None
+        ingest=ingest_result(runs,latest)
+        return render_template('library_workspace.html',vendor=vendor,library=library,ips=ips,source=source,deliveries=deliveries,latest=latest,ingest=ingest,warnings=warnings)
 
     @app.route('/registration', methods=['GET','POST'])
     def registration():
@@ -201,7 +228,7 @@ def create_app(plan_root, runs_root, work_root=None):
         try:
             configured = sources(work_root)
             if not configured: raise ValueError('没有已配置的扫描库')
-            for source in configured: run_scan(runs, source)
+            for source in configured: run_scan_and_ingest(runs, work_root, source)
         except (OSError, ValueError, KeyError) as exc:
             return render_template('operation_error.html',message=str(exc),params={}),409
         return redirect(url_for('index',view='discover'),code=303)
@@ -211,9 +238,23 @@ def create_app(plan_root, runs_root, work_root=None):
         try:
             matches = [x for x in sources(work_root) if x['vendor_id']==request.form.get('vendor') and x['source_library_id']==request.form.get('library')]
             if len(matches)!=1: abort(400)
-            run_scan(runs,matches[0])
+            run_scan_and_ingest(runs,work_root,matches[0])
         except (OSError, ValueError, KeyError) as exc:
             return render_template('operation_error.html',message=str(exc),params={}), 409
+        return redirect(url_for('index',view='discover'),code=303)
+
+    @app.post('/formal-sync')
+    def formal_sync():
+        from ai_lib_qor.sources.formal_sync import sync_formal
+        try:
+            configured=formal_sources(work_root)
+            requested=request.form.get('formal_nl_id','')
+            if requested: configured=[x for x in configured if x['formal_nl_id']==requested]
+            if not configured: raise ValueError('没有匹配的正式来源配置')
+            deliveries=[d for source in sources(work_root) for d in registered_deliveries(work_root,source)]
+            for source in configured: sync_formal(runs,source,deliveries,work_root)
+        except (OSError,ValueError,KeyError,ImportError) as exc:
+            return render_template('operation_error.html',message=str(exc),params={}),409
         return redirect(url_for('index',view='discover'),code=303)
 
     @app.post('/runs')
@@ -279,6 +320,27 @@ def create_app(plan_root, runs_root, work_root=None):
     @app.get('/outputs')
     def outputs():
         return render_template('outputs.html', runs=history(runs), output_root=str(runs), csrf=session['csrf'])
+
+    @app.get('/directories')
+    def directories():
+        which=request.args.get('root','work')
+        if which not in ('work','runs') or (which=='work' and not work_root): abort(400)
+        root=Path(work_root if which=='work' else runs).resolve()
+        rel=request.args.get('path','')
+        path=Path(rel)
+        if path.is_absolute() or '..' in path.parts: abort(400)
+        target=root
+        for part in path.parts:
+            target=target/part
+            if target.is_symlink(): abort(400)
+        if not target.resolve().is_relative_to(root) or not target.is_dir(): abort(400)
+        rows=[]
+        for item in sorted(target.iterdir(),key=lambda p:(not p.is_dir(),p.name.lower())):
+            if item.is_symlink(): continue
+            try: stat=item.stat()
+            except OSError: continue
+            rows.append({'name':item.name,'path':str(item.relative_to(root)), 'directory':item.is_dir(),'size':stat.st_size,'mtime':stat.st_mtime})
+        return render_template('directories.html',which=which,root=str(root),relative=rel,rows=rows)
 
     def open_directory(path):
         try:

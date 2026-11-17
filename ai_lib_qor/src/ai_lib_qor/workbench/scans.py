@@ -37,3 +37,31 @@ def run_scan(runs, source):
     row['changes']=compare_scans(previous,row) if previous and row['status']=='COMPLETE' else None
     write_atomic(Path(runs)/'scans'/f"{row['scan_id']}.json",row,immutable=True)
     return row
+
+
+def run_scan_and_ingest(runs, work, source):
+    row = run_scan(runs, source)
+    result = {'scan_id':row['scan_id'], 'created':0, 'duplicates':0, 'modified':0, 'blocked':0, 'reasons':[]}
+    if row['status'] != 'COMPLETE':
+        result['blocked'] = 1; result['reasons'].append('扫描未完整完成，不发布交付')
+    else:
+        try:
+            from ai_lib_qor.sources.classifier_adapter import classify_observation
+            result['classified'] = classify_observation(row, source)['files']
+            if not source.get('version_paths'):
+                result['blocked'] = 1; result['reasons'].append('未配置可确认的版本目录，已保留扫描观察')
+            else:
+                from ai_lib_qor.sources.auto_ingest import auto_ingest
+                result.update(auto_ingest(work, source, row))
+        except (OSError, ValueError, KeyError, ImportError) as exc:
+            result['blocked'] = 1; result['reasons'].append(str(exc))
+    write_atomic(Path(runs)/'ingest'/f"{row['scan_id']}.json", result, immutable=True)
+    return row
+
+
+def ingest_result(runs, scan):
+    if not scan: return None
+    path = Path(runs)/'ingest'/f"{scan['scan_id']}.json"
+    if not path.is_file() or path.is_symlink(): return None
+    try: return json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError): return None

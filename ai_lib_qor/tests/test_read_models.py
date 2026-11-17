@@ -36,7 +36,7 @@ class NavigationTests(unittest.TestCase):
   root=Path(__file__).resolve().parents[1]
   with tempfile.TemporaryDirectory() as d:
    client=create_app(root/'examples/pipeline',Path(d)/'runs',root/'examples/work').test_client()
-   body=client.get('/').get_data(as_text=True);self.assertIn('哪些库有更新',body);self.assertNotIn('IP REVIEW / vendor_orion',body)
+   body=client.get('/').get_data(as_text=True);self.assertIn('RAW 来源',body);self.assertNotIn('IP REVIEW / vendor_orion',body)
    body=client.get('/?vendor=vendor_orion&library=lib_rtavfs&ip=rtavfs').get_data(as_text=True)
    for text in ('IP 总览','当前有效来源','基线有效来源','rev_0002','rev_0001'):self.assertIn(text,body)
 
