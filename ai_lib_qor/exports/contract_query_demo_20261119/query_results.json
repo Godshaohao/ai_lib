@@ -1,0 +1,405 @@
+{
+  "note": "仅供模拟验收；V05/V06 的 LEF/Liberty 为新建模拟文件，Formal 为复制的既有历史快照，其原始链接未因本样例重新采集。",
+  "raw_v05": {
+    "schema": "raw_view.v1",
+    "context": {
+      "vendor": "SRAM22",
+      "library": "sram22_256x16m8w8",
+      "version": "20261024_de0a9a7",
+      "delivery_id": "delivery_fe93387faa824ebbb7bdcf451b83e56c",
+      "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V05",
+      "recorded_at": "2026-11-18T09:29:47.752860+00:00"
+    },
+    "views": {
+      "GDS": [
+        "GDS/sram22_256x16m8w8.gds.gz"
+      ],
+      "LEF": [
+        "LEF/sram22_256x16m8w8.lef"
+      ],
+      "LIBERTY": {
+        "NLDM": [
+          "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+          "LIB/NLDM/sram22_256x16m8w8_ss_100C_1v60.lib",
+          "LIB/NLDM/sram22_256x16m8w8_tt_025C_1v80.lib"
+        ]
+      },
+      "SPICE": [
+        "SPICE/sram22_256x16m8w8.spice"
+      ],
+      "VERILOG": [
+        "VERILOG/sram22_256x16m8w8.v"
+      ]
+    }
+  },
+  "effective_difference": {
+    "meaning": "SOURCE_ONLY",
+    "from": "rev_0001",
+    "to": "rev_0002",
+    "files": [
+      {
+        "view": "GDS",
+        "path": "GDS/sram22_256x16m8w8.gds.gz",
+        "change": "UNCHANGED",
+        "before": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        },
+        "after": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        }
+      },
+      {
+        "view": "LEF",
+        "path": "LEF/sram22_256x16m8w8.lef",
+        "change": "SOURCE_CHANGED",
+        "before": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        },
+        "after": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "V06_SIMULATED",
+          "delivery": "delivery_006_simulated"
+        }
+      },
+      {
+        "view": "LIBERTY",
+        "path": "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+        "change": "SOURCE_CHANGED",
+        "before": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        },
+        "after": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "V06_SIMULATED",
+          "delivery": "delivery_006_simulated"
+        }
+      },
+      {
+        "view": "LIBERTY",
+        "path": "LIB/NLDM/sram22_256x16m8w8_ss_100C_1v60.lib",
+        "change": "UNCHANGED",
+        "before": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        },
+        "after": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        }
+      },
+      {
+        "view": "LIBERTY",
+        "path": "LIB/NLDM/sram22_256x16m8w8_tt_025C_1v80.lib",
+        "change": "UNCHANGED",
+        "before": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        },
+        "after": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        }
+      },
+      {
+        "view": "SPICE",
+        "path": "SPICE/sram22_256x16m8w8.spice",
+        "change": "UNCHANGED",
+        "before": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        },
+        "after": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        }
+      },
+      {
+        "view": "VERILOG",
+        "path": "VERILOG/sram22_256x16m8w8.v",
+        "change": "UNCHANGED",
+        "before": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        },
+        "after": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        }
+      }
+    ]
+  },
+  "file_pairs": {
+    "from": "rev_0001",
+    "to": "rev_0002",
+    "meaning": "SOURCE_ONLY",
+    "pairs": [
+      {
+        "view": "LEF",
+        "path": "LEF/sram22_256x16m8w8.lef",
+        "change": "SOURCE_CHANGED",
+        "content_status": "NOT_CHECKED",
+        "before": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005",
+          "view": "LEF",
+          "path": "LEF/sram22_256x16m8w8.lef",
+          "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V05",
+          "absolute_path": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V05/LEF/sram22_256x16m8w8.lef",
+          "resolution": "RECORDED",
+          "delivery_id": "delivery_fe93387faa824ebbb7bdcf451b83e56c",
+          "file_id": "f_a94fc226a16c51b74610278a",
+          "file_key": "sram22_256x16m8w8:lef:sram22_256x16m8w8",
+          "classification": "RESOLVED",
+          "identity_status": "CONFIRMED"
+        },
+        "after": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "V06_SIMULATED",
+          "delivery": "delivery_006_simulated",
+          "view": "LEF",
+          "path": "LEF/sram22_256x16m8w8.lef",
+          "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V06_SIMULATED",
+          "absolute_path": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V06_SIMULATED/LEF/sram22_256x16m8w8.lef",
+          "resolution": "RECORDED",
+          "delivery_id": "delivery_006_simulated",
+          "file_id": "f_a94fc226a16c51b74610278a",
+          "file_key": "sram22_256x16m8w8:lef:sram22_256x16m8w8",
+          "classification": "RESOLVED",
+          "identity_status": "CONFIRMED"
+        }
+      },
+      {
+        "view": "LIBERTY",
+        "path": "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+        "change": "SOURCE_CHANGED",
+        "content_status": "NOT_CHECKED",
+        "before": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005",
+          "view": "LIBERTY",
+          "path": "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+          "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V05",
+          "absolute_path": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V05/LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+          "resolution": "RECORDED",
+          "delivery_id": "delivery_fe93387faa824ebbb7bdcf451b83e56c",
+          "file_id": "f_7200715a7f8abb74db39932c",
+          "file_key": "sram22_256x16m8w8:liberty:nldm_sram22_256x16m8w8_ff_n40c_1v95",
+          "classification": "RESOLVED",
+          "identity_status": "CONFIRMED"
+        },
+        "after": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "V06_SIMULATED",
+          "delivery": "delivery_006_simulated",
+          "view": "LIBERTY",
+          "path": "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+          "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V06_SIMULATED",
+          "absolute_path": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V06_SIMULATED/LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+          "resolution": "RECORDED",
+          "delivery_id": "delivery_006_simulated",
+          "file_id": "f_7200715a7f8abb74db39932c",
+          "file_key": "sram22_256x16m8w8:liberty:nldm_sram22_256x16m8w8_ff_n40c_1v95",
+          "classification": "RESOLVED",
+          "identity_status": "CONFIRMED"
+        }
+      }
+    ]
+  },
+  "effective_timeline": {
+    "view": "LEF",
+    "path": "LEF/sram22_256x16m8w8.lef",
+    "meaning": "SOURCE_ONLY",
+    "versions": [
+      {
+        "revision": "rev_0001",
+        "source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        }
+      },
+      {
+        "revision": "rev_0002",
+        "source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "V06_SIMULATED",
+          "delivery": "delivery_006_simulated"
+        }
+      }
+    ]
+  },
+  "formal_comparison": {
+    "nl": "NL2.5.3",
+    "snapshot": "snap_d23522b8710f4052a4adea080b9d4422",
+    "revision": "rev_0002",
+    "coverage": "PARTIAL",
+    "unassigned": [],
+    "meaning": "SOURCE_ONLY",
+    "files": [
+      {
+        "view": "GDS",
+        "formal_path": "IP/GDS/sram22_256x16m8w8.gds.gz",
+        "link_target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/GDS/sram22_256x16m8w8.gds.gz",
+        "link_target_status": "RECORDED",
+        "raw_source": null,
+        "effective_source": null,
+        "relation": "UNKNOWN",
+        "content_status": "NOT_CHECKED"
+      },
+      {
+        "view": "LEF",
+        "formal_path": "IP/LEF/sram22_256x16m8w8.lef",
+        "link_target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LEF/sram22_256x16m8w8.lef",
+        "link_target_status": "RECORDED",
+        "raw_source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "delivery_id": "delivery_fe93387faa824ebbb7bdcf451b83e56c",
+          "version": "20261024_de0a9a7",
+          "path": "LEF/sram22_256x16m8w8.lef",
+          "view": "LEF",
+          "file_key": "sram22_256x16m8w8:lef:sram22_256x16m8w8",
+          "identity_status": "CONFIRMED"
+        },
+        "effective_source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "V06_SIMULATED",
+          "delivery": "delivery_006_simulated"
+        },
+        "relation": "DIFFERENT_SOURCE",
+        "content_status": "NOT_CHECKED"
+      },
+      {
+        "view": "LIBERTY",
+        "formal_path": "IP/LIB/sram22_256x16m8w8_ff_n40C_1v95.lib",
+        "link_target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+        "link_target_status": "RECORDED",
+        "raw_source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "delivery_id": "delivery_fe93387faa824ebbb7bdcf451b83e56c",
+          "version": "20261024_de0a9a7",
+          "path": "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+          "view": "LIBERTY",
+          "file_key": "sram22_256x16m8w8:liberty:nldm_sram22_256x16m8w8_ff_n40c_1v95",
+          "identity_status": "CONFIRMED"
+        },
+        "effective_source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "V06_SIMULATED",
+          "delivery": "delivery_006_simulated"
+        },
+        "relation": "DIFFERENT_SOURCE",
+        "content_status": "NOT_CHECKED"
+      },
+      {
+        "view": "LIBERTY",
+        "formal_path": "IP/LIB/sram22_256x16m8w8_ss_100C_1v60.lib",
+        "link_target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_ss_100C_1v60.lib",
+        "link_target_status": "RECORDED",
+        "raw_source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "delivery_id": "delivery_fe93387faa824ebbb7bdcf451b83e56c",
+          "version": "20261024_de0a9a7",
+          "path": "LIB/NLDM/sram22_256x16m8w8_ss_100C_1v60.lib",
+          "view": "LIBERTY",
+          "file_key": "sram22_256x16m8w8:liberty:nldm_sram22_256x16m8w8_ss_100c_1v60",
+          "identity_status": "CONFIRMED"
+        },
+        "effective_source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        },
+        "relation": "SAME_SOURCE",
+        "content_status": "NOT_CHECKED"
+      },
+      {
+        "view": "LIBERTY",
+        "formal_path": "IP/LIB/sram22_256x16m8w8_tt_025C_1v80.lib",
+        "link_target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_tt_025C_1v80.lib",
+        "link_target_status": "RECORDED",
+        "raw_source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "delivery_id": "delivery_fe93387faa824ebbb7bdcf451b83e56c",
+          "version": "20261024_de0a9a7",
+          "path": "LIB/NLDM/sram22_256x16m8w8_tt_025C_1v80.lib",
+          "view": "LIBERTY",
+          "file_key": "sram22_256x16m8w8:liberty:nldm_sram22_256x16m8w8_tt_025c_1v80",
+          "identity_status": "CONFIRMED"
+        },
+        "effective_source": {
+          "vendor": "SRAM22",
+          "library": "sram22_256x16m8w8",
+          "version": "20261024_de0a9a7",
+          "delivery": "delivery_005"
+        },
+        "relation": "SAME_SOURCE",
+        "content_status": "NOT_CHECKED"
+      },
+      {
+        "view": "SPICE",
+        "formal_path": "IP/SPICE/sram22_256x16m8w8.spice",
+        "link_target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/SPICE/sram22_256x16m8w8.spice",
+        "link_target_status": "RECORDED",
+        "raw_source": null,
+        "effective_source": null,
+        "relation": "UNKNOWN",
+        "content_status": "NOT_CHECKED"
+      },
+      {
+        "view": "VERILOG",
+        "formal_path": "IP/VERILOG/sram22_256x16m8w8.v",
+        "link_target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/VERILOG/sram22_256x16m8w8.v",
+        "link_target_status": "RECORDED",
+        "raw_source": null,
+        "effective_source": null,
+        "relation": "UNKNOWN",
+        "content_status": "NOT_CHECKED"
+      }
+    ]
+  }
+}

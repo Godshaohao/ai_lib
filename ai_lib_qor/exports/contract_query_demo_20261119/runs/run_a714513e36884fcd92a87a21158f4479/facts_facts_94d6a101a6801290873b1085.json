@@ -1,0 +1,42 @@
+{
+  "schema_version": "file_facts.v1",
+  "facts_id": "facts_94d6a101a6801290873b1085",
+  "source_ref": {
+    "kind": "delivery_file",
+    "source_library_id": "sram22_256x16m8w8",
+    "delivery_id": "delivery_006_simulated",
+    "file_id": "f_a94fc226a16c51b74610278a"
+  },
+  "view": "LEF",
+  "parser": {
+    "name": "src_qor_lef",
+    "version": "2.5+adapter-1.0"
+  },
+  "parse_status": "COMPLETE",
+  "covered_sections": [
+    "MACRO_NAME",
+    "MACRO_SIZE",
+    "PIN_NAME",
+    "PIN_DIRECTION"
+  ],
+  "units": {
+    "distance": "um"
+  },
+  "objects": {
+    "macros": [
+      {
+        "name": "MAC_A",
+        "size_um": [
+          124.0,
+          80.0
+        ],
+        "pins": [
+          {
+            "name": "A",
+            "direction": "INPUT"
+          }
+        ]
+      }
+    ]
+  }
+}

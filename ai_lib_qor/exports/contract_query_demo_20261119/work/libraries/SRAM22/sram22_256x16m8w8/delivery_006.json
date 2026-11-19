@@ -1,0 +1,39 @@
+{
+  "schema_version": "delivery_record.v1",
+  "delivery_id": "delivery_006_simulated",
+  "vendor_id": "SRAM22",
+  "source_library_id": "sram22_256x16m8w8",
+  "supplier_version": "V06_SIMULATED",
+  "delivery_order": 6,
+  "received_at": "2026-11-18T09:29:47.752860+00:00",
+  "package_mode": "UNKNOWN",
+  "source_root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/contract_query_demo_20261119/simulated_raw/V06_SIMULATED",
+  "package_scope": {
+    "file_keys": [
+      "sram22_256x16m8w8:lef:sram22_256x16m8w8",
+      "sram22_256x16m8w8:liberty:nldm_sram22_256x16m8w8_ff_n40c_1v95"
+    ],
+    "scope_confirmed": false
+  },
+  "explicit_removed_file_keys": [],
+  "files": [
+    {
+      "file_id": "f_a94fc226a16c51b74610278a",
+      "file_key": "sram22_256x16m8w8:lef:sram22_256x16m8w8",
+      "classification": "RESOLVED",
+      "relative_path": "LEF/sram22_256x16m8w8.lef",
+      "view": "LEF",
+      "corner": null,
+      "mode": null
+    },
+    {
+      "file_id": "f_7200715a7f8abb74db39932c",
+      "file_key": "sram22_256x16m8w8:liberty:nldm_sram22_256x16m8w8_ff_n40c_1v95",
+      "classification": "RESOLVED",
+      "relative_path": "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+      "view": "LIBERTY",
+      "corner": "ff",
+      "mode": null
+    }
+  ]
+}

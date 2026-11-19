@@ -1,0 +1,35 @@
+{
+  "schema_version": "file_facts.v1",
+  "facts_id": "facts_67997932e19e7910f025fa75",
+  "source_ref": {
+    "kind": "delivery_file",
+    "source_library_id": "sram22_256x16m8w8",
+    "delivery_id": "delivery_006_simulated",
+    "file_id": "f_7200715a7f8abb74db39932c"
+  },
+  "view": "LIBERTY",
+  "parser": {
+    "name": "src_qor_liberty_interface",
+    "version": "standalone-interface-2+adapter-1.0"
+  },
+  "parse_status": "COMPLETE",
+  "covered_sections": [
+    "CELL_NAME",
+    "PIN_NAME",
+    "PIN_DIRECTION"
+  ],
+  "units": {},
+  "objects": {
+    "cells": [
+      {
+        "name": "MAC_A",
+        "pins": [
+          {
+            "name": "A",
+            "direction": "input"
+          }
+        ]
+      }
+    ]
+  }
+}
