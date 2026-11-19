@@ -28,7 +28,7 @@ def auto_ingest(work, source, scan, *, classified=None):
         raise ValueError('扫描与配置不匹配')
     classified = classified if classified is not None else classify_observation(scan, source)
     paths = classified['version_paths']
-    result = {'created': 0, 'duplicates': 0, 'modified': 0, 'blocked': 0,
+    result = {'created': 0, 'duplicates': 0, 'modified': 0, 'unverified': 0, 'blocked': 0,
               'files': len(classified['files']), 'versions_discovered': len(paths),
               'unresolved': sum(r['classification'] == 'UNRESOLVED' for r in classified['files']),
               'reasons': list(classified.get('warnings', []))}
@@ -77,6 +77,9 @@ def auto_ingest(work, source, scan, *, classified=None):
                     for _, evidence in prior if isinstance(evidence.get('files'), list)
                 ):
                     result['duplicates'] += 1
+                elif any(not isinstance(evidence.get('files'),list) for _,evidence in prior):
+                    result['unverified'] += 1
+                    result['reasons'].append(f'{version}: 缺少历史扫描元信息，不能判断原地变化；已保留原交付且未重复登记')
                 else:
                     result['modified'] += 1
                     result['reasons'].append(f'{version}: RAW 原地变化；旧内容未保存，历史路径不可保证重现，请作为新交付处理')

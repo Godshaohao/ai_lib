@@ -57,6 +57,17 @@ def load_catalog(work_root, *, reader=None):
             warnings.append(f'{path}: 有效集身份与目录不一致');continue
         try:
             effective_dir=path.parent/effective_name
+            # v2 has its own read projection; do not pass it to the v1-only
+            # member model. Still reject invalid history/index before skipping.
+            candidates=sorted(p for p in path.parent.glob(effective_name+'_[0-9]*.json') if p.is_file() and not p.is_symlink())
+            if candidates:
+                import json
+                first=json.loads(candidates[0].read_text(encoding='utf-8'))
+                if isinstance(first,dict) and first.get('schema')=='effective.simple.v2':
+                    from .latest_pointers import _latest_effective
+                    state=_latest_effective(path.parent,vendor,library)['sets'].get(item['effective_set_id'],{})
+                    if state.get('status')!='READY':raise ValueError(state.get('reason','v2 历史不可用'))
+                    continue
             versions=revisions(effective_dir);acceptance=events(effective_dir)
             if any(v['owner']!=item['owner'] or v['effective_set_id']!=item['effective_set_id'] for v in versions):raise ValueError('有效集成员身份不一致')
             if any(e['effective_set_id']!=item['effective_set_id'] for e in acceptance):raise ValueError('采纳事件与有效集不一致')

@@ -27,6 +27,57 @@ def _write_status(folder, data):
     temp.replace(path)
 
 
+def execute_changed_lefs(work, runs_root, *, vendor, library, set_id, before, after, pin_liberty_path=None, progress=None):
+    """Execute the explicitly scoped changed-LEF comparison and save existing artifacts."""
+    from ai_lib_qor.application.data_query import LibraryDataQuery
+    from ai_lib_qor.versions.store import write_atomic
+    query = LibraryDataQuery(work, runs_root)
+    root = Path(runs_root).resolve()
+    for item in query.deliveries:
+        source = Path(item['record']['source_root'])
+        if source.is_absolute() and root.is_relative_to(source.resolve()):
+            raise ValueError('运行目录不能位于 RAW 来源目录')
+    for snapshot in query.snapshots:
+        source = Path(snapshot['source_root'])
+        if source.is_absolute() and root.is_relative_to(source.resolve()):
+            raise ValueError('运行目录不能位于 Formal 来源目录')
+    folder = root / ('run_' + uuid.uuid4().hex)
+    folder.mkdir(parents=True, exist_ok=False)
+    status = {'id': folder.name, 'plan': '变化 LEF 对比', 'state': 'RUNNING',
+              'target': after, 'target_kind': 'EFFECTIVE_REVISION',
+              'owner': {'vendor': vendor, 'library': library, 'ip': set_id},
+              'started_at': datetime.now(timezone.utc).isoformat()}
+    _write_status(folder, status)
+    try:
+        write_atomic(folder / 'input_plan.json', {'kind':'CHANGED_LEF_COMPARISON',
+            'vendor':vendor,'library':library,'set_id':set_id,'before':before,'after':after,
+            'pin_liberty_path':pin_liberty_path}, immutable=True)
+        if progress: progress('正在解析来源变化的 LEF 文件')
+        checked = query.check_changed_lefs(vendor, library, set_id, before, after,
+            run_id=status['id'], ruleset_id='changed_lef', run_at=status['started_at'],pin_liberty_path=pin_liberty_path)
+        if checked['status'] != 'CHECKED':
+            raise ValueError(checked.get('reason') or '没有可检查的变化 LEF，或来源及文件身份未确认')
+        paths = []
+        for fact in checked['facts']:
+            path = folder / ('facts_' + fact['facts_id'] + '.json')
+            if path not in paths:
+                write_atomic(path, fact, immutable=True)
+                paths.append(path)
+        write_atomic(folder / 'check.json', checked['result'], immutable=True)
+        render_report(str(folder / 'check.json'), html=str(folder / 'report.html'),
+                      excel=str(folder / 'report.xlsx'), facts=[str(p) for p in paths])
+        status['summary'] = checked['result']['summary']
+        status['state'] = 'SUCCEEDED'
+        if progress: progress('变化 LEF 检查和报告已生成')
+    except Exception as exc:
+        status['state'] = 'FAILED'
+        status['error'] = f'{type(exc).__name__}: {exc}'
+        if progress: progress(status['error'])
+    status['finished_at'] = datetime.now(timezone.utc).isoformat()
+    _write_status(folder, status)
+    return status
+
+
 def execute(plan_path, runs_root, owner=None, expected_revision=None, *, progress=None):
     folder = Path(runs_root) / ('run_' + uuid.uuid4().hex)
     folder.mkdir(parents=True, exist_ok=False)

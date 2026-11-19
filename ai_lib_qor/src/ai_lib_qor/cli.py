@@ -28,8 +28,9 @@ def parser():
     latest.add_argument('--work',required=True);latest.add_argument('--vendor');latest.add_argument('--library')
     query=sub.add_parser('data-query',help='只读查询 JSON 的 RAW / 历史 / 有效 / Formal 视图')
     query.add_argument('--work',required=True);query.add_argument('--runs',default='.')
-    query.add_argument('--kind',required=True,choices=['raw','simple-raw','history','history-index','effective','effective-v2','simple-effective','formal','simple-formal','compare'])
+    query.add_argument('--kind',required=True,choices=['raw','simple-raw','history','history-index','effective','effective-v2','simple-effective','formal','simple-formal','compare','deliveries','compare-revisions','changed-pairs','formal-effective','effective-timeline'])
     for name in ('vendor','library','version','view','path','owner','set-id','revision','snapshot','delivery-id','other-revision'):query.add_argument('--'+name)
+    query.add_argument('--revisions',nargs='+')
     eff=sub.add_parser('effective-build',help='从简化 RAW JSON 和可选父版本计算独立有效版本')
     for name in ('raw','out','owner-type','owner-id','revision'):eff.add_argument('--'+name,required=True)
     eff.add_argument('--view',action='append',required=True);eff.add_argument('--parent');eff.add_argument('--work')
@@ -48,6 +49,9 @@ def parser():
     formal.add_argument('--work',required=True);formal.add_argument('--runs',required=True);formal.add_argument('--formal-nl-id')
     batch=sub.add_parser('run-ip', help='执行已登记 IP 的所有版本检查')
     for name in ('work','runs','plans','vendor','library','ip'):batch.add_argument('--'+name,required=True)
+    changed=sub.add_parser('run-changed-lef', help='只检查两个有效版本之间来源变化的 LEF，生成检查结果和报告')
+    for name in ('work','runs','vendor','library','set-id','before','after'):changed.add_argument('--'+name,required=True)
+    changed.add_argument('--pin-liberty-path',help='显式选择当前有效 Liberty 相对路径，同时检查其与变化 LEF 的信号 Pin')
     run_plan=sub.add_parser('run-plan', help='执行计划并保存状态、检查及报告')
     run_plan.add_argument('--plan',required=True,type=Path);run_plan.add_argument('--runs',required=True)
     for name in ('work','vendor','library','ip','revision'):run_plan.add_argument('--'+name)
@@ -66,6 +70,9 @@ def avoid_source(output, root):
 
 
 def run(a):
+    if a.command == 'run-changed-lef':
+        from ai_lib_qor.application.runs import execute_changed_lefs
+        return execute_changed_lefs(a.work,a.runs,vendor=a.vendor,library=a.library,set_id=a.set_id,before=a.before,after=a.after,pin_liberty_path=a.pin_liberty_path)
     if a.command == 'latest-refresh':
         from ai_lib_qor.application.latest_pointers import refresh_all,refresh_library
         if bool(a.vendor)!=bool(a.library):raise ValueError('必须同时指定 vendor 和 library')

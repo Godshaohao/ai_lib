@@ -198,7 +198,8 @@ def create_app(plan_root, runs_root, work_root=None):
         if not work_root:return jsonify({'error':'未配置 work 目录'}),400
         names=('vendor','library','version','view','path','owner','set_id','revision','snapshot','delivery_id','other_revision')
         try:
-            result=query_data(work_root,runs,request.args.get('kind',''),**{name:request.args.get(name) for name in names})
+            options={name:request.args.get(name) for name in names};options['revisions']=request.args.getlist('revisions')
+            result=query_data(work_root,runs,request.args.get('kind',''),**options)
             return jsonify(result)
         except (OSError,ValueError,KeyError) as exc:
             return jsonify({'error':str(exc)}),400
@@ -214,10 +215,18 @@ def create_app(plan_root, runs_root, work_root=None):
         from ai_lib_qor.application.data_query import list_effective_v2, query_data
         v2_versions=list_effective_v2(work_root,vendor,library)
         set_id=request.args.get('set_id','');revision=request.args.get('revision','');v2_selected=None;v2_plans=[];v2_blocked=None
+        v2_comparison=None;v2_comparison_error=None;v2_baselines=[];v2_baseline=''
         if set_id or revision:
             if not any(v['set_id']==set_id and v['revision']==revision for v in v2_versions):abort(400)
             try:v2_selected=query_data(work_root,runs,'effective-v2',vendor=vendor,library=library,set_id=set_id,revision=revision)
             except (OSError,ValueError,KeyError):abort(400)
+            v2_baselines=[v for v in v2_versions if v['set_id']==set_id and v['revision']!=revision]
+            v2_baseline=request.args.get('baseline',v2_selected['parent'] or '')
+            if v2_baseline:
+                if not any(v['revision']==v2_baseline for v in v2_baselines):v2_comparison_error='基准版本未找到，无法比较。'
+                else:
+                    try:v2_comparison=query_data(work_root,runs,'compare-revisions',vendor=vendor,library=library,set_id=set_id,revision=v2_baseline,other_revision=revision)
+                    except (OSError,ValueError,KeyError) as exc:v2_comparison_error=str(exc)
             v2_plans=plans_for_v2_revision(plans,work_root,vendor,library,set_id,revision)
             from ai_lib_qor.application.v2_check_adapter import load_v2_for_check
             from ai_lib_qor.sources.layout import library_folder
@@ -225,7 +234,8 @@ def create_app(plan_root, runs_root, work_root=None):
             except (OSError,ValueError,KeyError) as exc:v2_blocked=str(exc)
         return render_template('library_workspace.html', vendor=vendor, library=library,
                                sidebar_libraries=sidebar_groups(entries, [dict(vendor_id=k[0],source_library_id=k[1]) for k in catalog.libraries]),
-                               entries=entries, selected=None, view='library', v2_versions=v2_versions,v2_selected=v2_selected,v2_plans=v2_plans,v2_blocked=v2_blocked,csrf=session['csrf'], **context)
+                               entries=entries, selected=None, view='library', v2_versions=v2_versions,v2_selected=v2_selected,v2_plans=v2_plans,v2_blocked=v2_blocked,
+                               v2_comparison=v2_comparison,v2_comparison_error=v2_comparison_error,v2_baselines=v2_baselines,v2_baseline=v2_baseline,csrf=session['csrf'], **context)
 
     @app.get('/effective-v2')
     def effective_v2_page():

@@ -29,7 +29,12 @@ def _latest_delivery(work,folder,vendor,library):
     elif all(x['order_basis'] in ('configured_order','manual_confirmation') for x in records):
         orders=[x['record']['delivery_order'] for x in records]
         if len(set(orders))==len(orders):ordered=sorted(records,key=lambda x:x['record']['delivery_order']);basis='CONFIRMED_DELIVERY_ORDER'
-    if ordered is None and _config(work,vendor,library).get('order_rule')=={'type':'VERSION_DATE_PREFIX','confirmed':True}:
+    config=_config(work,vendor,library);mapping=config.get('delivery_orders',{})
+    if ordered is None and isinstance(mapping,dict):
+        versions=[x['record']['supplier_version'] for x in records]
+        if len(set(versions))==len(versions) and all(type(mapping.get(v)) is int and mapping[v]>=0 for v in versions) and len({mapping[v] for v in versions})==len(versions):
+            ordered=sorted(records,key=lambda x:mapping[x['record']['supplier_version']]);basis='CONFIGURED_SEQUENCE'
+    if ordered is None and config.get('order_rule')=={'type':'VERSION_DATE_PREFIX','confirmed':True}:
         from ai_lib_qor.application.simple_sources import version_date_order
         data=[{'delivery_id':x['record']['delivery_id'],'context':{'version':x['record']['supplier_version']}} for x in records]
         try:
