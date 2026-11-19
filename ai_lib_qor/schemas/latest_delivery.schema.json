@@ -1,0 +1,13 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"每库最新已登记交付指针",
+  "type":"object","additionalProperties":false,
+  "required":["schema","vendor","library","status","basis","latest","updated_at"],
+  "properties":{
+    "schema":{"const":"latest_delivery.v1"},"vendor":{"type":"string","minLength":1},"library":{"type":"string","minLength":1},
+    "status":{"enum":["READY","NO_DELIVERY","ORDER_UNCONFIRMED","UNAVAILABLE"]},
+    "basis":{"type":["string","null"]},"reason":{"type":"string"},"updated_at":{"type":"string","minLength":1},
+    "latest":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["version","delivery_id","file"],"properties":{"version":{"type":"string","minLength":1},"delivery_id":{"type":"string","minLength":1},"file":{"type":"string","pattern":"^[^/]+\\.json$"}}}]}
+  },
+  "allOf":[{"if":{"properties":{"status":{"const":"READY"}}},"then":{"properties":{"latest":{"type":"object"},"basis":{"type":"string"}}},"else":{"properties":{"latest":{"type":"null"}}}}]
+}

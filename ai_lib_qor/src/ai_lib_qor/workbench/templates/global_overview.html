@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Library 来源管理 · 全局总览</title>
+  <link rel="stylesheet" href="{{ url_for('static',filename='workbench.css') }}">
+  <style>
+    .l1-shell{max-width:1260px;margin:0 auto;padding:24px 28px 60px}
+    .l1-head{display:flex;justify-content:space-between;gap:20px;align-items:start;flex-wrap:wrap}
+    .l1-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .l1-actions form{display:inline-flex;margin:0}
+    .l1-nav{display:flex;gap:18px;padding:14px 0;border-bottom:1px solid var(--border,#ddd);margin:10px 0 22px}
+    .l1-nav a{text-decoration:none}
+    .l1-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin:16px 0 18px}
+    .l1-stat{border:1px solid var(--border,#ddd);border-radius:8px;padding:14px}
+    .l1-stat strong{font-size:24px;display:block;line-height:1.3}
+    .l1-stat small{opacity:.7}
+    .l1-section{margin-top:24px}
+    .l1-section-title{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+    .l1-section-title h2{margin:0 0 6px}
+    .l1-table{width:100%;border-collapse:collapse}
+    .l1-table td,.l1-table th{text-align:left;padding:11px 8px;vertical-align:top;border-bottom:1px solid var(--border,#ddd)}
+    .l1-table th{font-size:13px;opacity:.8}
+    .l1-date{font-size:12px;opacity:.8;display:block}
+    .l1-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .l1-detail{padding:8px 14px 13px;margin:5px 0 10px;border:1px solid var(--border,#ddd);border-radius:7px}
+    .l1-muted{opacity:.76;font-size:13px}
+    .l1-search{max-width:270px;min-width:175px}
+  </style>
+</head>
+<body>
+<header class="topbar"><strong>Library 数据中心 · 库更新中心</strong><small>第一层 · 来源扫描与全局索引</small></header>
+<main class="l1-shell">
+  <div class="l1-head">
+    <div><p class="eyebrow">GLOBAL SOURCE OVERVIEW</p><h1>Library 来源总览</h1>
+      <p class="l1-muted">快速发现 RAW 与 Formal NL 变化。页面刷新不访问 RAW 文件，也不执行解析和质量检查。</p></div>
+    <div class="l1-actions"><a href="{{ url_for('index',view='discover') }}">刷新显示</a>
+      {% if raw_rows|selectattr('configured')|list %}<form method="post" action="{{ url_for('scan_all') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">扫描全部 RAW</button></form>{% endif %}
+      {% if formal_rows|selectattr('configured')|list %}<form method="post" action="{{ url_for('formal_sync') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">同步全部 Formal NL</button></form>{% endif %}
+    </div>
+  </div>
+  <nav class="l1-nav" aria-label="全局区域"><a href="#raw">RAW 来源</a><a href="#formal">Formal NL</a><a href="#outputs">输出目录</a></nav>
+  {% for w in warnings %}<p class="warning">{{ w }}</p>{% endfor %}
+  <div class="l1-kpis" aria-label="统计概览">
+    <div class="l1-stat"><strong>{{ raw_rows|length }}</strong><small>已知来源库（含已保存记录）</small></div>
+    <div class="l1-stat"><strong>{{ raw_rows|selectattr('last_change')|list|length }}</strong><small>曾发现元数据变化的库</small></div>
+    <div class="l1-stat"><strong>{{ formal_rows|length }}</strong><small>Formal NL 来源</small></div>
+    <div class="l1-stat"><strong>{{ ip_total }}</strong><small>已有有效版本索引的 IP</small></div>
+  </div>
+  <section class="panel l1-section" id="raw">
+    <div class="l1-section-title"><div><h2>RAW 来源库</h2><p class="l1-muted">全部已配置库与已有交付记录的库；扫描按文件路径、大小、修改时间比较，不代表内容变化。</p></div>
+      <input class="l1-search" id="l1-filter" type="search" placeholder="按库名筛选 Vendor / SourceLibrary" value="{{ request.args.get('scan_q', '') }}" aria-label="筛选 RAW 来源库"></div>
+    <div class="table-wrap"><table class="l1-table"><thead><tr><th>Vendor / SourceLibrary</th><th>扫描与更新时间</th><th>文件 / 交付</th><th>最近扫描情况</th><th>操作</th></tr></thead><tbody>
+      {% for row in raw_rows %}{% set s=row.last_attempt %}{% set i=row.ingest %}
+      <tr data-lib-row data-search="{{ (row.vendor ~ ' ' ~ row.library)|lower }}">
+        <td><strong>{{ row.library }}</strong><small class="l1-date">{{ row.vendor }} · 关联 {{ row.ip_count }} 个已有 IP</small></td>
+        <td><small class="l1-date" title="{{ row.last_success.finished_at if row.last_success else '' }}">上次成功扫描：{{ row.last_success.finished_at[:10] if row.last_success else '尚无' }}</small>
+            <small class="l1-date">发现变化：{{ row.last_change.finished_at[:10] if row.last_change else '尚无记录' }}</small></td>
+        <td>{{ s.files|length if s else '—' }} 文件<small class="l1-date">{{ row.delivery_count }} 次已保存交付</small></td>
+        <td>{{ {'COMPLETE':'扫描完成','PARTIAL':'扫描不完整','FAILED':'扫描失败'}.get(s.status,s.status) if s else '尚未扫描' }}
+          {% if s and s.status == 'COMPLETE' and not s.previous_scan_id %}<small class="l1-date">已建立首次观察基线</small>{% endif %}
+          {% if s and s.changes %}<small class="l1-date">新增 {{ s.changes.added|length }} · 元数据变化 {{ s.changes.changed|length }} · 未再发现 {{ s.changes.removed|length }}</small>{% endif %}
+          {% if i and i.blocked %}<small class="l1-date">有 {{ i.blocked }} 项未建档，原因在库工作台</small>{% endif %}
+        </td>
+        <td><div class="l1-inline"><a href="{{ url_for('library_workspace',vendor=row.vendor,library=row.library) }}">进入库工作台</a>
+          {% if row.configured %}<form method="post" action="{{ url_for('scan_source') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ row.vendor }}"><input type="hidden" name="library" value="{{ row.library }}"><button type="submit">扫描此库</button></form>{% else %}<small>未配置扫描来源</small>{% endif %}</div></td>
+      </tr>
+      {% else %}<tr><td colspan="5">暂无来源配置。可用 Library Map 或 scan_sources.json 添加 SourceLibrary。</td></tr>{% endfor %}
+    </tbody></table></div>
+    <p id="l1-no-match" hidden>没有匹配的来源库。</p>
+  </section>
+  <section class="panel l1-section" id="formal">
+    <div class="l1-section-title"><div><h2>Formal NL 来源</h2><p class="l1-muted">正式链接来源按 Vendor → Library → IP 归类；未知归属独立保留，不猜测。</p></div></div>
+    <div class="table-wrap"><table class="l1-table"><thead><tr><th>Formal NL</th><th>成功同步</th><th>变化日期</th><th>当前文件 / 异常</th><th>操作</th></tr></thead><tbody>
+      {% for row in formal_rows %}{% set s=row.last_attempt %}
+      <tr><td><a href="{{ url_for('formal_detail',nl_id=row.id) }}"><strong>{{ row.id }}</strong></a><small class="l1-date">{{ row.snapshot_count }} 条已保存快照</small></td>
+          <td>{{ row.last_success.observed_at[:10] if row.last_success else '尚无' }}</td>
+          <td>{{ row.last_change.observed_at[:10] if row.last_change else '尚无记录' }}</td>
+          <td>{{ s.files|length if s else '—' }} 条{% if s and s.status != 'COMPLETE' %}<small class="l1-date">{{ s.status }} · 存在未完整观察范围</small>{% endif %}</td>
+          <td><a href="{{ url_for('formal_detail',nl_id=row.id) }}">查看快照</a>{% if row.configured %}<form method="post" action="{{ url_for('formal_sync') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="formal_nl_id" value="{{ row.id }}"><button type="submit">同步此 NL</button></form>{% endif %}</td>
+      </tr>
+      <tr><td colspan="5">
+        <details class="l1-detail"><summary>查看 Vendor / Library / IP 分类（{{ row.groups|length }} 组）</summary>
+          {% for group in row.groups %}<p><strong>{{ group.vendor }} / {{ group.library }} / {{ group.ip }}</strong> · {{ group.files|length }} 个文件
+              {% if group.vendor != '来源未匹配' %}<a href="{{ url_for('library_workspace',vendor=group.vendor,library=group.library) }}">查看库</a>{% endif %}</p>
+          {% else %}<p>尚无观察结果或无法分类。</p>{% endfor %}
+          {% if s %}<p class="l1-muted">最近同步：{{ s.status }} · {{ s.snapshot_note }}</p>{% endif %}
+        </details>
+      </td></tr>
+      {% else %}<tr><td colspan="5">尚未配置 Formal NL 来源。</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+  <section class="panel l1-section" id="outputs">
+    <h2>输出目录</h2><p class="l1-muted">查看保存的扫描记录、交付、有效版本和报告；目录浏览不会扫描 RAW。</p>
+    <div class="l1-inline">{% if work_enabled %}<a href="{{ url_for('directories',root='work') }}">浏览 work/</a>{% endif %}<a href="{{ url_for('directories',root='runs') }}">浏览 runs/</a><a href="{{ url_for('outputs') }}">检查与报告产物</a></div>
+  </section>
+</main>
+<script>
+const q=document.getElementById('l1-filter');if(q)q.addEventListener('input',()=>{const t=q.value.trim().toLowerCase();let count=0;document.querySelectorAll('[data-lib-row]').forEach(e=>{e.hidden=!e.dataset.search.includes(t);if(!e.hidden)count++});document.getElementById('l1-no-match').hidden=!t||count>0});if(q&&q.value)q.dispatchEvent(new Event('input'));
+</script>
+{% include 'operation_progress.html' %}</body></html>

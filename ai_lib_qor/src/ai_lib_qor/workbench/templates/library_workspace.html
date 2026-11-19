@@ -1,10 +1,71 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ library }} · 库工作台</title><link rel="stylesheet" href="{{ url_for('static',filename='workbench.css') }}"></head>
-<body><header class="topbar"><span class="brand-mark">IP</span><div><strong>工程检查</strong><small>库与 IP 工作台</small></div></header><main class="detail-main">
-<nav aria-label="当前位置"><a href="{{ url_for('index',view='discover') }}">来源总览</a> / {{ vendor }} / {{ library }}</nav>
-<div class="page-head"><div><p class="eyebrow">第二层 / SOURCE LIBRARY</p><h2>{{ library }} · 库工作台</h2><p>{{ vendor }} · 了解交付版本和文件来源，再选择已登记 IP 进行有效版本分析与检查。</p></div></div>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ library }} · SourceLibrary</title>
+<link rel="stylesheet" href="{{ url_for('static',filename='workbench.css') }}"><style>
+.l2-shell{max-width:1240px;width:100%;padding:28px 38px 64px}.l2-stats{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}.l2-stat{border:1px solid var(--border,#ddd);border-radius:8px;padding:12px 18px;min-width:150px}.l2-stat strong{display:block;font-size:20px}.l2-stat small{opacity:.72}.l2-tools{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.l2-tools input,.l2-tools select{max-width:280px}.l2-table{width:100%;border-collapse:collapse}.l2-table th,.l2-table td{padding:10px 8px;text-align:left;border-bottom:1px solid var(--border,#ddd);vertical-align:top}.l2-table th{font-size:13px;opacity:.85}.l2-note{font-size:13px;opacity:.75}.l2-section{margin-top:22px}.l2-list details{border-bottom:1px solid var(--border,#ddd);padding:8px 0}.l2-break{word-break:break-all}
+</style></head>
+<body>{% include 'workbench_header.html' %}<div class="layout">{% include 'workbench_sidebar.html' %}<main class="l2-shell">
+<nav aria-label="当前位置"><a href="{{ url_for('index',view='discover') }}">全局来源总览</a> / {{ vendor }} / {{ library }}</nav>
+{% include 'workspace_scope.html' %}
+<div class="page-head"><div><p class="eyebrow">SOURCE LIBRARY WORKBENCH</p><h1>{{ library }}</h1>
+<p class="l2-note">Vendor：{{ vendor }} · 最新/次新为文件位在已保存交付中的出现历史，不等于内容完全相同或当前 IP 已采纳。</p></div></div>
 {% for warning in warnings %}<p class="warning">{{ warning }}</p>{% endfor %}
-<section class="panel"><h3>关联 IP 与下一步</h3>{% if ips %}<p>选择已有 IP，进入有效版本、文件分析和检查报告。</p><div class="revision-items">{% for item in ips %}<a class="revision-item" href="{{ url_for('index',view='overview',vendor=item.vendor,library=item.library,ip=item.ip) }}"><strong>{{ item.ip }} →</strong><small>{{ item.versions|length }} 个有效版本 · 最新计算 {{ item.index.latest_calculated_revision or '无' }} · 当前采纳 {{ item.index.current_accepted_revision or '未采纳' }}</small></a>{% endfor %}</div>{% else %}<p>尚无已登记 IP。当前只能查看该库的扫描和交付，无法运行 IP 版本检查；需要已有的可信 IP 归属及有效版本记录。</p>{% endif %}</section>
-<section class="panel"><h3>交付版本与文件</h3><p>交付不是有效版本；未解析文件仍保留在来源记录中。</p>{% if deliveries %}{% for delivery in deliveries %}<details {% if loop.first %}open{% endif %}><summary>{{ delivery.supplier_version }} · {{ delivery.files|length }} 个文件 · {{ delivery.delivery_id }}</summary><p>接收顺序 {{ delivery.delivery_order }} · 包范围 {{ '已确认' if delivery.package_scope.scope_confirmed else '未确认' }} · 包类型 {{ delivery.package_mode }}</p><div class="table-wrap"><table><thead><tr><th>文件路径</th><th>View</th><th>Corner / Mode</th><th>文件位</th><th>分类</th></tr></thead><tbody>{% for file in delivery.files %}<tr><td>{{ file.relative_path }}</td><td>{{ file.view }}</td><td>{{ file.corner or '未确认' }} / {{ file.mode or '未确认' }}</td><td>{{ file.file_key or '未确认' }}</td><td>{{ file.classification }}</td></tr>{% endfor %}</tbody></table></div></details>{% endfor %}{% else %}<p>尚无已登记交付。{% if latest %}最近扫描状态：{{ latest.status }}。{% if ingest %}{% for reason in ingest.reasons %}{{ reason }}；{% endfor %}{% endif %}{% else %}请先返回来源总览扫描此库。{% endif %}</p>{% endif %}</section>
-<section class="panel"><h3>最近扫描</h3>{% if source %}<p>来源：<code>{{ source.root }}</code></p>{% endif %}{% if latest %}<p>{{ latest.finished_at }} · {{ latest.status }} · {{ latest.files|length }} 个文件</p>{% if ingest %}<p>自动纳管：新增 {{ ingest.created }} · 重复 {{ ingest.duplicates }} · 原地变化 {{ ingest.modified }} · 未完成 {{ ingest.blocked }}</p>{% for reason in ingest.reasons %}<p class="warning">{{ reason }}</p>{% endfor %}{% endif %}{% else %}<p>尚无此来源的扫描记录。</p>{% endif %}</section>
-</main></body></html>
+<div class="l2-stats">
+  <div class="l2-stat"><strong>{{ deliveries|length }}</strong><small>已保存交付</small></div>
+  <div class="l2-stat"><strong>{{ file_rows|length }}</strong><small>已定位文件位</small></div>
+  <div class="l2-stat"><strong>{{ ips|length }}</strong><small>关联有效版本 IP</small></div>
+  <div class="l2-stat"><strong>{{ latest.finished_at[:10] if latest else '—' }}</strong><small>最近扫描日期</small></div>
+</div>
+<section class="panel l2-section" id="file-history">
+  <h2>关键文件 · 最新与次新交付</h2>
+  <p class="l2-note">按照稳定 file_key 查询真实出现顺序。来源变更不是文件内容差异；未解析文件仍在下方交付记录中。</p>
+  <div class="l2-tools"><input type="search" id="file-search" placeholder="搜索 file_key / 文件路径" aria-label="文件位搜索">
+    <select id="file-view"><option value="">全部 View</option>{% for k in file_rows|map(attribute='view')|unique|sort %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select></div>
+  <div class="table-wrap"><table class="l2-table"><thead><tr><th>文件位</th><th>View / Corner</th><th>最新出现</th><th>次新出现</th><th>当前路径</th><th>历史</th></tr></thead><tbody>
+  {% for row in file_rows %}<tr data-file-row data-view="{{ row.view }}" data-search="{{ (row.key ~ ' ' ~ row.path)|lower }}">
+    <td class="l2-break"><strong>{{ row.key }}</strong></td><td>{{ row.view }}<small class="l1-date">{{ row.corner or '—' }}</small></td>
+    <td>{% if row.order_ambiguous %}顺序不唯一{% else %}{{ row.history[0].version }}<small class="l1-date">{{ row.latest }}</small>{% endif %}</td><td>{% if row.order_ambiguous %}无法确定{% elif row.previous %}{{ row.history[1].version }}<small class="l1-date">{{ row.previous }}</small>{% else %}无历史记录{% endif %}</td><td class="l2-break">{{ row.path }}</td>
+    <td><details><summary>查看 {{ row.history|length }} 次出现</summary>{% for h in row.history %}<p class="l2-note">{{ h.version }} / {{ h.delivery_id }} · {{ h.path }} · {{ h.corner or '—' }} / {{ h.mode or '—' }}</p>{% endfor %}</details></td>
+  </tr>{% else %}<tr><td colspan="6">尚无已确认文件位。可在 RAW 扫描结果中核查自动分类原因。</td></tr>{% endfor %}
+  </tbody></table></div><p id="file-empty" hidden>无匹配文件位。</p>
+</section>
+<section class="panel l2-section" id="deliveries">
+  <h2>交付版本时间线</h2><p class="l2-note">仅展示来源记录；UNKNOWN 包不推断删除，不自动采用到 IP。</p>
+  <div class="l2-list">{% for d in deliveries %}
+  <details><summary>{{ d.supplier_version }} · {{ d.files|length }} 文件 · 顺序 {{ d.delivery_order }} · {{ d.package_mode }} · {{ d.delivery_id }}</summary>
+    <p class="l2-note">覆盖范围：{{ '已确认' if d.package_scope.scope_confirmed else '未确认' }} · 源目录：<code>{{ d.source_root }}</code></p>
+    <div class="table-wrap"><table class="l2-table"><thead><tr><th>文件路径</th><th>View</th><th>Corner/Mode</th><th>文件位</th><th>状态</th></tr></thead><tbody>
+    {% for f in d.files %}<tr><td class="l2-break">{{ f.relative_path }}</td><td>{{ f.view }}</td><td>{{ f.corner or '—' }} / {{ f.mode or '—' }}</td><td class="l2-break">{{ f.file_key or '—' }}</td><td>{{ f.classification }}</td></tr>{% endfor %}
+    </tbody></table></div></details>
+  {% else %}<p>尚无已保存交付。请到第一层扫描 RAW。</p>{% endfor %}</div>
+</section>
+<section class="panel l2-section"><h2>最近 RAW 扫描文件</h2><p class="l2-note">包含尚未归入交付的文件；分类信息不表示已采纳。</p><details><summary>查看扫描文件 · {{ classified|length }}</summary><div class="table-wrap"><table class="l2-table"><thead><tr><th>相对路径</th><th>类型</th><th>文件位</th><th>状态 / 原因</th></tr></thead><tbody>{% for f in classified %}<tr><td>{{ f.path }}</td><td>{{ f.view }}</td><td>{{ f.file_key or '未确认' }}</td><td>{{ f.classification }} {{ f.reason or '' }}</td></tr>{% else %}<tr><td colspan="4">尚无分类记录，或最近扫描未完成。</td></tr>{% endfor %}</tbody></table></div></details></section>
+<section class="panel l2-section" id="formal-links"><h2>关联的 Formal NL 来源</h2>
+  <p class="l2-note">来源匹配只证明软链接目标指向该记录，不证明文件内容一致。</p>
+  <div class="l2-list">{% for file in formal_links %}<details><summary>{{ file.nl }} · {{ file.path }} · {{ file.source.version }}</summary>
+  <p class="l2-break">链接目标：<code>{{ file.target }}</code></p><p>来源：{{ file.source.delivery_id }} / {{ file.source.file_key or '文件位未知' }}</p></details>
+  {% else %}<p>当前没有唯一匹配到本库的 Formal NL 链接。</p>{% endfor %}</div></section>
+<section class="panel l2-section"><h2>本库有效集</h2><p class="l2-note">来源库有效集独立于业务 IP；计算版本与人工采纳分别记录。</p>
+{% for set in effective_sets %}<p><strong>{{ set.index.effective_set_id }}</strong> · 最新计算 {{ set.index.latest_calculated_revision or '无' }} · 当前采纳 {{ set.index.current_accepted_revision or '未采纳' }} · {{ set.versions|length }} 个版本</p>{% else %}<p>尚无来源库有效集。</p>{% endfor %}</section>
+{% if v2_versions %}<section class="panel l2-section" id="effective-files"><h2>有效版本文件</h2><p class="l2-note">选择版本查看已保存的来源；来源变化不代表内容变化，采纳和检查状态独立记录。</p>
+<div class="l2-tools" aria-label="版本切换">{% for v in v2_versions %}<a class="button {{ 'active' if v2_selected and v2_selected.set_id == v.set_id and v2_selected.revision == v.revision else '' }}" href="{{ url_for('library_workspace',vendor=vendor,library=library,set_id=v.set_id,revision=v.revision) }}#effective-files" {% if v2_selected and v2_selected.set_id == v.set_id and v2_selected.revision == v.revision %}aria-current="page"{% endif %}>{{ v.owner.id }} · {{ v.revision }}</a>{% endfor %}</div>
+{% if v2_selected %}<p class="l2-note">有效集 {{ v2_selected.set_id }} · 父版本 {{ v2_selected.parent or '无（初始版本）' }} · {{ v2_selected.files|length }} 个文件{% if v2_selected.formal_nl %} · 正式基准 {{ v2_selected.formal_nl }} / {{ v2_selected.formal_baseline }}{% endif %}</p>
+{% if v2_blocked %}<p class="warning">暂不能检查：{{ v2_blocked }}</p>{% elif v2_plans %}<form method="post" action="{{ url_for('start_v2_run') }}" class="version-run-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="set_id" value="{{ v2_selected.set_id }}"><input type="hidden" name="revision" value="{{ v2_selected.revision }}"><label>检查计划 <select name="plan">{% for plan in v2_plans %}<option value="{{ plan }}">{{ plan }}</option>{% endfor %}</select></label><button>运行单版本检查</button></form><p class="l2-note">计划将生成检查 JSON、HTML 和单版本 Excel；检查不等于采纳。</p>{% else %}<p class="l2-note">尚无匹配此版本的检查计划；需要先准备计划及解析事实。</p>{% endif %}
+<div class="l2-tools"><label for="effective-search">筛选有效文件</label><input type="search" id="effective-search" placeholder="搜索 View、路径或 RAW 版本"><label for="effective-view">View</label><select id="effective-view"><option value="">全部 View</option>{% for kind in v2_selected.files|map(attribute='view')|unique|sort %}<option value="{{ kind }}">{{ kind }}</option>{% endfor %}</select></div>
+<div class="table-wrap"><table class="l2-table"><thead><tr><th>View / 文件路径</th><th>RAW 来源</th><th>记录定位</th><th>文件身份 / 检查</th></tr></thead><tbody>{% for f in v2_selected.files %}<tr data-effective-row data-view="{{ f.view }}" data-search="{{ (f.view ~ ' ' ~ f.path ~ ' ' ~ f.source.version)|lower }}"><td>{{ f.view }}<small class="l1-date l2-break">{{ f.path }}</small></td><td>{{ f.source.version }}<small class="l1-date">{{ f.source.vendor }} / {{ f.source.library }} · {{ f.source.delivery }}</small></td><td class="l2-break">{{ f.recorded_path if f.resolution == 'RECORDED' else {'MISSING_DELIVERY':'交付记录缺失','AMBIGUOUS_DELIVERY':'交付记录不唯一','MISSING_FILE_RECORD':'交付未记录文件','AMBIGUOUS_FILE':'文件记录不唯一'}.get(f.resolution,'来源未知') }}</td><td>{{ {'CONFIRMED':'身份已确认','CANDIDATE':'候选待确认','UNKNOWN':'身份未知'}.get(f.identity_status,'身份未知') }}<small class="l1-date">内容未检查</small></td></tr>{% else %}<tr><td colspan="4">没有已记录文件。</td></tr>{% endfor %}</tbody></table></div><p id="effective-empty" class="l2-note" hidden>没有匹配的文件。</p>
+{% else %}<p class="l2-note">请选择上方版本，查看文件及来源。</p>{% endif %}</section>{% endif %}
+<section class="panel l2-section" id="ips"><h2>关联 IP</h2>
+  {% for item in ips %}<p><a href="{{ url_for('index',view='overview',vendor=item.vendor,library=item.library,ip=item.ip) }}"><strong>{{ item.ip }}</strong> · 进入 IP 工作台 → · 当前计算 {{ item.index.latest_calculated_revision or '无' }} · 当前采纳 {{ item.index.current_accepted_revision or '未采纳' }}</a></p>
+  {% else %}<p>尚无已登记 IP；尚未建立该来源库与 BusinessIP 的可信关联。库级文件查询不受影响。</p>{% endfor %}</section>
+<section class="panel l2-section"><h2>扫描与诊断</h2>
+  <p>RAW：{{ source.root if source else '未配置来源' }}</p>
+  <p>最近扫描：{{ latest.finished_at[:10] if latest else '尚无' }} · {{ latest.status if latest else '未知' }}</p>
+  {% if ingest %}<p class="l2-note">自动建档 {{ ingest.created }} · 重复 {{ ingest.duplicates }} · 原地变化 {{ ingest.modified }} · 阻塞 {{ ingest.blocked }} · 未解析文件 {{ ingest.unresolved if ingest.unresolved is defined else '—' }}</p>
+    {% for reason in ingest.reasons %}<p class="warning">{{ reason }}</p>{% endfor %}{% endif %}
+  <p><a href="{{ url_for('index',view='discover') }}#raw">返回第一层扫描来源</a> · <a href="{{ url_for('directories',root='work') }}">查看数据目录</a></p>
+</section>
+</main></div>
+<script>
+const search=document.querySelector('#ip-search');if(search)search.addEventListener('input',()=>{const term=search.value.toLowerCase().trim();let count=0;for(const e of document.querySelectorAll('.ip-list [data-search]')){e.hidden=!e.dataset.search.includes(term);if(!e.hidden)count++;}for(const group of document.querySelectorAll('.library-group,.vendor-group')){group.hidden=!!term&&!group.querySelector('[data-search]:not([hidden])');if(term){if(!group.hasAttribute('data-previous-open'))group.dataset.previousOpen=group.open?'1':'0';group.open=true;}else if(group.hasAttribute('data-previous-open')){group.open=group.dataset.previousOpen==='1';delete group.dataset.previousOpen;}}document.querySelector('#ip-no-match').hidden=!term||count>0;});const qs=document.querySelector('#file-search'),vs=document.querySelector('#file-view');function filterFiles(){const q=qs.value.trim().toLowerCase(),v=vs.value;let n=0;document.querySelectorAll('[data-file-row]').forEach(r=>{r.hidden=!!(q&&!r.dataset.search.includes(q)||v&&r.dataset.view!==v);if(!r.hidden)n++});document.querySelector('#file-empty').hidden=n>0||!q&&!v}if(qs&&vs){qs.addEventListener('input',filterFiles);vs.addEventListener('change',filterFiles)}
+const es=document.querySelector('#effective-search'),ev=document.querySelector('#effective-view');function filterEffective(){const q=es.value.trim().toLowerCase(),v=ev.value;let n=0;document.querySelectorAll('[data-effective-row]').forEach(r=>{r.hidden=!!(q&&!r.dataset.search.includes(q)||v&&r.dataset.view!==v);if(!r.hidden)n++});document.querySelector('#effective-empty').hidden=n>0||!q&&!v}if(es&&ev){es.addEventListener('input',filterEffective);ev.addEventListener('change',filterEffective)}
+</script>
+{% include 'operation_progress.html' %}</body></html>

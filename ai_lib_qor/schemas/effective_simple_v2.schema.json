@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "effective.simple.v2",
+  "type": "object",
+  "required": ["schema", "owner", "scope", "revision", "parent", "created_at", "sources", "views"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "effective.simple.v2"},
+    "owner": {"type": "object", "additionalProperties": false, "required": ["type", "id"], "properties": {"type": {"enum": ["SOURCE_LIBRARY", "BUSINESS_IP"]}, "id": {"type": "string", "minLength": 1}}},
+    "scope": {"type": "object", "additionalProperties": false, "required": ["vendor", "library"], "properties": {"vendor": {"type": "string", "minLength": 1}, "library": {"type": "string", "minLength": 1}}},
+    "revision": {"type": "string", "pattern": "^rev_[0-9]{4,}$"},
+    "parent": {"anyOf": [{"type": "null"}, {"type": "string", "pattern": "^rev_[0-9]{4,}$"}]},
+    "created_at": {"type": "string", "minLength": 1},
+    "sources": {"type": "object", "propertyNames": {"minLength": 1}, "additionalProperties": {"anyOf": [{"type": "string", "minLength": 1}, {"type":"object","additionalProperties":false,"required":["vendor","library","version","delivery"],"properties":{"vendor":{"type":"string","minLength":1},"library":{"type":"string","minLength":1},"version":{"type":"string","minLength":1},"delivery":{"type":"string","minLength":1}}}]}},
+    "views": {"type": "object", "additionalProperties": {"$ref": "#/$defs/group"}},
+    "formal_baseline": {"type": "string", "minLength": 1},
+    "formal_nl": {"type": "string", "minLength": 1}
+  },
+  "$defs": {"group": {"type": "object", "additionalProperties": {"anyOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/group"}]}}}
+}

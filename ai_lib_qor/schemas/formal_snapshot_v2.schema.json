@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai_lib_qor/formal_snapshot_v2.schema.json",
+  "$comment": "Design contract only. Validate against production parsers before migration.",
+  "title": "formal_snapshot_v2",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "formal_snapshot.v2"
+    },
+    "formal_nl_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "formal_snapshot_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "previous_snapshot_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "coverage": {
+      "type": "string",
+      "enum": [
+        "COMPLETE_IN_SCOPE",
+        "PARTIAL",
+        "UNKNOWN"
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "source_library_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "source_library_ids",
+        "views",
+        "note"
+      ],
+      "additionalProperties": false
+    },
+    "linked_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "file_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "link_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resolved_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_match": {
+            "type": "string",
+            "enum": [
+              "MATCHED_RAW",
+              "UNMATCHED",
+              "NOT_ATTEMPTED"
+            ]
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "delivery_file"
+                      },
+                      "source_library_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "delivery_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "file_id": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "source_library_id",
+                      "delivery_id",
+                      "file_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "formal_file"
+                      },
+                      "formal_nl_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "formal_snapshot_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "file_id": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "formal_nl_id",
+                      "formal_snapshot_id",
+                      "file_id"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "link_target": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "file_id",
+          "file_key",
+          "link_path",
+          "resolved_path",
+          "source_match",
+          "source_ref",
+          "link_target"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "formal_nl_id",
+    "formal_snapshot_id",
+    "previous_snapshot_id",
+    "observed_at",
+    "source_root",
+    "coverage",
+    "scope",
+    "linked_files"
+  ],
+  "additionalProperties": false
+}

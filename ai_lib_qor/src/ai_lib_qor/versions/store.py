@@ -17,11 +17,33 @@ SCHEMAS = Path(__file__).resolve().parents[3] / 'schemas'
 REV = re.compile(r'rev_(\d{4,})\Z')
 
 
+def flat_effective(root):
+    root=Path(root)
+    return root.name.startswith('effective_') and root.parent.parent.parent.name=='libraries'
+
+
+def revision_path(root, revision):
+    root=Path(root); match=REV.fullmatch(revision)
+    if not match: raise ValueError('有效版本标识无效')
+    return root.parent/f'{root.name}_{int(match.group(1)):03d}.json' if flat_effective(root) else root/'versions'/f'{revision}.json'
+
+
+def index_path(root):
+    root=Path(root)
+    return root.parent/f'{root.name}_index.json' if flat_effective(root) else root/'index.json'
+
+
+def event_path(root):
+    root=Path(root)
+    return root.parent/f'{root.name}_acceptance.jsonl' if flat_effective(root) else root/'acceptance.jsonl'
+
+
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
 def validate(data, name):
+    if name=='formal_snapshot' and isinstance(data,dict) and data.get('schema_version')=='formal_snapshot.v2':name='formal_snapshot_v2'
     schema = json.loads((SCHEMAS / f'{name}.schema.json').read_text(encoding='utf-8'))
     errors = sorted(Draft202012Validator(schema).iter_errors(data), key=lambda e: str(list(e.absolute_path)))
     if errors:
@@ -37,8 +59,11 @@ def read_json(path, schema):
 @contextlib.contextmanager
 def locked(root):
     root = Path(root)
+    if root.is_symlink(): raise ValueError('锁目录不能为符号链接')
     root.mkdir(parents=True, exist_ok=True)
-    with (root / '.versions.lock').open('a+') as f:
+    lockfile=root / '.versions.lock'
+    if lockfile.is_symlink(): raise ValueError('锁文件不能为符号链接')
+    with lockfile.open('a+') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
             yield
@@ -69,15 +94,18 @@ def write_atomic(path, obj, immutable=False):
 
 
 def revisions(root):
-    directory = Path(root) / 'versions'
-    files = list(directory.glob('*.json')) if directory.exists() else []
-    if any(not REV.fullmatch(p.stem) for p in files):
+    root=Path(root); flat=flat_effective(root); directory = root.parent if flat else root/'versions'
+    files = list(directory.glob(f'{root.name}_[0-9]*.json' if flat else '*.json')) if directory.exists() else []
+    def revision_for(path):
+        return 'rev_'+path.stem[len(root.name)+1:].zfill(4) if flat else path.stem
+    if any(not REV.fullmatch(revision_for(p)) for p in files):
         raise ValueError('版本目录存在无效文件名')
-    files.sort(key=lambda p: int(REV.fullmatch(p.stem).group(1)))
+    files.sort(key=lambda p: int(REV.fullmatch(revision_for(p)).group(1)))
     result = []
     for i, file in enumerate(files):
+        if file.is_symlink():raise ValueError('版本文件不能为符号链接')
         item = read_json(file, 'effective_version')
-        if item['revision_id'] != file.stem:
+        if item['revision_id'] != revision_for(file):
             raise ValueError('版本文件名与 ID 不匹配')
         parent = result[-1] if result else None
         if item['parent_revision_id'] != (parent['revision_id'] if parent else None):
@@ -90,7 +118,8 @@ def revisions(root):
 
 
 def events(root):
-    path = Path(root) / 'acceptance.jsonl'
+    path = event_path(root)
+    if path.is_symlink(): raise ValueError('采纳日志不能为符号链接')
     if not path.exists(): return []
     result = []
     with path.open(encoding='utf-8') as f:
@@ -103,7 +132,8 @@ def events(root):
 
 
 def append_event(root, event):
-    path = Path(root) / 'acceptance.jsonl'
+    path = event_path(root)
+    if path.is_symlink(): raise ValueError('采纳日志不能为符号链接')
     text = json.dumps(event, ensure_ascii=False, separators=(',', ':')) + '\n'
     with path.open('a', encoding='utf-8') as f:
         f.write(text); f.flush(); os.fsync(f.fileno())
@@ -114,12 +144,34 @@ def rebuild_index(root, revs=None, evts=None):
     evts = events(root) if evts is None else evts
     index = project(revs, evts, now())
     validate(index, 'effective_index')
-    write_atomic(Path(root) / 'index.json', index)
+    if index_path(root).is_symlink():raise ValueError('有效索引不能为符号链接')
+    write_atomic(index_path(root), index)
+    if flat_effective(root):
+        from ai_lib_qor.application.latest_pointers import refresh_library_locked
+        root=Path(root);refresh_library_locked(root.parent.parent.parent.parent,root.parent.parent.name,root.parent.name)
     return index
 
 
 def archive_delivery(root, delivery):
     """Freeze consumed source records and prevent unintentional out-of-order application."""
+    if flat_effective(root):
+        from ai_lib_qor.application.source_repository import SourceRepository
+        root=Path(root); work=root.parent.parent.parent.parent
+        records=SourceRepository(work).deliveries()
+        matches=[x['record'] for x in records if x['record']['delivery_id']==delivery['delivery_id']
+                 and x['record']['source_library_id']==delivery['source_library_id'] and x['record']['vendor_id']==delivery['vendor_id']]
+        if len(matches)!=1 or matches[0]!=delivery:
+            raise ValueError('交付记录未唯一登记或内容冲突')
+        others=[x['record'] for x in records if x['record']['source_library_id']==delivery['source_library_id']
+                and x['record']['delivery_id']==delivery['delivery_id'] and x['record']['vendor_id']!=delivery['vendor_id']]
+        if any({f['file_id'] for f in old['files']} & {f['file_id'] for f in delivery['files']} for old in others):
+            raise ValueError('跨供应商交付文件引用不唯一')
+        used={r['reason']['ref_id'] for r in revisions(root) if r['reason']['kind']=='RAW_DELIVERY'}
+        for item in records:
+            old=item['record']
+            if old['delivery_id'] in used and old['source_library_id']==delivery['source_library_id'] and old['delivery_id']!=delivery['delivery_id'] and old['delivery_order']>=delivery['delivery_order']:
+                raise ValueError('交付顺序不递增或出现相同 order')
+        return
     directory = Path(root) / '_inputs' / 'deliveries'
     directory.mkdir(parents=True, exist_ok=True)
     key = hashlib.sha256(delivery['delivery_id'].encode('utf-8')).hexdigest()

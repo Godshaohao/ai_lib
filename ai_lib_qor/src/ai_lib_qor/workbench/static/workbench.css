@@ -56,3 +56,22 @@ button,select,input{font:inherit}
 .library-group .library-scan small{margin:0 0 0 auto}
 .rail :is(a,summary,input):focus-visible{outline:3px solid #317e84;outline-offset:2px}
 @media(max-width:760px){.rail{max-height:360px;overflow:auto}.rail-head{align-items:center}.rail-label{margin-top:4px}}
+
+/* Keep object context stable when moving between library and IP views. */
+.workspace-breadcrumb{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 18px;color:#6b808d;font-size:13px}
+.workspace-breadcrumb a{color:#286e77;text-decoration:none}
+.workspace-breadcrumb a:hover{text-decoration:underline}
+.workspace-breadcrumb strong{color:#29475a}
+@media(max-width:760px){.l2-shell{padding:20px 16px 56px!important}}
+.workspace-scope{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 22px;padding:8px;background:#eaf1f3;border:1px solid #d8e5e8;border-radius:8px}
+.workspace-scope .scope-label{padding:6px 10px;color:#55727e;font-size:12px;font-weight:700}
+.workspace-scope a{display:inline-flex;align-items:center;min-height:36px;padding:7px 12px;border-radius:5px;color:#385d69;text-decoration:none;font-weight:650}
+.workspace-scope a:hover{background:#dceced}
+.workspace-scope a.is-active{color:#126e72;background:#fff;box-shadow:0 1px 4px #244e5b1a}
+.workspace-scope .scope-empty{padding:7px 10px;color:#6d818b;font-size:12px}
+
+/* Operation progress: real completed items or indeterminate phase. */
+.operation-overlay[hidden],.operation-reopen[hidden],.operation-result[hidden],.operation-actions button[hidden]{display:none}
+.operation-overlay{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;background:rgba(18,37,50,.48);padding:18px}
+.operation-panel{width:min(600px,100%);max-height:min(80vh,700px);overflow:auto;background:#fff;border:1px solid #cbdde4;border-radius:12px;padding:24px;box-shadow:0 20px 60px rgba(22,45,58,.24);color:#20394a}
+.operation-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.operation-header h2{margin:5px 0 0;font-size:21px}.operation-kicker{font-size:12px;color:#367279;font-weight:700}.operation-message{font-weight:600;margin:22px 0 10px;overflow-wrap:anywhere}.operation-panel progress{width:100%;height:12px;accent-color:#167d80}.operation-count,.operation-footnote{font-size:13px;color:#617681;line-height:1.6}.operation-details{margin:20px 0 8px;padding:14px;background:#f3f7f8;border:1px solid #dfebed;border-radius:8px}.operation-details summary{font-weight:700;cursor:pointer}.operation-details ol{max-height:180px;overflow:auto;padding-left:22px;margin:12px 0 0}.operation-details li{padding:4px 0;font-size:13px;overflow-wrap:anywhere}.operation-actions{display:flex;gap:12px;align-items:center;margin-top:18px}.operation-result{font-weight:700;color:#136e73}.operation-reopen{position:fixed;right:18px;bottom:18px;z-index:999;box-shadow:0 5px 18px #2344}.operation-minimize{background:#f3f7f8;color:#355964}.operation-panel :focus-visible,.operation-reopen:focus-visible{outline:3px solid #ebae43;outline-offset:3px}

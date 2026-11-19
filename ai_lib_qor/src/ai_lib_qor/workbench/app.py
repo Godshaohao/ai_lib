@@ -5,19 +5,33 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from flask import Flask, abort, redirect, render_template, request, send_file, session, url_for
-from .service import ARTIFACTS, execute, execute_evidence, execute_ip_batch, history, plans_in, select_plan, plans_for_revision
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from ai_lib_qor.application.runs import ARTIFACTS, execute, execute_evidence, execute_ip_batch, history, plans_in, select_plan, plans_for_revision, plans_for_v2_revision
 from .catalog import load_catalog, file_rows, compare_rows, member_rows, formal_comparison
-from .scans import sources, observations, run_scan_and_ingest, ingest_result
-from .registration import registered_deliveries
+from ai_lib_qor.application.scans import sources, observations, run_scan_and_ingest, ingest_result
+from ai_lib_qor.sources.registration import registered_deliveries
 from .read_models import build_file_matrix, result_matches
 from ai_lib_qor.sources.formal_sync import formal_sources, formal_history
+from ai_lib_qor.application.library_catalog import LibraryCatalog
+from .progress import OperationProgress
 
 RUN_ID = re.compile(r'run_[0-9a-f]{32}\Z')
 
 
+def sidebar_groups(entries, configured):
+    grouped = {}
+    for entry in entries:
+        key = (entry['vendor'], entry['library'])
+        grouped.setdefault(key, {'vendor':key[0], 'library':key[1], 'ips':[], 'configured':False})['ips'].append(entry)
+    for source in configured:
+        key = (source['vendor_id'], source['source_library_id'])
+        grouped.setdefault(key, {'vendor':key[0], 'library':key[1], 'ips':[], 'configured':False})['configured'] = True
+    return [grouped[key] for key in sorted(grouped)]
+
+
 def create_app(plan_root, runs_root, work_root=None):
     app = Flask(__name__)
+    operations=OperationProgress()
     app.secret_key = os.urandom(32)
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
     plans, runs = Path(plan_root).resolve(), Path(runs_root).resolve()
@@ -34,40 +48,52 @@ def create_app(plan_root, runs_root, work_root=None):
         if 'csrf' not in session: session['csrf'] = os.urandom(32).hex()
         if request.method == 'POST' and not hmac.compare_digest(session['csrf'], request.form.get('csrf', '')):
             abort(403)
+        labels={'scan_all':'扫描全部 RAW','scan_source':'扫描 RAW','formal_sync':'同步正式来源',
+                'start_run':'执行检查','start_version_run':'单版本检查','start_v2_run':'单版本检查','start_ip_run':'整体 IP 检查',
+                'apply_effective':'更新有效版本','extract_evidence':'提取解析证据','registration':'登记交付'}
+        ident=request.form.get('_operation_id','') if request.method=='POST' else ''
+        if ident and request.endpoint in labels:
+            if not re.fullmatch(r'[0-9a-f]{32}',ident):abort(400)
+            if not operations.start(ident,session['csrf'],labels[request.endpoint]):abort(409)
+            g.operation_id=ident
+
+    def progress(message,completed=None,total=None):
+        ident=getattr(g,'operation_id',None)
+        if ident:operations.update(ident,message,completed,total)
+
+    def finish_progress(state,message):
+        ident=getattr(g,'operation_id',None)
+        if ident:operations.finish(ident,state,message)
+
+    @app.after_request
+    def finish_request(response):
+        if getattr(g,'operation_id',None):
+            finish_progress('FAILED' if response.status_code>=400 else 'SUCCEEDED',
+                            '操作失败，请查看错误信息' if response.status_code>=400 else '操作已完成')
+        return response
+
+    @app.get('/operations/<ident>')
+    def operation_status(ident):
+        if not re.fullmatch(r'[0-9a-f]{32}',ident):abort(404)
+        status=operations.get(ident,session['csrf'])
+        if status is None:abort(404)
+        response=jsonify(status);response.headers['Cache-Control']='no-store'
+        return response
 
     @app.get('/')
     def index():
-        entries, snapshots, warnings = load_catalog(work_root)
-        try:
-            scan_sources = sources(work_root)
-            scan_rows = []
-            for x in scan_sources:
-                history_rows = observations(runs,x)
-                latest = history_rows[0] if history_rows else None
-                scan_rows.append({'source':x, 'observations':history_rows, 'candidate_dirs':[], 'last_success':next((item for item in history_rows if item['status']=='COMPLETE'),None), 'deliveries':registered_deliveries(work_root,x), 'ingest':ingest_result(runs,latest)})
-        except (ValueError, KeyError, OSError, TypeError) as exc:
-            scan_rows = []; warnings.append(f'扫描配置错误: {exc}')
-        formal_rows=[]
-        if work_root:
-            try:
-                for config in formal_sources(work_root):
-                    items=formal_history(runs,config)
-                    groups={};unmatched=[]
-                    for file in items[0]['files'] if items else []:
-                        if file['source']:
-                            key=(file['source']['vendor'],file['source']['library'])
-                            groups.setdefault(key,[]).append(file)
-                        else: unmatched.append(file)
-                    formal_rows.append({'source':config,'observations':items,'last_success':next((x for x in items if x['status']=='COMPLETE'),None),'groups':groups,'unmatched':unmatched})
-            except (ValueError, KeyError, OSError, TypeError) as exc: warnings.append(f'正式来源配置错误: {exc}')
-        sidebar = {}
-        for entry in entries:
-            key = (entry['vendor'], entry['library'])
-            sidebar.setdefault(key, {'vendor': key[0], 'library': key[1], 'ips': [], 'configured': False})['ips'].append(entry)
-        for row in scan_rows:
-            source = row['source']; key = (source['vendor_id'], source['source_library_id'])
-            sidebar.setdefault(key, {'vendor': key[0], 'library': key[1], 'ips': [], 'configured': False})['configured'] = True
-        sidebar_libraries = [sidebar[key] for key in sorted(sidebar)]
+        # L1 is a read-only source projection. Do not build plans, check history,
+        # macros or per-IP matrices when the user opens the global page.
+        if request.args.get('view') == 'discover' or (not request.args.get('view') and not any(
+                request.args.get(k) for k in ('vendor', 'library', 'ip'))):
+            return render_template('global_overview.html', csrf=session['csrf'],
+                                   **LibraryCatalog(work_root,runs).refresh().overview())
+        catalog=LibraryCatalog(work_root,runs).refresh()
+        entries, snapshots, warnings = catalog.entries, catalog.snapshots, catalog.warnings
+        overview=catalog.overview()
+        scan_rows=overview['scan_rows']
+        formal_rows=overview['formal_observation_rows']
+        sidebar_libraries = sidebar_groups(entries, [dict(vendor_id=k[0],source_library_id=k[1]) for k in catalog.libraries])
         chosen = tuple(request.args.get(x, '') for x in ('vendor', 'library', 'ip'))
         selected = next((e for e in entries if (e['vendor'], e['library'], e['ip']) == chosen), None)
         if any(chosen) and selected is None: abort(400)
@@ -93,7 +119,8 @@ def create_app(plan_root, runs_root, work_root=None):
         requested_view = request.args.get('view', 'overview' if selected else 'discover')
         view = {'catalog':'checks', 'manual':'checks'}.get(requested_view, requested_view)
         if view not in ('files', 'compare', 'deliveries', 'formal', 'history', 'checks', 'discover', 'versions', 'overview', 'analysis'): abort(400)
-        all_members = member_rows(revision, deliveries, snapshots)
+        ip_model=catalog.ip_detail(selected['vendor'],selected['library'],selected['ip'],revision_id=revision_id) if selected else None
+        all_members = ip_model['members'] if ip_model else []
         filters = {k: request.args.get(k, '').strip() for k in ('q', 'source', 'file_view', 'change', 'corner')}
         if filters['source'] not in ('', 'RAW', 'FORMAL') or filters['change'] not in ('', 'ADDED', 'REPLACED', 'UNCHANGED'):
             abort(400)
@@ -135,23 +162,10 @@ def create_app(plan_root, runs_root, work_root=None):
         if baseline_arg and (not baseline or not revision or versions.index(baseline) >= versions.index(revision)): abort(400)
         baseline_missing = bool(baseline_id and baseline is None)
         baseline_options = versions[:versions.index(revision)] if revision else []
-        matching_result = None
-        if revision and not baseline_missing and view in ('overview','analysis','checks'):
-            from ai_lib_qor.versions.store import read_json
-            from ai_lib_qor.checks.evidence import validate_check_result
-            for run in revision_runs.get(revision['revision_id'], []):
-                if run.get('state') != 'SUCCEEDED' or not RUN_ID.fullmatch(run['id']): continue
-                folder = runs/run['id']; check_path=folder/'check.json'; plan_path=folder/'input_plan.json'
-                if any(x.is_symlink() or not x.is_file() for x in (check_path,plan_path)): continue
-                try:
-                    result=read_json(check_path,'check_result'); validate_check_result(result)
-                    plan=json.loads(plan_path.read_text(encoding='utf-8'))
-                    if read_json(plan['target_revision'],'effective_version') != revision: continue
-                    plan_base=read_json(plan['baseline_revision'],'effective_version') if plan.get('baseline_revision') else None
-                    if plan_base != baseline or result['check_run_id'] != run['id'] or not result_matches(result,revision,baseline): continue
-                    matching_result=result; break
-                except (OSError, ValueError, KeyError, TypeError): continue
-        matrix=build_file_matrix(revision,baseline,deliveries,snapshots,matching_result,home_library=selected['library'] if selected else None,formal_snapshot=snapshot if view=='analysis' else None)
+        ip_model=(catalog.ip_detail(selected['vendor'],selected['library'],selected['ip'],revision_id=revision_id,
+                  baseline_id=baseline_id,formal_snapshot=snapshot if view=='analysis' else None) if selected else None)
+        matching_result=ip_model['matching_result'] if ip_model else None
+        matrix=ip_model['matrix'] if ip_model else build_file_matrix(None,None,[],[])
         matrix_filters={key:request.args.get('matrix_'+key,'').strip() for key in ('q','view','corner','source','content','check')}
         matrix_all=matrix['rows']
         matrix_views=sorted({r['view'] for r in matrix_all})
@@ -178,23 +192,56 @@ def create_app(plan_root, runs_root, work_root=None):
                                warnings=warnings, snapshot_counts=snapshot_counts, formal_files=formal_files, formal_query=formal_query, formal_match=formal_match, revision=revision, members=members, member_total=len(all_members), file_views=file_views, corners=corners, filters=filters, rows=shown_rows, file_total=len(location_rows), file_filter=file_filter, file_kind=file_view, file_kinds=file_kinds, unresolved_count=unresolved_count, history_scope=history_scope, shown_runs=shown_runs, compare=compare_rows(deliveries, request.args.get('base'), request.args.get('target')),
                                view=view, baseline=baseline, baseline_missing=baseline_missing, baseline_options=baseline_options, matrix=matrix, matrix_filters=matrix_filters, matrix_views=matrix_views, matrix_corners=matrix_corners, scan_rows=scan_rows, formal_rows=formal_rows, sidebar_libraries=sidebar_libraries, version_views=version_views, plan_baselines=plan_baselines, nl_rows=nl_rows, plans=plans_in(plans), runs=runs_list, selected_runs=selected_runs, overall_runs=overall_runs, revision_runs=revision_runs, plan_readiness=plan_readiness, plan_root=str(plans), matching_plans=matching_plans, output_root=str(runs), csrf=session['csrf'], work_root=work_root)
 
+    @app.get('/api/library-data')
+    def library_data_api():
+        from ai_lib_qor.application.data_query import query_data
+        if not work_root:return jsonify({'error':'未配置 work 目录'}),400
+        names=('vendor','library','version','view','path','owner','set_id','revision','snapshot','delivery_id','other_revision')
+        try:
+            result=query_data(work_root,runs,request.args.get('kind',''),**{name:request.args.get(name) for name in names})
+            return jsonify(result)
+        except (OSError,ValueError,KeyError) as exc:
+            return jsonify({'error':str(exc)}),400
+
     @app.get('/library')
     def library_workspace():
-        vendor=request.args.get('vendor',''); library=request.args.get('library','')
-        entries, _, warnings=load_catalog(work_root)
-        ips=[entry for entry in entries if entry['vendor']==vendor and entry['library']==library]
-        configured=[source for source in sources(work_root) if source['vendor_id']==vendor and source['source_library_id']==library]
-        if not configured and not ips: abort(404)
-        source=configured[0] if configured else None
-        deliveries=registered_deliveries(work_root,source) if source else ips[0]['deliveries']
-        scans=observations(runs,source) if source else []
-        latest=scans[0] if scans else None
-        ingest=ingest_result(runs,latest)
-        return render_template('library_workspace.html',vendor=vendor,library=library,ips=ips,source=source,deliveries=deliveries,latest=latest,ingest=ingest,warnings=warnings)
+        vendor = request.args.get('vendor', '')
+        library = request.args.get('library', '')
+        catalog=LibraryCatalog(work_root,runs).refresh()
+        context = catalog.library_detail(vendor,library)
+        if context is None: abort(404)
+        entries=catalog.entries
+        from ai_lib_qor.application.data_query import list_effective_v2, query_data
+        v2_versions=list_effective_v2(work_root,vendor,library)
+        set_id=request.args.get('set_id','');revision=request.args.get('revision','');v2_selected=None;v2_plans=[];v2_blocked=None
+        if set_id or revision:
+            if not any(v['set_id']==set_id and v['revision']==revision for v in v2_versions):abort(400)
+            try:v2_selected=query_data(work_root,runs,'effective-v2',vendor=vendor,library=library,set_id=set_id,revision=revision)
+            except (OSError,ValueError,KeyError):abort(400)
+            v2_plans=plans_for_v2_revision(plans,work_root,vendor,library,set_id,revision)
+            from ai_lib_qor.application.v2_check_adapter import load_v2_for_check
+            from ai_lib_qor.sources.layout import library_folder
+            try:load_v2_for_check(library_folder(work_root,vendor,library)/f'effective_{set_id}_{int(revision[4:]):03d}.json',work_root)
+            except (OSError,ValueError,KeyError) as exc:v2_blocked=str(exc)
+        return render_template('library_workspace.html', vendor=vendor, library=library,
+                               sidebar_libraries=sidebar_groups(entries, [dict(vendor_id=k[0],source_library_id=k[1]) for k in catalog.libraries]),
+                               entries=entries, selected=None, view='library', v2_versions=v2_versions,v2_selected=v2_selected,v2_plans=v2_plans,v2_blocked=v2_blocked,csrf=session['csrf'], **context)
+
+    @app.get('/effective-v2')
+    def effective_v2_page():
+        options={name:request.args.get(name,'') for name in ('vendor','library','set_id','revision')}
+        return redirect(url_for('library_workspace',**options)+'#effective-files',code=302)
+
+    @app.get('/formal/<nl_id>')
+    def formal_detail(nl_id):
+        catalog=LibraryCatalog(work_root,runs).refresh()
+        detail=catalog.formal_detail(nl_id)
+        if not detail['snapshots'] and not any(c['formal_nl_id']==nl_id for c in catalog.formal_configured): abort(404)
+        return render_template('formal_catalog.html',detail=detail,warnings=catalog.warnings)
 
     @app.route('/registration', methods=['GET','POST'])
     def registration():
-        from .registration import register_delivery, SAFE
+        from ai_lib_qor.sources.registration import register_delivery, SAFE
         vendor = request.values.get('vendor',''); library = request.values.get('library','')
         version = request.values.get('version','')
         try:
@@ -210,10 +257,12 @@ def create_app(plan_root, runs_root, work_root=None):
             files = sorted(f['path'][len(prefix):] for f in scan['files'] if f['path'].startswith(prefix))
             if not files: raise ValueError('扫描中没有该交付目录的文件')
             if request.method == 'POST':
+                progress(f'正在核验 {vendor} / {library} / {version} 的扫描记录和文件位')
                 mapping = {name:{'file_key':request.form.get(f'file_key_{i}','').strip()} for i,name in enumerate(files)}
                 meta = {key:request.form.get(key,'').strip() for key in ('delivery_id','supplier_version','delivery_order','package_mode')}
                 if not meta['supplier_version']: raise ValueError('供应商版本不能为空')
                 path=register_delivery(work_root,source,scan,version,meta,mapping)
+                progress(f"交付记录已保存：{meta['delivery_id']}")
                 return redirect(url_for('registration_done',vendor=vendor,library=library,delivery=meta['delivery_id']),code=303)
             return render_template('registration.html',source=source,version=version,files=files,scan=scan,csrf=session['csrf'])
         except (OSError,ValueError,KeyError,TypeError) as exc:
@@ -228,7 +277,16 @@ def create_app(plan_root, runs_root, work_root=None):
         try:
             configured = sources(work_root)
             if not configured: raise ValueError('没有已配置的扫描库')
-            for source in configured: run_scan_and_ingest(runs, work_root, source)
+            failures=[];total=len(configured)
+            for n,source in enumerate(configured):
+                name=f"{source['vendor_id']} / {source['source_library_id']}"
+                progress(f'正在扫描 {name}',n,total)
+                row=run_scan_and_ingest(runs,work_root,source,progress=lambda message:progress(f'{name}：{message}'))
+                ingest=ingest_result(runs,row) or {}
+                if row['status']!='COMPLETE' or ingest.get('blocked',0) or ingest.get('modified',0):
+                    failures.append(f"{name}：{'；'.join(ingest.get('reasons',[]) or row.get('errors',[])) or row['status']}")
+                progress(f"{name}：新增 {ingest.get('created',0)}、重复 {ingest.get('duplicates',0)}、原地变化 {ingest.get('modified',0)}、未确认 {ingest.get('unresolved',0)}",n+1,total)
+            if failures:finish_progress('PARTIAL','部分来源未完成：'+'；'.join(failures))
         except (OSError, ValueError, KeyError) as exc:
             return render_template('operation_error.html',message=str(exc),params={}),409
         return redirect(url_for('index',view='discover'),code=303)
@@ -238,7 +296,14 @@ def create_app(plan_root, runs_root, work_root=None):
         try:
             matches = [x for x in sources(work_root) if x['vendor_id']==request.form.get('vendor') and x['source_library_id']==request.form.get('library')]
             if len(matches)!=1: abort(400)
-            run_scan_and_ingest(runs,work_root,matches[0])
+            source=matches[0];name=f"{source['vendor_id']} / {source['source_library_id']}"
+            progress(f'正在扫描 {name}',0,1)
+            row=run_scan_and_ingest(runs,work_root,source,progress=lambda message:progress(f'{name}：{message}'))
+            ingest=ingest_result(runs,row) or {}
+            progress(f"{name}：新增 {ingest.get('created',0)}、重复 {ingest.get('duplicates',0)}、原地变化 {ingest.get('modified',0)}、未确认 {ingest.get('unresolved',0)}",1,1)
+            if row['status']!='COMPLETE' or ingest.get('blocked',0) or ingest.get('modified',0):
+                state='FAILED' if row['status']=='FAILED' else 'PARTIAL'
+                finish_progress(state,'扫描需要处理：'+'；'.join(ingest.get('reasons',[]) or row.get('errors',[]) or [row['status']]))
         except (OSError, ValueError, KeyError) as exc:
             return render_template('operation_error.html',message=str(exc),params={}), 409
         return redirect(url_for('index',view='discover'),code=303)
@@ -252,7 +317,13 @@ def create_app(plan_root, runs_root, work_root=None):
             if requested: configured=[x for x in configured if x['formal_nl_id']==requested]
             if not configured: raise ValueError('没有匹配的正式来源配置')
             deliveries=[d for source in sources(work_root) for d in registered_deliveries(work_root,source)]
-            for source in configured: sync_formal(runs,source,deliveries,work_root)
+            failures=[];total=len(configured)
+            for n,source in enumerate(configured):
+                progress(f"正在同步 {source['formal_nl_id']}",n,total)
+                result=sync_formal(runs,source,deliveries,work_root)
+                if result.get('status')!='COMPLETE':failures.append(f"{source['formal_nl_id']}：{'；'.join(result.get('errors',[])) or result.get('status','未知')}")
+                progress(f"已处理 {source['formal_nl_id']}",n+1,total)
+            if failures:finish_progress('PARTIAL','部分正式来源未完成：'+'；'.join(failures))
         except (OSError,ValueError,KeyError,ImportError) as exc:
             return render_template('operation_error.html',message=str(exc),params={}),409
         return redirect(url_for('index',view='discover'),code=303)
@@ -261,7 +332,8 @@ def create_app(plan_root, runs_root, work_root=None):
     def start_run():
         try: plan = select_plan(plans, request.form.get('plan', ''))
         except ValueError: abort(400)
-        result = execute(plan, runs)
+        result = execute(plan, runs, progress=progress)
+        if result['state']!='SUCCEEDED':finish_progress('FAILED',result.get('error','检查执行失败'))
         return redirect(url_for('detail', run_id=result['id']), code=303)
 
     @app.post('/version-run')
@@ -274,13 +346,30 @@ def create_app(plan_root, runs_root, work_root=None):
         if len(matches) != 1: abort(400)
         name = request.form.get('plan', '')
         if name not in plans_for_revision(plans, matches[0]): abort(400)
-        result = execute(select_plan(plans, name), runs, owner=owner, expected_revision=matches[0]['revision_id'])
+        result = execute(select_plan(plans, name), runs, owner=owner, expected_revision=matches[0]['revision_id'],progress=progress)
+        if result['state']!='SUCCEEDED':finish_progress('FAILED',result.get('error','检查执行失败'))
+        return redirect(url_for('detail',run_id=result['id']),code=303)
+
+    @app.post('/effective-v2/run')
+    def start_v2_run():
+        from ai_lib_qor.application.data_query import query_data
+        args={key:request.form.get(key,'') for key in ('vendor','library','set_id','revision')}
+        try:
+            selected=query_data(work_root,runs,'effective-v2',**args)
+            name=request.form.get('plan','')
+            if name not in plans_for_v2_revision(plans,work_root,**args):abort(400)
+            owner=({'vendor':args['vendor'],'library':args['library'],'ip':selected['owner']['id']}
+                   if selected['owner']['type']=='BUSINESS_IP' else None)
+            result=execute(select_plan(plans,name),runs,owner=owner,expected_revision=args['revision'],progress=progress)
+        except (OSError,ValueError,KeyError) as exc:
+            return render_template('operation_error.html',message=str(exc),params={}),409
+        if result['state']!='SUCCEEDED':finish_progress('FAILED',result.get('error','检查执行失败'))
         return redirect(url_for('detail',run_id=result['id']),code=303)
 
     @app.post('/effective/apply')
     def apply_effective():
         from ai_lib_qor.versions.store import read_json
-        from ai_lib_qor.versions.__main__ import parser as version_parser, run as version_run
+        from ai_lib_qor.versions.service import apply_version, candidate_file_keys
         entries, _, _ = load_catalog(work_root)
         owner = {key: request.form.get(key, '') for key in ('vendor', 'library', 'ip')}
         selected = next((e for e in entries if all(e[k] == owner[k] for k in owner)), None)
@@ -290,19 +379,34 @@ def create_app(plan_root, runs_root, work_root=None):
         root = Path(work_root).resolve()
         library_dir = root / 'vendors' / owner['vendor'] / 'libraries' / owner['library']
         effective_dir = library_dir / 'ips' / owner['ip'] / 'effective'
-        delivery_dir = library_dir / 'deliveries'
-        paths = list(delivery_dir.glob('*.json')) + list(delivery_dir.glob('*/delivery.json'))
-        matches = []
-        for path in paths:
-            if path.is_symlink() or path.parent.is_symlink() or not path.resolve().is_relative_to(delivery_dir.resolve()): continue
-            try:
-                item = read_json(path, 'delivery_record')
-                if item['delivery_id'] == delivery_id and item['source_library_id'] == owner['library'] and item['vendor_id'] == owner['vendor']: matches.append(path)
-            except (OSError, ValueError, KeyError): continue
+        from ai_lib_qor.application.source_repository import SourceRepository
+        from ai_lib_qor.versions.store import index_path
+        from ai_lib_qor.sources.layout import SAFE
+        if not SAFE.fullmatch(selected['index']['effective_set_id']):abort(400)
+        flat_dir=root/'libraries'/owner['vendor']/owner['library']/('effective_'+selected['index']['effective_set_id'])
+        if index_path(flat_dir).is_file():effective_dir=flat_dir
+        try:
+            matches=[Path(x['path']) for x in SourceRepository(root).deliveries() if
+                     (x['record']['vendor_id'],x['record']['source_library_id'],x['record']['delivery_id'])==
+                     (owner['vendor'],owner['library'],delivery_id)]
+        except (OSError,ValueError,KeyError):abort(409)
         if len(matches) != 1 or not effective_dir.resolve().is_relative_to(root): abort(400)
         try:
-            args = version_parser().parse_args(['apply', '--effective-dir', str(effective_dir), '--delivery', str(matches[0])])
-            result = version_run(args)
+            progress('正在校验交付文件和候选有效版本')
+            delivery = read_json(matches[0], 'delivery_record')
+            selected_keys = None
+            candidates = candidate_file_keys(matches[0],delivery)
+            # Select only explicitly identified slots. An unclassified README
+            # remains RAW history and cannot block a known LEF/Liberty update.
+            if candidates or any(f['classification'] != 'RESOLVED' for f in delivery['files']):
+                selected_keys = {f['file_key'] for f in delivery['files']
+                                 if f['classification'] == 'RESOLVED' and f['file_key'] and f['file_key'] not in candidates}
+                selected_keys.update(delivery['explicit_removed_file_keys'])
+                if not selected_keys:
+                    raise ValueError('当前交付没有可采用的已确认文件位')
+            result = apply_version(effective_dir, matches[0],
+                                   file_keys=sorted(selected_keys) if selected_keys is not None else None)
+            progress(f"有效版本处理完成：{result['revision_id']}")
         except (OSError, ValueError, KeyError) as exc:
             return render_template('operation_error.html', message=str(exc), params=owner), 409
         return redirect(url_for('index', view='versions', revision=result['revision_id'], generated='1' if result.get('changed') else '0', **owner), code=303)
@@ -313,8 +417,9 @@ def create_app(plan_root, runs_root, work_root=None):
         owner={key:request.form.get(key, '') for key in ('vendor','library','ip')}
         selected=next((e for e in entries if all(e[k]==owner[k] for k in owner)),None)
         if not selected: abort(400)
-        try: result=execute_ip_batch(selected,plans,runs)
+        try: result=execute_ip_batch(selected,plans,runs,progress=progress)
         except ValueError: abort(400)
+        if result['state']!='SUCCEEDED':finish_progress(result['state'],result.get('error','部分版本执行失败，请查看各版本运行记录'))
         return redirect(url_for('detail',run_id=result['id']),code=303)
 
     @app.get('/outputs')
@@ -339,7 +444,10 @@ def create_app(plan_root, runs_root, work_root=None):
             if item.is_symlink(): continue
             try: stat=item.stat()
             except OSError: continue
-            rows.append({'name':item.name,'path':str(item.relative_to(root)), 'directory':item.is_dir(),'size':stat.st_size,'mtime':stat.st_mtime})
+            from datetime import datetime
+            rows.append({'name':item.name,'path':str(item.relative_to(root)),
+                         'directory':item.is_dir(), 'size':stat.st_size,
+                         'mtime':stat.st_mtime, 'mtime_date':datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d')})
         return render_template('directories.html',which=which,root=str(root),relative=rel,rows=rows)
 
     def open_directory(path):
@@ -363,8 +471,9 @@ def create_app(plan_root, runs_root, work_root=None):
         if len(deliveries) != 1: abort(400)
         files = [f for f in deliveries[0]['files'] if f['file_id'] == request.form.get('file_id')]
         if len(files) != 1 or files[0]['classification'] != 'RESOLVED' or files[0]['view'] not in ('LEF','LIBERTY','VERILOG','CDL'): abort(400)
-        try: result = execute_evidence(deliveries[0], files[0]['file_id'], runs)
+        try: result = execute_evidence(deliveries[0], files[0]['file_id'], runs,progress=progress)
         except ValueError: abort(400)
+        if result['state']!='SUCCEEDED':finish_progress('FAILED',result.get('error','解析证据提取失败'))
         return redirect(url_for('detail',run_id=result['id']),code=303)
 
     def lookup(run_id):

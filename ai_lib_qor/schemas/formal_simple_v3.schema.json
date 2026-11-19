@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai_lib_qor/formal_simple_v3.schema.json",
+  "title": "formal.simple.v3 query projection",
+  "type": "object",
+  "properties": {
+    "schema": {"const": "formal.simple.v3"},
+    "snapshot_id": {"type": "string", "minLength": 1},
+    "context": {
+      "type": "object",
+      "properties": {
+        "vendor": {"type": "string"},
+        "library": {"type": "string"},
+        "version": {"type": "string"},
+        "root": {"type": "string"},
+        "recorded_at": {"type": "string"}
+      },
+      "required": ["vendor", "library", "version", "root", "recorded_at"],
+      "additionalProperties": false
+    },
+    "views": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "link_target": {"type": ["string", "null"]},
+            "link_target_status": {"const": "NOT_RECORDED"},
+            "raw_version": {"type": ["string", "null"]},
+            "raw_path": {"type": ["string", "null"]},
+            "resolved_path": {"type": ["string", "null"]},
+            "match_basis": {"type": "string"},
+            "vendor": {"type": "string"},
+            "library": {"type": "string"},
+            "delivery": {"type": "string"}
+          },
+          "required": ["link_target", "raw_version", "raw_path"],
+          "additionalProperties": false,
+          "allOf": [
+            {"if": {"properties": {"link_target": {"type": "null"}}, "required": ["link_target"]}, "then": {"required": ["link_target_status"]}}
+          ]
+        }
+      }
+    },
+    "unassigned": {"type": "array", "items": {"type": "object"}}
+  },
+  "required": ["schema", "snapshot_id", "context", "views"],
+  "additionalProperties": false
+}

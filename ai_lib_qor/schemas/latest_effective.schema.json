@@ -1,0 +1,13 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"每库各有效集最新计算版本指针",
+  "type":"object","additionalProperties":false,
+  "required":["schema","vendor","library","status","sets","updated_at"],
+  "properties":{
+    "schema":{"const":"latest_effective.v1"},"vendor":{"type":"string","minLength":1},"library":{"type":"string","minLength":1},
+    "status":{"enum":["READY","NO_EFFECTIVE_VERSION","PARTIAL"]},"updated_at":{"type":"string","minLength":1},
+    "sets":{"type":"object","additionalProperties":{"type":"object","additionalProperties":false,"required":["status","revision","file"],
+      "properties":{"status":{"enum":["READY","UNAVAILABLE"]},"revision":{"type":["string","null"]},"file":{"type":["string","null"]},"owner_type":{"type":"string"},"owner_id":{"type":"string"},"reason":{"type":"string"}},
+      "allOf":[{"if":{"properties":{"status":{"const":"READY"}}},"then":{"required":["owner_type","owner_id"],"properties":{"revision":{"type":"string"},"file":{"type":"string","pattern":"^[^/]+\\.json$"}}},"else":{"properties":{"revision":{"type":"null"},"file":{"type":"null"}}}}]}}
+  }
+}

@@ -1,0 +1,8 @@
+{% set scope_vendor = selected.vendor if selected else vendor %}{% set scope_library = selected.library if selected else library %}
+<nav class="workspace-scope" aria-label="库与 IP 视角切换">
+  <span class="scope-label">当前范围</span>
+  <a href="{{ url_for('library_workspace',vendor=scope_vendor,library=scope_library) }}" class="{{ 'is-active' if view == 'library' else '' }}" {% if view == 'library' %}aria-current="page"{% endif %}>库文件与交付</a>
+  {% for group in sidebar_libraries if group.vendor == scope_vendor and group.library == scope_library %}
+    {% for item in group.ips %}<a href="{{ url_for('index',view='overview',revision=revision.revision_id if selected and selected.ip == item.ip and revision else none,vendor=item.vendor,library=item.library,ip=item.ip) }}" class="{{ 'is-active' if selected and selected.ip == item.ip else '' }}" {% if selected and selected.ip == item.ip %}aria-current="location"{% endif %}>IP · {{ item.ip }}</a>{% else %}<span class="scope-empty">尚无已登记 IP</span>{% endfor %}
+  {% endfor %}
+</nav>

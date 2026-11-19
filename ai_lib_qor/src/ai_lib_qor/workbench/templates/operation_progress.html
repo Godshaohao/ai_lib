@@ -1,0 +1,13 @@
+<button type="button" class="operation-reopen" id="operation-reopen" hidden>查看运行进度</button>
+<div class="operation-overlay" id="operation-overlay" hidden>
+  <section class="operation-panel" role="dialog" aria-modal="true" aria-labelledby="operation-title">
+    <div class="operation-header"><div><span class="operation-kicker">运行状态</span><h2 id="operation-title">正在准备操作</h2></div><button type="button" class="operation-minimize" id="operation-minimize">收起</button></div>
+    <p class="operation-message" id="operation-message" role="status" aria-live="polite">正在连接…</p>
+    <progress id="operation-bar" max="1" aria-label="已处理项目"></progress>
+    <p class="operation-count" id="operation-count">正在执行，当前阶段没有可计算的百分比</p>
+    <details class="operation-details" open><summary>运行详情</summary><ol id="operation-events"></ol></details>
+    <p class="operation-footnote">进度记录保存在当前工作台进程中。收起不会中止任务；检查完成不代表质量通过或版本已采纳。</p>
+    <div class="operation-actions"><a id="operation-result" class="operation-result" hidden>查看结果 →</a><button type="button" id="operation-close" hidden>关闭</button></div>
+  </section>
+</div>
+<script src="{{ url_for('static',filename='operation_progress.js') }}" defer></script>
