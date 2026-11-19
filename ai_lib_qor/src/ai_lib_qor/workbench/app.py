@@ -264,10 +264,30 @@ def create_app(plan_root, runs_root, work_root=None):
             from ai_lib_qor.sources.layout import library_folder
             try:load_v2_for_check(library_folder(work_root,vendor,library)/f'effective_{set_id}_{int(revision[4:]):03d}.json',work_root)
             except (OSError,ValueError,KeyError) as exc:v2_blocked=str(exc)
-        return render_template('library_workspace.html', vendor=vendor, library=library,
+        index_refresh_message=session.pop('index_refresh_message',None)
+        return render_template('library_workspace.html', vendor=vendor, library=library, index_refresh_message=index_refresh_message,
                                sidebar_libraries=sidebar_groups(entries, [dict(vendor_id=k[0],source_library_id=k[1]) for k in catalog.libraries],work_root),
                                entries=entries, selected=None, view='library', v2_versions=v2_versions,v2_selected=v2_selected,v2_plans=v2_plans,v2_blocked=v2_blocked,
                                v2_comparison=v2_comparison,v2_comparison_error=v2_comparison_error,v2_baselines=v2_baselines,v2_baseline=v2_baseline,index_status=index_status,v3_profiles=v3_profile_names(plans),v2_ip_sets=list(v2_ip_sets.values()),csrf=session['csrf'], **context)
+
+    @app.post('/file-index/refresh')
+    def refresh_file_index():
+        from ai_lib_qor.application.file_index import refresh_library_index_locked
+        from ai_lib_qor.application.latest_pointers import _config
+        from ai_lib_qor.sources.layout import SAFE, library_folder
+        from ai_lib_qor.versions.store import locked
+        vendor=request.form.get('vendor','');library=request.form.get('library','')
+        if not all(SAFE.fullmatch(x) and x not in ('.','..') for x in (vendor,library)):abort(400)
+        if LibraryCatalog(work_root,runs).refresh().library_detail(vendor,library) is None:abort(404)
+        try:
+            folder=library_folder(work_root,vendor,library)
+            with locked(folder):
+                result=refresh_library_index_locked(work_root,vendor,library,_config(work_root,vendor,library))
+            action=result.get('action')
+            session['index_refresh_message']='交付顺序未确认，索引未更新' if action=='ORDER_UNCONFIRMED' else '索引已更新：'+str(action)
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            session['index_refresh_message']='索引更新失败：'+str(exc)
+        return redirect(url_for('library_workspace',vendor=vendor,library=library)+'#file-history',code=302)
 
     @app.get('/effective-v2')
     def effective_v2_page():

@@ -18,6 +18,10 @@
 </div>
 <section class="panel l2-section" id="file-history">
   <h2>关键文件 · 最新与次新交付</h2>
+  <p>文件索引：{{ {'VALID':'已更新','MISSING':'尚未建立','STALE':'需要更新','INVALID':'无法核验'}.get(index_status.status,'状态未知') }}。{{ index_status.message }}</p>
+  {% if index_refresh_message %}<p role="status">{{ index_refresh_message }}</p>{% endif %}
+  <form method="post" action="{{ url_for('refresh_file_index') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><button type="submit">刷新文件索引</button></form>
+  <p class="l2-note">根据已归档的交付、正式快照和有效版本更新；不扫描 RAW。</p>
   <p class="l2-note">按照稳定 file_key 查询真实出现顺序。来源变更不是文件内容差异；未解析文件仍在下方交付记录中。</p>
   <div class="l2-tools"><input type="search" id="file-search" placeholder="搜索 file_key / 文件路径" aria-label="文件位搜索">
     <select id="file-view"><option value="">全部 View</option>{% for k in file_rows|map(attribute='view')|unique|sort %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select></div>
