@@ -16,6 +16,8 @@ def parser():
     sn=sub.add_parser('snapshot');sn.add_argument('--root',required=True);sn.add_argument('--config',required=True);sn.add_argument('--out',required=True)
     f=sub.add_parser('facts');f.add_argument('--delivery',required=True);f.add_argument('--file-id',required=True);f.add_argument('--out',required=True)
     e=sub.add_parser('facts-evidence');e.add_argument('--delivery',required=True);e.add_argument('--file-id',required=True);e.add_argument('--out',required=True)
+    fa=sub.add_parser('facts-at',help='按真实 Delivery ID、View 与路径解析已归档文件')
+    for name in ('work','runs','vendor','library','delivery-id','view','path','out'):fa.add_argument('--'+name,required=True)
     c=sub.add_parser('check');c.add_argument('--plan',required=True);c.add_argument('--out',required=True)
     r=sub.add_parser('report');r.add_argument('--check',required=True);r.add_argument('--html');r.add_argument('--excel');r.add_argument('--delivery',action='append',default=[]);r.add_argument('--facts',action='append',default=[]);r.add_argument('--formal-snapshot');r.add_argument('--source-snapshot',action='append',default=[]);r.add_argument('--target-revision');r.add_argument('--baseline-revision');r.add_argument('--accepted-revision');r.add_argument('--effective-index')
     r.add_argument('--work-root',help='v2 版本所在的 work 目录')
@@ -26,10 +28,13 @@ def parser():
     catalog.add_argument('--work',required=True);catalog.add_argument('--runs',required=True)
     latest=sub.add_parser('latest-refresh',help='从已保存记录重建每库最新软链接')
     latest.add_argument('--work',required=True);latest.add_argument('--vendor');latest.add_argument('--library')
+    fi=sub.add_parser('file-index-refresh',help='按归档 Delivery、Formal、Effective 刷新单库 v3 索引')
+    for name in ('work','vendor','library'):fi.add_argument('--'+name,required=True)
+    fi.add_argument('--rebuild',action='store_true',help='确认历史记录后强制重建已知格式的派生索引')
     query=sub.add_parser('data-query',help='只读查询 JSON 的 RAW / 历史 / 有效 / Formal 视图')
     query.add_argument('--work',required=True);query.add_argument('--runs',default='.')
-    query.add_argument('--kind',required=True,choices=['raw','simple-raw','history','history-index','effective','effective-v2','simple-effective','formal','simple-formal','compare','deliveries','compare-revisions','changed-pairs','formal-effective','effective-timeline'])
-    for name in ('vendor','library','version','view','path','owner','set-id','revision','snapshot','delivery-id','other-revision'):query.add_argument('--'+name)
+    query.add_argument('--kind',required=True,choices=['raw','simple-raw','history','history-at','history-index','index-status','index-v3','logical-history','effective','effective-v2','simple-effective','formal','simple-formal','compare','deliveries','compare-revisions','compare-revisions-logical','changed-pairs','formal-effective','effective-timeline'])
+    for name in ('vendor','library','version','view','path','file-key','owner','set-id','revision','snapshot','delivery-id','other-revision'):query.add_argument('--'+name)
     query.add_argument('--revisions',nargs='+')
     eff=sub.add_parser('effective-build',help='从简化 RAW JSON 和可选父版本计算独立有效版本')
     for name in ('raw','out','owner-type','owner-id','revision'):eff.add_argument('--'+name,required=True)
@@ -49,6 +54,10 @@ def parser():
     formal.add_argument('--work',required=True);formal.add_argument('--runs',required=True);formal.add_argument('--formal-nl-id')
     batch=sub.add_parser('run-ip', help='执行已登记 IP 的所有版本检查')
     for name in ('work','runs','plans','vendor','library','ip'):batch.add_argument('--'+name,required=True)
+    for command,help_text in (('run-v3-revision','用 v3 索引执行单版本范围检查'),('run-v3-ip','用 v3 索引执行整体 IP 检查')):
+        run3=sub.add_parser(command,help=help_text)
+        for name in ('work','runs','vendor','library','set-id','profile'):run3.add_argument('--'+name,required=True)
+        run3.add_argument('--revision',action='append',required=command=='run-v3-revision',help='指定有效版本；整体检查可重复指定，默认全部')
     changed=sub.add_parser('run-changed-lef', help='只检查两个有效版本之间来源变化的 LEF，生成检查结果和报告')
     for name in ('work','runs','vendor','library','set-id','before','after'):changed.add_argument('--'+name,required=True)
     changed.add_argument('--pin-liberty-path',help='显式选择当前有效 Liberty 相对路径，同时检查其与变化 LEF 的信号 Pin')
@@ -70,6 +79,33 @@ def avoid_source(output, root):
 
 
 def run(a):
+    if a.command in ('run-v3-revision','run-v3-ip'):
+        from ai_lib_qor.application.v3_checks import run_v3_ip,run_v3_revision
+        profile_path=Path(a.profile)
+        if profile_path.is_symlink() or not profile_path.is_file():raise ValueError('检查配置不存在或为软链接')
+        profile=read(profile_path)
+        options={'vendor':a.vendor,'library':a.library,'set_id':a.set_id,'profile':profile}
+        if a.command=='run-v3-revision':
+            if len(a.revision)!=1:raise ValueError('单版本检查必须恰好指定一个版本')
+            return run_v3_revision(a.work,a.runs,revision=a.revision[0],**options)
+        return run_v3_ip(a.work,a.runs,revisions=a.revision,**options)
+    if a.command == 'file-index-refresh':
+        from ai_lib_qor.application.file_index import refresh_library_index_locked
+        from ai_lib_qor.application.latest_pointers import _config
+        from ai_lib_qor.sources.layout import library_folder
+        from ai_lib_qor.versions.store import locked
+        folder=library_folder(a.work,a.vendor,a.library)
+        with locked(folder):return refresh_library_index_locked(a.work,a.vendor,a.library,_config(a.work,a.vendor,a.library),force_rebuild=a.rebuild)
+    if a.command == 'facts-at':
+        from ai_lib_qor.application.data_query import LibraryDataQuery, parse_recorded_file
+        q=LibraryDataQuery(a.work,a.runs)
+        matches=[x['record'] for x in q.deliveries if (x['record']['vendor_id'],x['record']['source_library_id'],x['record']['delivery_id'])==(a.vendor,a.library,a.delivery_id)]
+        if len(matches)!=1:raise ValueError('交付不存在或不唯一')
+        for item in q.deliveries:avoid_source(a.out,item['record']['source_root'])
+        for snapshot in q.snapshots:avoid_source(a.out,snapshot['source_root'])
+        fact=parse_recorded_file(a.work,a.runs,a.vendor,a.library,a.delivery_id,a.view,a.path)
+        write_atomic(a.out,fact,immutable=True)
+        return {'facts_id':fact['facts_id'],'output':a.out}
     if a.command == 'run-changed-lef':
         from ai_lib_qor.application.runs import execute_changed_lefs
         return execute_changed_lefs(a.work,a.runs,vendor=a.vendor,library=a.library,set_id=a.set_id,before=a.before,after=a.after,pin_liberty_path=a.pin_liberty_path)
@@ -191,7 +227,8 @@ def run(a):
 def main():
     try:
         args=parser().parse_args();result=run(args);print(json.dumps(result,ensure_ascii=False,indent=2))
-        if result.get('state') in ('FAILED','PARTIAL') or (args.command in ('scan','formal-sync') and any(x.get('status') != 'COMPLETE' or x.get('ingest',{}).get('blocked',0) for x in result.get('sources',[]))): return 1
+        if args.command=='file-index-refresh' and result.get('action')=='ORDER_UNCONFIRMED':return 1
+        if result.get('state') in ('FAILED','PARTIAL') or (args.command in ('scan','formal-sync') and any(x.get('status') != 'COMPLETE' or x.get('ingest',{}).get('blocked',0) or x.get('ingest',{}).get('file_index',{}).get('action') == 'ERROR' for x in result.get('sources',[]))): return 1
     except (OSError,ValueError,KeyError,ImportError) as e:print(f'错误: {e}',file=sys.stderr);return 1
     return 0
 

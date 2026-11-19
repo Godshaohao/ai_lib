@@ -61,4 +61,11 @@ def publish_v2(work,out,record,parent=None):
         write_atomic(path,record,immutable=True)
         write_atomic(index_path,index)
         refresh_library_locked(root,scope['vendor'],scope['library'])
+        try:
+            from .file_index import refresh_library_index_locked
+            from .latest_pointers import _config
+            refresh_library_index_locked(root,scope['vendor'],scope['library'],_config(root,scope['vendor'],scope['library']))
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            import warnings
+            warnings.warn(f'有效版本已发布，文件索引未刷新：{exc}',RuntimeWarning,stacklevel=2)
     return path

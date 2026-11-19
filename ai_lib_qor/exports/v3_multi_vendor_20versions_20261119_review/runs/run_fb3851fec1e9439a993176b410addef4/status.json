@@ -1,0 +1,26 @@
+{
+  "id": "run_fb3851fec1e9439a993176b410addef4",
+  "state": "SUCCEEDED",
+  "plan": "v3 索引范围检查",
+  "target": "rev_0003",
+  "target_kind": "EFFECTIVE_REVISION",
+  "owner": {
+    "vendor": "SIM_C",
+    "library": "lib_c1",
+    "ip": "lib_c1_ip"
+  },
+  "started_at": "2026-11-19T09:42:29.803252+00:00",
+  "summary": {
+    "files_with_new_source": 0,
+    "files_with_confirmed_content_change": 0,
+    "failed_checks": 0,
+    "inconclusive_checks": 0
+  },
+  "source_summary": {
+    "SOURCE_CHANGED": 1,
+    "ADDED": 0,
+    "REMOVED": 0,
+    "UNCHANGED": 3
+  },
+  "finished_at": "2026-11-19T09:42:29.839494+00:00"
+}

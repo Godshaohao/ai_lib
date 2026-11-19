@@ -39,7 +39,7 @@ class WorkbenchScanTest(unittest.TestCase):
             (raw/'a.lef').write_text('two')
             self.assertEqual(client.post('/scan',data={'csrf':'test','vendor':'v','library':'lib'}).status_code,303)
             body=client.get('/?view=discover').get_data(as_text=True)
-            self.assertIn('a.lef',body);self.assertIn('元数据变化',body)
+            self.assertIn('进入库工作台',body);self.assertIn('元数据变化',body)
             self.assertEqual(len(list((root/'runs'/'scans').glob('*.json'))),2)
             self.assertEqual(client.post('/scan',data={'csrf':'test','vendor':'x','library':'lib'}).status_code,400)
 
@@ -64,8 +64,9 @@ class WorkbenchScanTest(unittest.TestCase):
             with client.session_transaction() as session:session['csrf']='test'
             client.post('/scan',data={'csrf':'test','vendor':'v','library':'lib'})
             body=client.get('/?view=discover').get_data(as_text=True)
-            self.assertIn('查看本次扫描文件',body)
-            self.assertIn('core.lef',body)
+            self.assertIn('进入库工作台',body)
+            detail=client.get('/library?vendor=v&library=lib').get_data(as_text=True)
+            self.assertIn('core.lef',detail)
 
     def test_scan_overview_distinguishes_global_scope_and_states(self):
         import json
@@ -80,7 +81,7 @@ class WorkbenchScanTest(unittest.TestCase):
             self.assertIn('全部已配置库',body);self.assertIn('尚未扫描',body)
             client.post('/scan',data={'csrf':'test','vendor':'v','library':'lib'})
             body=client.get('/?view=discover').get_data(as_text=True)
-            self.assertIn('已建立首次观察基线',body);self.assertIn('查看本次扫描文件',body)
+            self.assertIn('已建立首次观察基线',body);self.assertIn('进入库工作台',body)
             self.assertIn('按库名筛选',body)
 
     def test_fast_scanning_uses_metadata_without_reading_file_contents(self):

@@ -1,0 +1,35 @@
+{
+  "schema_version": "file_facts.v1",
+  "facts_id": "facts_8533e8c9c843b82c2b94573c",
+  "source_ref": {
+    "kind": "delivery_file",
+    "source_library_id": "lib_b1",
+    "delivery_id": "delivery_f69936de926448479e6a89529cbd86ed",
+    "file_id": "f_0a2bfac0bed28060bc0acbdb"
+  },
+  "view": "LIBERTY",
+  "parser": {
+    "name": "src_qor_liberty_interface",
+    "version": "standalone-interface-2+adapter-1.0"
+  },
+  "parse_status": "COMPLETE",
+  "covered_sections": [
+    "CELL_NAME",
+    "PIN_NAME",
+    "PIN_DIRECTION"
+  ],
+  "units": {},
+  "objects": {
+    "cells": [
+      {
+        "name": "CORE",
+        "pins": [
+          {
+            "name": "A",
+            "direction": "input"
+          }
+        ]
+      }
+    ]
+  }
+}

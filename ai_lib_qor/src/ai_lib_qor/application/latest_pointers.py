@@ -23,24 +23,8 @@ def _latest_delivery(work,folder,vendor,library):
     if warnings:
         result.update(status='UNAVAILABLE',reason='来源记录存在冲突或无法读取');return result
     if not records:return result
-    ordered=None;basis=None
-    if len(records)==1:
-        ordered=records;basis='ONLY_REGISTERED_DELIVERY'
-    elif all(x['order_basis'] in ('configured_order','manual_confirmation') for x in records):
-        orders=[x['record']['delivery_order'] for x in records]
-        if len(set(orders))==len(orders):ordered=sorted(records,key=lambda x:x['record']['delivery_order']);basis='CONFIRMED_DELIVERY_ORDER'
-    config=_config(work,vendor,library);mapping=config.get('delivery_orders',{})
-    if ordered is None and isinstance(mapping,dict):
-        versions=[x['record']['supplier_version'] for x in records]
-        if len(set(versions))==len(versions) and all(type(mapping.get(v)) is int and mapping[v]>=0 for v in versions) and len({mapping[v] for v in versions})==len(versions):
-            ordered=sorted(records,key=lambda x:mapping[x['record']['supplier_version']]);basis='CONFIGURED_SEQUENCE'
-    if ordered is None and config.get('order_rule')=={'type':'VERSION_DATE_PREFIX','confirmed':True}:
-        from ai_lib_qor.application.simple_sources import version_date_order
-        data=[{'delivery_id':x['record']['delivery_id'],'context':{'version':x['record']['supplier_version']}} for x in records]
-        try:
-            order=version_date_order(data);by_id={x['record']['delivery_id']:x for x in records}
-            if len(by_id)==len(records):ordered=[by_id[x] for x in order];basis='CONFIRMED_VERSION_DATE_PREFIX'
-        except (ValueError,KeyError):pass
+    from ai_lib_qor.application.file_index import repository_order
+    ordered,basis=repository_order(records,_config(work,vendor,library))
     if ordered is None:
         result.update(status='ORDER_UNCONFIRMED',reason='多个交付的业务顺序未确认或存在歧义');return result
     item=ordered[-1];record=item['record'];path=Path(item['path'])

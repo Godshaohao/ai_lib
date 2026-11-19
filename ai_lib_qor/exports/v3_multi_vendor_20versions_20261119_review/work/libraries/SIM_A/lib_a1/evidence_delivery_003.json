@@ -1,0 +1,18 @@
+{
+  "schema_version": "delivery_source_evidence.v1",
+  "scan_id": "scan_8afab99922a049c2bc54d35c80bf462e",
+  "files": [
+    {
+      "path": "lib/core.lib",
+      "size": 63,
+      "mtime_ns": 1795081346531202544
+    }
+  ],
+  "order_basis": "configured_order",
+  "classification": {
+    "lib/core.lib": {
+      "basis": "explicit",
+      "corner_hint": null
+    }
+  }
+}

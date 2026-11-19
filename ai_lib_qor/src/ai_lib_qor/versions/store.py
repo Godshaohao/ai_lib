@@ -149,6 +149,14 @@ def rebuild_index(root, revs=None, evts=None):
     if flat_effective(root):
         from ai_lib_qor.application.latest_pointers import refresh_library_locked
         root=Path(root);refresh_library_locked(root.parent.parent.parent.parent,root.parent.parent.name,root.parent.name)
+        try:
+            from ai_lib_qor.application.file_index import refresh_library_index_locked
+            from ai_lib_qor.application.latest_pointers import _config
+            work=root.parent.parent.parent.parent;vendor=root.parent.parent.name;library=root.parent.name
+            refresh_library_index_locked(work,vendor,library,_config(work,vendor,library))
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            import warnings
+            warnings.warn(f'有效版本已发布，文件索引未刷新：{exc}',RuntimeWarning,stacklevel=2)
     return index
 
 

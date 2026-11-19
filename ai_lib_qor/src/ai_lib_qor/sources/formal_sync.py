@@ -213,6 +213,15 @@ def sync_formal(runs, config, deliveries, work=None):
                     except (OSError,ValueError,KeyError,TypeError) as exc:
                         row['note']+=f'；最新链接更新失败：{exc}'
                         row['link_status']='FAILED';result['status']='PARTIAL'
+                    try:
+                        from ai_lib_qor.application.file_index import refresh_library_index_locked
+                        from ai_lib_qor.application.latest_pointers import _config
+                        state=refresh_library_index_locked(base,vendor,library,_config(base,vendor,library))
+                        row['file_index_action']=state['action']
+                        if state['action']=='ORDER_UNCONFIRMED':row['note']+='；交付顺序未确认，文件索引未刷新'
+                    except (OSError,ValueError,KeyError,TypeError) as exc:
+                        row['note']+=f'；文件索引刷新失败：{exc}'
+                        row['file_index_action']='ERROR';result['status']='PARTIAL'
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 row['note'] = f'快照未发布：{exc}'
         if len(result['snapshots']) == 1:

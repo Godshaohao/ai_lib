@@ -15,10 +15,10 @@ class RegistrationTests(unittest.TestCase):
             f.write_text('changed')
             with self.assertRaisesRegex(ValueError,'变化'):
                 register_delivery(base/'work',source,scan,'V1',metadata,{'core.lef':{'file_key':'lib:lef:core'}})
-            self.assertFalse((base/'work/vendors/v/libraries/lib/deliveries/d1').exists())
+            self.assertFalse((base/'work/libraries/v/lib/delivery_001.json').exists())
             scan=run_scan(base/'runs',source)
             path=register_delivery(base/'work',source,scan,'V1',metadata,{'core.lef':{'file_key':'lib:lef:core'}})
-            self.assertTrue(path.is_file());self.assertTrue((path.parent/'source_evidence.json').is_file())
+            self.assertTrue(path.is_file());self.assertTrue(path.with_name('evidence_'+path.stem+'.json').is_file())
             with self.assertRaises((FileExistsError,ValueError)):
                 register_delivery(base/'work',source,scan,'V1',metadata,{'core.lef':{'file_key':'lib:lef:core'}})
 
@@ -37,7 +37,7 @@ class RegistrationTests(unittest.TestCase):
             scan_id=next((runs/'scans').glob('scan_*.json')).stem
             response=client.post('/registration',data={'scan_id':scan_id,'csrf':'t','vendor':'v','library':'lib','version':'V1','delivery_id':'d1','supplier_version':'V1','delivery_order':'1','package_mode':'FULL','file_key_0':'lib:lef:core'})
             self.assertEqual(response.status_code,303)
-            self.assertTrue((work/'vendors/v/libraries/lib/deliveries/d1/delivery.json').is_file())
+            self.assertTrue((work/'libraries/v/lib/delivery_001.json').is_file())
 
     def test_registered_delivery_visible_before_ip_exists(self):
         import json
@@ -49,5 +49,8 @@ class RegistrationTests(unittest.TestCase):
             (work/'scan_sources.json').write_text(json.dumps({'sources':[source]}))
             scan=run_scan(runs,source)
             register_delivery(work,source,scan,'V1',{'delivery_id':'d1','supplier_version':'V1','delivery_order':1,'package_mode':'FULL'},{'core.lef':{'file_key':'lib:lef:core'}})
-            body=create_app(plans,runs,work).test_client().get('/?view=discover').get_data(as_text=True)
-            self.assertIn('d1',body);self.assertIn('已登记交付',body)
+            client=create_app(plans,runs,work).test_client()
+            body=client.get('/?view=discover').get_data(as_text=True)
+            self.assertIn('进入库工作台',body)
+            detail=client.get('/library?vendor=v&library=lib').get_data(as_text=True)
+            self.assertIn('d1',detail);self.assertIn('交付版本时间线',detail)

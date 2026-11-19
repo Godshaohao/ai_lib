@@ -1,0 +1,189 @@
+{
+  "sources": [
+    {
+      "vendor_id": "SIM_A",
+      "source_library_id": "lib_a1",
+      "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/v3_multi_vendor_20versions_20261119_review/raw/SIM_A/lib_a1",
+      "version_paths": {
+        "V01": "V01",
+        "V02": "V02",
+        "V03": "V03",
+        "V04": "V04"
+      },
+      "delivery_orders": {
+        "V01": 1,
+        "V02": 2,
+        "V03": 3,
+        "V04": 4
+      },
+      "file_mapping": {
+        "V01/lef/core.lef": {
+          "file_key": "lib_a1:lef:core"
+        },
+        "V01/lib/core.lib": {
+          "file_key": "lib_a1:liberty:core"
+        },
+        "V02/lef/core.lef": {
+          "file_key": "lib_a1:lef:core"
+        },
+        "V03/lib/core.lib": {
+          "file_key": "lib_a1:liberty:core"
+        },
+        "V04/lef/core.lef": {
+          "file_key": "lib_a1:lef:core"
+        },
+        "V04/lib/core.lib": {
+          "file_key": "lib_a1:liberty:core"
+        }
+      }
+    },
+    {
+      "vendor_id": "SIM_A",
+      "source_library_id": "lib_a2",
+      "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/v3_multi_vendor_20versions_20261119_review/raw/SIM_A/lib_a2",
+      "version_paths": {
+        "V01": "V01",
+        "V02": "V02",
+        "V03": "V03",
+        "V04": "V04"
+      },
+      "delivery_orders": {
+        "V01": 1,
+        "V02": 2,
+        "V03": 3,
+        "V04": 4
+      },
+      "file_mapping": {
+        "V01/lef/core.lef": {
+          "file_key": "lib_a2:lef:core"
+        },
+        "V01/lib/core.lib": {
+          "file_key": "lib_a2:liberty:core"
+        },
+        "V02/lef/core.lef": {
+          "file_key": "lib_a2:lef:core"
+        },
+        "V03/lib/core.lib": {
+          "file_key": "lib_a2:liberty:core"
+        },
+        "V04/lef/core.lef": {
+          "file_key": "lib_a2:lef:core"
+        },
+        "V04/lib/core.lib": {
+          "file_key": "lib_a2:liberty:core"
+        }
+      }
+    },
+    {
+      "vendor_id": "SIM_B",
+      "source_library_id": "lib_b1",
+      "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/v3_multi_vendor_20versions_20261119_review/raw/SIM_B/lib_b1",
+      "version_paths": {
+        "V01": "V01",
+        "V02": "V02",
+        "V03": "V03",
+        "V04": "V04"
+      },
+      "delivery_orders": {
+        "V01": 1,
+        "V02": 2,
+        "V03": 3,
+        "V04": 4
+      },
+      "file_mapping": {
+        "V01/lef/core.lef": {
+          "file_key": "lib_b1:lef:core"
+        },
+        "V01/lib/core.lib": {
+          "file_key": "lib_b1:liberty:core"
+        },
+        "V02/lef/core.lef": {
+          "file_key": "lib_b1:lef:core"
+        },
+        "V03/lib/core.lib": {
+          "file_key": "lib_b1:liberty:core"
+        },
+        "V04/lef/core.lef": {
+          "file_key": "lib_b1:lef:core"
+        },
+        "V04/lib/core.lib": {
+          "file_key": "lib_b1:liberty:core"
+        }
+      }
+    },
+    {
+      "vendor_id": "SIM_B",
+      "source_library_id": "lib_b2",
+      "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/v3_multi_vendor_20versions_20261119_review/raw/SIM_B/lib_b2",
+      "version_paths": {
+        "V01": "V01",
+        "V02": "V02",
+        "V03": "V03",
+        "V04": "V04"
+      },
+      "delivery_orders": {
+        "V01": 1,
+        "V02": 2,
+        "V03": 3,
+        "V04": 4
+      },
+      "file_mapping": {
+        "V01/lef/core.lef": {
+          "file_key": "lib_b2:lef:core"
+        },
+        "V01/lib/core.lib": {
+          "file_key": "lib_b2:liberty:core"
+        },
+        "V02/lef/core.lef": {
+          "file_key": "lib_b2:lef:core"
+        },
+        "V03/lib/core.lib": {
+          "file_key": "lib_b2:liberty:core"
+        },
+        "V04/lef/core.lef": {
+          "file_key": "lib_b2:lef:core"
+        },
+        "V04/lib/core.lib": {
+          "file_key": "lib_b2:liberty:core"
+        }
+      }
+    },
+    {
+      "vendor_id": "SIM_C",
+      "source_library_id": "lib_c1",
+      "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/v3_multi_vendor_20versions_20261119_review/raw/SIM_C/lib_c1",
+      "version_paths": {
+        "V01": "V01",
+        "V02": "V02",
+        "V03": "V03",
+        "V04": "V04"
+      },
+      "delivery_orders": {
+        "V01": 1,
+        "V02": 2,
+        "V03": 3,
+        "V04": 4
+      },
+      "file_mapping": {
+        "V01/lef/core.lef": {
+          "file_key": "lib_c1:lef:core"
+        },
+        "V01/lib/core.lib": {
+          "file_key": "lib_c1:liberty:core"
+        },
+        "V02/lef/core.lef": {
+          "file_key": "lib_c1:lef:core"
+        },
+        "V03/lib/core.lib": {
+          "file_key": "lib_c1:liberty:core"
+        },
+        "V04/lef/core.lef": {
+          "file_key": "lib_c1:lef:core"
+        },
+        "V04/lib/core.lib": {
+          "file_key": "lib_c1:liberty:core"
+        }
+      }
+    }
+  ]
+}

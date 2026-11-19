@@ -20,7 +20,10 @@ class ClassificationTests(unittest.TestCase):
             self.assertEqual(rows['V07/lib/func_tt.lib.gz']['view'],'LIBERTY')
             self.assertEqual(rows['V07/doc/readme.pdf']['file_type'],'doc')
             self.assertEqual(rows['V07/mystery.xyz']['file_type'],'unknown')
-            self.assertTrue(all(x['file_key'] is None and x['classification']=='UNRESOLVED' for x in rows.values()))
+            self.assertIsNotNone(rows['V07/lef/core.lef.gz']['file_key'])
+            self.assertIsNotNone(rows['V07/lib/func_tt.lib.gz']['file_key'])
+            self.assertIsNone(rows['V07/doc/readme.pdf']['file_key'])
+            self.assertIsNone(rows['V07/mystery.xyz']['file_key'])
             self.assertTrue(all('sha256' not in x for x in scan['files']))
 
     def test_deep_version_roots_and_ambiguous_prefixes(self):
@@ -42,9 +45,10 @@ class ClassificationTests(unittest.TestCase):
         from ai_lib_qor.sources.classifier_adapter import classify_observation
         names=('V07/lib/scan_tt.lib','V07/lib/func_tt.lib','V07/lib/tt_0p75v85c.lib','V07/lib/tt_0p85v125c.lib','V07/rtl/design.sv','V07/net/design.cdl')
         scan={'status':'COMPLETE','comparison_method':'size_mtime_ns','files':[{'path':p,'size':1,'mtime_ns':1} for p in names]}
-        rows=classify_observation(scan,{'version_paths':{'V07':'V07'}})['files']
+        rows=classify_observation(scan,{'version_paths':{'V07':'V07'},'source_library_id':'lib'})['files']
         self.assertEqual(len(rows),len(names))
-        self.assertTrue(all(row['file_key'] is None for row in rows))
+        self.assertTrue(all(row['file_key'] for row in rows[:4]))
+        self.assertTrue(all(row['file_key'] is None for row in rows[4:]))
         self.assertEqual(rows[-2]['view'],'VERILOG')
         self.assertEqual(rows[-1]['view'],'CDL')
 

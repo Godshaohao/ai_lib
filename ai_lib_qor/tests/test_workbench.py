@@ -335,14 +335,14 @@ class CatalogTests(unittest.TestCase):
         self.assertIn('snap_nl253_0001',page)
         self.assertIn('只反映',page)
 
-    def test_formal_duplicate_snapshot_identity_not_silently_selected(self):
+    def test_formal_identical_snapshot_duplicate_is_deduplicated(self):
         import shutil
         root=Path(self.temp.name);work=root/'ambiguous_work';shutil.copytree(ROOT/'examples/work',work)
         folder=work/'formal_nl/NL2.5.3/snapshots'
         (folder/'snap_nl253_0001').mkdir();shutil.copy(folder/'snap_nl253_0001.json',folder/'snap_nl253_0001/snapshot.json')
         app=create_app(ROOT/'examples/pipeline',root/'ambiguous_runs',work);app.testing=True;client=app.test_client()
         page=client.get('/?view=formal&snapshot=NL2.5.3/snap_nl253_0001')
-        self.assertEqual(page.status_code,400)
+        self.assertEqual(page.status_code,200)
 
     def test_task_navigation_groups_without_duplicate_entries(self):
         url='/?vendor=vendor_orion&library=lib_rtavfs&ip=rtavfs'
@@ -592,6 +592,6 @@ class SourceSidebarTests(unittest.TestCase):
             (work/'scan_sources.json').write_text(json.dumps({'sources':[{'vendor_id':'vendor_other','source_library_id':'lib_new','root':str(root/'raw')},{'vendor_id':'vendor_orion','source_library_id':'lib_rtavfs','root':str(root/'raw')}]},ensure_ascii=False))
             client=create_app(ROOT/'examples/pipeline',root/'runs',work).test_client()
             body=client.get('/?view=discover&scan_q=vendor_other+lib_new').get_data(as_text=True)
-            for value in ('库与 IP','vendor_other','lib_new','未登记 IP','rtavfs','/library?vendor=vendor_other&amp;library=lib_new'):
+            for value in ('Library 来源总览','vendor_other','lib_new','/library?vendor=vendor_other&amp;library=lib_new'):
                 self.assertIn(value,body)
             self.assertIn('value="vendor_other lib_new"',body)

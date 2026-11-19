@@ -1,0 +1,36 @@
+{
+  "schema": "effective.simple.v2",
+  "owner": {
+    "type": "SOURCE_LIBRARY",
+    "id": "lib_a2"
+  },
+  "scope": {
+    "vendor": "SIM_A",
+    "library": "lib_a2"
+  },
+  "revision": "rev_0004",
+  "parent": "rev_0003",
+  "created_at": "2026-01-04",
+  "sources": {
+    "V01": "delivery_001",
+    "V02": "delivery_002",
+    "V03": "delivery_003",
+    "V04": "delivery_004"
+  },
+  "views": {
+    "GDS": {
+      "gds/core.gds": "V01"
+    },
+    "LEF": {
+      "lef/core.lef": "V04"
+    },
+    "LIBERTY": {
+      "UNKNOWN": {
+        "lib/core.lib": "V04"
+      }
+    },
+    "VERILOG": {
+      "verilog/core.v": "V01"
+    }
+  }
+}

@@ -57,6 +57,12 @@ def register_delivery(work, source, scan, version_dir, metadata, mapping):
             raise
         from ai_lib_qor.application.latest_pointers import refresh_library_locked
         refresh_library_locked(work_root,vendor,library)
+        try:
+            from ai_lib_qor.application.file_index import refresh_library_index_locked
+            refresh_library_index_locked(work_root,vendor,library,source)
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            import warnings
+            warnings.warn(f'交付已登记，文件索引未刷新：{exc}',RuntimeWarning,stacklevel=2)
     return target
 
 

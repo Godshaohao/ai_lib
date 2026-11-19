@@ -50,7 +50,7 @@ class VersionFlow(unittest.TestCase):
   self.cmd('revoke','--effective-dir',self.work,'--revision','rev_0001','--actor','owner','--reason','review')
   self.assertIsNone(json.loads((self.work/'index.json').read_text())['current_accepted_revision'])
  def test_reject_missing_file_and_tampered_parent(self):
-  self.init();(self.raw/'V08/lef/core.lef').unlink();self.cmd('apply','--effective-dir',self.work,'--delivery',self.d08,ok=False)
+  self.init();(self.raw/'V08/lef/core.lef').unlink();self.cmd('apply','--effective-dir',self.work,'--delivery',self.d08,'--verify-files',ok=False)
   r=self.work/'versions/rev_0001.json';data=json.loads(r.read_text());data['changes']=[];r.write_text(json.dumps(data))
   self.cmd('rebuild-index','--effective-dir',self.work,ok=False)
  def test_reject_older_delivery_and_changed_record_identity(self):

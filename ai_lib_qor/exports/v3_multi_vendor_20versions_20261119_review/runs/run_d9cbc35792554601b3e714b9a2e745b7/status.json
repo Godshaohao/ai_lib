@@ -1,0 +1,21 @@
+{
+  "id": "run_d9cbc35792554601b3e714b9a2e745b7",
+  "state": "SUCCEEDED",
+  "plan": "v3 索引范围检查",
+  "target": "rev_0001",
+  "target_kind": "EFFECTIVE_REVISION",
+  "owner": {
+    "vendor": "SIM_A",
+    "library": "lib_a1",
+    "ip": "lib_a1_ip"
+  },
+  "started_at": "2026-11-19T09:42:26.859996+00:00",
+  "summary": {
+    "files_with_new_source": 0,
+    "files_with_confirmed_content_change": 0,
+    "failed_checks": 0,
+    "inconclusive_checks": 0
+  },
+  "source_summary": null,
+  "finished_at": "2026-11-19T09:42:26.901349+00:00"
+}

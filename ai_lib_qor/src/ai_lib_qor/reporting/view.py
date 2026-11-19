@@ -14,8 +14,15 @@ def _unique(items, schema, identity):
     return list(result.values())
 
 
-def build_report(check_result, *, deliveries=(), facts=(), formal_snapshot=None, target_revision=None, baseline_revision=None, effective_index=None, accepted_revision=None, source_snapshots=()):
+def build_report(check_result, *, deliveries=(), facts=(), formal_snapshot=None, target_revision=None, baseline_revision=None, effective_index=None, accepted_revision=None, source_snapshots=(),library_index=None,source_comparison=None):
     validate_check_result(check_result)
+    if library_index is not None:
+        if library_index.get('schema')!='file_index.v3':raise ValueError('报告需要 v3 文件索引')
+        group=library_index.get('effective_sets',{}).get(check_result['effective_set_id'],{})
+        if check_result['target']['id'] not in [x['revision'] for x in group.get('revisions',[])]:raise ValueError('报告目标不在文件索引中')
+    if source_comparison is not None:
+        if not library_index or source_comparison.get('to')!=check_result['target']['id'] or source_comparison.get('from')!=(check_result.get('baseline') or {}).get('id'):
+            raise ValueError('来源对照与报告版本不一致')
     deliveries=_unique(deliveries,'delivery_record',lambda x:(x['source_library_id'],x['delivery_id']))
     facts=_unique(facts,'file_facts',lambda x:x['facts_id'])
     source_snapshots=_unique([*source_snapshots,*([formal_snapshot] if formal_snapshot else [])],'formal_snapshot',lambda x:(x['formal_nl_id'],x['formal_snapshot_id']))
@@ -48,5 +55,5 @@ def build_report(check_result, *, deliveries=(), facts=(), formal_snapshot=None,
     for revision in (target_revision,baseline_revision,accepted_revision):
         if revision and effective_index and revision['owner']!=effective_index['owner']:raise ValueError('版本与索引所属对象不一致')
     out=deepcopy(check_result)
-    out['_report_context']={'deliveries':deliveries,'facts':facts,'formal_snapshot':deepcopy(formal_snapshot),'target_revision':deepcopy(target_revision),'baseline_revision':deepcopy(baseline_revision),'effective_index':deepcopy(effective_index),'accepted_revision':deepcopy(accepted_revision),'source_snapshots':source_snapshots}
+    out['_report_context']={'deliveries':deliveries,'facts':facts,'formal_snapshot':deepcopy(formal_snapshot),'target_revision':deepcopy(target_revision),'baseline_revision':deepcopy(baseline_revision),'effective_index':deepcopy(effective_index),'accepted_revision':deepcopy(accepted_revision),'source_snapshots':source_snapshots,'library_index':deepcopy(library_index),'source_comparison':deepcopy(source_comparison)}
     return out

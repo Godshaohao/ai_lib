@@ -1,0 +1,13 @@
+{
+  "sources": [
+    {
+      "vendor_id": "SRAM22",
+      "source_library_id": "sram22_256x16m8w8",
+      "root": "/demo/RAW",
+      "delivery_order_ids": [
+        "delivery_006_simulated",
+        "delivery_fe93387faa824ebbb7bdcf451b83e56c"
+      ]
+    }
+  ]
+}

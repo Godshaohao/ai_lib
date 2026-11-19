@@ -49,6 +49,7 @@ class LibraryDataQuery:
         self._refs=defaultdict(list)
         self._history=defaultdict(list)
         self._recorded_paths=defaultdict(list)
+        self._file_index_cache={}
         for item in self.deliveries:
             d=item['record']
             for f in item['files']:
@@ -85,24 +86,10 @@ class LibraryDataQuery:
 
     def list_deliveries(self,vendor,library):
         """List all registered deliveries, sorting only when the basis is confirmed."""
-        from .simple_sources import _alias, version_date_order
+        from .simple_sources import _alias
+        from .file_index import repository_order
         records=[x for x in self.deliveries if (x['record']['vendor_id'],x['record']['source_library_id'])==(vendor,library)]
-        config=self._source_configs.get((vendor,library),{});ordered=None;basis=None
-        if len(records)==1:ordered=list(records);basis='ONLY_REGISTERED_DELIVERY'
-        elif records and all(x['ordering_status']=='CONFIRMED' for x in records):
-            orders=[x['record']['delivery_order'] for x in records]
-            if len(set(orders))==len(orders):ordered=sorted(records,key=lambda x:x['record']['delivery_order']);basis='CONFIRMED_DELIVERY_ORDER'
-        mapping=config.get('delivery_orders',{})
-        if ordered is None and records and isinstance(mapping,dict):
-            versions=[x['record']['supplier_version'] for x in records]
-            if len(set(versions))==len(versions) and all(type(mapping.get(v)) is int and mapping[v]>=0 for v in versions) and len({mapping[v] for v in versions})==len(versions):
-                ordered=sorted(records,key=lambda x:mapping[x['record']['supplier_version']]);basis='CONFIGURED_SEQUENCE'
-        if ordered is None and records and config.get('order_rule')=={'type':'VERSION_DATE_PREFIX','confirmed':True}:
-            try:
-                ids=version_date_order([{'delivery_id':x['record']['delivery_id'],'context':{'version':x['record']['supplier_version']}} for x in records])
-                index={x['record']['delivery_id']:x for x in records}
-                if len(index)==len(records):ordered=[index[x] for x in ids];basis='CONFIRMED_VERSION_DATE_PREFIX'
-            except (ValueError,KeyError):pass
+        ordered,basis=repository_order(records,self._source_configs.get((vendor,library),{}))
         return {'vendor':vendor,'library':library,'ordering_status':'CONFIRMED' if ordered is not None else 'ORDER_UNCONFIRMED',
                 'order_basis':basis,'deliveries':[{'delivery_id':x['record']['delivery_id'],
                   'delivery':_alias(self,vendor,library,x['record']['delivery_id']),
@@ -132,6 +119,40 @@ class LibraryDataQuery:
     def compare_revisions(self,vendor,library,set_id,rev_a,rev_b):
         from .effective_json import compare_revisions
         return compare_revisions(self._simple_revision(vendor,library,set_id,rev_a),self._simple_revision(vendor,library,set_id,rev_b))
+
+    def compare_revisions_logical(self,vendor,library,set_id,rev_a,rev_b):
+        """Compare confirmed file identities; otherwise match exact View and path."""
+        from .effective_json import _flat_views
+        def select(rev):
+            output=[]
+            for (view,path),source in _flat_views(self._simple_revision(vendor,library,set_id,rev)).items():
+                loc=self._source_location(source,view,path)
+                if loc['resolution']!='RECORDED':raise ValueError('有效文件来源无法唯一定位')
+                confirmed=loc['identity_status']=='CONFIRMED' and loc['classification']=='RESOLVED' and bool(loc.get('file_key'))
+                output.append({'view':view,'path':path,'source':source,'delivery_id':loc['delivery_id'],
+                               'file_key':loc.get('file_key'),'identity_status':loc['identity_status'],'_confirmed':confirmed})
+            keys=[(x['view'],x['source']['vendor'],x['source']['library'],x['file_key']) for x in output if x['_confirmed']]
+            if len(keys)!=len(set(keys)):raise ValueError('同一版本的逻辑文件身份不唯一')
+            return output
+        before=select(rev_a);after=select(rev_b);rows=[];matched=set();matched_old=set()
+        def logical(x):return (x['view'],x['source']['vendor'],x['source']['library'],x['file_key'])
+        def emit(old,new,basis):
+            change='ADDED' if old is None else 'REMOVED' if new is None else 'UNCHANGED' if (old['delivery_id'],old['path'])==(new['delivery_id'],new['path']) else 'SOURCE_CHANGED'
+            clean=lambda x:{k:v for k,v in x.items() if k!='_confirmed'} if x else None
+            rows.append({'match_basis':basis,'change':change,'before':clean(old),'after':clean(new),'content_status':'NOT_CHECKED'})
+        for j,old in enumerate(before):
+            choices=[i for i,new in enumerate(after) if i not in matched and old['_confirmed'] and new['_confirmed'] and logical(old)==logical(new)]
+            if len(choices)>1:raise ValueError('有效文件匹配不唯一')
+            if choices:matched_old.add(j);matched.add(choices[0]);emit(old,after[choices[0]],'CONFIRMED_KEY')
+        for j,old in enumerate(before):
+            if j in matched_old:continue
+            choices=[i for i,new in enumerate(after) if i not in matched and (old['view'],old['path'])==(new['view'],new['path'])]
+            if len(choices)>1:raise ValueError('有效文件匹配不唯一')
+            if choices:matched.add(choices[0]);emit(old,after[choices[0]],'PATH')
+            else:emit(old,None,'UNMATCHED')
+        for i,new in enumerate(after):
+            if i not in matched:emit(None,new,'UNMATCHED')
+        return {'from':rev_a,'to':rev_b,'meaning':'CONFIRMED_IDENTITY_OR_EXACT_PATH_SOURCE_ONLY','files':rows}
 
     def file_timeline(self,vendor,library,set_id,view,path,revisions):
         from .effective_json import file_timeline
@@ -241,15 +262,25 @@ class LibraryDataQuery:
         for view,group in formal['views'].items():
             for formal_path,item in group.items():
                 raw=item.get('raw_source');selected=effective.get((view,raw['path'])) if raw else None
+                # Compare only archived path text: an indirect symlink can legitimately
+                # differ, so a mismatch is inconclusive rather than proof of tampering.
+                path_status='UNAVAILABLE';expected=None
+                if raw and item.get('resolved_path'):
+                    registered=self._delivery(raw['vendor'],raw['library'],raw['version'],raw['delivery_id'])['record']
+                    if posixpath.isabs(registered['source_root']) and posixpath.isabs(item['resolved_path']):
+                        expected=posixpath.normpath(posixpath.join(registered['source_root'],raw['path']))
+                        path_status='MATCH' if expected==posixpath.normpath(item['resolved_path']) else 'MISMATCH_OR_INDIRECT'
                 relation='UNKNOWN'
-                if raw and not selected:relation='NOT_IN_EFFECTIVE'
-                elif raw and selected:
+                if raw and path_status=='MATCH' and not selected:relation='NOT_IN_EFFECTIVE'
+                elif raw and selected and path_status=='MATCH':
                     location=self._source_location(selected,view,raw['path'])
                     if (raw['vendor'],raw['library'],raw['version'])!=(selected['vendor'],selected['library'],selected['version']):relation='DIFFERENT_SOURCE'
                     elif location['resolution']=='RECORDED':relation='SAME_SOURCE' if raw['delivery_id']==location['delivery_id'] else 'DIFFERENT_SOURCE'
                 rows.append({'view':view,'formal_path':formal_path,'link_target':item.get('link_target'),
                              'link_target_status':item.get('link_target_status'),'raw_source':raw,
-                             'effective_source':selected,'relation':relation,'content_status':'NOT_CHECKED'})
+                             'effective_source':selected,'relation':relation,'content_status':'NOT_CHECKED',
+                             'resolved_path':item.get('resolved_path'),'archived_raw_path':expected,
+                             'archived_path_status':path_status,'verification_scope':'ARCHIVED_RECORDS_ONLY'})
         return {'nl':nl,'snapshot':snapshot,'revision':revision,'coverage':formal['context']['coverage'],
                 'unassigned':formal['unassigned'],'meaning':'SOURCE_ONLY','files':rows}
 
@@ -263,17 +294,107 @@ class LibraryDataQuery:
         listing=self.list_deliveries(vendor,library)
         confirmed=bool(occurrences) and listing['ordering_status']=='CONFIRMED'
         basis=listing['order_basis'] if confirmed else None;warning=None
+        index,index_status=self._verified_file_index(vendor,library)
         if confirmed:
-            rank={item['delivery_id']:i for i,item in enumerate(listing['deliveries'])}
+            indexed=index['views'].get(view.upper(),{}).get(path,{}).get('timeline',[]) if index else []
+            rank={item['delivery_id']:i for i,item in enumerate(reversed(indexed))} if indexed else {item['delivery_id']:i for i,item in enumerate(listing['deliveries'])}
             occurrences.sort(key=lambda x:rank[x['delivery_id']])
         return {'view':view.upper(),'path':path,'occurrences':occurrences,'ordering_status':'CONFIRMED' if confirmed else 'ORDER_UNCONFIRMED',
-                'order_basis':basis,'ordering_warning':warning,'latest':occurrences[-1] if confirmed else None,'previous':occurrences[-2] if confirmed and len(occurrences)>1 else None}
+                'order_basis':basis,'ordering_warning':warning,'index_status':index_status,'latest':occurrences[-1] if confirmed else None,'previous':occurrences[-2] if confirmed and len(occurrences)>1 else None}
+
+    def _verified_file_index(self,vendor,library):
+        """Validate an optional derived index against archived records, never write it."""
+        from .file_index import repository_index_state
+        from ai_lib_qor.sources.layout import library_folder
+        key=(vendor,library)
+        if key in self._file_index_cache:return self._file_index_cache[key]
+        path=library_folder(self.work,vendor,library)/'file_index.json'
+        if path.is_symlink() or not path.is_file():
+            self._file_index_cache[key]=(None,'MISSING');return self._file_index_cache[key]
+        items=[x for x in self.deliveries if (x['record']['vendor_id'],x['record']['source_library_id'])==(vendor,library)]
+        try:
+            saved=json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(saved,dict):raise ValueError('索引格式无效')
+            if self.list_deliveries(vendor,library)['ordering_status']!='CONFIRMED':
+                result=(None,'ORDER_UNCONFIRMED')
+            elif saved.get('schema')=='file_index.v3':
+                from .file_index_v3 import build_library_index,raw_compat,preserves_history
+                expected=build_library_index(self.work,vendor,library,query=self)
+                if saved==expected:result=(raw_compat(saved),'VALID')
+                elif preserves_history(saved,expected):result=(None,'STALE')
+                else:result=(None,'INVALID')
+            else:
+                index,action,_=repository_index_state(items,self._source_configs.get((vendor,library),{}),saved)
+                result=(index,'VALID') if action=='UNCHANGED' else (None,'STALE')
+        except (OSError,ValueError,KeyError,TypeError):result=(None,'INVALID')
+        self._file_index_cache[key]=result
+        return result
+
+    def get_file_at_delivery(self,vendor,library,view,path,delivery_id):
+        """Select the last appearance at or before an explicitly identified Delivery."""
+        from .file_index import _path
+        _path(path)
+        listing=self.list_deliveries(vendor,library)
+        if listing['ordering_status']!='CONFIRMED':raise ValueError('交付顺序未确认，无法按时间点选择文件')
+        ids=[x['delivery_id'] for x in listing['deliveries']]
+        if delivery_id not in ids:raise ValueError('所选交付不存在')
+        index,status=self._verified_file_index(vendor,library)
+        if index is not None:
+            timeline=index['views'].get(view.upper(),{}).get(path,{}).get('timeline',[])
+            by_id={x['delivery_id']:x for x in timeline}
+        else:
+            by_id={x['delivery_id']:x for x in self.get_file_history(vendor,library,view,path)['occurrences']}
+        chosen=next((by_id[i] for i in reversed(ids[:ids.index(delivery_id)+1]) if i in by_id),None)
+        source=next((x for x in listing['deliveries'] if chosen and x['delivery_id']==chosen['delivery_id']),None)
+        if chosen and source:chosen={**chosen,'version':source['version']}
+        identity='UNKNOWN'
+        if chosen:
+            identities=[f['identity_status'] for item,f in self._history.get((vendor,library,view.upper(),path),[])
+                        if item['record']['delivery_id']==chosen['delivery_id'] and f['file_id']==chosen.get('file_id')]
+            if len(identities)==1:identity=identities[0]
+        return {'vendor':vendor,'library':library,'view':view.upper(),'path':path,'at_delivery_id':delivery_id,
+                'occurrence':chosen,'source_root':source['root'] if source else None,
+                'delivery_record_path':self._delivery(vendor,library,source['version'],source['delivery_id'])['path'] if source else None,
+                'absolute_path':posixpath.join(source['root'],path) if source else None,
+                'identity_status':identity,'index_status':status,'meaning':'LAST_RECORDED_APPEARANCE_NOT_EFFECTIVE_OR_CONTENT'}
 
     def get_history_index(self,vendor,library):
         result={}
         for v,l,kind,path in self._history:
             if (v,l)==(vendor,library):result.setdefault(kind,{})[path]=self.get_file_history(v,l,kind,path)
-        return {'context':{'vendor':vendor,'library':library},'views':result}
+        return {'context':{'vendor':vendor,'library':library},'index_status':self.file_index_status(vendor,library)['status'],'views':result}
+
+    def file_index_status(self,vendor,library):
+        _,status=self._verified_file_index(vendor,library)
+        return {'vendor':vendor,'library':library,'status':status,
+                'message':{'VALID':'索引与已归档交付一致','MISSING':'尚未建立索引，查询使用归档交付',
+                           'STALE':'索引未包含最新归档或需要迁移；查询使用归档交付',
+                           'ORDER_UNCONFIRMED':'交付顺序未确认，不能使用有序索引；查询使用归档交付',
+                           'INVALID':'索引与归档记录不一致，查询使用归档交付；请核验后重建'}[status]}
+
+    def get_logical_file_timeline(self,vendor,library,view,file_key):
+        """Combine only explicitly confirmed file identities, including path changes."""
+        if not isinstance(file_key,str) or not file_key.strip():raise ValueError('必须指定非空文件身份')
+        rows=[];unconfirmed=0
+        for (v,l,kind,path),items in self._history.items():
+            if (v,l,kind)!=(vendor,library,view.upper()):continue
+            for item,f in items:
+                if f.get('file_key')!=file_key:continue
+                if f.get('identity_status')!='CONFIRMED' or f.get('classification')!='RESOLVED':
+                    unconfirmed+=1;continue
+                d=item['record']
+                rows.append({'delivery_id':d['delivery_id'],'version':d['supplier_version'],
+                             'path':path,'file_id':f['file_id'],'file_key':file_key,
+                             'identity_status':'CONFIRMED','root':d['source_root']})
+        ids=[x['delivery_id'] for x in rows]
+        if len(set(ids))!=len(ids):raise ValueError('同一交付中存在多个已确认的相同文件身份，无法唯一合并')
+        listing=self.list_deliveries(vendor,library)
+        if listing['ordering_status']=='CONFIRMED':
+            rank={x['delivery_id']:i for i,x in enumerate(listing['deliveries'])}
+            rows.sort(key=lambda x:rank[x['delivery_id']])
+        return {'vendor':vendor,'library':library,'view':view.upper(),'file_key':file_key,
+                'occurrences':rows,'unconfirmed_count':unconfirmed,'ordering_status':listing['ordering_status'],
+                'order_basis':listing['order_basis'],'meaning':'CONFIRMED_IDENTITY_NOT_CONTENT_CHANGE'}
 
     def _revision(self,vendor,library,owner,revision):
         matches=[r for e in self.entries if (e['vendor'],e['library'],e['ip'])==(vendor,library,owner) for r in e['versions'] if r['revision_id']==revision]
@@ -354,12 +475,30 @@ class LibraryDataQuery:
         return {'from':rev_a,'to':rev_b,'meaning':'SOURCE_RELATIONSHIP_ONLY','changes':changes_between(members_map(a),members_map(b))}
 
 
+def parse_recorded_file(work,runs,vendor,library,delivery_id,view,path):
+    """Parse an exact archived v1 Delivery row; do not invent identities."""
+    from .file_index import _path
+    from ai_lib_qor.facts.parsers import parse_delivery_file
+    _path(path);q=LibraryDataQuery(work,runs)
+    matches=[x for x in q.deliveries if (x['record']['vendor_id'],x['record']['source_library_id'],x['record']['delivery_id'])==(vendor,library,delivery_id)]
+    if len(matches)!=1:raise ValueError('交付不存在或不唯一')
+    item=matches[0];rows=[f for f in item['files'] if f['relative_path']==path and _view(f['view'],path)==view.upper()]
+    if len(rows)!=1 or not rows[0].get('file_id') or rows[0]['classification']!='RESOLVED':
+        raise ValueError('交付文件不存在、身份不唯一或分类未解决')
+    ref=(library,delivery_id,rows[0]['file_id'])
+    if len(q._refs[ref])!=1:raise ValueError('旧 FileFacts 引用跨供应商不唯一')
+    return parse_delivery_file(item['record'],rows[0]['file_id'])
+
+
 def query_data(work,runs,kind,**options):
     if not Path(work).is_dir():raise ValueError('work 目录不存在')
     required={'raw':('vendor','library','version'),'simple-raw':('vendor','library','version'),'history':('vendor','library','view','path'),'history-index':('vendor','library'),
+              'history-at':('vendor','library','view','path','delivery_id'),'index-status':('vendor','library'),'index-v3':('vendor','library'),
+              'logical-history':('vendor','library','view','file_key'),
               'effective':('vendor','library','owner','revision'),'effective-v2':('vendor','library','set_id','revision'),'simple-effective':('vendor','library','owner','revision'),'formal':('vendor','library','version','snapshot'),
               'simple-formal':('vendor','library','version','snapshot'),'compare':('vendor','library','owner','revision','other_revision'),
               'deliveries':('vendor','library'),'compare-revisions':('vendor','library','set_id','revision','other_revision'),
+              'compare-revisions-logical':('vendor','library','set_id','revision','other_revision'),
               'changed-pairs':('vendor','library','set_id','revision','other_revision'),
               'formal-effective':('vendor','library','set_id','revision','version','snapshot'),
               'effective-timeline':('vendor','library','set_id','view','path','revisions')}
@@ -369,8 +508,12 @@ def query_data(work,runs,kind,**options):
     if kind=='effective-v2':
         return get_effective_v2_files(work,options['vendor'],options['library'],options['set_id'],options['revision'],options.get('view'))
     q=LibraryDataQuery(work,runs);v=options.get('vendor');l=options.get('library');view=options.get('view')
+    if kind=='index-v3':
+        from .file_index_v3 import build_library_index
+        return {'index_status':q.file_index_status(v,l)['status'],'index':build_library_index(work,v,l,query=q)}
     if kind=='deliveries':return q.list_deliveries(v,l)
     if kind=='compare-revisions':return q.compare_revisions(v,l,options['set_id'],options['revision'],options['other_revision'])
+    if kind=='compare-revisions-logical':return q.compare_revisions_logical(v,l,options['set_id'],options['revision'],options['other_revision'])
     if kind=='changed-pairs':return q.get_changed_file_pairs(v,l,options['set_id'],options['revision'],options['other_revision'])
     if kind=='formal-effective':return q.compare_formal_vs_effective(v,l,options['version'],options['snapshot'],options['set_id'],options['revision'])
     if kind=='effective-timeline':return q.file_timeline(v,l,options['set_id'],view,options['path'],options['revisions'])
@@ -385,6 +528,9 @@ def query_data(work,runs,kind,**options):
         from .simple_sources import simple_effective
         return simple_effective(q,v,l,options['owner'],options['revision'])
     if kind=='history':return q.get_file_history(v,l,view,options['path'])
+    if kind=='history-at':return q.get_file_at_delivery(v,l,view,options['path'],options['delivery_id'])
+    if kind=='index-status':return q.file_index_status(v,l)
+    if kind=='logical-history':return q.get_logical_file_timeline(v,l,view,options['file_key'])
     if kind=='history-index':return q.get_history_index(v,l)
     if kind=='effective':return q.get_effective_files(v,l,options['owner'],options['revision'],view)
     if kind=='formal':return q.get_formal_files(v,l,options['version'],options['snapshot'],view)

@@ -1,0 +1,45 @@
+{
+  "schema_version": "delivery_source_evidence.v1",
+  "scan_id": "scan_8afab99922a049c2bc54d35c80bf462e",
+  "files": [
+    {
+      "path": "gds/core.gds",
+      "size": 43,
+      "mtime_ns": 1795081346530799815
+    },
+    {
+      "path": "lef/core.lef",
+      "size": 70,
+      "mtime_ns": 1795081346530594861
+    },
+    {
+      "path": "lib/core.lib",
+      "size": 63,
+      "mtime_ns": 1795081346530705198
+    },
+    {
+      "path": "verilog/core.v",
+      "size": 43,
+      "mtime_ns": 1795081346530930330
+    }
+  ],
+  "order_basis": "configured_order",
+  "classification": {
+    "gds/core.gds": {
+      "basis": null,
+      "corner_hint": null
+    },
+    "lef/core.lef": {
+      "basis": "explicit",
+      "corner_hint": null
+    },
+    "lib/core.lib": {
+      "basis": "explicit",
+      "corner_hint": null
+    },
+    "verilog/core.v": {
+      "basis": null,
+      "corner_hint": null
+    }
+  }
+}

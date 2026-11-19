@@ -1,5 +1,5 @@
 (() => {
-  const paths = new Set(['/scan-all','/scan','/formal-sync','/runs','/version-run','/effective-v2/run','/ip-run','/effective/apply','/evidence','/registration']);
+  const paths = new Set(['/scan-all','/scan','/formal-sync','/runs','/version-run','/effective-v2/run','/ip-run','/index-v3/run','/index-v3/ip','/effective/apply','/evidence','/registration']);
   const overlay=document.getElementById('operation-overlay'), reopen=document.getElementById('operation-reopen');
   const title=document.getElementById('operation-title'), message=document.getElementById('operation-message');
   const bar=document.getElementById('operation-bar'), count=document.getElementById('operation-count');
@@ -22,7 +22,9 @@
   }
   document.addEventListener('submit',async event=>{
     const form=event.target;
-    if (!(form instanceof HTMLFormElement) || form.method.toLowerCase()!=='post' || !paths.has(new URL(form.action,location.href).pathname) || event.defaultPrevented || !window.crypto?.getRandomValues) return;
+    if (!(form instanceof HTMLFormElement)) return;
+    const target=new URL(event.submitter?.hasAttribute('formaction') ? event.submitter.formAction : form.action,location.href);
+    if (form.method.toLowerCase()!=='post' || target.origin!==location.origin || !paths.has(target.pathname) || event.defaultPrevented || !window.crypto?.getRandomValues) return;
     event.preventDefault();
     if(active)return;
     active=true;const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);
@@ -39,7 +41,7 @@
     };
     poll();
     try {
-      const response=await fetch(form.action || location.href,{method:'POST',body:data,credentials:'same-origin'});
+      const response=await fetch(target.href,{method:'POST',body:data,credentials:'same-origin'});
       try {const status=await fetch(`/operations/${id}`,{cache:'no-store'});if(status.ok){last=await status.json();display(last);}} catch (_) {}
       if(!response.ok){
         const page=new DOMParser().parseFromString(await response.text(),'text/html');

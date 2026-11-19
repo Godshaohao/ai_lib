@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
-        self.check = json.loads((ROOT / 'tests/fixtures/check_result.json').read_text())
+        self.check = json.loads((ROOT / 'exports/pipeline_demo/run_demo_001.json').read_text())
 
     def test_reject_mismatching_summary(self):
         self.check['summary']['failed_checks'] = 999

@@ -1,0 +1,224 @@
+{
+  "simulated": true,
+  "vendors": 3,
+  "libraries": 5,
+  "deliveries": 20,
+  "effective_revisions": 20,
+  "business_ips": 3,
+  "reports": [
+    {
+      "vendor": "SIM_A",
+      "library": "lib_a1",
+      "set_id": "lib_a1_ip",
+      "status": {
+        "id": "run_e6af98b210d8422588b5ac3ee95976ff",
+        "owner": {
+          "vendor": "SIM_A",
+          "library": "lib_a1",
+          "ip": "lib_a1_ip"
+        },
+        "plan": "v3 索引整体 IP 检查",
+        "target": "lib_a1_ip",
+        "target_kind": "IP_VERSION_BATCH",
+        "state": "SUCCEEDED",
+        "started_at": "2026-11-19T09:42:26.859732+00:00",
+        "children": [
+          {
+            "id": "run_d9cbc35792554601b3e714b9a2e745b7",
+            "revision": "rev_0001",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 0,
+              "files_with_confirmed_content_change": 0,
+              "failed_checks": 0,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          },
+          {
+            "id": "run_d3c8a4e2b92d45b185c6285524eb2528",
+            "revision": "rev_0002",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 1,
+              "files_with_confirmed_content_change": 1,
+              "failed_checks": 0,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          },
+          {
+            "id": "run_8047f79b228649bb99b14dac7feb35c9",
+            "revision": "rev_0003",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 0,
+              "files_with_confirmed_content_change": 0,
+              "failed_checks": 0,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          },
+          {
+            "id": "run_3e671a59aed24225804d9448c3d6f164",
+            "revision": "rev_0004",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 1,
+              "files_with_confirmed_content_change": 1,
+              "failed_checks": 1,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          }
+        ],
+        "facts_parsed": 6,
+        "facts_reused": 5,
+        "finished_at": "2026-11-19T09:42:27.024536+00:00"
+      }
+    },
+    {
+      "vendor": "SIM_B",
+      "library": "lib_b1",
+      "set_id": "lib_b1_ip",
+      "status": {
+        "id": "run_ccfbaf00aa3743de9e4dac6be54329c8",
+        "owner": {
+          "vendor": "SIM_B",
+          "library": "lib_b1",
+          "ip": "lib_b1_ip"
+        },
+        "plan": "v3 索引整体 IP 检查",
+        "target": "lib_b1_ip",
+        "target_kind": "IP_VERSION_BATCH",
+        "state": "SUCCEEDED",
+        "started_at": "2026-11-19T09:42:28.032639+00:00",
+        "children": [
+          {
+            "id": "run_1c438370bc40423aa9a16172095c6b6f",
+            "revision": "rev_0001",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 0,
+              "files_with_confirmed_content_change": 0,
+              "failed_checks": 0,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          },
+          {
+            "id": "run_2d3db8dac55846bab3ae6e6664872dbd",
+            "revision": "rev_0002",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 1,
+              "files_with_confirmed_content_change": 1,
+              "failed_checks": 0,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          },
+          {
+            "id": "run_6da089f0a45843b6997e1cfeb13245c4",
+            "revision": "rev_0003",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 0,
+              "files_with_confirmed_content_change": 0,
+              "failed_checks": 0,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          },
+          {
+            "id": "run_d71488525077417fada0c41eb66cc85e",
+            "revision": "rev_0004",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 1,
+              "files_with_confirmed_content_change": 1,
+              "failed_checks": 1,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          }
+        ],
+        "facts_parsed": 6,
+        "facts_reused": 5,
+        "finished_at": "2026-11-19T09:42:28.195714+00:00"
+      }
+    },
+    {
+      "vendor": "SIM_C",
+      "library": "lib_c1",
+      "set_id": "lib_c1_ip",
+      "status": {
+        "id": "run_825bf9fcb8b94e06895abf0028069fe6",
+        "owner": {
+          "vendor": "SIM_C",
+          "library": "lib_c1",
+          "ip": "lib_c1_ip"
+        },
+        "plan": "v3 索引整体 IP 检查",
+        "target": "lib_c1_ip",
+        "target_kind": "IP_VERSION_BATCH",
+        "state": "SUCCEEDED",
+        "started_at": "2026-11-19T09:42:29.725369+00:00",
+        "children": [
+          {
+            "id": "run_55290c7afb674852a6efd7257c5a4c78",
+            "revision": "rev_0001",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 0,
+              "files_with_confirmed_content_change": 0,
+              "failed_checks": 0,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          },
+          {
+            "id": "run_cf0fa132bb8545c98e3c8b2f1028f6f8",
+            "revision": "rev_0002",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 1,
+              "files_with_confirmed_content_change": 1,
+              "failed_checks": 0,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          },
+          {
+            "id": "run_fb3851fec1e9439a993176b410addef4",
+            "revision": "rev_0003",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 0,
+              "files_with_confirmed_content_change": 0,
+              "failed_checks": 0,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          },
+          {
+            "id": "run_2bcad3b77edb4ef5a687b7b4e3d9035a",
+            "revision": "rev_0004",
+            "state": "SUCCEEDED",
+            "summary": {
+              "files_with_new_source": 1,
+              "files_with_confirmed_content_change": 1,
+              "failed_checks": 1,
+              "inconclusive_checks": 0
+            },
+            "error": null
+          }
+        ],
+        "facts_parsed": 6,
+        "facts_reused": 5,
+        "finished_at": "2026-11-19T09:42:29.887089+00:00"
+      }
+    }
+  ],
+  "note": "V04 Liberty 故意增加 B 引脚，用于验证质量 FAIL 与执行成功的区别。"
+}

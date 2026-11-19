@@ -1,0 +1,55 @@
+{
+  "observation_id": "formal_503a693592a145dfbd3d7bb1ff8c98d4",
+  "formal_nl_id": "NL_SIM",
+  "root": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/v3_multi_vendor_20versions_20261119_review/formal/SIM_C/lib_c1",
+  "observed_at": "2026-11-19T09:42:29.059377+00:00",
+  "status": "COMPLETE",
+  "files": [
+    {
+      "path": "lib/core.lib",
+      "target": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/v3_multi_vendor_20versions_20261119_review/raw/SIM_C/lib_c1/V01/lib/core.lib",
+      "link_status": "OK",
+      "link_target": "../../../../raw/SIM_C/lib_c1/V01/lib/core.lib",
+      "source_status": "MATCHED_RAW",
+      "source": {
+        "vendor": "SIM_C",
+        "library": "lib_c1",
+        "version": "V01",
+        "delivery_id": "delivery_4012efafb966464fae97ac687fe0e0c7",
+        "file_id": "f_0a2bfac0bed28060bc0acbdb",
+        "file_key": "lib_c1:liberty:core"
+      }
+    },
+    {
+      "path": "lef/core.lef",
+      "target": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/exports/v3_multi_vendor_20versions_20261119_review/raw/SIM_C/lib_c1/V01/lef/core.lef",
+      "link_status": "OK",
+      "link_target": "../../../../raw/SIM_C/lib_c1/V01/lef/core.lef",
+      "source_status": "MATCHED_RAW",
+      "source": {
+        "vendor": "SIM_C",
+        "library": "lib_c1",
+        "version": "V01",
+        "delivery_id": "delivery_4012efafb966464fae97ac687fe0e0c7",
+        "file_id": "f_bcfdf1f237255fe47c326ad8",
+        "file_key": "lib_c1:lef:core"
+      }
+    }
+  ],
+  "errors": [],
+  "previous_success_id": null,
+  "changes": null,
+  "snapshot_id": "snap_10eef39cd09348c9ada30cbc6726189c",
+  "snapshot_action": "CREATED",
+  "snapshot_note": "已保存部分覆盖快照",
+  "snapshots": [
+    {
+      "vendor": "SIM_C",
+      "library": "lib_c1",
+      "snapshot_id": "snap_10eef39cd09348c9ada30cbc6726189c",
+      "action": "CREATED",
+      "note": "已保存部分覆盖快照",
+      "file_index_action": "APPEND"
+    }
+  ]
+}

@@ -1,0 +1,149 @@
+{
+  "owner": {
+    "vendor": "SIM_A",
+    "library": "lib_a1",
+    "ip": "lib_a1_ip"
+  },
+  "versions": [
+    {
+      "revision": "rev_0001",
+      "baseline": null,
+      "plan": "v3 索引范围检查",
+      "run_id": "run_d9cbc35792554601b3e714b9a2e745b7",
+      "state": "SUCCEEDED",
+      "error": null,
+      "index_source_changes": null,
+      "index_source_added": null,
+      "index_source_removed": null,
+      "summary": {
+        "files_with_new_source": 0,
+        "files_with_confirmed_content_change": 0,
+        "failed_checks": 0,
+        "inconclusive_checks": 0
+      },
+      "comparison_count": 0,
+      "checks": [
+        {
+          "check_id": "LEF_LIBERTY_PIN_MATCH",
+          "scope_file_keys": [
+            "lib_a1:lef:core",
+            "lib_a1:liberty:core"
+          ],
+          "result": "PASS",
+          "coverage": "COMPLETE",
+          "facts_refs": [
+            "facts_a6dcaaa0b2be67c9da674c3e",
+            "facts_1e5fb1ff75cac6b06cccb011"
+          ],
+          "detail": "所选 Macro 的信号 Pin 名称和方向一致；未检查 PG Pin 或时序弧"
+        }
+      ],
+      "note": "仅比较所选 LEF 的 Macro SIZE、Pin，并检查目标版本 LEF/Liberty 信号 Pin 对齐；不比较新旧 Liberty 内容。未覆盖的文件和检查不代表通过，检查不等于采纳。 已核对交付时文件元信息；大小和时间一致不证明历史内容一致。"
+    },
+    {
+      "revision": "rev_0002",
+      "baseline": "rev_0001",
+      "plan": "v3 索引范围检查",
+      "run_id": "run_d3c8a4e2b92d45b185c6285524eb2528",
+      "state": "SUCCEEDED",
+      "error": null,
+      "index_source_changes": 1,
+      "index_source_added": 0,
+      "index_source_removed": 0,
+      "summary": {
+        "files_with_new_source": 1,
+        "files_with_confirmed_content_change": 1,
+        "failed_checks": 0,
+        "inconclusive_checks": 0
+      },
+      "comparison_count": 1,
+      "checks": [
+        {
+          "check_id": "LEF_LIBERTY_PIN_MATCH",
+          "scope_file_keys": [
+            "lib_a1:lef:core",
+            "lib_a1:liberty:core"
+          ],
+          "result": "PASS",
+          "coverage": "COMPLETE",
+          "facts_refs": [
+            "facts_e31480ea810ada7fb09a9b5a",
+            "facts_1e5fb1ff75cac6b06cccb011"
+          ],
+          "detail": "所选 Macro 的信号 Pin 名称和方向一致；未检查 PG Pin 或时序弧"
+        }
+      ],
+      "note": "仅比较所选 LEF 的 Macro SIZE、Pin，并检查目标版本 LEF/Liberty 信号 Pin 对齐；不比较新旧 Liberty 内容。未覆盖的文件和检查不代表通过，检查不等于采纳。 已核对交付时文件元信息；大小和时间一致不证明历史内容一致。"
+    },
+    {
+      "revision": "rev_0003",
+      "baseline": "rev_0002",
+      "plan": "v3 索引范围检查",
+      "run_id": "run_8047f79b228649bb99b14dac7feb35c9",
+      "state": "SUCCEEDED",
+      "error": null,
+      "index_source_changes": 1,
+      "index_source_added": 0,
+      "index_source_removed": 0,
+      "summary": {
+        "files_with_new_source": 0,
+        "files_with_confirmed_content_change": 0,
+        "failed_checks": 0,
+        "inconclusive_checks": 0
+      },
+      "comparison_count": 1,
+      "checks": [
+        {
+          "check_id": "LEF_LIBERTY_PIN_MATCH",
+          "scope_file_keys": [
+            "lib_a1:lef:core",
+            "lib_a1:liberty:core"
+          ],
+          "result": "PASS",
+          "coverage": "COMPLETE",
+          "facts_refs": [
+            "facts_e31480ea810ada7fb09a9b5a",
+            "facts_d6dc9c0da8951ff12c370b24"
+          ],
+          "detail": "所选 Macro 的信号 Pin 名称和方向一致；未检查 PG Pin 或时序弧"
+        }
+      ],
+      "note": "仅比较所选 LEF 的 Macro SIZE、Pin，并检查目标版本 LEF/Liberty 信号 Pin 对齐；不比较新旧 Liberty 内容。未覆盖的文件和检查不代表通过，检查不等于采纳。 已核对交付时文件元信息；大小和时间一致不证明历史内容一致。"
+    },
+    {
+      "revision": "rev_0004",
+      "baseline": "rev_0003",
+      "plan": "v3 索引范围检查",
+      "run_id": "run_3e671a59aed24225804d9448c3d6f164",
+      "state": "SUCCEEDED",
+      "error": null,
+      "index_source_changes": 2,
+      "index_source_added": 0,
+      "index_source_removed": 0,
+      "summary": {
+        "files_with_new_source": 1,
+        "files_with_confirmed_content_change": 1,
+        "failed_checks": 1,
+        "inconclusive_checks": 0
+      },
+      "comparison_count": 1,
+      "checks": [
+        {
+          "check_id": "LEF_LIBERTY_PIN_MATCH",
+          "scope_file_keys": [
+            "lib_a1:lef:core",
+            "lib_a1:liberty:core"
+          ],
+          "result": "FAIL",
+          "coverage": "COMPLETE",
+          "facts_refs": [
+            "facts_69644d4f1fc6502a064ebe08",
+            "facts_77a4ff192b4e8d3219ae04c8"
+          ],
+          "detail": "CORE: Liberty 多出 B"
+        }
+      ],
+      "note": "仅比较所选 LEF 的 Macro SIZE、Pin，并检查目标版本 LEF/Liberty 信号 Pin 对齐；不比较新旧 Liberty 内容。未覆盖的文件和检查不代表通过，检查不等于采纳。 已核对交付时文件元信息；大小和时间一致不证明历史内容一致。"
+    }
+  ]
+}

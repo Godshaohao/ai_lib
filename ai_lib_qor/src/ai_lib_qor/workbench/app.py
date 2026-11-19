@@ -16,9 +16,22 @@ from ai_lib_qor.application.library_catalog import LibraryCatalog
 from .progress import OperationProgress
 
 RUN_ID = re.compile(r'run_[0-9a-f]{32}\Z')
+FACT_ARTIFACT = re.compile(r'facts_[0-9a-f]{24}\.json\Z')
 
 
-def sidebar_groups(entries, configured):
+def v3_profile_names(plans):
+    result=[]
+    for name in plans_in(plans):
+        if not re.fullmatch(r'v3_profile_[A-Za-z0-9_.-]+\.json',name):continue
+        try:
+            data=json.loads(select_plan(plans,name).read_text(encoding='utf-8'))
+            if isinstance(data,dict) and set(data)=={'pin_pairs'} and isinstance(data['pin_pairs'],list) and data['pin_pairs']:
+                result.append(name)
+        except (OSError,ValueError,TypeError):continue
+    return result
+
+
+def sidebar_groups(entries, configured, work=None):
     grouped = {}
     for entry in entries:
         key = (entry['vendor'], entry['library'])
@@ -26,6 +39,17 @@ def sidebar_groups(entries, configured):
     for source in configured:
         key = (source['vendor_id'], source['source_library_id'])
         grouped.setdefault(key, {'vendor':key[0], 'library':key[1], 'ips':[], 'configured':False})['configured'] = True
+    if work:
+        from ai_lib_qor.application.data_query import list_effective_v2
+        for (vendor,library),group in grouped.items():
+            newest={}
+            for row in list_effective_v2(work,vendor,library):
+                if row['owner']['type']!='BUSINESS_IP':continue
+                key=(row['set_id'],row['owner']['id'])
+                if key not in newest or int(row['revision'][4:])>int(newest[key]['revision'][4:]):newest[key]=row
+            group['v2_ips']=[{'set_id':row['set_id'],'ip':row['owner']['id'],'revision':row['revision']}
+                             for key,row in sorted(newest.items()) if not any(x['ip']==key[1] for x in group['ips'])]
+            group['v2_ip_count']=len({x['ip'] for x in group['v2_ips']})
     return [grouped[key] for key in sorted(grouped)]
 
 
@@ -50,6 +74,7 @@ def create_app(plan_root, runs_root, work_root=None):
             abort(403)
         labels={'scan_all':'扫描全部 RAW','scan_source':'扫描 RAW','formal_sync':'同步正式来源',
                 'start_run':'执行检查','start_version_run':'单版本检查','start_v2_run':'单版本检查','start_ip_run':'整体 IP 检查',
+                'start_v3_index_run':'v3 索引单版本检查','start_v3_index_ip':'v3 索引整体 IP 检查',
                 'apply_effective':'更新有效版本','extract_evidence':'提取解析证据','registration':'登记交付'}
         ident=request.form.get('_operation_id','') if request.method=='POST' else ''
         if ident and request.endpoint in labels:
@@ -93,7 +118,7 @@ def create_app(plan_root, runs_root, work_root=None):
         overview=catalog.overview()
         scan_rows=overview['scan_rows']
         formal_rows=overview['formal_observation_rows']
-        sidebar_libraries = sidebar_groups(entries, [dict(vendor_id=k[0],source_library_id=k[1]) for k in catalog.libraries])
+        sidebar_libraries = sidebar_groups(entries, [dict(vendor_id=k[0],source_library_id=k[1]) for k in catalog.libraries],work_root)
         chosen = tuple(request.args.get(x, '') for x in ('vendor', 'library', 'ip'))
         selected = next((e for e in entries if (e['vendor'], e['library'], e['ip']) == chosen), None)
         if any(chosen) and selected is None: abort(400)
@@ -196,7 +221,7 @@ def create_app(plan_root, runs_root, work_root=None):
     def library_data_api():
         from ai_lib_qor.application.data_query import query_data
         if not work_root:return jsonify({'error':'未配置 work 目录'}),400
-        names=('vendor','library','version','view','path','owner','set_id','revision','snapshot','delivery_id','other_revision')
+        names=('vendor','library','version','view','path','file_key','owner','set_id','revision','snapshot','delivery_id','other_revision')
         try:
             options={name:request.args.get(name) for name in names};options['revisions']=request.args.getlist('revisions')
             result=query_data(work_root,runs,request.args.get('kind',''),**options)
@@ -213,7 +238,14 @@ def create_app(plan_root, runs_root, work_root=None):
         if context is None: abort(404)
         entries=catalog.entries
         from ai_lib_qor.application.data_query import list_effective_v2, query_data
+        try:index_status=query_data(work_root,runs,'index-status',vendor=vendor,library=library)
+        except (OSError,ValueError,KeyError) as exc:index_status={'status':'INVALID','message':'索引状态无法核验：'+str(exc)}
         v2_versions=list_effective_v2(work_root,vendor,library)
+        v2_ip_sets={}
+        for item in v2_versions:
+            if item['owner']['type']!='BUSINESS_IP' or any(x['ip']==item['owner']['id'] for x in context.get('ips',[])):continue
+            key=(item['set_id'],item['owner']['id'])
+            if key not in v2_ip_sets or int(item['revision'][4:])>int(v2_ip_sets[key]['revision'][4:]):v2_ip_sets[key]=item
         set_id=request.args.get('set_id','');revision=request.args.get('revision','');v2_selected=None;v2_plans=[];v2_blocked=None
         v2_comparison=None;v2_comparison_error=None;v2_baselines=[];v2_baseline=''
         if set_id or revision:
@@ -233,9 +265,9 @@ def create_app(plan_root, runs_root, work_root=None):
             try:load_v2_for_check(library_folder(work_root,vendor,library)/f'effective_{set_id}_{int(revision[4:]):03d}.json',work_root)
             except (OSError,ValueError,KeyError) as exc:v2_blocked=str(exc)
         return render_template('library_workspace.html', vendor=vendor, library=library,
-                               sidebar_libraries=sidebar_groups(entries, [dict(vendor_id=k[0],source_library_id=k[1]) for k in catalog.libraries]),
+                               sidebar_libraries=sidebar_groups(entries, [dict(vendor_id=k[0],source_library_id=k[1]) for k in catalog.libraries],work_root),
                                entries=entries, selected=None, view='library', v2_versions=v2_versions,v2_selected=v2_selected,v2_plans=v2_plans,v2_blocked=v2_blocked,
-                               v2_comparison=v2_comparison,v2_comparison_error=v2_comparison_error,v2_baselines=v2_baselines,v2_baseline=v2_baseline,csrf=session['csrf'], **context)
+                               v2_comparison=v2_comparison,v2_comparison_error=v2_comparison_error,v2_baselines=v2_baselines,v2_baseline=v2_baseline,index_status=index_status,v3_profiles=v3_profile_names(plans),v2_ip_sets=list(v2_ip_sets.values()),csrf=session['csrf'], **context)
 
     @app.get('/effective-v2')
     def effective_v2_page():
@@ -376,6 +408,26 @@ def create_app(plan_root, runs_root, work_root=None):
         if result['state']!='SUCCEEDED':finish_progress('FAILED',result.get('error','检查执行失败'))
         return redirect(url_for('detail',run_id=result['id']),code=303)
 
+    def execute_v3_index(batch):
+        from ai_lib_qor.application.v3_checks import run_v3_ip,run_v3_revision
+        args={key:request.form.get(key,'') for key in ('vendor','library','set_id','revision')}
+        name=request.form.get('profile','')
+        if name not in v3_profile_names(plans):abort(400)
+        try:
+            profile=json.loads(select_plan(plans,name).read_text(encoding='utf-8'))
+            options={'vendor':args['vendor'],'library':args['library'],'set_id':args['set_id'],'profile':profile,'progress':progress}
+            result=run_v3_ip(work_root,runs,**options) if batch else run_v3_revision(work_root,runs,revision=args['revision'],**options)
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            return render_template('operation_error.html',message=str(exc),params={}),409
+        if result['state']!='SUCCEEDED':finish_progress(result['state'],result.get('error','部分版本执行失败，请查看各版本运行记录'))
+        return redirect(url_for('detail',run_id=result['id']),code=303)
+
+    @app.post('/index-v3/run')
+    def start_v3_index_run():return execute_v3_index(False)
+
+    @app.post('/index-v3/ip')
+    def start_v3_index_ip():return execute_v3_index(True)
+
     @app.post('/effective/apply')
     def apply_effective():
         from ai_lib_qor.versions.store import read_json
@@ -488,6 +540,8 @@ def create_app(plan_root, runs_root, work_root=None):
 
     def lookup(run_id):
         if not RUN_ID.fullmatch(run_id): abort(404)
+        folder=runs/run_id
+        if folder.is_symlink() or not folder.is_dir() or not folder.resolve().is_relative_to(runs):abort(404)
         item = next((item for item in history(runs) if item['id'] == run_id), None)
         if item is None: abort(404)
         return item
@@ -495,7 +549,8 @@ def create_app(plan_root, runs_root, work_root=None):
     @app.get('/runs/<run_id>')
     def detail(run_id):
         item = lookup(run_id)
-        artifacts = [name for name in ARTIFACTS if (runs / run_id / name).is_file()]
+        artifacts = [name for name in ARTIFACTS if (runs / run_id / name).is_file() and not (runs / run_id / name).is_symlink()]
+        artifacts.extend(sorted(p.name for p in (runs/run_id).glob('facts_*.json') if FACT_ARTIFACT.fullmatch(p.name) and p.is_file() and not p.is_symlink()))
         inputs = []
         quality = None
         try:
@@ -536,7 +591,7 @@ def create_app(plan_root, runs_root, work_root=None):
     def artifact(run_id, name):
         lookup(run_id)
         path = runs / run_id / name
-        if name not in ARTIFACTS or path.is_symlink() or not path.is_file(): abort(404)
+        if (name not in ARTIFACTS and not FACT_ARTIFACT.fullmatch(name)) or path.is_symlink() or not path.is_file(): abort(404)
         return send_file(path, as_attachment=True, download_name=name)
 
     return app

@@ -1,0 +1,27 @@
+{
+  "schema_version": "delivery_source_evidence.v1",
+  "scan_id": "scan_57e3f98b3473406ca8d69dd1a38735af",
+  "files": [
+    {
+      "path": "lef/core.lef",
+      "size": 70,
+      "mtime_ns": 1795081346532050651
+    },
+    {
+      "path": "lib/core.lib",
+      "size": 93,
+      "mtime_ns": 1795081346532116388
+    }
+  ],
+  "order_basis": "configured_order",
+  "classification": {
+    "lef/core.lef": {
+      "basis": "explicit",
+      "corner_hint": null
+    },
+    "lib/core.lib": {
+      "basis": "explicit",
+      "corner_hint": null
+    }
+  }
+}

@@ -50,7 +50,7 @@ def check_plan(plan_path, out):
     result=build_check_result(target=target_ref,baseline=base_ref,run_id=plan['run_id'],ruleset_id=plan['ruleset_id'],run_at=plan['run_at'],comparisons=comparisons,pin_pairs=pairs,plugin_ids=plan.get('plugins'),**extra)
     write_atomic(out,result,immutable=True);return {'check_run_id':result['check_run_id'],'output':str(out)}
 
-def render_report(check_path, *, html=None, excel=None, delivery=(), facts=(), source_snapshot=(), formal_snapshot=None, target_revision=None, baseline_revision=None, accepted_revision=None, effective_index=None, work_root=None):
+def render_report(check_path, *, html=None, excel=None, delivery=(), facts=(), source_snapshot=(), formal_snapshot=None, target_revision=None, baseline_revision=None, accepted_revision=None, effective_index=None, work_root=None, library_index=None,source_comparison=None):
     context_options={'formal_snapshot':formal_snapshot,'target_revision':target_revision,'baseline_revision':baseline_revision,'accepted_revision':accepted_revision,'effective_index':effective_index}
     if not html and not excel:raise ValueError('至少指定 --html 或 --excel')
     context={'deliveries':[read_json(x,'delivery_record') for x in delivery], 'facts':[read_json(x,'file_facts') for x in facts], 'source_snapshots':[read_json(x,'formal_snapshot') for x in source_snapshot]}
@@ -87,7 +87,7 @@ def render_report(check_path, *, html=None, excel=None, delivery=(), facts=(), s
                 if len(matches)!=1:raise ValueError(f'质量检查事实与目标版本文件范围不匹配: {fact_id}')
     if v2_context:
         result=dict(result);result['evidence_note']+=' v2 版本来源已核对；工作簿的旧版有效成员上下文未填充。'
-    report=build_report(result,**context);outputs=[]
+    report=build_report(result,library_index=library_index,source_comparison=source_comparison,**context);outputs=[]
     if html:
         path=Path(html);path.parent.mkdir(parents=True,exist_ok=True)
         with path.open('x',encoding='utf-8') as out:out.write(render_html(report))

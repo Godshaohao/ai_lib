@@ -23,12 +23,12 @@ class L1WebTests(unittest.TestCase):
             with client.session_transaction() as session: session['csrf']='token'
             self.assertEqual(client.post('/scan',data={'csrf':'token','vendor':'v','library':'lib'}).status_code,303)
             body=client.get('/library?vendor=v&library=lib').get_data(as_text=True)
-            self.assertIn('未配置可确认的版本目录',body);self.assertIn('尚无已登记 IP',body)
+            self.assertIn('没有识别出交付版本目录',body);self.assertIn('尚未建立该来源库与 BusinessIP',body)
             (raw/'file.lef').unlink();raw.rmdir()
             self.assertEqual(client.post('/scan',data={'csrf':'token','vendor':'v','library':'lib'}).status_code,303)
             body=client.get('/library?vendor=v&library=lib').get_data(as_text=True)
             self.assertIn('FAILED',body);self.assertIn('扫描未完整完成',body)
-            self.assertFalse(list(work.rglob('delivery.json')))
+            self.assertFalse(list(work.glob('libraries/*/*/delivery_*.json')))
 
     def test_existing_library_connects_to_ip_workbench(self):
         with tempfile.TemporaryDirectory() as d:
@@ -36,9 +36,26 @@ class L1WebTests(unittest.TestCase):
             response=client.get('/library?vendor=vendor_orion&library=lib_rtavfs')
             self.assertEqual(response.status_code,200)
             body=response.get_data(as_text=True)
+            self.assertIn('aria-label="供应商和库"',body)
+            self.assertIn('aria-current="page"',body)
             self.assertIn('ip=rtavfs',body);self.assertIn('rev_0002',body)
             ip=client.get('/?view=overview&vendor=vendor_orion&library=lib_rtavfs&ip=rtavfs')
             self.assertEqual(ip.status_code,200);self.assertIn('当前有效文件矩阵',ip.get_data(as_text=True))
+            self.assertIn('/library?vendor=vendor_orion&amp;library=lib_rtavfs',ip.get_data(as_text=True))
+            self.assertIn('aria-label="当前位置"',ip.get_data(as_text=True))
+            ip=client.get('/?view=checks&vendor=vendor_orion&library=lib_rtavfs&ip=rtavfs&revision=rev_0001')
+            from html.parser import HTMLParser
+            from urllib.parse import parse_qs, urlparse
+            class ScopeLinks(HTMLParser):
+                def __init__(self): super().__init__(); self.active=False; self.links=[]
+                def handle_starttag(self,tag,attrs):
+                    attrs=dict(attrs)
+                    if tag=='nav' and attrs.get('aria-label')=='库与 IP 视角切换': self.active=True
+                    if self.active and tag=='a': self.links.append(attrs.get('href',''))
+                def handle_endtag(self,tag):
+                    if tag=='nav': self.active=False
+            links=ScopeLinks();links.feed(ip.get_data(as_text=True))
+            self.assertTrue(any(parse_qs(urlparse(link).query).get('revision')==['rev_0001'] for link in links.links))
 
     def test_library_workspace_is_accessible_without_an_ip(self):
         with tempfile.TemporaryDirectory() as d:
@@ -63,16 +80,16 @@ class L1WebTests(unittest.TestCase):
             (work/'formal_sources.json').write_text(json.dumps({'sources':[{'formal_nl_id':'NL1','root':str(formal)}]}))
             client=create_app(ROOT/'examples/pipeline',root/'runs',work).test_client()
             with client.session_transaction() as session: session['csrf']='token'
-            self.assertEqual(client.get('/').status_code,200); self.assertFalse(list(work.rglob('delivery.json')))
+            self.assertEqual(client.get('/').status_code,200); self.assertFalse(list(work.glob('libraries/*/*/delivery_*.json')))
             self.assertEqual(client.post('/scan',data={'csrf':'token','vendor':'v','library':'lib'}).status_code,303)
-            record=json.loads(next(work.rglob('delivery.json')).read_text())
+            record=json.loads(next(work.glob('libraries/*/*/delivery_*.json')).read_text())
             self.assertEqual(record['files'][0]['file_key'],'lib:lef:core')
             self.assertEqual(client.post('/formal-sync',data={'csrf':'token','formal_nl_id':'NL1'}).status_code,303)
             observation=json.loads(next((root/'runs/formal_observations').glob('*.json')).read_text())
             self.assertEqual(observation['files'][0]['source']['delivery_id'],record['delivery_id'])
-            snapshot=json.loads(next((work/'formal_nl/NL1/snapshots').glob('*/snapshot.json')).read_text())
+            snapshot=json.loads(next((work/'libraries/v/lib').glob('formal_NL1_*.json')).read_text())
             self.assertEqual(snapshot['coverage'],'PARTIAL')
             self.assertEqual(snapshot['linked_files'][0]['source_ref']['delivery_id'],record['delivery_id'])
             before=set(root.rglob('*')); page=client.get('/').get_data(as_text=True); after=set(root.rglob('*'))
             self.assertEqual(before,after)
-            for value in ('RAW 来源','Formal NL 来源','输出目录','NL1','MATCHED_RAW'): self.assertIn(value,page)
+            for value in ('RAW 来源','Formal NL 来源','输出目录','NL1','v / lib / 归属未知'): self.assertIn(value,page)

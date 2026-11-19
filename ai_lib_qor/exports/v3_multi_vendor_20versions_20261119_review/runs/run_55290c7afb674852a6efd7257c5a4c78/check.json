@@ -1,0 +1,36 @@
+{
+  "schema_version": "check_result.v1",
+  "check_run_id": "run_55290c7afb674852a6efd7257c5a4c78",
+  "target": {
+    "kind": "EFFECTIVE_REVISION",
+    "id": "rev_0001"
+  },
+  "baseline": null,
+  "effective_set_id": "lib_c1_ip",
+  "run_at": "2026-11-19T09:42:29.725539+00:00",
+  "ruleset_id": "v3_index_explicit_pairs",
+  "file_changes": [],
+  "quality_checks": [
+    {
+      "check_id": "LEF_LIBERTY_PIN_MATCH",
+      "scope_file_keys": [
+        "lib_c1:lef:core",
+        "lib_c1:liberty:core"
+      ],
+      "result": "PASS",
+      "coverage": "COMPLETE",
+      "facts_refs": [
+        "facts_a2356a907b3e15d93405f275",
+        "facts_2b39c51e98282ea3063b6eb8"
+      ],
+      "detail": "所选 Macro 的信号 Pin 名称和方向一致；未检查 PG Pin 或时序弧"
+    }
+  ],
+  "summary": {
+    "files_with_new_source": 0,
+    "files_with_confirmed_content_change": 0,
+    "failed_checks": 0,
+    "inconclusive_checks": 0
+  },
+  "evidence_note": "仅比较所选 LEF 的 Macro SIZE、Pin，并检查目标版本 LEF/Liberty 信号 Pin 对齐；不比较新旧 Liberty 内容。未覆盖的文件和检查不代表通过，检查不等于采纳。 已核对交付时文件元信息；大小和时间一致不证明历史内容一致。"
+}

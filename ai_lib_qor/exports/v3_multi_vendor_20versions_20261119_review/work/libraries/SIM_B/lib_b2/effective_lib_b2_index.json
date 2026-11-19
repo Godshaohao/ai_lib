@@ -1,0 +1,12 @@
+{
+  "schema_version": "effective_index.v1",
+  "effective_set_id": "lib_b2",
+  "owner": {
+    "owner_type": "SOURCE_LIBRARY",
+    "owner_id": "lib_b2",
+    "home_source_library_id": "lib_b2"
+  },
+  "latest_calculated_revision": "rev_0004",
+  "current_accepted_revision": null,
+  "updated_at": "2026-11-19T09:42:28+00:00"
+}

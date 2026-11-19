@@ -139,4 +139,13 @@ def auto_ingest(work, source, scan, *, classified=None):
             result['created'] += 1
         from ai_lib_qor.application.latest_pointers import refresh_library_locked
         refresh_library_locked(work,vendor,library)
+        from ai_lib_qor.application.file_index import refresh_library_index_locked
+        try:
+            result['file_index']=refresh_library_index_locked(work,vendor,library,source)
+            if result['file_index']['action']=='ORDER_UNCONFIRMED':
+                result['reasons'].append('交付顺序未确认，文件历史索引未更新')
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            # Delivery is already published: keep it and make the projection failure visible.
+            result['file_index']={'action':'ERROR','error':str(exc)}
+            result['reasons'].append('文件历史索引未更新：'+str(exc))
     return result

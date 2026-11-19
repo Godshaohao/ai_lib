@@ -20,7 +20,8 @@ def _ref(ref):
 
 def build_sheets(report):
     ctx=report.get('_report_context',{});deliveries=ctx.get('deliveries',[]);facts=ctx.get('facts',[]);snapshot=ctx.get('formal_snapshot');index=ctx.get('effective_index')
-    current=ctx.get('target_revision');base=ctx.get('baseline_revision');accepted=ctx.get('accepted_revision');owner=current['owner']['owner_id'] if current else UNKNOWN
+    current=ctx.get('target_revision');base=ctx.get('baseline_revision');accepted=ctx.get('accepted_revision');library_index=ctx.get('library_index')
+    owner=current['owner']['owner_id'] if current else (library_index['effective_sets'][report['effective_set_id']]['owner']['id'] if library_index else UNKNOWN)
     changes={x['file_key']:x for x in report['file_changes']};quality=report['quality_checks'];facts_by_id={f['facts_id']:f for f in facts}
     by_file={};occurrences=defaultdict(list);rows={}
     for d in deliveries:
@@ -62,8 +63,12 @@ def build_sheets(report):
     if snapshot:keys.update(x['file_key'] for x in snapshot['linked_files'] if x['file_key'])
     matrix=[]
     for key in sorted(keys):
-        occ=occurrences.get(key,[]);sorted_occ=sorted(occ,key=lambda x:x['delivery']['delivery_order'],reverse=True)
-        if len({x['delivery']['source_library_id'] for x in occ})>1 or len({x['delivery']['delivery_order'] for x in occ})!=len(occ):
+        occ=occurrences.get(key,[])
+        rank={(library_index['scope']['vendor'],library_index['scope']['library'],x['delivery_id']):i for i,x in enumerate(library_index['deliveries'])} if library_index else None
+        ident=lambda x:(x['delivery']['vendor_id'],x['delivery']['source_library_id'],x['delivery']['delivery_id'])
+        sorted_occ=sorted(occ,key=lambda x:rank.get(ident(x),len(rank)) if rank is not None else -x['delivery']['delivery_order'])
+        ambiguous=(any(ident(x) not in rank for x in occ) or len({ident(x) for x in occ})!=len(occ)) if rank is not None else len({x['delivery']['delivery_order'] for x in occ})!=len(occ)
+        if len({x['delivery']['source_library_id'] for x in occ})>1 or ambiguous:
             latest=previous='顺序不明确';latest_path=previous_path='顺序不明确'
         else:
             latest=sorted_occ[0]['delivery']['supplier_version'] if sorted_occ else UNKNOWN
@@ -83,7 +88,7 @@ def build_sheets(report):
     qa=[['本次检查对象',report['target']['id'],report['target']['kind']],['比较基线',_text((report.get('baseline') or {}).get('id')),'基线由本次检查指定'],['当前已采纳版本',_text(index['current_accepted_revision']) if index else UNKNOWN,'采纳与检查结论独立'],['完整库整体是否通过','未评估','本报告仅覆盖已提供的检查与事实']]
     concerns=[[owner,x[2],x[3],x[4],x[5],x[6],x[8]] for x in details]
     concerns += [[owner,'质量检查',q['check_id'],q['result'],'','',q['detail']] for q in quality if q['result']!='PASS']
-    return [
+    sheets=[
       ('00-概览',['IP / Owner','检查目标','目标类型','基线','Run ID','规则集','执行时间','文件来源变化','确认内容变化','失败检查','不确定检查','采纳版本','整体质量判断','范围说明'],[[owner,report['target']['id'],report['target']['kind'],_text((report.get('baseline') or {}).get('id')),report['check_run_id'],report['ruleset_id'],report['run_at'],report['summary']['files_with_new_source'] if report['file_changes'] else '未对比',report['summary']['files_with_confirmed_content_change'] if report['file_changes'] else '未对比',report['summary']['failed_checks'],report['summary']['inconclusive_checks'],_text(index['current_accepted_revision']) if index else UNKNOWN,'未评估',report['evidence_note']]]),
       ('文件版本矩阵',['IP / Owner','文件键','最新版本（已提供范围）','最新路径（已提供范围）','次新版本（已提供范围）','次新路径（已提供范围）','基准来源','目标来源','目标 Rev 成员来源','当前已采纳 Rev','已采纳文件来源','正式快照来源','内容状态','范围说明'],matrix),
       ('01-工程检查',['序号','检查项ID','本次结果','覆盖','文件范围','事实引用','范围或缺口'],quality_rows),
@@ -97,3 +102,29 @@ def build_sheets(report):
       ('09-Liberty角',['IP / Owner','文件键','来源路径','Corner','Cell数','范围或缺口','事实ID'],corner_rows),
       ('10-Liberty单元',['IP / Owner','文件键','来源路径','Corner','Cell','信号Pin数','接口状态','事实ID'],lib_rows),
       ('11-对象变化',['IP / Owner','文件键','对象类型','对象','属性','旧值','新值','单位','事实引用'],details)]
+    if library_index:
+        versions={x['delivery_id']:x for x in library_index['deliveries']}
+        rows=[]
+        for view,group in library_index['views'].items():
+            for path,item in group['files'].items():
+                for source in item.get('effective',{}).get(report['effective_set_id'],[]):
+                    if source['revision']!=report['target']['id']:continue
+                    info=versions.get(source['delivery_id'],{}) if not source.get('source_scope') else {}
+                    ext=next((x for x in deliveries if x['delivery_id']==source['delivery_id'] and
+                        (x['vendor_id'],x['source_library_id'])==(source.get('source_scope',{}).get('vendor'),source.get('source_scope',{}).get('library'))),None)
+                    scope=source.get('source_scope',library_index['scope']);source_path=source.get('source_path',path)
+                    rawroot=info.get('root') or (ext['source_root'] if ext else None)
+                    formal='\n'.join(f"{f['nl']} / {f['snapshot_id']} / {f['link_path']} → {f.get('link_target') or '未记录'}" for f in item.get('formal',[])) or UNKNOWN
+                    rows.append([owner,report['target']['id'],view,path,scope['vendor'],scope['library'],source['delivery_id'],info.get('version') or (ext['supplier_version'] if ext else UNKNOWN),str(PurePosixPath(rawroot)/source_path) if rawroot else UNKNOWN,formal,'来源记录；不代表内容已检查'])
+        sheets.append(('12-有效文件来源',['IP / Owner','有效版本','View','文件路径','来源供应商','来源库','交付 ID','交付版本','RAW 路径','Formal 历史链接','证据范围'],rows))
+        comparison=ctx.get('source_comparison');difference=[]
+        if comparison:
+            for item in comparison['files']:
+                before=item['before'];after=item['after']
+                label={'SOURCE_CHANGED':'来源变化','UNCHANGED':'来源相同','ADDED':'新增','REMOVED':'移除'}.get(item['change'],item['change'])
+                difference.append([comparison['from'],comparison['to'],item['view'],item['path'],label,
+                    _text(before['delivery_id']) if before else '无',_text(after['delivery_id']) if after else '无',
+                    '按 View 和路径比较来源，不判断内容'])
+        else:difference=[['未提供','当前版本','','','无基线','','','初始版本不进行来源对比']]
+        sheets.append(('13-版本来源对照',['基线','目标','View','文件路径','来源关系','基线交付 ID','目标交付 ID','范围说明'],difference))
+    return sheets

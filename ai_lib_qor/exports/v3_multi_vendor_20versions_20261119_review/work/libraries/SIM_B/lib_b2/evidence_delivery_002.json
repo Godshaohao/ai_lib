@@ -1,0 +1,18 @@
+{
+  "schema_version": "delivery_source_evidence.v1",
+  "scan_id": "scan_f86cf843f5a64f528a147726f350abfb",
+  "files": [
+    {
+      "path": "lef/core.lef",
+      "size": 70,
+      "mtime_ns": 1795081346533297817
+    }
+  ],
+  "order_basis": "configured_order",
+  "classification": {
+    "lef/core.lef": {
+      "basis": "explicit",
+      "corner_hint": null
+    }
+  }
+}
