@@ -1,11 +1,13 @@
 """Rebuild two per-library pointers from saved records; never scan RAW or Formal."""
 from pathlib import Path
 import json
+import os
 import re
+import uuid
 from ai_lib_qor.application.source_repository import SourceRepository
 from ai_lib_qor.sources.layout import SAFE, library_folder
 from ai_lib_qor.sources.source_discovery import load_scan_sources
-from ai_lib_qor.versions.store import locked, now, write_atomic, read_json, revisions, events, revision_path, validate
+from ai_lib_qor.versions.store import locked, now, read_json, revisions, events, revision_path, validate
 from ai_lib_qor.versions.index_projector import project, project_simple
 
 
@@ -98,12 +100,104 @@ def refresh_library_locked(work,vendor,library):
     folder.mkdir(parents=True,exist_ok=True)
     delivery=_latest_delivery(work,folder,vendor,library);effective=_latest_effective(folder,vendor,library)
     validate(delivery,'latest_delivery');validate(effective,'latest_effective')
-    for name in ('latest_delivery.json','latest_effective.json'):
-        if (folder/name).is_symlink():raise ValueError('最新指针文件不能是符号链接')
-    for name,value in (('latest_delivery.json',delivery),('latest_effective.json',effective)):
+    desired={}
+    if delivery['status']=='READY':desired['latest_delivery.json']=delivery['latest']['file']
+    valid_sets={key:value for key,value in effective['sets'].items() if value['status']=='READY'}
+    if len(effective['sets'])==1 and len(valid_sets)==1:
+        desired['latest_effective.json']=next(iter(valid_sets.values()))['file']
+    elif len(effective['sets'])>1:
+        for set_id,value in valid_sets.items():desired[f'latest_effective_{set_id}.json']=value['file']
+    known={'latest_delivery.json','latest_effective.json'}
+    known.update(p.name for p in folder.glob('latest_effective_*.json'))
+    known.update(desired)
+    # The older implementation created regular JSON pointer records. Only those
+    # exact validated records may be replaced/removed; never overwrite user files.
+    for name in known:
         path=folder/name
-        write_atomic(path,value)
-    return {'vendor':vendor,'library':library,'delivery_status':delivery['status'],'effective_status':effective['status']}
+        if path.is_symlink():
+            target=os.readlink(path)
+            pattern=r'delivery_[A-Za-z0-9_.-]+\.json' if name=='latest_delivery.json' else r'effective_[A-Za-z0-9_.-]+_\d+\.json'
+            if not re.fullmatch(pattern,target):raise ValueError(f'拒绝替换不受管理的链接: {name}')
+        elif path.exists():
+            if name not in ('latest_delivery.json','latest_effective.json') or not path.is_file():
+                raise ValueError(f'拒绝覆盖已有文件: {name}')
+            schema='latest_delivery' if name=='latest_delivery.json' else 'latest_effective'
+            old=read_json(path,schema)
+            if (old['vendor'],old['library'])!=(vendor,library):raise ValueError(f'旧指针归属不一致: {name}')
+    for name,target in desired.items():
+        if not (folder/target).is_file() or (folder/target).is_symlink():raise ValueError('指针目标不存在或不安全')
+        path=folder/name
+        if path.is_symlink() and os.readlink(path)==target:continue
+        temporary=folder/('.latest-link-'+uuid.uuid4().hex)
+        try:
+            os.symlink(target,temporary)
+            os.replace(temporary,path)
+        finally:
+            if temporary.is_symlink():temporary.unlink()
+    for name in known-set(desired):
+        path=folder/name
+        if path.is_symlink() or path.exists():path.unlink()
+    fd=os.open(folder,os.O_RDONLY)
+    try:os.fsync(fd)
+    finally:os.close(fd)
+    formal=refresh_formal_locked(work,vendor,library)
+    return {'vendor':vendor,'library':library,'delivery_status':delivery['status'],'effective_status':effective['status'],'formal':formal}
+
+
+def refresh_formal_locked(work,vendor,library):
+    """Point each NL to its unique, complete saved snapshot chain tip."""
+    work=Path(work).resolve(strict=True);folder=library_folder(work,vendor,library)
+    groups={};statuses={};desired={}
+    for path in folder.glob('formal_*_[0-9]*.json'):
+        match=re.fullmatch(r'formal_(.+)_(\d+)\.json',path.name)
+        if not match or not SAFE.fullmatch(match.group(1)):continue
+        groups.setdefault(match.group(1),[]).append(path)
+    for nl,paths in groups.items():
+        try:
+            snapshots={}
+            for path in paths:
+                if path.is_symlink():raise ValueError('快照不能为符号链接')
+                item=read_json(path,'formal_snapshot')
+                if item['formal_nl_id']!=nl or item['scope']['source_library_ids']!=[library]:raise ValueError('快照归属不一致')
+                ident=item['formal_snapshot_id']
+                if ident in snapshots:raise ValueError('快照身份重复')
+                snapshots[ident]=(item,path)
+            previous=[item['previous_snapshot_id'] for item,_ in snapshots.values()]
+            if sum(x is None for x in previous)!=1 or any(x is not None and x not in snapshots for x in previous):raise ValueError('快照历史不完整')
+            if len([x for x in previous if x is not None])!=len(set(x for x in previous if x is not None)):raise ValueError('快照历史存在分叉')
+            tips=set(snapshots)-set(x for x in previous if x is not None)
+            if len(tips)!=1:raise ValueError('快照历史存在分叉或循环')
+            tip=next(iter(tips));seen=set();cursor=tip
+            while cursor is not None:
+                if cursor in seen:raise ValueError('快照历史存在循环')
+                seen.add(cursor);cursor=snapshots[cursor][0]['previous_snapshot_id']
+            if len(seen)!=len(snapshots):raise ValueError('快照历史不连续')
+            desired[f'latest_formal_{nl}.json']=snapshots[tip][1].name
+            statuses[nl]={'status':'READY','file':snapshots[tip][1].name}
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            statuses[nl]={'status':'UNAVAILABLE','reason':str(exc)}
+    known={p.name for p in folder.glob('latest_formal_*.json')}|set(desired)
+    for name in known:
+        path=folder/name
+        if path.is_symlink():
+            nl=name[len('latest_formal_'):-len('.json')];target=os.readlink(path)
+            if not re.fullmatch(re.escape('formal_'+nl+'_')+r'\d+\.json',target):raise ValueError(f'拒绝替换不受管理的链接: {name}')
+        elif path.exists():raise ValueError(f'拒绝覆盖已有文件: {name}')
+    for name,target in desired.items():
+        path=folder/name
+        if path.is_symlink() and os.readlink(path)==target:continue
+        temporary=folder/('.latest-link-'+uuid.uuid4().hex)
+        try:
+            os.symlink(target,temporary);os.replace(temporary,path)
+        finally:
+            if temporary.is_symlink():temporary.unlink()
+    for name in known-set(desired):
+        path=folder/name
+        if path.is_symlink():path.unlink()
+    fd=os.open(folder,os.O_RDONLY)
+    try:os.fsync(fd)
+    finally:os.close(fd)
+    return statuses
 
 
 def refresh_library(work,vendor,library):

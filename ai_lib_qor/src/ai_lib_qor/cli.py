@@ -24,7 +24,7 @@ def parser():
     scan.add_argument('--vendor');scan.add_argument('--library')
     catalog=sub.add_parser('catalog-refresh',help='只读构建内存查询目录并输出统计；不扫描 RAW')
     catalog.add_argument('--work',required=True);catalog.add_argument('--runs',required=True)
-    latest=sub.add_parser('latest-refresh',help='从已保存记录重建每库的两个最新指针')
+    latest=sub.add_parser('latest-refresh',help='从已保存记录重建每库最新软链接')
     latest.add_argument('--work',required=True);latest.add_argument('--vendor');latest.add_argument('--library')
     query=sub.add_parser('data-query',help='只读查询 JSON 的 RAW / 历史 / 有效 / Formal 视图')
     query.add_argument('--work',required=True);query.add_argument('--runs',default='.')

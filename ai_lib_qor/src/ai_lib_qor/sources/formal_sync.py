@@ -206,6 +206,13 @@ def sync_formal(runs, config, deliveries, work=None):
                     else:
                         write_atomic(folder / next_filename(folder,'formal_'+nl), candidate, immutable=True)
                         row.update(snapshot_id=sid, action='CREATED', note='已保存部分覆盖快照')
+                    from ai_lib_qor.application.latest_pointers import refresh_formal_locked
+                    try:
+                        link_status=refresh_formal_locked(base,vendor,library).get(nl,{'status':'UNAVAILABLE'})
+                        if link_status['status']!='READY':raise ValueError(link_status.get('reason','无法确定最新快照'))
+                    except (OSError,ValueError,KeyError,TypeError) as exc:
+                        row['note']+=f'；最新链接更新失败：{exc}'
+                        row['link_status']='FAILED';result['status']='PARTIAL'
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 row['note'] = f'快照未发布：{exc}'
         if len(result['snapshots']) == 1:
