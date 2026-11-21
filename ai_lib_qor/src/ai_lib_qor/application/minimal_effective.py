@@ -4,6 +4,9 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import csv
+import os
+import uuid
 
 from ai_lib_qor.sources.layout import library_folder
 from ai_lib_qor.sources.root_inventory import update_pointer
@@ -46,21 +49,55 @@ def _make(vendor,library,number,views):
                      for view,versions in sorted(views.items()) if any(versions.values())}}
 
 
-def _save(folder,library,number,row,work):
+def _audit(folder,operation,actor,action,parent,revision,status,changes,detail=''):
+    if not isinstance(actor,str) or not actor.strip() or len(actor)>128:raise ValueError('操作来源无效')
+    path=folder/'effective_operations.tsv'
+    if path.is_symlink():raise ValueError('操作审计不能为软链接')
+    new=not path.exists()
+    with path.open('a',encoding='utf-8',newline='') as stream:
+        writer=csv.writer(stream,delimiter='\t',lineterminator='\n')
+        if new:writer.writerow(['operation','time','actor','action','parent','revision','status','changes','detail'])
+        writer.writerow([operation,utc_text(),actor,action,parent or '',revision,status,json.dumps(changes,ensure_ascii=False,sort_keys=True),detail])
+        stream.flush();os.fsync(stream.fileno())
+
+
+def _audit_recover(folder,revision):
+    path=folder/'effective_operations.tsv'
+    if path.is_symlink():raise ValueError('操作审计不能为软链接')
+    if not path.is_file():return
+    with path.open(encoding='utf-8',newline='') as stream:
+        rows=[x for x in csv.DictReader(stream,delimiter='\t') if x.get('revision')==revision]
+    if rows and rows[-1].get('status') in ('INTENT','INTERRUPTED'):
+        item=rows[-1]
+        _audit(folder,item['operation'],item['actor'],item['action'],item['parent'],revision,'RECOVERED',json.loads(item['changes']),'已修复指针并刷新索引')
+
+
+def _save(folder,library,number,row,work,*,actor='local',action='update'):
     validate(row,'effective_path')
     target=folder/f'effective_{library}_{number:03d}.json'
-    write_atomic(target,row,immutable=True)
-    update_pointer(folder,'latest_effective.json',target.name)
+    history=_history(folder,library);parent=history[-1][2] if history else None
+    before=_flat(parent['views']) if parent else {};after=_flat(row['views'])
+    changes=[{'view':v,'path':p,'before':before.get((v,p)),'after':after.get((v,p))}
+             for v,p in sorted(before.keys()|after.keys()) if before.get((v,p))!=after.get((v,p))]
+    operation=uuid.uuid4().hex;parent_rev=parent['revision'] if parent else None
+    _audit(folder,operation,actor,action,parent_rev,row['revision'],'INTENT',changes)
+    try:
+        write_atomic(target,row,immutable=True)
+        update_pointer(folder,'latest_effective.json',target.name)
+    except (OSError,ValueError,KeyError,TypeError) as exc:
+        _audit(folder,operation,actor,action,parent_rev,row['revision'],'INTERRUPTED',changes,str(exc))
+        raise
     result={'state':'PUBLISHED','revision':row['revision'],'path':str(target)}
     try:
         from .minimal_file_index import refresh_index_locked
         result['index']=refresh_index_locked(work,row['vendor'],library)
     except (OSError,ValueError,KeyError,TypeError) as exc:
         result.update(state='PUBLISHED_INDEX_STALE',index_error=str(exc))
+    _audit(folder,operation,actor,action,parent_rev,row['revision'],result['state'],changes,result.get('index_error',''))
     return result
 
 
-def initialize_from_formal(work,vendor,library,formal_path,*,include=None):
+def initialize_from_formal(work,vendor,library,formal_path,*,include=None,actor='local'):
     folder=library_folder(work,vendor,library)
     with locked(folder):
         path=Path(formal_path)
@@ -92,7 +129,7 @@ def initialize_from_formal(work,vendor,library,formal_path,*,include=None):
             if history[0][2]['views']==row['views']:
                 return {'state':'UNCHANGED','revision':history[-1][2]['revision']}
             raise ValueError('有效版本已初始化，不覆盖历史')
-        return _save(folder,library,1,row,work)
+        return _save(folder,library,1,row,work,actor=actor,action='INITIALIZE')
 
 
 def _candidate(folder,vendor,library,operations,expected_parent=None,work=None):
@@ -140,20 +177,28 @@ def preview_update(work,vendor,library,operations):
         return {'parent':last['revision'],'changes':changes,'views':row['views']}
 
 
-def apply_update(work,vendor,library,operations,*,expected_parent):
+def apply_update(work,vendor,library,operations,*,expected_parent,actor='local'):
     folder=library_folder(work,vendor,library)
     with locked(folder):
-        history,last,row=_candidate(folder,vendor,library,operations,expected_parent,work)
-        if row['views']==last['views']:return {'state':'UNCHANGED','revision':last['revision']}
-        return _save(folder,library,history[-1][0]+1,row,work)
+        try:history,last,row=_candidate(folder,vendor,library,operations,expected_parent,work)
+        except (ValueError,KeyError,TypeError) as exc:
+            _audit(folder,uuid.uuid4().hex,actor,'UPDATE',expected_parent,'','REJECTED',[],str(exc));raise
+        if row['views']==last['views']:
+            _audit(folder,uuid.uuid4().hex,actor,'UPDATE',last['revision'],last['revision'],'UNCHANGED',[])
+            return {'state':'UNCHANGED','revision':last['revision']}
+        return _save(folder,library,history[-1][0]+1,row,work,actor=actor,action='UPDATE')
 
 
-def update_effective(work,vendor,library,operations):
+def update_effective(work,vendor,library,operations,*,actor='local'):
     folder=library_folder(work,vendor,library)
     with locked(folder):
-        history,last,row=_candidate(folder,vendor,library,operations,work=work)
-        if row['views']==last['views']:return {'state':'UNCHANGED','revision':last['revision']}
-        return _save(folder,library,history[-1][0]+1,row,work)
+        try:history,last,row=_candidate(folder,vendor,library,operations,work=work)
+        except (ValueError,KeyError,TypeError) as exc:
+            _audit(folder,uuid.uuid4().hex,actor,'UPDATE',None,'','REJECTED',[],str(exc));raise
+        if row['views']==last['views']:
+            _audit(folder,uuid.uuid4().hex,actor,'UPDATE',last['revision'],last['revision'],'UNCHANGED',[])
+            return {'state':'UNCHANGED','revision':last['revision']}
+        return _save(folder,library,history[-1][0]+1,row,work,actor=actor,action='UPDATE')
 
 
 def preview_delivery(work,vendor,library,version):
@@ -175,13 +220,36 @@ def preview_delivery(work,vendor,library,version):
         return {'parent':last['revision'],'changes':changes,'views':row['views'],'operations':operations}
 
 
-def restore_revision(work,vendor,library,revision,*,expected_parent):
+def restore_issues(work,vendor,library,views):
+    from .path_config import excluded_versions
+    folder=library_folder(work,vendor,library);deliveries=_deliveries(folder,vendor,library)
+    excluded=excluded_versions(work,vendor,library);issues=[]
+    for (view,path),version in sorted(_flat(views).items()):
+        if version in excluded:issues.append(f'已排除来源：{version} · {path}')
+        delivery=deliveries.get(version)
+        if not delivery or path not in delivery['views'].get(view,[]):
+            issues.append(f'来源交付不可用：{version} · {path}');continue
+        absolute=Path(delivery['root'])/path
+        if not absolute.is_file():issues.append(f'来源文件不可用：{absolute}')
+    return sorted(issues)
+
+
+def restore_revision(work,vendor,library,revision,*,expected_parent,actor='local',expected_issues=None):
     folder=library_folder(work,vendor,library)
     with locked(folder):
         history=_history(folder,library)
-        if not history or history[-1][2]['revision']!=expected_parent:raise ValueError('父版本已变化，请重新选择')
+        if not history or history[-1][2]['revision']!=expected_parent:
+            _audit(folder,uuid.uuid4().hex,actor,'RESTORE:'+str(revision),expected_parent,'','REJECTED',[],'父版本已变化')
+            raise ValueError('父版本已变化，请重新选择')
         matches=[item[2] for item in history if item[2]['revision']==revision]
-        if len(matches)!=1:raise ValueError('有效版本不存在')
+        if len(matches)!=1:
+            _audit(folder,uuid.uuid4().hex,actor,'RESTORE:'+str(revision),expected_parent,'','REJECTED',[],'有效版本不存在')
+            raise ValueError('有效版本不存在')
+        if expected_issues is not None and restore_issues(work,vendor,library,matches[0]['views'])!=expected_issues:
+            _audit(folder,uuid.uuid4().hex,actor,'RESTORE:'+str(revision),expected_parent,'','REJECTED',[],'来源状态已变化')
+            raise ValueError('来源状态已变化，请重新预览')
         row=_make(vendor,library,history[-1][0]+1,matches[0]['views'])
-        if row['views']==history[-1][2]['views']:return {'state':'UNCHANGED','revision':expected_parent}
-        return _save(folder,library,history[-1][0]+1,row,work)
+        if row['views']==history[-1][2]['views']:
+            _audit(folder,uuid.uuid4().hex,actor,'RESTORE:'+str(revision),expected_parent,expected_parent,'UNCHANGED',[])
+            return {'state':'UNCHANGED','revision':expected_parent}
+        return _save(folder,library,history[-1][0]+1,row,work,actor=actor,action='RESTORE:'+revision)

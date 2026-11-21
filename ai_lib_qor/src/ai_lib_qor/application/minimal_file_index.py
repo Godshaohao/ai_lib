@@ -1,7 +1,6 @@
 """Rebuildable ordered path histories over the three minimal source contracts."""
 import json
 import os
-from collections import Counter
 from datetime import date
 from pathlib import Path, PurePosixPath
 
@@ -119,7 +118,11 @@ def refresh_index_locked(work,vendor,library):
         if old==new:return {'state':'UNCHANGED','path':str(path)}
         def contains(before,after):
             encode=lambda v:json.dumps(v,sort_keys=True,ensure_ascii=False,separators=(',',':'))
-            return not (Counter(map(encode,before))-Counter(map(encode,after)))
+            previous=iter(map(encode,before));expected=next(previous,None)
+            for value in map(encode,after):
+                if value==expected:expected=next(previous,None)
+                if expected is None:return True
+            return expected is None
         try:
             preserved=all(contains(old[key],new[key]) for key in ('deliveries','nl_snapshots','revisions'))
             for view,files in old['views'].items():
@@ -127,7 +130,7 @@ def refresh_index_locked(work,vendor,library):
                     target=new['views'].get(view,{}).get(relative)
                     if not target or not all(contains(row[k],target[k]) for k in ('raw','nl','effective')):preserved=False
         except (KeyError,TypeError,AttributeError):preserved=False
-        if not preserved:raise ValueError('已发布索引的历史记录发生变更，拒绝覆盖')
+        if not preserved:raise ValueError('已发布索引的历史记录或顺序发生变更，拒绝覆盖')
     write_atomic(path,new)
     return {'state':'UPDATED','path':str(path)}
 
@@ -139,26 +142,5 @@ def refresh_index(work,vendor,library):
 
 
 def query_path(work,vendor,library,view,path,*,revision=None,version=None):
-    if revision is not None and version is not None:raise ValueError('只能指定 Effective 版本或交付版本')
-    folder=library_folder(work,vendor,library);index_path=folder/'file_index.json'
-    if index_path.is_symlink() or not index_path.is_file():raise ValueError('索引不存在或无效')
-    with locked(folder):
-        saved=json.loads(index_path.read_text(encoding='utf-8'))
-        try:current=build_index(work,vendor,library)
-        except (OSError,ValueError,KeyError,TypeError) as exc:raise ValueError('索引已过期或来源无效: '+str(exc)) from exc
-        if saved!=current:raise ValueError('索引已过期，请重建')
-        row=saved['views'].get(view,{}).get(_relative(path))
-        if row is None:raise ValueError('文件不在索引中')
-        result={'vendor':vendor,'library':library,'view':view,'path':path,**row}
-        if revision is not None:
-            if revision not in saved['revisions']:raise ValueError('有效版本不存在')
-            matches=[r for r in row['effective'] if r['revision']==revision]
-            if len(matches)>1:raise ValueError('有效版本来源不唯一')
-            result['effective']=matches[0] if matches else None
-        if version is not None:
-            order=[item['version'] for item in saved['deliveries']]
-            if version not in order:raise ValueError('交付版本不存在')
-            rank={v:i for i,v in enumerate(order)};at=rank[version]
-            candidates=[item for item in row['raw'] if rank[item['version']]<=at]
-            result['as_of']=candidates[-1] if candidates else None
-        return result
+    from .path_query import PathDataQuery
+    return PathDataQuery(work).file(vendor,library,view,path,revision=revision,version=version)

@@ -97,7 +97,8 @@ def create_path_app(work_root):
             except (OSError,ValueError,KeyError):continue
         for path in sorted(folder.glob('overall_run_*.xlsx'),key=lambda p:p.stat().st_mtime_ns,reverse=True)[:10]:
             if not path.is_symlink():artifacts.append({'name':path.name,'label':'整体报告 · '+path.name,'available':True})
-        return render_template('path_workbench.html',level=2,vendor=vendor,library=library,index=index,error=error,revision=revision,members=members,delivery_rows=delivery_rows,artifacts=artifacts)
+        audit_available=(folder/'effective_operations.tsv').is_file() and not (folder/'effective_operations.tsv').is_symlink()
+        return render_template('path_workbench.html',level=2,vendor=vendor,library=library,index=index,error=error,revision=revision,members=members,delivery_rows=delivery_rows,artifacts=artifacts,audit_available=audit_available)
 
     @app.get('/path/index')
     def index_page():
@@ -156,10 +157,68 @@ def create_path_app(work_root):
         except (OSError,ValueError,KeyError,TypeError) as exc:session['path_notice']={'title':'未能生成文件事实','details':str(exc),'warnings':[]}
         return redirect(url_for('index_page',vendor=vendor,library=library))
 
+    @app.post('/path/effective/preview')
+    def effective_preview():
+        from ai_lib_qor.application.minimal_effective import preview_update,restore_issues,_history
+        from ai_lib_qor.application.path_query import PathDataQuery
+        vendor,library,folder=scope();action=request.form.get('action')
+        try:
+            if action in ('set','remove','batch'):
+                view=request.form.get('view','');path=request.form.get('path','')
+                operations={'set':[],'remove':[]}
+                if action=='set':operations['set'].append({'view':view,'path':path,'version':request.form.get('version','')})
+                elif action=='remove':operations['remove'].append({'view':view,'path':path})
+                else:
+                    selected=request.form.getlist('selection')
+                    if not selected or len(selected)>50 or sum(len(x.encode('utf-8')) for x in selected)>2000:raise ValueError('请选择 1 至 50 项，单次选择内容不超过 2000 字节')
+                    for value in selected:
+                        item=json.loads(value)
+                        if not isinstance(item,dict):raise ValueError('文件选择无效')
+                        if item.get('action')=='set' and set(item)=={'action','view','path','version'}:
+                            operations['set'].append({k:item[k] for k in ('view','path','version')})
+                        elif item.get('action')=='remove' and set(item)=={'action','view','path'}:
+                            operations['remove'].append({k:item[k] for k in ('view','path')})
+                        else:raise ValueError('文件选择无效')
+                preview=preview_update(work,vendor,library,operations)
+                draft={'vendor':vendor,'library':library,'action':action,'operations':operations,'parent':preview['parent']}
+                changes=preview['changes'];issues=[]
+            elif action=='restore':
+                revision=request.form.get('revision','');query=PathDataQuery(work);index=query.index(vendor,library)
+                if not index['revisions'] or revision not in index['revisions']:raise ValueError('有效版本不存在')
+                parent=index['revisions'][-1]
+                before=query.get_check_context(vendor,library,parent)['members']
+                after=query.get_check_context(vendor,library,revision)['members']
+                a={(x['view'],x['path']):x for x in before};b={(x['view'],x['path']):x for x in after}
+                changes=[{'view':v,'path':p,'before':a.get((v,p),{}).get('version'),'after':b.get((v,p),{}).get('version')}
+                         for v,p in sorted(a.keys()|b.keys()) if a.get((v,p),{}).get('version')!=b.get((v,p),{}).get('version')]
+                target=next(row for _,_,row in _history(folder,library) if row['revision']==revision)
+                issues=restore_issues(work,vendor,library,target['views'])
+                draft={'vendor':vendor,'library':library,'action':action,'revision':revision,'parent':parent,'issues':issues}
+            else:raise ValueError('操作类型无效')
+            session['effective_draft']=draft
+            return render_template('path_effective_preview.html',vendor=vendor,library=library,draft=draft,changes=changes,issues=issues,csrf=session['csrf'])
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            session.pop('effective_draft',None)
+            session['path_notice']={'title':'无法预览','details':str(exc),'warnings':[]}
+            return redirect(url_for('library_page',vendor=vendor,library=library))
+
+    @app.post('/path/effective/apply')
+    def effective_apply():
+        from ai_lib_qor.application.minimal_effective import apply_update,restore_revision
+        vendor,library,folder=scope();draft=session.pop('effective_draft',None)
+        try:
+            if not isinstance(draft,dict) or (draft.get('vendor'),draft.get('library'))!=(vendor,library):raise ValueError('预览已失效，请重新选择')
+            if draft['action']=='restore':result=restore_revision(work,vendor,library,draft['revision'],expected_parent=draft['parent'],actor='web',expected_issues=draft['issues'])
+            else:result=apply_update(work,vendor,library,draft['operations'],expected_parent=draft['parent'],actor='web')
+            session['path_notice']={'title':'有效版本已处理','details':result['state']+' · '+result['revision'],'warnings':[result['index_error']] if result.get('index_error') else []}
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            session['path_notice']={'title':'发布未完成','details':str(exc),'warnings':[]}
+        return redirect(url_for('library_page',vendor=vendor,library=library))
+
     @app.get('/path/artifact')
     def artifact():
         vendor,library,folder=scope();name=request.args.get('name','')
-        if not re.fullmatch(r'(?:report_run_[a-f0-9]{32}\.xlsx|overall_run_[a-f0-9]{32}\.(?:xlsx|json)|check_run_[a-f0-9]{32}\.json|facts_[A-Z]+_[A-Za-z0-9_]+\.json|file_index\.json)',name):abort(400)
+        if not re.fullmatch(r'(?:report_run_[a-f0-9]{32}\.xlsx|overall_run_[a-f0-9]{32}\.(?:xlsx|json)|check_run_[a-f0-9]{32}\.json|facts_[A-Z]+_[A-Za-z0-9_]+\.json|file_index\.json|effective_operations\.tsv|file_index_reconciliation\.tsv|formal_observations\.tsv)',name):abort(400)
         path=folder/name
         if path.is_symlink() or not path.is_file():abort(404)
         return send_file(path,as_attachment=True,download_name=name)

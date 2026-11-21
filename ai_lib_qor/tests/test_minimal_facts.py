@@ -13,7 +13,7 @@ class MinimalFactsTests(unittest.TestCase):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.base=Path(self.tmp.name)
   self.work=self.base/'work';raw=self.base/'raw';nl=self.base/'NL1';nl.mkdir()
   version='20261024_abcdef12';self.version=version
-  files={'LEF/a.lef':'MACRO A\n SIZE 2 BY 3 ;\n PIN IN\n DIRECTION INPUT ;\n END IN\nEND A\n',
+  files={'LEF/a.lef':'MACRO A\n SIZE 2 BY 3 ;\n PIN IN\n DIRECTION INPUT ;\n END IN\n PIN VDD\n DIRECTION INOUT ;\n USE POWER ;\n END VDD\nEND A\n',
          'LIB/a.lib':'library(test) { cell(A) { pin(IN) { direction : input; } } }'}
   for path,text in files.items():
    file=raw/'v/lib'/version/path;file.parent.mkdir(parents=True,exist_ok=True);file.write_text(text)
@@ -53,11 +53,9 @@ class MinimalFactsTests(unittest.TestCase):
 
  def test_lef_power_pins_keep_their_type(self):
   from ai_lib_qor.application.minimal_facts import build_facts
-  source=self.base/'raw/v/lib'/self.version/'LEF/a.lef'
-  source.write_text('MACRO A\n SIZE 2 BY 3 ;\n PIN VDD\n DIRECTION INOUT ;\n USE POWER ;\n END VDD\nEND A\n')
   result=build_facts(self.work,'v','lib','LEF','LEF/a.lef',revision='rev_0001')
   fact=json.loads(Path(result['path']).read_text())
-  self.assertEqual(fact['objects']['macros'][0]['pins'][0]['use'],'POWER')
+  self.assertEqual(next(p for p in fact['objects']['macros'][0]['pins'] if p['name']=='VDD')['use'],'POWER')
 
  def test_stale_index_and_missing_revision_member_are_rejected(self):
   from ai_lib_qor.application.minimal_facts import build_facts

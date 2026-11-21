@@ -15,11 +15,8 @@ from .minimal_file_index import build_index
 
 
 def _fresh(work,vendor,library):
-    folder=library_folder(work,vendor,library);path=folder/'file_index.json'
-    if path.is_symlink() or not path.is_file():raise ValueError('文件索引不存在')
-    saved=json.loads(path.read_text(encoding='utf-8'))
-    if saved!=build_index(work,vendor,library):raise ValueError('文件索引过期')
-    return folder,saved
+    from .path_query import PathDataQuery
+    return library_folder(work,vendor,library),PathDataQuery(work).index(vendor,library)
 
 
 def _members(index,revision):

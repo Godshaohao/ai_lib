@@ -158,8 +158,8 @@ def run(a):
         from ai_lib_qor.application.minimal_effective import preview_update,apply_update,restore_revision
         args=(a.work,a.vendor,a.library)
         if a.command=='path-effective-preview':return preview_update(*args,read(a.operations))
-        if a.command=='path-effective-apply':return apply_update(*args,read(a.operations),expected_parent=a.expected_parent)
-        return restore_revision(*args,a.revision,expected_parent=a.expected_parent)
+        if a.command=='path-effective-apply':return apply_update(*args,read(a.operations),expected_parent=a.expected_parent,actor='cli')
+        return restore_revision(*args,a.revision,expected_parent=a.expected_parent,actor='cli')
     if a.command in ('minimal-check-revision','minimal-check-library'):
         from ai_lib_qor.application.minimal_checks import run_revision,run_library
         if a.command=='minimal-check-revision':
@@ -180,8 +180,8 @@ def run(a):
             if a.include is not None:
                 if any('=' not in x for x in a.include):raise ValueError('成员选择格式应为 VIEW=相对路径')
                 include=[tuple(x.split('=',1)) for x in a.include]
-            return initialize_from_formal(a.work,a.vendor,a.library,a.formal,include=include)
-        return update_effective(a.work,a.vendor,a.library,read(a.operations))
+            return initialize_from_formal(a.work,a.vendor,a.library,a.formal,include=include,actor='cli')
+        return update_effective(a.work,a.vendor,a.library,read(a.operations),actor='cli')
     if a.command=='inventory-roots':
         from ai_lib_qor.sources.root_inventory import build_from_roots
         from ai_lib_qor.application.path_config import load_path_config,update_options

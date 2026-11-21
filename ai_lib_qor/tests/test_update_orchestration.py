@@ -108,5 +108,8 @@ class UpdateOrchestrationTests(unittest.TestCase):
    self.assertTrue((folder/'effective_lib_002.json').is_file())
    self.assertEqual(build_from_roots(raw,nl,work)['effective_pending'],0)
    self.assertEqual((folder/'latest_effective.json').readlink().name,'effective_lib_002.json')
+   import csv
+   with (folder/'effective_operations.tsv').open(newline='') as stream:events=list(csv.DictReader(stream,delimiter='\t'))
+   self.assertTrue(any(x['revision']=='rev_0002' and x['status']=='RECOVERED' for x in events))
 
 if __name__=='__main__':unittest.main()

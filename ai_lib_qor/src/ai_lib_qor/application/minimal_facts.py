@@ -1,6 +1,7 @@
 """Build path-based FileFacts from the validated minimal file index."""
 from pathlib import Path
 import json
+import csv
 
 from ai_lib_qor.facts import parsers
 from ai_lib_qor.sources.layout import library_folder,next_filename
@@ -30,6 +31,17 @@ def build_facts(work,vendor,library,view,relative_path,*,version=None,revision=N
     root=Path(deliveries[0]['root']).resolve(strict=True)
     real=absolute.resolve(strict=True)
     if not real.is_relative_to(root) or not real.is_file() or real!=absolute:raise ValueError('RAW 文件不存在、越界或包含符号链接')
+    observation=folder/'raw_observations.tsv'
+    if observation.is_symlink():raise ValueError('RAW 观察记录不能为软链接')
+    if observation.is_file():
+        with observation.open(encoding='utf-8',newline='') as stream:
+            for recorded in csv.reader(stream,delimiter='\t'):
+                if len(recorded)!=5:raise ValueError('RAW 观察记录格式无效')
+                if recorded[:2]==[source_version,relative_path]:
+                    stat=real.stat()
+                    if (stat.st_size,stat.st_mtime_ns)!=(int(recorded[2]),int(recorded[3])):
+                        raise ValueError('RAW 文件相对首次观察已变化，不能当作历史文件解析')
+                    break
     before=_stat_key(real);digest=parsers._file_digest(real)
     if _stat_key(real)!=before:raise ValueError('读取 RAW 文件时发生变化')
     payload=parsers.parse_file_payload(real,view,allow_pg=True)

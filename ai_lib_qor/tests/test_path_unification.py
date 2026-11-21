@@ -55,6 +55,25 @@ class PathUnificationTests(unittest.TestCase):
         restored = json.loads((self.folder/'effective_lib_003.json').read_text())
         self.assertEqual(first['views'], restored['views'])
 
+    def test_batch_apply_records_audit_and_invalid_batch_is_atomic(self):
+        import csv
+        from ai_lib_qor.application.minimal_effective import preview_update,apply_update
+        ops={'set':[{'view':'LEF','version':self.versions[1],'path':'LEF/a.lef'}],
+             'remove':[{'view':'LIBERTY','path':'LIB/a.lib'}]}
+        preview=preview_update(self.work,'v','lib',ops)
+        self.assertEqual(len(preview['changes']),2)
+        result=apply_update(self.work,'v','lib',ops,expected_parent='rev_0001',actor='test')
+        self.assertEqual(result['revision'],'rev_0002')
+        with (self.folder/'effective_operations.tsv').open(newline='') as stream:rows=list(csv.DictReader(stream,delimiter='\t'))
+        event=next(r for r in rows if r['revision']=='rev_0002' and r['status']=='PUBLISHED')
+        self.assertEqual(event['actor'],'test');self.assertEqual(event['parent'],'rev_0001')
+        self.assertEqual(len(json.loads(event['changes'])),2)
+        with self.assertRaises(ValueError):
+            apply_update(self.work,'v','lib',{'set':[{'view':'LEF','version':self.versions[0],'path':'missing'}],'remove':[]},expected_parent='rev_0002',actor='test')
+        self.assertFalse((self.folder/'effective_lib_003.json').exists())
+        with (self.folder/'effective_operations.tsv').open(newline='') as stream:rows=list(csv.DictReader(stream,delimiter='\t'))
+        self.assertTrue(any(r['actor']=='test' and r['status']=='REJECTED' for r in rows))
+
     def test_unified_configuration_registration_times(self):
         from ai_lib_qor.application.path_config import load_path_config
         config = {'raw_root':str(self.raw), 'nl_root':str(self.nl), 'nl_version':'NL1',

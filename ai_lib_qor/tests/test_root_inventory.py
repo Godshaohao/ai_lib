@@ -15,10 +15,8 @@ class RootInventoryTests(unittest.TestCase):
    (nl/'IP/LEF').mkdir(parents=True);(nl/'IP/LIB').mkdir()
    (nl/'IP/LEF/a.lef').symlink_to(os.path.relpath(a,nl/'IP/LEF'))
    (nl/'IP/LIB/a.lib').symlink_to(os.path.relpath(b,nl/'IP/LIB'))
-   (nl/'IP/LEF/broken.lef').symlink_to('/missing/file.lef')
    result=build_from_roots(raw,nl,out,nl_version='NL2.5.3')
    self.assertEqual(result['delivery_created'],2);self.assertEqual(result['formal_created'],2)
-   self.assertTrue(any('broken.lef' in e for e in result['warnings']))
    folder=out/'libraries/VENDOR_A/LIB_A'
    delivery=json.loads((folder/'delivery_LIB_A_20261024_001.json').read_text())
    self.assertEqual(set(delivery),{'vendor','library','version','version_date','directory_created_at','root','views'})
@@ -32,7 +30,9 @@ class RootInventoryTests(unittest.TestCase):
    link=formal['views']['LEF']['20261024_abcdef12'][0]
    self.assertEqual(link,{'path':'IP/LEF/a.lef','target':os.readlink(nl/'IP/LEF/a.lef'),'resolved':str(a)})
    self.assertNotIn('delivery_id',json.dumps(formal));self.assertNotIn('file_id',json.dumps(formal))
+   (nl/'IP/LEF/broken.lef').symlink_to('/missing/file.lef')
    repeat=build_from_roots(raw,nl,out,nl_version='NL2.5.3')
+   self.assertTrue(any('broken.lef' in e for e in repeat['warnings']))
    self.assertEqual(repeat['delivery_created'],0);self.assertEqual(repeat['formal_created'],0)
    self.assertEqual(len(list(folder.glob('delivery_*.json'))),1)
    self.assertEqual((folder/'latest_delivery.json').readlink().name,'delivery_LIB_A_20261024_001.json')

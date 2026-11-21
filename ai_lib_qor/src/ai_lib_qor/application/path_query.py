@@ -16,7 +16,9 @@ class PathDataQuery:
             raise ValueError('文件索引不存在')
         with locked(folder):
             saved = json.loads(path.read_text(encoding='utf-8'))
-            if saved != build_index(self.work, vendor, library):
+            try:current=build_index(self.work, vendor, library)
+            except (OSError,ValueError,KeyError,TypeError) as exc:raise ValueError('文件索引过期或来源无效: '+str(exc)) from exc
+            if saved != current:
                 raise ValueError('文件索引过期或格式不兼容')
         return saved
 
@@ -41,3 +43,23 @@ class PathDataQuery:
                                     'baseline':previous[0] if previous else None})
         return {'vendor':vendor, 'library':library, 'revision':revision,
                 'baseline':baseline, 'members':members, 'index':index}
+
+    def file(self,vendor,library,view,path,*,revision=None,version=None):
+        from .minimal_file_index import _relative
+        if revision is not None and version is not None:raise ValueError('只能指定 Effective 版本或交付版本')
+        index=self.index(vendor,library)
+        row=index['views'].get(view,{}).get(_relative(path))
+        if row is None:raise ValueError('文件不在索引中')
+        result={'vendor':vendor,'library':library,'view':view,'path':path,**row}
+        if revision is not None:
+            if revision not in index['revisions']:raise ValueError('有效版本不存在')
+            matches=[r for r in row['effective'] if r['revision']==revision]
+            if len(matches)>1:raise ValueError('有效版本来源不唯一')
+            result['effective']=matches[0] if matches else None
+        if version is not None:
+            order=[item['version'] for item in index['deliveries']]
+            if version not in order:raise ValueError('交付版本不存在')
+            rank={v:i for i,v in enumerate(order)};at=rank[version]
+            candidates=[item for item in row['raw'] if rank[item['version']]<=at]
+            result['as_of']=candidates[-1] if candidates else None
+        return result
