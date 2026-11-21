@@ -11,7 +11,7 @@ from ai_lib_qor.versions.store import locked, write_atomic, read_json, events, n
 from ai_lib_qor.versions.index_projector import project_simple
 
 
-def publish_v2(work,out,record,parent=None):
+def publish_v2(work,out,record,parent=None,*,auto_accept=False,delivery_guard=None,acceptance_actor='automatic',acceptance_reason='自动发布时生效'):
     root=Path(work).resolve(strict=True);scope=record['scope'];folder=library_folder(root,scope['vendor'],scope['library'])
     path=Path(out)
     if path.parent.resolve()!=folder.resolve() or path.is_symlink():raise ValueError('v2 输出必须位于对应库目录且不能是符号链接')
@@ -20,6 +20,11 @@ def publish_v2(work,out,record,parent=None):
         raise ValueError('v2 输出文件名与版本不一致')
     set_id=match.group(1)
     with locked(folder):
+        if delivery_guard is not None:
+            from .effective_workflow import excluded_deliveries
+            guards={delivery_guard} if isinstance(delivery_guard,str) else set(delivery_guard)
+            if guards & excluded_deliveries(root,scope['vendor'],scope['library'],set_id):
+                raise ValueError('该交付已被排除，不能发布')
         if parent is not None:
             number=int(parent['revision'][4:]);previous=folder/f'effective_{set_id}_{number:03d}.json'
             if previous.is_symlink() or not previous.is_file() or read_json(previous,'effective_simple_v2')!=parent:
@@ -56,9 +61,16 @@ def publish_v2(work,out,record,parent=None):
             keys=('effective_set_id','owner','latest_calculated_revision','current_accepted_revision')
             if any(previous_index[k]!=previous_projection[k] for k in keys):raise ValueError('现有索引与版本历史不一致')
         history.append(record)
-        index=project_simple(history,event_log,set_id,now())
+        automatic_event=None
+        if auto_accept:
+            from ai_lib_qor.versions.acceptance import create_event
+            automatic_event=create_event(set_id,record['revision'],'ACCEPT',acceptance_actor,acceptance_reason,now())
+        index=project_simple(history,event_log+([automatic_event] if automatic_event else []),set_id,now())
         validate(index,'effective_index')
         write_atomic(path,record,immutable=True)
+        if automatic_event:
+            from ai_lib_qor.versions.store import append_event
+            append_event(folder/f'effective_{set_id}',automatic_event)
         write_atomic(index_path,index)
         refresh_library_locked(root,scope['vendor'],scope['library'])
         try:

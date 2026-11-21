@@ -124,7 +124,8 @@ class CliWorkflowTests(unittest.TestCase):
             leaf.parent.mkdir(parents=True);leaf.write_text('MACRO A\n SIZE 2 BY 2 ;\n END A\n')
             (work/'scan_sources.json').write_text(json.dumps({'sources':[{'vendor_id':'v','source_library_id':'lib','root':str(raw),'version_paths':{'V01':'V01'}}]}))
             scanned=self.cli('scan','--work',work,'--runs',root/'runs');self.assertEqual(scanned.returncode,0,scanned.stderr)
-            delivery=next(work.glob('libraries/*/*/delivery_*.json')); file_id=json.loads(delivery.read_text())['files'][0]['file_id']
+            from ai_lib_qor.versions.store import read_json
+            delivery=next(work.glob('libraries/*/*/delivery_*.json')); file_id=read_json(delivery,'delivery_record')['files'][0]['file_id']
             result=self.cli('run-evidence','--delivery',delivery,'--file-id',file_id,'--runs',root/'runs')
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             run=json.loads(result.stdout);self.assertTrue((root/'runs'/run['id']/'parser_evidence.json').is_file())

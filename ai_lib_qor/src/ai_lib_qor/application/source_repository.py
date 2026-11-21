@@ -7,6 +7,21 @@ from ai_lib_qor.versions.store import read_json
 from ai_lib_qor.sources.layout import evidence_path
 
 
+def archive_fingerprint(work):
+    """Observe archive metadata only; never walk RAW or Formal source trees."""
+    root=Path(work).resolve();patterns=('scan_sources.json','libraries/*/*/delivery_*.json','libraries/*/*/evidence_delivery_*.json',
+        'libraries/*/*/formal_*.json','libraries/*/*/effective_*_[0-9]*.json','libraries/*/*/file_index.json',
+        'vendors/*/libraries/*/deliveries/*.json','vendors/*/libraries/*/deliveries/*/delivery.json',
+        'vendors/*/libraries/*/ips/*/effective/versions/*.json',
+        'vendors/*/libraries/*/formal_nl/*/snapshots/*/snapshot.json','raw/*/*/*.json',
+        'formal_nl/*/snapshots/*.json','formal_nl/*/snapshots/*/snapshot.json','formal/*/*.json')
+    paths=sorted({p for pattern in patterns for p in root.glob(pattern)})
+    result=[]
+    for path in paths:
+        s=path.lstat();result.append((str(path.relative_to(root)),s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns))
+    return tuple(result)
+
+
 class SourceRepository:
     def __init__(self, root, *, reader=None, warnings=None):
         self.root = Path(root).resolve()
@@ -73,6 +88,9 @@ class SourceRepository:
                 file['classification_basis']=basis
                 file['observation']={k:obs[k] for k in ('size','mtime_ns') if k in obs}
                 files.append(file)
+            confirmed=[(f['view'],f['file_key']) for f in files if f['identity_status']=='CONFIRMED' and f.get('file_key')]
+            if len(confirmed)!=len(set(confirmed)):
+                raise ValueError(f"交付 {record['delivery_id']} 中已确认文件身份重复")
             order_basis=evidence.get('order_basis')
             output.append({'record':record,'path':str(item['path']),'evidence':item['evidence'],
                            'files':files,'ordering_status':'CONFIRMED' if order_basis in ('configured_order','manual_confirmation') else 'UNCONFIRMED',

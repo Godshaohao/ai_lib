@@ -82,7 +82,8 @@ class L1WebTests(unittest.TestCase):
             with client.session_transaction() as session: session['csrf']='token'
             self.assertEqual(client.get('/').status_code,200); self.assertFalse(list(work.glob('libraries/*/*/delivery_*.json')))
             self.assertEqual(client.post('/scan',data={'csrf':'token','vendor':'v','library':'lib'}).status_code,303)
-            record=json.loads(next(work.glob('libraries/*/*/delivery_*.json')).read_text())
+            from ai_lib_qor.versions.store import read_json
+            record=read_json(next(work.glob('libraries/*/*/delivery_*.json')),'delivery_record')
             self.assertEqual(record['files'][0]['file_key'],'lib:lef:core')
             self.assertEqual(client.post('/formal-sync',data={'csrf':'token','formal_nl_id':'NL1'}).status_code,303)
             observation=json.loads(next((root/'runs/formal_observations').glob('*.json')).read_text())

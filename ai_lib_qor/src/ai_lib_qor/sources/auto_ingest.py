@@ -28,7 +28,7 @@ def auto_ingest(work, source, scan, *, classified=None):
         raise ValueError('扫描与配置不匹配')
     classified = classified if classified is not None else classify_observation(scan, source)
     paths = classified['version_paths']
-    result = {'created': 0, 'duplicates': 0, 'modified': 0, 'unverified': 0, 'blocked': 0,
+    result = {'created': 0, 'created_delivery_ids': [], 'duplicates': 0, 'modified': 0, 'unverified': 0, 'blocked': 0,
               'files': len(classified['files']), 'versions_discovered': len(paths),
               'unresolved': sum(r['classification'] == 'UNRESOLVED' for r in classified['files']),
               'reasons': list(classified.get('warnings', []))}
@@ -42,7 +42,14 @@ def auto_ingest(work, source, scan, *, classified=None):
     from ai_lib_qor.application.source_repository import SourceRepository
     parent = library_folder(work, vendor, library)
     with locked(parent):
-        existing = [(x['record'],x['evidence'] or {}) for x in SourceRepository(work).deliveries()
+        try:
+            source_items=SourceRepository(work).deliveries(vendor=vendor,library=library)
+        except ValueError as exc:
+            if '简化交付缺少来源标识映射' not in str(exc):raise
+            result['unverified']+=1;result['blocked']+=1
+            result['reasons'].append('缺少历史来源标识映射，暂停登记并保留现有文件：'+str(exc))
+            return result
+        existing = [(x['record'],x['evidence'] or {}) for x in source_items
                     if (x['record']['vendor_id'],x['record']['source_library_id'])==(vendor,library)]
         explicit_order = source.get('delivery_orders', {})
         if not isinstance(explicit_order, dict):
@@ -121,6 +128,7 @@ def auto_ingest(work, source, scan, *, classified=None):
             ep = evidence_path(target)
             evidence_created = False
             try:
+                from .minimal_delivery import simplify,compatibility,directory_birthtime
                 evidence = {
                     'schema_version': 'delivery_source_evidence.v1', 'scan_id': scan['scan_id'],
                     'files': after_scan['files'],
@@ -128,15 +136,17 @@ def auto_ingest(work, source, scan, *, classified=None):
                     'classification': {r['relative_in_version']: {
                         'basis': r['identity_basis'], 'corner_hint': r['corner_hint']
                     } for r in rows},
+                    'legacy_compatibility': compatibility(record),
                 }
                 write_atomic(ep, evidence, immutable=True)
                 evidence_created = True
-                write_atomic(target, record, immutable=True)
+                write_atomic(target, simplify(record,created_at=directory_birthtime(candidate)), immutable=True)
             except Exception:
                 if evidence_created and not target.exists(): ep.unlink(missing_ok=True)
                 raise
             existing.append((record, evidence))
             result['created'] += 1
+            result['created_delivery_ids'].append(record['delivery_id'])
         from ai_lib_qor.application.latest_pointers import refresh_library_locked
         refresh_library_locked(work,vendor,library)
         from ai_lib_qor.application.file_index import refresh_library_index_locked
@@ -148,4 +158,13 @@ def auto_ingest(work, source, scan, *, classified=None):
             # Delivery is already published: keep it and make the projection failure visible.
             result['file_index']={'action':'ERROR','error':str(exc)}
             result['reasons'].append('文件历史索引未更新：'+str(exc))
+    if result['created_delivery_ids']:
+        from ai_lib_qor.application.effective_workflow import process_registered_delivery
+        result['effective_updates']=[]
+        for delivery_id in result['created_delivery_ids']:
+            try:
+                outcomes=process_registered_delivery(work,vendor,library,delivery_id)
+                result['effective_updates'].extend({'delivery_id':delivery_id,**x} for x in outcomes)
+            except (OSError,ValueError,KeyError,TypeError) as exc:
+                result['effective_updates'].append({'delivery_id':delivery_id,'state':'ERROR','reasons':[str(exc)]})
     return result

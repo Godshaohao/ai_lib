@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type":"object", "additionalProperties":false,
+  "required":["version", "vendor", "library", "root", "observed_at", "views"],
+  "properties":{
+    "version":{"type":"string", "minLength":1},
+    "vendor":{"type":"string", "minLength":1},
+    "library":{"type":"string", "minLength":1},
+    "root":{"type":"string", "minLength":1},
+    "observed_at":{"type":"string", "minLength":1},
+    "views":{"type":"object", "additionalProperties":{"type":"object", "additionalProperties":{"type":"array", "items":{"type":"object", "additionalProperties":false, "required":["path", "target", "resolved"], "properties":{"path":{"type":"string", "minLength":1}, "target":{"type":"string", "minLength":1}, "resolved":{"type":"string", "minLength":1}}}}}}
+  }
+}

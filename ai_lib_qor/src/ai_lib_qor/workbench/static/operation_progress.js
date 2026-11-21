@@ -36,7 +36,7 @@
     let polling=true,last=null;
     const poll=async()=>{
       if(!polling)return;
-      try {const response=await fetch(`/operations/${id}`,{cache:'no-store'});if(response.ok){last=await response.json();display(last);}} catch (_) { /* The original request determines whether the operation failed. */ }
+      try {const response=await fetch(`/operations/${id}?wait=1`,{cache:'no-store'});if(response.ok){last=await response.json();display(last);}} catch (_) { /* The original request determines whether the operation failed. */ }
       if(polling)setTimeout(poll,600);
     };
     poll();

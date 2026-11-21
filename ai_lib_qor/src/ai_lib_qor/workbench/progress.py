@@ -1,12 +1,13 @@
 """Ephemeral, session-bound progress for one local workbench process."""
 from copy import deepcopy
-from threading import Lock
+from threading import Lock, Condition
 from time import monotonic
 
 
 class OperationProgress:
     def __init__(self):
         self._lock=Lock()
+        self._started=Condition(self._lock)
         self._items={}
 
     def start(self,ident,owner,label):
@@ -16,6 +17,7 @@ class OperationProgress:
             if ident in self._items:return False
             self._items[ident]={'owner':owner,'updated':now,'data':{'state':'RUNNING','label':label,
                 'message':'正在准备操作','completed':None,'total':None,'events':[]}}
+            self._started.notify_all()
             return True
 
     def update(self,ident,message,completed=None,total=None):
@@ -37,8 +39,9 @@ class OperationProgress:
             data['events'].append(str(message));data['events']=data['events'][-50:]
             item['updated']=monotonic()
 
-    def get(self,ident,owner):
-        with self._lock:
+    def get(self,ident,owner,*,wait=False):
+        with self._started:
+            if wait:self._started.wait_for(lambda:ident in self._items,timeout=1.0)
             item=self._items.get(ident)
             if not item or item['owner']!=owner:return None
             return deepcopy(item['data'])

@@ -1,0 +1,17 @@
+{
+  "raw_root": "/path/to/RAW",
+  "nl_root": "/path/to/NL2.5.3",
+  "nl_version": "NL2.5.3",
+  "update_raw": true,
+  "update_formal": true,
+  "update_index": true,
+  "auto_effective": true,
+  "libraries": {
+    "example_vendor": {
+      "example_library": {
+        "version_registration_times": {},
+        "excluded_versions": []
+      }
+    }
+  }
+}

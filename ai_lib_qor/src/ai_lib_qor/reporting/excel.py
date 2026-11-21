@@ -9,7 +9,10 @@ from .workbook_model import build_sheets
 def render_excel(report, path):
     path=Path(path)
     if path.exists():raise FileExistsError(f'报告已存在: {path}')
-    sheets=build_sheets(report)
+    if report.get('schema_version')=='check_result.path.v1':
+        from .path_workbook_model import build_path_sheets
+        sheets=build_path_sheets(report)
+    else:sheets=build_sheets(report)
     for name,headers,rows in sheets:
         for row in [headers,*rows]:
             if any(len(str(x))>32767 for x in row if x is not None):raise ValueError(f'{name}: 单元格内容超过 Excel 限制')
@@ -24,7 +27,7 @@ def render_excel(report, path):
         for index,(name,headers,rows) in enumerate(sheets,1):
             sheet=book.add_worksheet(name);sheet.hide_gridlines(2);sheet.set_row(0,28);sheet.set_row(1,34);sheet.set_row(3,32,header);sheet.set_default_row(30)
             sheet.merge_range(0,0,0,len(headers)-1,name,title)
-            scope='本表只使用本次 CheckResult 和明确提供的 v3 记录；未提供不表示不存在或通过。'
+            scope='本表只使用本次 CheckResult 和明确提供的来源记录；未提供不表示不存在或通过。'
             sheet.merge_range(1,0,1,len(headers)-1,scope,note)
             visible=rows if rows else [['未提供']+['']*(len(headers)-1)]
             sheet.add_table(3,0,3+len(visible),len(headers)-1,{'name':f'QorReview{index}','style':'Table Style Medium 2','columns':[{'header':h} for h in headers],'data':visible})

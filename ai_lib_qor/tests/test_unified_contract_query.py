@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 from ai_lib_qor.application.data_query import LibraryDataQuery
 ROOT=Path(__file__).resolve().parents[1]
-SOURCE=ROOT/'work'
+# Legacy-contract tests must use the archived fixture, not the active path workspace.
+SOURCE=ROOT/'exports/formal_link_target_review_huos9l37/work'
 SAMPLE=ROOT/'exports/effective_v2_simulation_20261118'
 VENDOR='SRAM22';LIB='sram22_256x16m8w8';SET=LIB
 
@@ -43,6 +44,8 @@ class UnifiedContractQueryTests(unittest.TestCase):
   self.assertEqual(lef['relation'],'DIFFERENT_SOURCE');self.assertTrue(lef['link_target'])
   self.assertEqual([x['source']['version'] for x in timeline['versions']],['20261024_de0a9a7','V06_SIMULATED'])
  def test_configured_order_works_without_evidence(self):
+  from ai_lib_qor.versions.store import read_json
+  for p in self.folder.glob('delivery_*.json'):p.write_text(json.dumps(read_json(p,'delivery_record')))
   for p in self.folder.glob('evidence_delivery_*.json'):p.unlink()
   cfg=json.loads((self.work/'scan_sources.json').read_text())
   for item in cfg['sources']:
@@ -72,6 +75,8 @@ class UnifiedContractQueryTests(unittest.TestCase):
   response=client.get('/api/library-data',query_string={'kind':'changed-pairs',**args})
   self.assertEqual(response.status_code,200);self.assertEqual(response.get_json(),json.loads(proc.stdout))
  def test_explicit_delivery_order_without_evidence(self):
+  from ai_lib_qor.versions.store import read_json
+  for p in self.folder.glob('delivery_*.json'):p.write_text(json.dumps(read_json(p,'delivery_record')))
   for p in self.folder.glob('evidence_delivery_*.json'):p.unlink()
   cfg=json.loads((self.work/'scan_sources.json').read_text())
   for item in cfg['sources']:
@@ -89,7 +94,8 @@ class UnifiedContractQueryTests(unittest.TestCase):
   for root,size in ((olddir,120),(newdir,124)):
    path=root/'LEF/sram22_256x16m8w8.lef';path.parent.mkdir(parents=True)
    path.write_text(f'MACRO MAC_A\n SIZE {size} BY 80 ;\n PIN A\n DIRECTION INPUT ;\n END A\nEND MAC_A\n')
-  oldpath=self.folder/'delivery_005.json';old=json.loads(oldpath.read_text());old['source_root']=str(olddir);oldpath.write_text(json.dumps(old))
+  from ai_lib_qor.versions.store import read_json
+  oldpath=self.folder/'delivery_005.json';old=read_json(oldpath,'delivery_record');old['source_root']=str(olddir);oldpath.write_text(json.dumps(old))
   new=dict(old,delivery_id='delivery_006_simulated',supplier_version='V06_SIMULATED',delivery_order=6,source_root=str(newdir))
   new['files']=[f for f in old['files'] if f['relative_path'] in ('LEF/sram22_256x16m8w8.lef','LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib')]
   new['package_scope']={'file_keys':[f['file_key'] for f in new['files'] if f['file_key']],'scope_confirmed':False}

@@ -5,7 +5,7 @@ import posixpath
 import json
 
 from .catalog import load_catalog
-from .source_repository import SourceRepository
+from .source_repository import SourceRepository, archive_fingerprint
 from ai_lib_qor.versions.composer import changes_between, members_map
 
 
@@ -30,6 +30,7 @@ def _subgroup(view, path):
 class LibraryDataQuery:
     def __init__(self,work,runs):
         self.work=work
+        self._archive_snapshot=archive_fingerprint(work)
         self.repo=SourceRepository(work)
         self.deliveries=self.repo.deliveries()
         cfg=Path(work)/'scan_sources.json';self._order_rules={};self._source_configs={}
@@ -50,6 +51,7 @@ class LibraryDataQuery:
         self._history=defaultdict(list)
         self._recorded_paths=defaultdict(list)
         self._file_index_cache={}
+        self._published_index_cache={}
         for item in self.deliveries:
             d=item['record']
             for f in item['files']:
@@ -153,6 +155,64 @@ class LibraryDataQuery:
         for i,new in enumerate(after):
             if i not in matched:emit(None,new,'UNMATCHED')
         return {'from':rev_a,'to':rev_b,'meaning':'CONFIRMED_IDENTITY_OR_EXACT_PATH_SOURCE_ONLY','files':rows}
+
+    def get_check_context(self,vendor,library,set_id,revision,baseline=None,selected_views=None):
+        """Build one in-memory check input from validated archives and the published index."""
+        from .effective_json import _flat_views
+        index=self.published_v3_index(vendor,library)
+        effective=index.get('effective_sets',{}).get(set_id)
+        if not effective:raise ValueError('有效集不在索引中')
+        revisions=[x for x in effective['revisions'] if x['revision']==revision]
+        if len(revisions)!=1:raise ValueError('目标版本不在索引中')
+        parent=revisions[0]['parent'];baseline=parent if baseline is None else baseline
+        if selected_views is not None and not isinstance(selected_views,(list,tuple,set)):raise ValueError('检查 View 选择无效')
+        views=set(selected_views) if selected_views is not None else None
+        if views is not None and (not views or any(not isinstance(x,str) or not x for x in views)):raise ValueError('检查 View 选择无效')
+        unresolved=[];formal=[]
+        def files_for(rev):
+            if not rev:return []
+            record=self._simple_revision(vendor,library,set_id,rev);result=[]
+            for (view,path),source in _flat_views(record).items():
+                if views is not None and view not in views:continue
+                node=index.get('views',{}).get(view,{}).get('files',{}).get(path,{})
+                indexed=[x for x in node.get('effective',{}).get(set_id,[]) if x.get('revision')==rev]
+                if len(indexed)!=1:raise ValueError('有效文件在索引中不存在或不唯一')
+                source_path=indexed[0].get('source_path',path)
+                loc=self._source_location(source,view,source_path)
+                if loc['resolution']!='RECORDED':unresolved.append({'revision':rev,'view':view,'path':path,'reason':loc['resolution']})
+                confirmed=loc.get('identity_status')=='CONFIRMED' and loc.get('classification')=='RESOLVED'
+                row={'view':view,'effective_path':path,'source_scope':{'vendor':source['vendor'],'library':source['library']},
+                     'delivery_id':loc.get('delivery_id'),'file_id':loc.get('file_id'),'file_key':loc.get('file_key') if confirmed else None,
+                     'identity_status':loc.get('identity_status','UNKNOWN'),'source_relative_path':source_path,'absolute_path':loc.get('absolute_path'),
+                     'resolution':loc['resolution'],'subtype':node.get('model')}
+                result.append(row)
+                if rev==revision:
+                    for ref in node.get('formal',[]):formal.append({'view':view,'path':path,**ref})
+            return result
+        selected=files_for(revision);base=files_for(baseline)
+        changes=[];logical=[]
+        if baseline:
+            changes=[{**x,'content_status':'NOT_CHECKED'} for x in self.compare_revisions(vendor,library,set_id,baseline,revision)['files'] if views is None or x['view'] in views]
+            try:logical=self.compare_revisions_logical(vendor,library,set_id,baseline,revision)['files']
+            except ValueError as exc:unresolved.append({'revision':baseline,'reason':str(exc)})
+            if views is not None:logical=[x for x in logical if (x.get('after') or x.get('before'))['view'] in views]
+        for view,group in index.get('views',{}).items():
+            if views is not None and view not in views:continue
+            for item in group.get('unmatched_formal',[]):formal.append({'view':view,'unmatched':True,**item})
+        return {'target':{'owner':effective['owner'],'set_id':set_id,'revision':revision,'parent':parent},
+                'selected_files':selected,'baseline_files':base,'source_changes':changes,'logical_matches':logical,
+                'formal_refs':formal,'unresolved':unresolved,'provenance':{'status':'VALID','source':'PUBLISHED_INDEX','content_status':'NOT_CHECKED'}}
+
+    def published_v3_index(self,vendor,library):
+        from ai_lib_qor.sources.layout import library_folder
+        from copy import deepcopy
+        _,state=self._verified_file_index(vendor,library)
+        if state!='VALID':raise ValueError('v3 索引不可用：'+state)
+        saved=self._published_index_cache.get((vendor,library))
+        if not saved:raise ValueError('需要已发布的 v3 索引')
+        path=library_folder(self.work,vendor,library)/'file_index.json';stat=path.stat()
+        if path.is_symlink() or (stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns)!=saved[1]:raise ValueError('索引在核验后发生变化')
+        return deepcopy(saved[0])
 
     def file_timeline(self,vendor,library,set_id,view,path,revisions):
         from .effective_json import file_timeline
@@ -307,12 +367,14 @@ class LibraryDataQuery:
         from .file_index import repository_index_state
         from ai_lib_qor.sources.layout import library_folder
         key=(vendor,library)
+        if self._archive_snapshot!=archive_fingerprint(self.work):return (None,'STALE')
         if key in self._file_index_cache:return self._file_index_cache[key]
         path=library_folder(self.work,vendor,library)/'file_index.json'
         if path.is_symlink() or not path.is_file():
             self._file_index_cache[key]=(None,'MISSING');return self._file_index_cache[key]
         items=[x for x in self.deliveries if (x['record']['vendor_id'],x['record']['source_library_id'])==(vendor,library)]
         try:
+            st=path.stat();fingerprint=(st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns)
             saved=json.loads(path.read_text(encoding='utf-8'))
             if not isinstance(saved,dict):raise ValueError('索引格式无效')
             if self.list_deliveries(vendor,library)['ordering_status']!='CONFIRMED':
@@ -320,7 +382,10 @@ class LibraryDataQuery:
             elif saved.get('schema')=='file_index.v3':
                 from .file_index_v3 import build_library_index,raw_compat,preserves_history
                 expected=build_library_index(self.work,vendor,library,query=self)
-                if saved==expected:result=(raw_compat(saved),'VALID')
+                after=path.stat()
+                if fingerprint!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns):raise ValueError('索引核验中发生变化')
+                if saved==expected:
+                    self._published_index_cache[key]=(saved,fingerprint);result=(raw_compat(saved),'VALID')
                 elif preserves_history(saved,expected):result=(None,'STALE')
                 else:result=(None,'INVALID')
             else:
@@ -500,6 +565,7 @@ def query_data(work,runs,kind,**options):
               'deliveries':('vendor','library'),'compare-revisions':('vendor','library','set_id','revision','other_revision'),
               'compare-revisions-logical':('vendor','library','set_id','revision','other_revision'),
               'changed-pairs':('vendor','library','set_id','revision','other_revision'),
+              'check-context':('vendor','library','set_id','revision'),
               'formal-effective':('vendor','library','set_id','revision','version','snapshot'),
               'effective-timeline':('vendor','library','set_id','view','path','revisions')}
     if kind not in required:raise ValueError('不支持的查询类型')
@@ -508,9 +574,10 @@ def query_data(work,runs,kind,**options):
     if kind=='effective-v2':
         return get_effective_v2_files(work,options['vendor'],options['library'],options['set_id'],options['revision'],options.get('view'))
     q=LibraryDataQuery(work,runs);v=options.get('vendor');l=options.get('library');view=options.get('view')
+    if kind=='check-context':return q.get_check_context(v,l,options['set_id'],options['revision'],baseline=options.get('other_revision'),selected_views=[view] if view else None)
     if kind=='index-v3':
-        from .file_index_v3 import build_library_index
-        return {'index_status':q.file_index_status(v,l)['status'],'index':build_library_index(work,v,l,query=q)}
+        status=q.file_index_status(v,l)['status']
+        return {'index_status':status,'index':q.published_v3_index(v,l) if status=='VALID' else None}
     if kind=='deliveries':return q.list_deliveries(v,l)
     if kind=='compare-revisions':return q.compare_revisions(v,l,options['set_id'],options['revision'],options['other_revision'])
     if kind=='compare-revisions-logical':return q.compare_revisions_logical(v,l,options['set_id'],options['revision'],options['other_revision'])

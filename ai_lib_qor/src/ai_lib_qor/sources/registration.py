@@ -47,11 +47,13 @@ def register_delivery(work, source, scan, version_dir, metadata, mapping):
         target=parent/next_filename(parent,'delivery',with_evidence=True);ep=evidence_path(target)
         evidence_created=False
         try:
+            from .minimal_delivery import simplify,compatibility,directory_birthtime
             write_atomic(ep,{'schema_version':'delivery_source_evidence.v1','scan_id':scan['scan_id'],'files':current2['files'],
                              'order_basis':'manual_confirmation',
-                             'classification':{path:{'basis':'explicit'} for path in mapping}},immutable=True)
+                             'classification':{path:{'basis':'explicit'} for path in mapping},
+                             'legacy_compatibility':compatibility(record)},immutable=True)
             evidence_created=True
-            write_atomic(target,record,immutable=True)
+            write_atomic(target,simplify(record,created_at=directory_birthtime(candidate)),immutable=True)
         except Exception:
             if evidence_created and not target.exists(): ep.unlink(missing_ok=True)
             raise
@@ -63,6 +65,16 @@ def register_delivery(work, source, scan, version_dir, metadata, mapping):
         except (OSError,ValueError,KeyError,TypeError) as exc:
             import warnings
             warnings.warn(f'交付已登记，文件索引未刷新：{exc}',RuntimeWarning,stacklevel=2)
+    try:
+        from ai_lib_qor.application.effective_workflow import process_registered_delivery
+        outcomes=process_registered_delivery(work_root,vendor,library,delivery_id)
+        pending=[x for x in outcomes if x.get('state') in ('NEEDS_REVIEW','ERROR','PUBLISHED_INDEX_STALE')]
+        if pending:
+            import warnings
+            warnings.warn('交付已登记，部分有效集需要核查：'+str(pending),RuntimeWarning,stacklevel=2)
+    except (OSError,ValueError,KeyError,TypeError) as exc:
+        import warnings
+        warnings.warn(f'交付已登记，有效集自动更新失败：{exc}',RuntimeWarning,stacklevel=2)
     return target
 
 

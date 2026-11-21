@@ -76,6 +76,23 @@ class WebProgressTests(unittest.TestCase):
             result=client.get('/operations/'+op).get_json()
             self.assertEqual(result['state'],'FAILED');self.assertIn('扫描',result['message'])
 
+    def test_progress_poll_can_wait_for_operation_registration(self):
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);work=root/'work';work.mkdir()
+            (work/'scan_sources.json').write_text(json.dumps({'sources':[{'vendor_id':'v','source_library_id':'lib','root':str(root/'raw')}]}))
+            app=create_app(ROOT/'examples/pipeline',root/'runs',work);starter=app.test_client();watcher=app.test_client()
+            with starter.session_transaction() as session:session['csrf']='test-token'
+            watcher.set_cookie('session',starter.get_cookie('session').value)
+            op='e'*32;responses=[]
+            thread=threading.Thread(target=lambda:responses.append(watcher.get('/operations/'+op+'?wait=1')))
+            thread.start();time.sleep(.05)
+            with patch('ai_lib_qor.workbench.app.run_scan_and_ingest',return_value={'scan_id':'x','status':'COMPLETE'}), patch('ai_lib_qor.workbench.app.ingest_result',return_value={}):
+                starter.post('/scan',data={'csrf':'test-token','vendor':'v','library':'lib','_operation_id':op})
+            thread.join(3);self.assertFalse(thread.is_alive())
+            self.assertEqual(responses[0].status_code,200)
+            self.assertIn(responses[0].get_json()['state'],('RUNNING','SUCCEEDED'))
+
     def test_in_place_modification_is_reported_as_partial(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);work=root/'work';work.mkdir()

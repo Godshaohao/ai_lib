@@ -49,24 +49,24 @@ class V3IndexCheckFlowTests(unittest.TestCase):
   from ai_lib_qor.application.v3_checks import run_v3_ip
   result=run_v3_ip(self.work,self.root/'runs',vendor='v',library='lib',set_id='core_ip',profile=self.profile)
   self.assertEqual(result['state'],'SUCCEEDED',result.get('error'))
-  folder=self.root/'runs'/result['id'];overall=json.loads((folder/'overall.json').read_text())
+  folder=self.work/'libraries/v/lib';overall=json.loads((folder/f"overall_{result['id']}.json").read_text())
   self.assertEqual([r['revision'] for r in overall['versions']],['rev_0001','rev_0002','rev_0003'])
   rev3=overall['versions'][2]
   self.assertEqual(rev3['index_source_changes'],1)
   self.assertEqual(rev3['summary']['files_with_new_source'],0)
   for row in overall['versions']:
-   child=self.root/'runs'/row['run_id'];check=json.loads((child/'check.json').read_text())
+   child=folder;check=json.loads((child/f"check_{row['run_id']}.json").read_text())
    self.assertEqual(row['summary'],check['summary']);self.assertEqual(row['checks'],check['quality_checks'])
-   self.assertTrue((child/'report.xlsx').is_file())
-   with ZipFile(child/'report.xlsx') as z:self.assertIn('LEF_LIBERTY_PIN_MATCH',z.read('xl/sharedStrings.xml').decode())
+   report=child/f"report_{row['run_id']}.xlsx";self.assertTrue(report.is_file())
+   with ZipFile(report) as z:self.assertIn('LEF_LIBERTY_PIN_MATCH',z.read('xl/sharedStrings.xml').decode())
    from openpyxl import load_workbook
-   book=load_workbook(child/'report.xlsx',data_only=True)
+   book=load_workbook(report,data_only=True)
    self.assertIn('12-有效文件来源',book.sheetnames)
    self.assertIn('13-版本来源对照',book.sheetnames)
    values=[tuple(x.value for x in r) for r in book['12-有效文件来源']]
    self.assertTrue(any('lef/core.lef' in r for r in values));self.assertTrue(any('lib/core.lib' in r for r in values))
-  self.assertTrue((folder/'overall.xlsx').is_file())
-  with ZipFile(folder/'overall.xlsx') as z:
+  output=folder/f"overall_{result['id']}.xlsx";self.assertTrue(output.is_file())
+  with ZipFile(output) as z:
    text=z.read('xl/sharedStrings.xml').decode();self.assertIn('rev_0003',text);self.assertIn('LEF_LIBERTY_PIN_MATCH',text)
   self.assertGreaterEqual(result['facts_reused'],1)
  def test_missing_and_unconfirmed_are_not_fabricated(self):
@@ -74,7 +74,7 @@ class V3IndexCheckFlowTests(unittest.TestCase):
   (self.root/'raw/V02/lef/core.lef').unlink()
   result=run_v3_ip(self.work,self.root/'runs',vendor='v',library='lib',set_id='core_ip',profile=self.profile)
   self.assertEqual(result['state'],'PARTIAL');self.assertTrue(any(x['state']=='FAILED' for x in result['children']))
-  self.assertTrue((self.root/'runs'/result['id']/'overall.xlsx').is_file())
+  self.assertTrue((self.work/'libraries/v/lib'/f"overall_{result['id']}.xlsx").is_file())
  def test_wrong_index_and_unsafe_output_are_rejected(self):
   from ai_lib_qor.application.v3_checks import run_v3_ip
   (self.work/'libraries/v/lib/file_index.json').unlink()
@@ -122,11 +122,21 @@ class V3IndexCheckFlowTests(unittest.TestCase):
   response=client.post('/index-v3/run',data=data)
   self.assertEqual(response.status_code,303);detail=client.get(response.location)
   self.assertIn('facts_',detail.get_data(as_text=True))
-  run_id=response.location.rsplit('/',1)[-1];fact=next((self.root/'runs'/run_id).glob('facts_*.json'))
+  import html,re
+  markup=detail.get_data(as_text=True)
+  href=html.unescape(re.search(r'<a href="([^"]+)">← 返回当前 IP 的检查与报告</a>',markup).group(1))
+  self.assertIn('/library?',href);self.assertIn('set_id=core_ip',href);self.assertIn('revision=rev_0002',href)
+  self.assertEqual(client.get(href).status_code,200)
+  from ai_lib_qor.application.library_runs import history as library_history
+  run_id=response.location.rsplit('/',1)[-1];row=next(x for x in library_history(self.work) if x['id']==run_id);fact=self.work/'libraries/v/lib'/row['facts_files'][0]
   downloaded=client.get(response.location+'/artifacts/'+fact.name);self.assertEqual(downloaded.status_code,200);downloaded.close()
   batch=client.post('/index-v3/ip',data=data);self.assertEqual(batch.status_code,303)
-  status=json.loads((self.root/'runs'/batch.location.rsplit('/',1)[-1]/'status.json').read_text())
+  status=next(x for x in library_history(self.work) if x['id']==batch.location.rsplit('/',1)[-1])
   self.assertEqual(status['state'],'SUCCEEDED');self.assertEqual(len(status['children']),3)
+  import html,re
+  batch_html=client.get(batch.location).get_data(as_text=True)
+  batch_back=html.unescape(re.search(r'<a href="([^"]+)">← 返回当前 IP 的检查与报告</a>',batch_html).group(1))
+  self.assertIn('revision=rev_0003',batch_back);self.assertEqual(client.get(batch_back).status_code,200)
   denied=client.post('/index-v3/run',data={**data,'profile':'../profile.json'});self.assertEqual(denied.status_code,400)
   denied=client.post('/index-v3/run',data={**data,'csrf':'bad'});self.assertEqual(denied.status_code,403)
   (self.work/'libraries/v/lib/file_index.json').unlink()

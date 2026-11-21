@@ -31,15 +31,77 @@ def parser():
     fi=sub.add_parser('file-index-refresh',help='按归档 Delivery、Formal、Effective 刷新单库 v3 索引')
     for name in ('work','vendor','library'):fi.add_argument('--'+name,required=True)
     fi.add_argument('--rebuild',action='store_true',help='确认历史记录后强制重建已知格式的派生索引')
+    migration=sub.add_parser('delivery-simplify',help='迁移一个库的旧交付为七字段结构，并保留既有来源引用')
+    for name in ('work','vendor','library'):migration.add_argument('--'+name,required=True)
+    inventory=sub.add_parser('inventory-roots',help='从 RAW 总目录和 NL 总目录生成简化清单与按库快照')
+    inventory.add_argument('--raw-root');inventory.add_argument('--nl-root');inventory.add_argument('--output',required=True)
+    inventory.add_argument('--nl-version',help='正式版本；省略时从目录名提取')
+    for name in ('raw','formal','index'):
+        group=inventory.add_mutually_exclusive_group()
+        group.add_argument('--'+name,dest='update_'+name,action='store_true',default=None)
+        group.add_argument('--no-'+name,'--skip-'+name,dest='update_'+name,action='store_false')
+    auto=inventory.add_mutually_exclusive_group()
+    auto.add_argument('--auto-effective',dest='auto_effective',action='store_true',default=None)
+    auto.add_argument('--no-auto-effective',dest='auto_effective',action='store_false')
+    inventory.add_argument('--vendor');inventory.add_argument('--library')
+    init=sub.add_parser('minimal-effective-init',help='按同库 Formal 链接初始化路径式有效版本')
+    for name in ('work','vendor','library','formal'):init.add_argument('--'+name,required=True)
+    init.add_argument('--include',action='append',help='可重复指定 VIEW=RAW相对路径；省略表示选择全部正式链接')
+    update=sub.add_parser('minimal-effective-update',help='以明确的文件操作更新路径式有效版本')
+    for name in ('work','vendor','library','operations'):update.add_argument('--'+name,required=True)
+    for command in ('path-effective-preview','path-effective-apply'):
+        operation=sub.add_parser(command,help='预览或发布路径式有效版本变更')
+        for name in ('work','vendor','library','operations'):operation.add_argument('--'+name,required=True)
+        if command.endswith('apply'):operation.add_argument('--expected-parent',required=True)
+    restore=sub.add_parser('path-effective-restore',help='将历史成员组合恢复为新版本')
+    for name in ('work','vendor','library','revision','expected-parent'):restore.add_argument('--'+name,required=True)
+    context=sub.add_parser('path-check-context',help='查询检查的有效成员与基线')
+    for name in ('work','vendor','library','revision'):context.add_argument('--'+name,required=True)
+    context.add_argument('--baseline')
+    migration_path=sub.add_parser('path-migrate-library',help='将旧库历史迁移到独立的路径式工作目录')
+    for name in ('source','destination','vendor','library'):migration_path.add_argument('--'+name,required=True)
+    preview_delivery=sub.add_parser('path-delivery-preview',help='预览交付对当前有效成员的更新')
+    for name in ('work','vendor','library','version'):preview_delivery.add_argument('--'+name,required=True)
+    for command in ('path-delivery-exclude','path-delivery-include'):
+        policy=sub.add_parser(command,help='设置路径式交付是否参与后续有效版本更新')
+        for name in ('work','vendor','library','version'):policy.add_argument('--'+name,required=True)
+    simple_index=sub.add_parser('minimal-index-refresh',help='从简化 Delivery、Formal、Effective 重建单库文件索引')
+    for name in ('work','vendor','library'):simple_index.add_argument('--'+name,required=True)
+    simple_query=sub.add_parser('minimal-index-query',help='校验并查询简化文件索引')
+    for name in ('work','vendor','library','view','path'):simple_query.add_argument('--'+name,required=True)
+    simple_query.add_argument('--revision');simple_query.add_argument('--version')
+    path_facts=sub.add_parser('minimal-facts',help='使用路径式 file_index 为指定文件构建 FileFacts')
+    for name in ('work','vendor','library','view','path'):path_facts.add_argument('--'+name,required=True)
+    select=path_facts.add_mutually_exclusive_group(required=True)
+    select.add_argument('--version',help='精确交付版本')
+    select.add_argument('--revision',help='有效版本')
+    for command in ('minimal-check-revision','minimal-check-library'):
+        check_new=sub.add_parser(command,help='基于路径式 FileFacts 执行有效版本检查并生成 Excel')
+        for name in ('work','vendor','library'):check_new.add_argument('--'+name,required=True)
+        check_new.add_argument('--revision',action='append',required=command=='minimal-check-revision')
     query=sub.add_parser('data-query',help='只读查询 JSON 的 RAW / 历史 / 有效 / Formal 视图')
     query.add_argument('--work',required=True);query.add_argument('--runs',default='.')
-    query.add_argument('--kind',required=True,choices=['raw','simple-raw','history','history-at','history-index','index-status','index-v3','logical-history','effective','effective-v2','simple-effective','formal','simple-formal','compare','deliveries','compare-revisions','compare-revisions-logical','changed-pairs','formal-effective','effective-timeline'])
+    query.add_argument('--kind',required=True,choices=['raw','simple-raw','history','history-at','history-index','index-status','index-v3','logical-history','effective','effective-v2','simple-effective','formal','simple-formal','compare','deliveries','compare-revisions','compare-revisions-logical','changed-pairs','formal-effective','effective-timeline','check-context'])
     for name in ('vendor','library','version','view','path','file-key','owner','set-id','revision','snapshot','delivery-id','other-revision'):query.add_argument('--'+name)
     query.add_argument('--revisions',nargs='+')
     eff=sub.add_parser('effective-build',help='从简化 RAW JSON 和可选父版本计算独立有效版本')
     for name in ('raw','out','owner-type','owner-id','revision'):eff.add_argument('--'+name,required=True)
     eff.add_argument('--view',action='append',required=True);eff.add_argument('--parent');eff.add_argument('--work')
     eff.add_argument('--allow-cross-library',action='store_true')
+    for name in ('effective-preview','effective-apply'):
+        workflow=sub.add_parser(name,help='预览或发布已确认身份的增量有效版本')
+        for option in ('work','vendor','library','set-id','delivery-id'):workflow.add_argument('--'+option,required=True)
+        workflow.add_argument('--include-file-key',action='append',help='明确选择属于此有效集的已确认文件位，可重复')
+        if name=='effective-apply':
+            workflow.add_argument('--expected-parent',required=True)
+            workflow.add_argument('--expected-preview-token',help='人工选择文件时使用预览返回的确认值')
+    for name in ('delivery-exclude','delivery-include'):
+        policy=sub.add_parser(name,help='调整单个有效集的交付排除策略')
+        for option in ('work','vendor','library','set-id','delivery-id','actor','reason'):policy.add_argument('--'+option,required=True)
+    for name in ('acceptance-rollback','effective-restore'):
+        operation=sub.add_parser(name,help='回退采纳或基于历史文件组合创建新的有效版本')
+        for option in ('work','vendor','library','set-id','revision','actor','reason'):operation.add_argument('--'+option,required=True)
+        if name=='effective-restore':operation.add_argument('--expected-parent',required=True)
     base=sub.add_parser('effective-formal-init',help='从 Formal 快照及 RAW 记录初始化 v2 版本')
     for name in ('formal','out','owner-type','owner-id'):base.add_argument('--'+name,required=True)
     base.add_argument('--raw',action='append',required=True);base.add_argument('--view',action='append',required=True);base.add_argument('--work')
@@ -79,6 +141,67 @@ def avoid_source(output, root):
 
 
 def run(a):
+    if a.command=='path-migrate-library':
+        from ai_lib_qor.application.path_migration import migrate_legacy_library
+        return migrate_legacy_library(a.source,a.destination,a.vendor,a.library)
+    if a.command=='path-delivery-preview':
+        from ai_lib_qor.application.minimal_effective import preview_delivery
+        return preview_delivery(a.work,a.vendor,a.library,a.version)
+    if a.command in ('path-delivery-exclude','path-delivery-include'):
+        from ai_lib_qor.application.path_config import set_version_excluded
+        return set_version_excluded(a.work,a.vendor,a.library,a.version,a.command=='path-delivery-exclude')
+    if a.command=='path-check-context':
+        from ai_lib_qor.application.path_query import PathDataQuery
+        result=PathDataQuery(a.work).get_check_context(a.vendor,a.library,a.revision,baseline=a.baseline)
+        return {key:value for key,value in result.items() if key!='index'}
+    if a.command in ('path-effective-preview','path-effective-apply','path-effective-restore'):
+        from ai_lib_qor.application.minimal_effective import preview_update,apply_update,restore_revision
+        args=(a.work,a.vendor,a.library)
+        if a.command=='path-effective-preview':return preview_update(*args,read(a.operations))
+        if a.command=='path-effective-apply':return apply_update(*args,read(a.operations),expected_parent=a.expected_parent)
+        return restore_revision(*args,a.revision,expected_parent=a.expected_parent)
+    if a.command in ('minimal-check-revision','minimal-check-library'):
+        from ai_lib_qor.application.minimal_checks import run_revision,run_library
+        if a.command=='minimal-check-revision':
+            if len(a.revision)!=1:raise ValueError('单版本检查必须恰好指定一个版本')
+            return run_revision(a.work,a.vendor,a.library,a.revision[0])
+        return run_library(a.work,a.vendor,a.library,revisions=a.revision)
+    if a.command=='minimal-facts':
+        from ai_lib_qor.application.minimal_facts import build_facts
+        return build_facts(a.work,a.vendor,a.library,a.view,a.path,version=a.version,revision=a.revision)
+    if a.command in ('minimal-index-refresh','minimal-index-query'):
+        from ai_lib_qor.application.minimal_file_index import refresh_index,query_path
+        if a.command=='minimal-index-refresh':return refresh_index(a.work,a.vendor,a.library)
+        return query_path(a.work,a.vendor,a.library,a.view,a.path,revision=a.revision,version=a.version)
+    if a.command in ('minimal-effective-init','minimal-effective-update'):
+        from ai_lib_qor.application.minimal_effective import initialize_from_formal,update_effective
+        if a.command=='minimal-effective-init':
+            include=None
+            if a.include is not None:
+                if any('=' not in x for x in a.include):raise ValueError('成员选择格式应为 VIEW=相对路径')
+                include=[tuple(x.split('=',1)) for x in a.include]
+            return initialize_from_formal(a.work,a.vendor,a.library,a.formal,include=include)
+        return update_effective(a.work,a.vendor,a.library,read(a.operations))
+    if a.command=='inventory-roots':
+        from ai_lib_qor.sources.root_inventory import build_from_roots
+        from ai_lib_qor.application.path_config import load_path_config,update_options
+        config=load_path_config(a.output)
+        options=update_options(config,**{key:getattr(a,key) for key in ('update_raw','update_formal','update_index','auto_effective')})
+        return build_from_roots(a.raw_root or config.get('raw_root'),a.nl_root or config.get('nl_root'),a.output,nl_version=a.nl_version or config.get('nl_version'),vendor=a.vendor,library=a.library,**options)
+    if a.command=='delivery-simplify':
+        from ai_lib_qor.sources.minimal_delivery import migrate_library
+        return migrate_library(a.work,a.vendor,a.library)
+    if a.command in ('delivery-exclude','delivery-include'):
+        from ai_lib_qor.application.effective_workflow import set_delivery_exclusion
+        return set_delivery_exclusion(a.work,a.vendor,a.library,a.set_id,a.delivery_id,excluded=a.command=='delivery-exclude',actor=a.actor,reason=a.reason)
+    if a.command in ('acceptance-rollback','effective-restore'):
+        from ai_lib_qor.application.effective_workflow import rollback_acceptance,restore_effective_revision
+        args=(a.work,a.vendor,a.library,a.set_id,a.revision)
+        return rollback_acceptance(*args,actor=a.actor,reason=a.reason) if a.command=='acceptance-rollback' else restore_effective_revision(*args,expected_parent_revision=a.expected_parent,actor=a.actor,reason=a.reason)
+    if a.command in ('effective-preview','effective-apply'):
+        from ai_lib_qor.application.effective_workflow import preview_effective_update, apply_effective_update
+        args=(a.work,a.vendor,a.library,a.set_id,a.delivery_id)
+        return preview_effective_update(*args,include_file_keys=a.include_file_key) if a.command=='effective-preview' else apply_effective_update(*args,expected_parent_revision=a.expected_parent,include_file_keys=a.include_file_key,expected_preview_token=a.expected_preview_token)
     if a.command in ('run-v3-revision','run-v3-ip'):
         from ai_lib_qor.application.v3_checks import run_v3_ip,run_v3_revision
         profile_path=Path(a.profile)
@@ -228,6 +351,8 @@ def main():
     try:
         args=parser().parse_args();result=run(args);print(json.dumps(result,ensure_ascii=False,indent=2))
         if args.command=='file-index-refresh' and result.get('action')=='ORDER_UNCONFIRMED':return 1
+        if args.command=='inventory-roots' and result.get('indexes_failed',0):return 1
+        if args.command=='inventory-roots' and result.get('effective_pending',0) and any('自动发布' in x for x in result.get('warnings',[])):return 1
         if result.get('state') in ('FAILED','PARTIAL') or (args.command in ('scan','formal-sync') and any(x.get('status') != 'COMPLETE' or x.get('ingest',{}).get('blocked',0) or x.get('ingest',{}).get('file_index',{}).get('action') == 'ERROR' for x in result.get('sources',[]))): return 1
     except (OSError,ValueError,KeyError,ImportError) as e:print(f'错误: {e}',file=sys.stderr);return 1
     return 0

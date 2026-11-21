@@ -52,6 +52,12 @@ def validate(data, name):
 
 def read_json(path, schema):
     data = json.loads(Path(path).read_text(encoding='utf-8'))
+    if schema=='delivery_record' and isinstance(data,dict) and set(data)=={'vendor','library','version','version_date','directory_created_at','root','views'}:
+        from ai_lib_qor.sources.layout import evidence_path
+        from ai_lib_qor.sources.minimal_delivery import expand
+        evidence=evidence_path(Path(path).resolve() if Path(path).name=='latest_delivery.json' else path)
+        if evidence.is_symlink() or not evidence.is_file():raise ValueError('简化交付缺少来源标识映射')
+        return expand(data,json.loads(evidence.read_text(encoding='utf-8')))
     validate(data, schema)
     return data
 

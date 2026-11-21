@@ -13,7 +13,7 @@ def compare(lef,liberty,lef_key,liberty_key):
     problems=[]
     for name,macro in sorted(macros.items()):
         if name not in cells:problems.append(f'{name}: Liberty 未找到 Cell');continue
-        lp={x['name']:x['direction'].upper() for x in _unique(macro['pins'],'LEF Pin').values()}
+        lp={x['name']:x['direction'].upper() for x in _unique(macro['pins'],'LEF Pin').values() if str(x.get('use') or '').upper() not in ('POWER','GROUND')}
         bp={x['name']:x['direction'].upper() for x in _unique(cells[name]['pins'],'Liberty Pin').values()}
         if not lp or not bp:
             check.update(result='INCONCLUSIVE',coverage='PARTIAL',detail=f'{name}: 未发现可核实的信号 Pin；不能判断一致')

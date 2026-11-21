@@ -53,7 +53,10 @@ def sidebar_groups(entries, configured, work=None):
     return [grouped[key] for key in sorted(grouped)]
 
 
-def create_app(plan_root, runs_root, work_root=None):
+def create_app(plan_root, runs_root, work_root=None, *, path_mode=None):
+    from .path_app import is_path_work,create_path_app
+    if path_mode is True or (path_mode is None and is_path_work(work_root)):
+        return create_path_app(work_root)
     app = Flask(__name__)
     operations=OperationProgress()
     app.secret_key = os.urandom(32)
@@ -62,6 +65,13 @@ def create_app(plan_root, runs_root, work_root=None):
     if not plans.is_dir(): raise ValueError('计划目录不存在')
     runs.mkdir(parents=True, exist_ok=True)
     if runs.is_relative_to(plans): raise ValueError('运行输出不能位于计划目录中')
+
+    def all_history():
+        from ai_lib_qor.application.library_runs import history as library_history
+        rows=history(runs)+library_history(work_root)
+        counts={}
+        for row in rows:counts[row['id']]=counts.get(row['id'],0)+1
+        return sorted((row for row in rows if counts[row['id']]==1),key=lambda x:x.get('started_at',''),reverse=True)
 
     @app.before_request
     def local_only():
@@ -100,7 +110,7 @@ def create_app(plan_root, runs_root, work_root=None):
     @app.get('/operations/<ident>')
     def operation_status(ident):
         if not re.fullmatch(r'[0-9a-f]{32}',ident):abort(404)
-        status=operations.get(ident,session['csrf'])
+        status=operations.get(ident,session['csrf'],wait=request.args.get('wait')=='1')
         if status is None:abort(404)
         response=jsonify(status);response.headers['Cache-Control']='no-store'
         return response
@@ -177,7 +187,7 @@ def create_app(plan_root, runs_root, work_root=None):
             version_views[item['revision_id']] = counts
         nl_rows = formal_comparison(revision, snapshot, snapshots)
         plan_readiness = [{'revision':r['revision_id'], 'plans':matching_plans[r['revision_id']]} for r in versions]
-        runs_list = history(runs)
+        runs_list = all_history()
         selected_runs = [r for r in runs_list if selected and r.get('owner') == {k:selected[k] for k in ('vendor','library','ip')}]
         overall_runs = [r for r in selected_runs if r.get('target_kind') == 'IP_VERSION_BATCH']
         revision_runs = {v['revision_id']: [r for r in selected_runs if r.get('target_kind') != 'IP_VERSION_BATCH' and (r.get('expected_revision') or r.get('target')) == v['revision_id']] for v in versions}
@@ -265,10 +275,53 @@ def create_app(plan_root, runs_root, work_root=None):
             try:load_v2_for_check(library_folder(work_root,vendor,library)/f'effective_{set_id}_{int(revision[4:]):03d}.json',work_root)
             except (OSError,ValueError,KeyError) as exc:v2_blocked=str(exc)
         index_refresh_message=session.pop('index_refresh_message',None)
-        return render_template('library_workspace.html', vendor=vendor, library=library, index_refresh_message=index_refresh_message,
+        policy_message=session.pop('policy_message',None);version_message=session.pop('version_message',None);excluded_ids=set();policy_error=None;latest_revision=None
+        if v2_selected:
+            latest_revision=max((x['revision'] for x in v2_versions if x['set_id']==set_id),key=lambda x:int(x[4:]))
+            try:
+                from ai_lib_qor.application.effective_workflow import excluded_deliveries
+                excluded_ids=excluded_deliveries(work_root,vendor,library,set_id)
+            except (OSError,ValueError,KeyError,TypeError) as exc:policy_error=str(exc)
+        return render_template('library_workspace.html', vendor=vendor, library=library, index_refresh_message=index_refresh_message,policy_message=policy_message,version_message=version_message,latest_revision=latest_revision,excluded_ids=excluded_ids,policy_error=policy_error,
                                sidebar_libraries=sidebar_groups(entries, [dict(vendor_id=k[0],source_library_id=k[1]) for k in catalog.libraries],work_root),
                                entries=entries, selected=None, view='library', v2_versions=v2_versions,v2_selected=v2_selected,v2_plans=v2_plans,v2_blocked=v2_blocked,
                                v2_comparison=v2_comparison,v2_comparison_error=v2_comparison_error,v2_baselines=v2_baselines,v2_baseline=v2_baseline,index_status=index_status,v3_profiles=v3_profile_names(plans),v2_ip_sets=list(v2_ip_sets.values()),csrf=session['csrf'], **context)
+
+    @app.post('/delivery/policy')
+    def delivery_policy():
+        from ai_lib_qor.application.effective_workflow import set_delivery_exclusion
+        vendor=request.form.get('vendor','');library=request.form.get('library','');set_id=request.form.get('set_id','');revision=request.form.get('revision','')
+        action=request.form.get('action','')
+        if action not in ('exclude','include'):abort(400)
+        try:
+            result=set_delivery_exclusion(work_root,vendor,library,set_id,request.form.get('delivery_id',''),excluded=action=='exclude',actor=request.form.get('actor',''),reason=request.form.get('reason',''))
+            message={'EXCLUDED':'已排除后续参与','INCLUDED':'已恢复参与','UNCHANGED':'状态无变化'}[result['state']]
+            if result['current_revision_uses_delivery']:message+='；当前版本仍引用该交付，历史未修改'
+            session['policy_message']=message
+        except (OSError,ValueError,KeyError,TypeError) as exc:session['policy_message']='操作失败：'+str(exc)
+        return redirect(url_for('library_workspace',vendor=vendor,library=library,set_id=set_id,revision=revision)+'#deliveries',code=302)
+
+    @app.post('/effective/restore')
+    def restore_effective():
+        from ai_lib_qor.application.effective_workflow import restore_effective_revision
+        vendor=request.form.get('vendor','');library=request.form.get('library','');set_id=request.form.get('set_id','');revision=request.form.get('revision','')
+        try:
+            result=restore_effective_revision(work_root,vendor,library,set_id,revision,expected_parent_revision=request.form.get('expected_parent',''),actor=request.form.get('actor',''),reason=request.form.get('reason',''))
+            if result['state']=='PUBLISHED':session['version_message']='已创建恢复版本 '+result['revision'];revision=result['revision']
+            elif result['state']=='PUBLISHED_INDEX_STALE':session['version_message']='版本已发布，但索引需核查：'+result.get('error','');revision=result['revision']
+            else:session['version_message']='文件组合无变化'
+        except (OSError,ValueError,KeyError,TypeError) as exc:session['version_message']='恢复失败：'+str(exc)
+        return redirect(url_for('library_workspace',vendor=vendor,library=library,set_id=set_id,revision=revision)+'#effective-files',code=302)
+
+    @app.post('/effective/acceptance-rollback')
+    def rollback_effective_acceptance():
+        from ai_lib_qor.application.effective_workflow import rollback_acceptance
+        vendor=request.form.get('vendor','');library=request.form.get('library','');set_id=request.form.get('set_id','');revision=request.form.get('revision','')
+        try:
+            result=rollback_acceptance(work_root,vendor,library,set_id,revision,actor=request.form.get('actor',''),reason=request.form.get('reason',''))
+            session['version_message']='采纳已回退到 '+revision if result['state']=='ROLLED_BACK' else '回退事件已记录，索引需核查：'+result.get('error','')
+        except (OSError,ValueError,KeyError,TypeError) as exc:session['version_message']='采纳回退失败：'+str(exc)
+        return redirect(url_for('library_workspace',vendor=vendor,library=library,set_id=set_id,revision=revision)+'#effective-files',code=302)
 
     @app.post('/file-index/refresh')
     def refresh_file_index():
@@ -506,7 +559,7 @@ def create_app(plan_root, runs_root, work_root=None):
 
     @app.get('/outputs')
     def outputs():
-        return render_template('outputs.html', runs=history(runs), output_root=str(runs), csrf=session['csrf'])
+        return render_template('outputs.html', runs=all_history(), output_root=str(runs), csrf=session['csrf'])
 
     @app.get('/directories')
     def directories():
@@ -560,27 +613,39 @@ def create_app(plan_root, runs_root, work_root=None):
 
     def lookup(run_id):
         if not RUN_ID.fullmatch(run_id): abort(404)
-        folder=runs/run_id
-        if folder.is_symlink() or not folder.is_dir() or not folder.resolve().is_relative_to(runs):abort(404)
-        item = next((item for item in history(runs) if item['id'] == run_id), None)
+        item = next((item for item in all_history() if item['id'] == run_id), None)
         if item is None: abort(404)
+        if item.get('storage')!='LIBRARY':
+            folder=runs/run_id
+            if folder.is_symlink() or not folder.is_dir() or not folder.resolve().is_relative_to(runs):abort(404)
         return item
+
+    def run_artifact(item,name):
+        if item.get('storage')=='LIBRARY':
+            from ai_lib_qor.application.library_runs import artifact as library_artifact
+            try:return library_artifact(work_root,item,name)
+            except (OSError,ValueError,KeyError,TypeError):return None
+        path=runs/item['id']/name
+        if (name not in ARTIFACTS and not FACT_ARTIFACT.fullmatch(name)) or path.is_symlink() or not path.is_file():return None
+        return path
 
     @app.get('/runs/<run_id>')
     def detail(run_id):
         item = lookup(run_id)
-        artifacts = [name for name in ARTIFACTS if (runs / run_id / name).is_file() and not (runs / run_id / name).is_symlink()]
-        artifacts.extend(sorted(p.name for p in (runs/run_id).glob('facts_*.json') if FACT_ARTIFACT.fullmatch(p.name) and p.is_file() and not p.is_symlink()))
+        artifacts = [name for name in ARTIFACTS if run_artifact(item,name)]
+        if item.get('storage')=='LIBRARY':artifacts.extend(name for name in item.get('facts_files',[]) if run_artifact(item,name))
+        else:artifacts.extend(sorted(p.name for p in (runs/run_id).glob('facts_*.json') if FACT_ARTIFACT.fullmatch(p.name) and p.is_file() and not p.is_symlink()))
         inputs = []
         quality = None
+        check_record = None
         try:
-            check_path = runs / run_id / 'check.json'
-            if not check_path.is_symlink() and check_path.is_file():
-                quality = json.loads(check_path.read_text(encoding='utf-8')).get('summary')
+            check_path = run_artifact(item,'check.json')
+            if check_path:
+                check_record=json.loads(check_path.read_text(encoding='utf-8'));quality=check_record.get('summary')
         except (OSError, ValueError, AttributeError): pass
         try:
-            plan_path = runs / run_id / 'input_plan.json'
-            if not plan_path.is_symlink() and plan_path.is_file():
+            plan_path = run_artifact(item,'input_plan.json')
+            if plan_path:
                 plan = json.loads(plan_path.read_text(encoding='utf-8'))
                 for key,label in [('target_revision','目标有效版本'),('baseline_revision','检查基线'),('report_formal_snapshot','正式快照')]:
                     if plan.get(key): inputs.append((label, plan[key]))
@@ -589,29 +654,56 @@ def create_app(plan_root, runs_root, work_root=None):
                         for key in keys:
                             if row.get(key) and ('解析事实', row[key]) not in inputs: inputs.append(('解析事实',row[key]))
         except (OSError, ValueError, TypeError, AttributeError): pass
-        return render_template('detail.html', run=item, artifacts=artifacts, inputs=inputs, quality=quality, output_path=str(runs / run_id), csrf=session['csrf'], folder_error=request.args.get('folder_error') == '1')
+        back_url=None;v2_history=False
+        if item.get('owner') and work_root:
+            from ai_lib_qor.application.data_query import list_effective_v2
+            owner=item['owner'];candidate=check_record
+            if candidate is None and item.get('children'):
+                for child in reversed(item['children']):
+                    child_id=child.get('id','')
+                    if not RUN_ID.fullmatch(child_id):continue
+                    child_item=next((x for x in all_history() if x['id']==child_id),None)
+                    child_path=run_artifact(child_item,'check.json') if child_item else None
+                    try:
+                        if child_path:candidate=json.loads(child_path.read_text(encoding='utf-8'));break
+                    except (OSError,ValueError,TypeError):continue
+            if isinstance(candidate,dict):
+                set_id=candidate.get('effective_set_id');revision=(candidate.get('target') or {}).get('id')
+                versions=list_effective_v2(work_root,owner['vendor'],owner['library'])
+                match=next((v for v in versions if v['set_id']==set_id and v['revision']==revision and v['owner']['id']==owner['ip']),None)
+                if match:
+                    back_url=url_for('library_workspace',vendor=owner['vendor'],library=owner['library'],set_id=set_id,revision=revision)+'#effective-files';v2_history=True
+        if item.get('storage')=='LIBRARY':
+            from ai_lib_qor.sources.layout import library_folder
+            output_path=library_folder(work_root,item['owner']['vendor'],item['owner']['library'])
+        else:output_path=runs/run_id
+        artifact_labels={name:run_artifact(item,name).name for name in artifacts if run_artifact(item,name)}
+        return render_template('detail.html', run=item, artifacts=artifacts, artifact_labels=artifact_labels,inputs=inputs, quality=quality, back_url=back_url,v2_history=v2_history,output_path=str(output_path), csrf=session['csrf'], folder_error=request.args.get('folder_error') == '1')
 
     @app.post('/runs/<run_id>/open-folder')
     def open_run_folder(run_id):
-        lookup(run_id)
-        path = runs / run_id
+        item=lookup(run_id)
+        if item.get('storage')=='LIBRARY':
+            from ai_lib_qor.sources.layout import library_folder
+            path=library_folder(work_root,item['owner']['vendor'],item['owner']['library'])
+        else:path = runs / run_id
         if path.is_symlink() or not path.is_dir(): abort(404)
         return redirect(url_for('detail',run_id=run_id,folder_error=0 if open_directory(path) else 1),code=303)
 
     @app.get('/runs/<run_id>/preview/<name>')
     def preview(run_id,name):
-        lookup(run_id)
-        path=runs / run_id / name
-        if name not in ('report.html','parser_evidence.html') or path.is_symlink() or not path.is_file(): abort(404)
+        item=lookup(run_id)
+        path=run_artifact(item,name)
+        if name not in ('report.html','parser_evidence.html') or not path: abort(404)
         response=send_file(path, as_attachment=False)
         response.headers['Content-Security-Policy']="default-src 'none'; style-src 'unsafe-inline'"
         return response
 
     @app.get('/runs/<run_id>/artifacts/<name>')
     def artifact(run_id, name):
-        lookup(run_id)
-        path = runs / run_id / name
-        if (name not in ARTIFACTS and not FACT_ARTIFACT.fullmatch(name)) or path.is_symlink() or not path.is_file(): abort(404)
-        return send_file(path, as_attachment=True, download_name=name)
+        item=lookup(run_id)
+        path=run_artifact(item,name)
+        if not path: abort(404)
+        return send_file(path, as_attachment=True, download_name=path.name)
 
     return app

@@ -109,7 +109,9 @@ class FileIndexIntegrationTests(unittest.TestCase):
    # An edited archived manifest invalidates the projection; query falls back to source records.
    original=index.read_text()
    delivery=work/'libraries/v/lib/delivery_001.json'
-   changed=json.loads(delivery.read_text());changed['files'][0]['relative_path']='lef/replaced.lef';delivery.write_text(json.dumps(changed))
+   from ai_lib_qor.sources.layout import evidence_path
+   changed=json.loads(delivery.read_text());changed['views']['LEF']=['lef/replaced.lef'];delivery.write_text(json.dumps(changed))
+   ep=evidence_path(delivery);evidence=json.loads(ep.read_text());compat=evidence['legacy_compatibility'];mapping=compat['files'];mapping['lef/replaced.lef']=mapping.pop('lef/core.lef');compat['file_order']=['lef/replaced.lef' if x=='lef/core.lef' else x for x in compat['file_order']];ep.write_text(json.dumps(evidence))
    status=auto_ingest(work,source,scan_library(raw,'v','lib',metadata_only=True))['file_index']
    self.assertEqual(status['action'],'ERROR');self.assertEqual(index.read_text(),original)
    stale=LibraryDataQuery(work,root/'runs').get_file_at_delivery('v','lib','LEF','lef/core.lef',ids['V02'])
@@ -124,7 +126,8 @@ class FileIndexIntegrationTests(unittest.TestCase):
    result=auto_ingest(work,source,scan_library(raw,'v','lib',metadata_only=True))
    self.assertEqual(result['created'],2);self.assertEqual(result['file_index']['action'],'ORDER_UNCONFIRMED')
    self.assertFalse((work/'libraries/v/lib/file_index.json').exists())
-   records=[json.loads(p.read_text()) for p in sorted((work/'libraries/v/lib').glob('delivery_*.json'))]
+   from ai_lib_qor.versions.store import read_json
+   records=[read_json(p,'delivery_record') for p in sorted((work/'libraries/v/lib').glob('delivery_*.json'))]
    ids={r['supplier_version']:r['delivery_id'] for r in records}
    source['delivery_order_ids']=[ids['V02'],ids['V01']]
    (work/'scan_sources.json').write_text(json.dumps({'sources':[source]}))
@@ -133,4 +136,4 @@ class FileIndexIntegrationTests(unittest.TestCase):
    self.assertEqual([x['version'] for x in listing['deliveries']],['V01','V02'])
    from ai_lib_qor.application.latest_pointers import refresh_library
    refresh_library(work,'v','lib')
-   self.assertEqual(json.loads((work/'libraries/v/lib/latest_delivery.json').read_text())['delivery_id'],ids['V02'])
+   self.assertEqual(read_json(work/'libraries/v/lib/latest_delivery.json','delivery_record')['delivery_id'],ids['V02'])

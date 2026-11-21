@@ -72,6 +72,10 @@ def _read_delivery(path: Path):
         raise IndexErrorValue(f"无法读取 Delivery JSON: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise IndexErrorValue(f"Delivery JSON 必须是对象: {path}")
+    if set(data)=={'vendor','library','version','version_date','directory_created_at','root','views'}:
+        from ai_lib_qor.versions.store import read_json
+        try:data=read_json(path,'delivery_record')
+        except (OSError,ValueError,KeyError,TypeError) as exc:raise IndexErrorValue(f'简化交付无法读取: {path}: {exc}') from exc
     if data.get("schema_version") == "delivery_record.v1":
         version = data.get("supplier_version")
         scope = (data.get("vendor_id"), data.get("source_library_id"))

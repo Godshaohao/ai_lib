@@ -1,0 +1,379 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Path-based FileFacts",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "file_facts.path.v1"
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "vendor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "library": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relative_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "absolute_path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "historical_content": {
+          "const": "UNVERIFIED"
+        }
+      },
+      "required": [
+        "vendor",
+        "library",
+        "version",
+        "relative_path",
+        "absolute_path",
+        "historical_content"
+      ],
+      "additionalProperties": false
+    },
+    "selection": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "DELIVERY",
+            "EFFECTIVE"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "parsed_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "view": {
+      "type": "string",
+      "enum": [
+        "LEF",
+        "LIBERTY",
+        "VERILOG",
+        "CDL",
+        "SPICE"
+      ]
+    },
+    "parser": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "parse_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "FAILED"
+      ]
+    },
+    "covered_sections": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "units": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "objects": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "source",
+    "selection",
+    "parsed_at",
+    "view",
+    "parser",
+    "parse_status",
+    "covered_sections",
+    "units",
+    "objects"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "view": {
+            "const": "LEF"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "objects": {
+            "type": "object",
+            "properties": {
+              "macros": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "size_um": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 2,
+                      "maxItems": 2
+                    },
+                    "pins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "direction": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "use": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "direction"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "size_um",
+                    "pins"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "macros"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "view": {
+            "const": "LIBERTY"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "objects": {
+            "type": "object",
+            "properties": {
+              "cells": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "pins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "direction": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "direction"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "pins"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "cells"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "view": {
+            "const": "VERILOG"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "objects": {
+            "type": "object",
+            "properties": {
+              "modules": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            },
+            "required": [
+              "modules"
+            ],
+            "additionalProperties": false
+          },
+          "parse_status": {
+            "const": "PARTIAL"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "view": {
+            "const": "CDL"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "objects": {
+            "type": "object",
+            "properties": {
+              "subcircuits": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "includes": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            },
+            "required": [
+              "subcircuits",
+              "includes"
+            ],
+            "additionalProperties": false
+          },
+          "parse_status": {
+            "const": "PARTIAL"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "view": {
+            "const": "SPICE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "objects": {
+            "type": "object",
+            "properties": {
+              "subcircuits": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "includes": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            },
+            "required": [
+              "subcircuits",
+              "includes"
+            ],
+            "additionalProperties": false
+          },
+          "parse_status": {
+            "const": "PARTIAL"
+          }
+        }
+      }
+    }
+  ]
+}

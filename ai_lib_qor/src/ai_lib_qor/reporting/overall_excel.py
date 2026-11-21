@@ -17,7 +17,8 @@ def render_overall_excel(owner, rows, output):
         sheet=book.add_worksheet('版本运行汇总');sheet.hide_gridlines(2);sheet.freeze_panes(3,0)
         sheet.set_column(0,0,16,text);sheet.set_column(1,2,14,text);sheet.set_column(3,3,40,text);sheet.set_column(4,7,22,text);sheet.set_column(8,8,20,text);sheet.set_column(9,10,50,text)
         sheet.set_row(0,26);sheet.set_row(1,36);sheet.set_row(2,42)
-        sheet.merge_range(0,0,0,last_col,f"IP: {owner['vendor']} / {owner['library']} / {owner['ip']}",title)
+        label=(f"IP: {owner['vendor']} / {owner['library']} / {owner['ip']}" if owner.get('ip') else f"库有效集: {owner['vendor']} / {owner['library']}")
+        sheet.merge_range(0,0,0,last_col,label,title)
         sheet.merge_range(1,0,1,last_col,'仅汇总列出的版本及检查范围；索引按 View 和路径比较来源，不代表内容变化；不代表全部检查通过或版本采纳。',note)
         columns=['有效版本','基线','执行状态','Run ID','已检查文件来源变化','已检查文件内容变化','失败项','不确定项','计划','范围说明','错误']
         if indexed:

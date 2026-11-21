@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["vendor", "library", "revision", "created_at", "views"],
+  "properties": {
+    "vendor": {"type":"string", "minLength":1},
+    "library": {"type":"string", "minLength":1},
+    "revision": {"type":"string", "pattern":"^rev_[0-9]{4,}$"},
+    "created_at": {"type":"string", "minLength":1},
+    "views": {"type":"object", "additionalProperties":{"type":"object", "additionalProperties":{"type":"array", "uniqueItems":true, "items":{"type":"string", "minLength":1}}}}
+  }
+}
