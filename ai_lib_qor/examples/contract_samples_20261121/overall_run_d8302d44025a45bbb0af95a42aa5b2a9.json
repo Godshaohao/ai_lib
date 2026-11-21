@@ -1,0 +1,20 @@
+{
+  "vendor": "SRAM22",
+  "library": "sram22_256x16m8w8",
+  "versions": [
+    {
+      "state": "PARTIAL",
+      "revision": "rev_0001",
+      "run_id": "run_39d30433024346919b0b959696aec0c9",
+      "check": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/work/libraries/SRAM22/sram22_256x16m8w8/check_run_39d30433024346919b0b959696aec0c9.json",
+      "excel": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/work/libraries/SRAM22/sram22_256x16m8w8/report_run_39d30433024346919b0b959696aec0c9.xlsx"
+    },
+    {
+      "state": "SUCCEEDED",
+      "revision": "rev_0002",
+      "run_id": "run_880436d181724645a87033128cdca1ca",
+      "check": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/work/libraries/SRAM22/sram22_256x16m8w8/check_run_880436d181724645a87033128cdca1ca.json",
+      "excel": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/work/libraries/SRAM22/sram22_256x16m8w8/report_run_880436d181724645a87033128cdca1ca.xlsx"
+    }
+  ]
+}

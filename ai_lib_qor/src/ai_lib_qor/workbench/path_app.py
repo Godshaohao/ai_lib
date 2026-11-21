@@ -55,7 +55,14 @@ def create_path_app(work_root):
 
     @app.context_processor
     def common():
-        return {'csrf':session.get('csrf'),'work_root':str(work),'notice':session.pop('path_notice',None)}
+        lib_list = []
+        try:
+            for f in sorted((work/'libraries').glob('*/*')):
+                if f.is_dir() and not f.is_symlink() and not f.parent.is_symlink():
+                    lib_list.append({'vendor':f.parent.name, 'library':f.name})
+        except OSError:
+            pass
+        return {'csrf':session.get('csrf'),'work_root':str(work),'notice':session.pop('path_notice',None),'all_libraries':lib_list}
 
     @app.get('/')
     def overview():
@@ -66,19 +73,46 @@ def create_path_app(work_root):
             index,error=index_state(vendor,library,folder)
             libraries.append({'vendor':vendor,'library':library,'delivery_count':len(index['deliveries']) if index else None,
                               'revision_count':len(index['revisions']) if index else None,'error':error})
-        return render_template('path_workbench.html',level=1,libraries=libraries,config=source_config())
+        summary={'vendors':len(set(x['vendor'] for x in libraries)),
+                 'libraries':len(libraries),
+                 'revisions':sum((x['revision_count'] or 0) for x in libraries),
+                 'issues':sum(1 for x in libraries if x.get('error'))}
+        return render_template('path_workbench.html',level=1,libraries=libraries,config=source_config(),summary=summary)
 
     @app.get('/path/library')
     def library_page():
         vendor,library,folder=scope();index,error=index_state(vendor,library,folder)
-        revision=request.args.get('revision','');members=[];delivery_rows=[]
+        revision=request.args.get('revision','');baseline=request.args.get('baseline','')
+        members=[];removed=[];delivery_rows=[];member_views=[]
+        prev_rev=None;next_rev=None;baseline_rev=None;rev_idx=-1
         if index:
             if revision and revision not in index['revisions']:abort(400)
             if not revision and index['revisions']:revision=index['revisions'][-1]
+            if revision:
+                rev_idx=index['revisions'].index(revision)
+                prev_rev=index['revisions'][rev_idx-1] if rev_idx>0 else None
+                next_rev=index['revisions'][rev_idx+1] if rev_idx<len(index['revisions'])-1 else None
+            if baseline == '__none__':
+                baseline_rev = None
+            elif baseline:
+                if baseline not in index['revisions'] or index['revisions'].index(baseline)>=rev_idx:abort(400)
+                baseline_rev = baseline
+            else:baseline_rev = prev_rev
+
             for view,group in index['views'].items():
                 for path,row in group.items():
                     for entry in row['effective']:
-                        if entry['revision']==revision:members.append({'view':view,'relative_path':path,**entry})
+                        if entry['revision']==revision:
+                            diff_status='NEW' if baseline_rev else 'CURRENT'
+                            if baseline_rev:
+                                prev_entry=next((e for e in row['effective'] if e['revision']==baseline_rev),None)
+                                if prev_entry:
+                                    diff_status='INHERITED' if prev_entry['version']==entry['version'] else 'UPDATED'
+                            members.append({'view':view,'relative_path':path,'diff_status':diff_status,**entry})
+                    old=next((e for e in row['effective'] if e['revision']==baseline_rev),None) if baseline_rev else None
+                    if old and not any(e['revision']==revision for e in row['effective']):
+                        removed.append({'view':view,'relative_path':path,**old})
+            member_views=sorted({m['view'] for m in members})
             for delivery in index['deliveries']:
                 kinds={};count=0
                 for kind,group in index['views'].items():
@@ -87,35 +121,53 @@ def create_path_app(work_root):
                             count+=1;kinds[kind]=kinds.get(kind,0)+1
                 delivery_rows.append({**delivery,'file_count':count,'view_counts':kinds})
         artifacts=[]
-        for path in sorted(folder.glob('check_run_*.json'),key=lambda p:p.stat().st_mtime_ns,reverse=True)[:20]:
+        for path in sorted(folder.glob('check_run_*.json'),key=lambda p:p.stat().st_mtime_ns,reverse=True):
             if path.is_symlink():continue
             try:
                 d=json.loads(path.read_text(encoding='utf-8'))
                 if d.get('schema_version')=='check_result.path.v1':
                     report='report_'+d['run_id']+'.xlsx'
-                    artifacts.append({'name':report,'check':path.name,'label':d['revision']+' · '+d['state'],'available':(folder/report).is_file()})
+                    summary=d.get('summary',{})
+                    artifacts.append({'name':report,'check':path.name,'label':d['revision']+' · 运行 '+d['state']+' · 失败 '+str(summary.get('failed_checks',0))+' · 无结论 '+str(summary.get('inconclusive_checks',0))+' · 文件失败 '+str(summary.get('failed_files',0)),'available':(folder/report).is_file()})
             except (OSError,ValueError,KeyError):continue
-        for path in sorted(folder.glob('overall_run_*.xlsx'),key=lambda p:p.stat().st_mtime_ns,reverse=True)[:10]:
-            if not path.is_symlink():artifacts.append({'name':path.name,'label':'整体报告 · '+path.name,'available':True})
+        for path in sorted(folder.glob('overall_run_*.xlsx'),key=lambda p:p.stat().st_mtime_ns,reverse=True):
+            if not path.is_symlink():artifacts.append({'name':path.name,'label':'整体报告 · '+path.name,'overall_json':path.with_suffix('.json').name if path.with_suffix('.json').is_file() and not path.with_suffix('.json').is_symlink() else None,'available':True})
         audit_available=(folder/'effective_operations.tsv').is_file() and not (folder/'effective_operations.tsv').is_symlink()
-        return render_template('path_workbench.html',level=2,vendor=vendor,library=library,index=index,error=error,revision=revision,members=members,delivery_rows=delivery_rows,artifacts=artifacts,audit_available=audit_available)
+        return render_template('path_workbench.html',level=2,vendor=vendor,library=library,index=index,error=error,revision=revision,members=members,removed=removed,delivery_rows=delivery_rows,artifacts=artifacts,audit_available=audit_available,member_views=member_views,prev_rev=prev_rev,next_rev=next_rev,baseline_rev=baseline_rev,rev_idx=rev_idx)
 
     @app.get('/path/index')
     def index_page():
         vendor,library,folder=scope();index,error=index_state(vendor,library,folder)
-        query=request.args.get('q','').strip();view=request.args.get('view','');rows=[];views=[]
+        query=request.args.get('q','').strip();view=request.args.get('view','');delivery=request.args.get('delivery','');nl_version=request.args.get('nl_version','');rows=[];views=[];nl_versions=[]
+        revision=request.args.get('revision','')
         if index:
             views=sorted(index['views'])
+            nl_versions=sorted({n['nl_version'] for n in index['nl_snapshots']})
+            if nl_version and nl_version not in nl_versions:abort(400)
+            if not nl_version and index['nl_snapshots']:nl_version=index['nl_snapshots'][-1]['nl_version']
+            latest=next((n for n in reversed(index['nl_snapshots']) if n['nl_version']==nl_version),None)
+            if delivery and delivery not in [d['version'] for d in index['deliveries']]:abort(400)
             if view and view not in views:abort(400)
+            if revision and revision not in index['revisions']:abort(400)
+            if not revision and index['revisions']:
+                revision = index['revisions'][-1]
             for kind,group in index['views'].items():
                 if view and kind!=view:continue
                 for path,history in group.items():
+                    if delivery and not any(r['version']==delivery for r in history['raw']):continue
                     if query and query.casefold() not in (kind+' '+path).casefold():continue
-                    rows.append({'view':kind,'path':path,**history})
+                    effective_in_rev = None
+                    if revision:
+                        effective_in_rev = next((e for e in history['effective'] if e['revision']==revision), None)
+                    nl_latest=next((n for n in reversed(history['nl']) if latest and n['observed_at']==latest['observed_at'] and n['version']==latest['nl_version']),None)
+                    nl_relation=('无法确认' if nl_latest and nl_latest['source_match']!='MATCHED_RAW' else
+                                 '来源相同' if nl_latest and effective_in_rev and nl_latest['resolved_path']==effective_in_rev['path'] else
+                                 '来源不同' if nl_latest and effective_in_rev else '无法对照')
+                    rows.append({'view':kind,'path':path,'effective_in_rev':effective_in_rev,'nl_latest':nl_latest,'nl_relation':nl_relation,**history})
         try:page=max(1,int(request.args.get('page','1')))
         except ValueError:abort(400)
         total=len(rows);pages=max(1,(total+79)//80);page=min(page,pages);rows=rows[(page-1)*80:page*80]
-        return render_template('path_workbench.html',level=3,vendor=vendor,library=library,index=index,error=error,rows=rows,views=views,view=view,q=query,page=page,pages=pages,total=total)
+        return render_template('path_workbench.html',level=3,vendor=vendor,library=library,index=index,error=error,rows=rows,views=views,view=view,q=query,delivery=delivery,nl_version=nl_version,nl_versions=nl_versions,page=page,pages=pages,total=total,revision=revision)
 
     @app.post('/path/update')
     def update():
@@ -142,7 +194,7 @@ def create_path_app(work_root):
         from ai_lib_qor.application.minimal_checks import run_revision,run_library
         vendor,library,folder=scope();revision=request.form.get('revision','')
         try:
-            result=run_library(work,vendor,library) if request.form.get('kind')=='all' else run_revision(work,vendor,library,revision)
+            result=run_library(work,vendor,library) if request.form.get('kind')=='all' else run_revision(work,vendor,library,revision,baseline=request.form.get('baseline') or None)
             session['path_notice']={'title':'检查已完成' if result['state']=='SUCCEEDED' else '检查部分完成','details':'报告已保存到本库，可在下方下载。','warnings':[]}
         except (OSError,ValueError,KeyError,TypeError) as exc:session['path_notice']={'title':'检查未完成','details':str(exc),'warnings':[]}
         return redirect(url_for('library_page',vendor=vendor,library=library,revision=revision))
@@ -170,6 +222,11 @@ def create_path_app(work_root):
                 elif action=='remove':operations['remove'].append({'view':view,'path':path})
                 else:
                     selected=request.form.getlist('selection')
+                    for key in request.form:
+                        if re.fullmatch(r'selection_\d+',key):
+                            values=request.form.getlist(key)
+                            if len(values)!=1:raise ValueError('每个文件只能选择一个操作')
+                            if values[0]:selected.append(values[0])
                     if not selected or len(selected)>50 or sum(len(x.encode('utf-8')) for x in selected)>2000:raise ValueError('请选择 1 至 50 项，单次选择内容不超过 2000 字节')
                     for value in selected:
                         item=json.loads(value)

@@ -24,9 +24,9 @@ def _members(index,revision):
             for entry in row['effective'] if entry['revision']==revision}
 
 
-def _run(work,vendor,library,revision,cache):
+def _run(work,vendor,library,revision,cache,*,baseline=None):
     from .path_query import PathDataQuery
-    context=PathDataQuery(work).get_check_context(vendor,library,revision)
+    context=PathDataQuery(work).get_check_context(vendor,library,revision,baseline=baseline)
     folder=library_folder(work,vendor,library);index=context['index'];parent=context['baseline']
     target={(row['view'],row['path']):{'version':row['version'],'path':row['absolute_path']} for row in context['members']}
     baseline={(row['view'],row['path']):row['baseline'] for row in context['members'] if row['baseline']}
@@ -133,7 +133,7 @@ def _run(work,vendor,library,revision,cache):
     return {'state':state,'revision':revision,'run_id':run,'check':str(check),'excel':str(excel)}
 
 
-def run_revision(work,vendor,library,revision):return _run(work,vendor,library,revision,{})
+def run_revision(work,vendor,library,revision,*,baseline=None):return _run(work,vendor,library,revision,{},baseline=baseline)
 
 
 def run_library(work,vendor,library,*,revisions=None):

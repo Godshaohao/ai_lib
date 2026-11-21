@@ -1,0 +1,27 @@
+{
+  "vendor": "SRAM22",
+  "library": "sram22_256x16m8w8",
+  "version": "20261024_de0a9a7",
+  "version_date": "2026-10-24",
+  "directory_created_at": null,
+  "root": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7",
+  "views": {
+    "GDS": [
+      "GDS/sram22_256x16m8w8.gds.gz"
+    ],
+    "LEF": [
+      "LEF/sram22_256x16m8w8.lef"
+    ],
+    "LIBERTY": [
+      "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+      "LIB/NLDM/sram22_256x16m8w8_ss_100C_1v60.lib",
+      "LIB/NLDM/sram22_256x16m8w8_tt_025C_1v80.lib"
+    ],
+    "SPICE": [
+      "SPICE/sram22_256x16m8w8.spice"
+    ],
+    "VERILOG": [
+      "VERILOG/sram22_256x16m8w8.v"
+    ]
+  }
+}

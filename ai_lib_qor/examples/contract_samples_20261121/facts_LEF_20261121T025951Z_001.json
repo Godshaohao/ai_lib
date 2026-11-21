@@ -1,0 +1,239 @@
+{
+  "schema_version": "file_facts.path.v1",
+  "source": {
+    "vendor": "SRAM22",
+    "library": "sram22_256x16m8w8",
+    "version": "20261024_de0a9a7",
+    "relative_path": "LEF/sram22_256x16m8w8.lef",
+    "absolute_path": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LEF/sram22_256x16m8w8.lef",
+    "historical_content": "UNVERIFIED"
+  },
+  "selection": {
+    "kind": "DELIVERY",
+    "value": "20261024_de0a9a7"
+  },
+  "parsed_at": "2026-11-21T02:59:51Z",
+  "view": "LEF",
+  "parser": {
+    "name": "src_qor_lef",
+    "version": "2.5+adapter-1.0"
+  },
+  "parse_status": "COMPLETE",
+  "covered_sections": [
+    "MACRO_NAME",
+    "MACRO_SIZE",
+    "PIN_NAME",
+    "PIN_DIRECTION",
+    "PIN_USE"
+  ],
+  "units": {
+    "distance": "um"
+  },
+  "objects": {
+    "macros": [
+      {
+        "name": "sram22_256x16m8w8",
+        "size_um": [
+          396.36,
+          225.68
+        ],
+        "pins": [
+          {
+            "name": "dout[0]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[1]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[2]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[3]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[4]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[5]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[6]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[7]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[8]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[9]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[10]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[11]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[12]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[13]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[14]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "dout[15]",
+            "direction": "OUTPUT"
+          },
+          {
+            "name": "din[0]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[1]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[2]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[3]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[4]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[5]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[6]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[7]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[8]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[9]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[10]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[11]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[12]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[13]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[14]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "din[15]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "wmask[0]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "wmask[1]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "addr[0]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "addr[1]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "addr[2]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "addr[3]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "addr[4]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "addr[5]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "addr[6]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "addr[7]",
+            "direction": "INPUT"
+          },
+          {
+            "name": "we",
+            "direction": "INPUT"
+          },
+          {
+            "name": "ce",
+            "direction": "INPUT"
+          },
+          {
+            "name": "clk",
+            "direction": "INPUT"
+          },
+          {
+            "name": "rstb",
+            "direction": "INPUT"
+          },
+          {
+            "name": "vdd",
+            "direction": "INOUT",
+            "use": "POWER"
+          },
+          {
+            "name": "vss",
+            "direction": "INOUT",
+            "use": "GROUND"
+          }
+        ]
+      }
+    ]
+  }
+}

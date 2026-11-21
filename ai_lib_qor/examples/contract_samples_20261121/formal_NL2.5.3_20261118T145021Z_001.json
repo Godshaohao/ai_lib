@@ -1,0 +1,64 @@
+{
+  "version": "NL2.5.3",
+  "vendor": "SRAM22",
+  "library": "sram22_256x16m8w8",
+  "root": "/home/polaris/proj/mx/ai_lib/lib_NL2.5_3",
+  "observed_at": "2026-11-18T14:50:21Z",
+  "views": {
+    "GDS": {
+      "20261024_de0a9a7": [
+        {
+          "path": "IP/GDS/sram22_256x16m8w8.gds.gz",
+          "target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/GDS/sram22_256x16m8w8.gds.gz",
+          "resolved": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/GDS/sram22_256x16m8w8.gds.gz"
+        }
+      ]
+    },
+    "LEF": {
+      "20261024_de0a9a7": [
+        {
+          "path": "IP/LEF/sram22_256x16m8w8.lef",
+          "target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LEF/sram22_256x16m8w8.lef",
+          "resolved": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LEF/sram22_256x16m8w8.lef"
+        }
+      ]
+    },
+    "LIBERTY": {
+      "20261024_de0a9a7": [
+        {
+          "path": "IP/LIB/sram22_256x16m8w8_ff_n40C_1v95.lib",
+          "target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+          "resolved": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib"
+        },
+        {
+          "path": "IP/LIB/sram22_256x16m8w8_ss_100C_1v60.lib",
+          "target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_ss_100C_1v60.lib",
+          "resolved": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_ss_100C_1v60.lib"
+        },
+        {
+          "path": "IP/LIB/sram22_256x16m8w8_tt_025C_1v80.lib",
+          "target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_tt_025C_1v80.lib",
+          "resolved": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_tt_025C_1v80.lib"
+        }
+      ]
+    },
+    "SPICE": {
+      "20261024_de0a9a7": [
+        {
+          "path": "IP/SPICE/sram22_256x16m8w8.spice",
+          "target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/SPICE/sram22_256x16m8w8.spice",
+          "resolved": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/SPICE/sram22_256x16m8w8.spice"
+        }
+      ]
+    },
+    "VERILOG": {
+      "20261024_de0a9a7": [
+        {
+          "path": "IP/VERILOG/sram22_256x16m8w8.v",
+          "target": "../../../3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/VERILOG/sram22_256x16m8w8.v",
+          "resolved": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/VERILOG/sram22_256x16m8w8.v"
+        }
+      ]
+    }
+  }
+}

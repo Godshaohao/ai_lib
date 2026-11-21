@@ -108,6 +108,19 @@ class PathWorkbenchTests(unittest.TestCase):
   response=self.client.get('/path/artifact',query_string={'vendor':'v','library':'lib','name':'effective_operations.tsv'})
   self.assertEqual(response.status_code,200);response.close()
 
+ def test_batch_controls_choose_one_action_per_file_and_disclose_limits(self):
+  import re
+  p=self.raw/'v/lib/20261002_abcdef12/LEF/a.lef';p.parent.mkdir(parents=True);p.write_text('MACRO A\nEND A\n')
+  build_from_roots(self.raw,self.nl,self.work,auto_effective=False)
+  html=self.client.get('/path/index',query_string={'vendor':'v','library':'lib'}).get_data(as_text=True)
+  fields=re.findall(r'<input type="radio" name="(selection_\d+)"',html)
+  self.assertGreaterEqual(len(fields),3)
+  self.assertEqual(len(set(fields)),1)
+  self.assertIn('2000 字节',html)
+  selection=json.dumps({'action':'set','view':'LEF','path':'LEF/a.lef','version':'20261002_abcdef12'})
+  response=self.client.post('/path/effective/preview',data={'csrf':self.csrf,'vendor':'v','library':'lib','action':'batch','selection_0':selection})
+  self.assertEqual(response.status_code,200);self.assertIn('确认发布',response.get_data(as_text=True))
+
  def test_restore_rejects_new_exclusion_after_preview(self):
   from ai_lib_qor.application.minimal_effective import update_effective
   from ai_lib_qor.application.path_config import set_version_excluded
@@ -119,3 +132,43 @@ class PathWorkbenchTests(unittest.TestCase):
   response=self.client.post('/path/effective/apply',data={'csrf':self.csrf,'vendor':'v','library':'lib'},follow_redirects=True)
   self.assertIn('来源状态已变化',response.get_data(as_text=True))
   self.assertFalse((folder/'effective_lib_003.json').exists())
+
+ def test_empty_work_does_not_claim_source_health(self):
+  from ai_lib_qor.workbench.path_app import create_path_app
+  with tempfile.TemporaryDirectory() as d:
+   html=create_path_app(Path(d)).test_client().get('/').get_data(as_text=True)
+  self.assertNotIn('全库索引与来源正常',html)
+  self.assertIn('暂无库',html)
+
+ def test_delivery_filter_uses_exact_version(self):
+  html=self.client.get('/path/index',query_string={'vendor':'v','library':'lib','delivery':'20261001_abcdef12'}).get_data(as_text=True)
+  self.assertIn('LEF/a.lef',html)
+  html=self.client.get('/path/index',query_string={'vendor':'v','library':'lib','delivery':'not-a-version'})
+  self.assertEqual(html.status_code,400)
+
+ def test_removed_member_and_selected_baseline_in_check(self):
+  from ai_lib_qor.application.minimal_effective import update_effective
+  update_effective(self.work,'v','lib',{'set':[],'remove':[{'view':'LEF','path':'LEF/a.lef'}]})
+  html=self.client.get('/path/library',query_string={'vendor':'v','library':'lib','revision':'rev_0002','baseline':'rev_0001'}).get_data(as_text=True)
+  self.assertIn('已移除',html);self.assertIn('LEF/a.lef',html)
+  self.assertIn('name="baseline" value="rev_0001"',html)
+  self.client.post('/path/check',data={'csrf':self.csrf,'vendor':'v','library':'lib','revision':'rev_0002','baseline':'__none__'})
+  folder=self.work/'libraries/v/lib';check=json.loads(next(folder.glob('check_run_*.json')).read_text())
+  self.assertIsNone(check['baseline'])
+
+ def test_formal_latest_snapshot_is_not_old_file_observation(self):
+  from ai_lib_qor.application.minimal_file_index import build_index
+  folder=self.work/'libraries/v/lib';snap=next(folder.glob('formal_NL1_*.json'));data=json.loads(snap.read_text())
+  data['observed_at']='2099-01-01T00:00:00Z';data['views']={}
+  (folder/'formal_NL1_20990101T000000Z_001.json').write_text(json.dumps(data))
+  (folder/'file_index.json').write_text(json.dumps(build_index(self.work,'v','lib')))
+  html=self.client.get('/path/index',query_string={'vendor':'v','library':'lib'}).get_data(as_text=True)
+  self.assertIn('最新快照未观察到',html)
+
+ def test_index_rejects_changed_archive_with_preserved_timestamp(self):
+  import os
+  folder=self.work/'libraries/v/lib';p=next(folder.glob('delivery_*.json'))
+  stat=p.stat();data=json.loads(p.read_text());data['views']['LEF']=[]
+  p.write_text(json.dumps(data));os.utime(p,ns=(stat.st_atime_ns,stat.st_mtime_ns))
+  html=self.client.get('/path/index',query_string={'vendor':'v','library':'lib'}).get_data(as_text=True)
+  self.assertIn('索引不可用',html)

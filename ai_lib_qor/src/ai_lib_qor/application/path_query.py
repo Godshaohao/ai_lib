@@ -16,8 +16,10 @@ class PathDataQuery:
             raise ValueError('文件索引不存在')
         with locked(folder):
             saved = json.loads(path.read_text(encoding='utf-8'))
-            try:current=build_index(self.work, vendor, library)
-            except (OSError,ValueError,KeyError,TypeError) as exc:raise ValueError('文件索引过期或来源无效: '+str(exc)) from exc
+            try:
+                current = build_index(self.work, vendor, library)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise ValueError('文件索引过期或来源无效: ' + str(exc)) from exc
             if saved != current:
                 raise ValueError('文件索引过期或格式不兼容')
         return saved
@@ -30,6 +32,8 @@ class PathDataQuery:
         n = revisions.index(revision)
         if baseline is None:
             baseline = revisions[n-1] if n else None
+        elif baseline == '__none__':
+            baseline = None
         elif baseline not in revisions or revisions.index(baseline) >= n:
             raise ValueError('基线版本不存在或不是较早版本')
         members = []

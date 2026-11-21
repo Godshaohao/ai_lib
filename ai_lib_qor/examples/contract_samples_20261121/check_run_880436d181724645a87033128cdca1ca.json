@@ -1,0 +1,69 @@
+{
+  "schema_version": "check_result.path.v1",
+  "run_id": "run_880436d181724645a87033128cdca1ca",
+  "vendor": "SRAM22",
+  "library": "sram22_256x16m8w8",
+  "revision": "rev_0002",
+  "baseline": "rev_0001",
+  "run_at": "2026-11-21T02:59:51Z",
+  "state": "SUCCEEDED",
+  "files": [
+    {
+      "view": "LEF",
+      "path": "LEF/sram22_256x16m8w8.lef",
+      "version": "20261024_de0a9a7",
+      "absolute_path": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LEF/sram22_256x16m8w8.lef",
+      "status": "PARSED",
+      "facts": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/work/libraries/SRAM22/sram22_256x16m8w8/facts_LEF_20261121T025951Z_001.json",
+      "note": "仅覆盖 MACRO_NAME, MACRO_SIZE, PIN_NAME, PIN_DIRECTION, PIN_USE"
+    },
+    {
+      "view": "LIBERTY",
+      "path": "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+      "version": "20261024_de0a9a7",
+      "absolute_path": "/home/polaris/proj/mx/ai_lib/3rd_IP/SRAM22/sram22_256x16m8w8/20261024_de0a9a7/LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib",
+      "status": "PARSED",
+      "facts": "/home/polaris/文档/ChatGPT/ai_lib/ai_lib_qor/work/libraries/SRAM22/sram22_256x16m8w8/facts_LIBERTY_20261121T025951Z_001.json",
+      "note": "仅覆盖 CELL_NAME, PIN_NAME, PIN_DIRECTION"
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "LEF_LIBERTY_PIN_MATCH",
+      "scope_file_keys": [
+        "LEF/sram22_256x16m8w8.lef",
+        "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib"
+      ],
+      "result": "PASS",
+      "coverage": "COMPLETE",
+      "facts_refs": [
+        "facts_LEF_20261121T025951Z_001.json",
+        "facts_LIBERTY_20261121T025951Z_001.json"
+      ],
+      "detail": "所选 Macro 的信号 Pin 名称和方向一致；未检查 PG Pin 或时序弧"
+    }
+  ],
+  "comparisons": [
+    {
+      "view": "LEF",
+      "path": "LEF/sram22_256x16m8w8.lef",
+      "baseline_version": "20261024_de0a9a7",
+      "version": "20261024_de0a9a7",
+      "content_status": "CURRENT_CONTENT_MATCH",
+      "facts_refs": [
+        "facts_LEF_20261121T025951Z_001.json",
+        "facts_LEF_20261121T025951Z_001.json"
+      ]
+    }
+  ],
+  "partial_comparisons": [],
+  "changes": [],
+  "summary": {
+    "failed_checks": 0,
+    "inconclusive_checks": 0,
+    "failed_files": 0,
+    "files_with_new_source": 0,
+    "files_with_confirmed_content_change": 0
+  },
+  "note": "仅比较 LEF Macro SIZE、Pin 存在及方向并检查 LEF/Liberty 信号 Pin；VERILOG/CDL/SPICE 的接口差异仅部分解析，GDS 等未检查；当前来源不证明历史字节一致。"
+}

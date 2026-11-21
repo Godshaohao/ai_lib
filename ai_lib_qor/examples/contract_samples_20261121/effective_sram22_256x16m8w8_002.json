@@ -1,0 +1,18 @@
+{
+  "vendor": "SRAM22",
+  "library": "sram22_256x16m8w8",
+  "revision": "rev_0002",
+  "created_at": "2026-11-18T09:32:07Z",
+  "views": {
+    "LEF": {
+      "20261024_de0a9a7": [
+        "LEF/sram22_256x16m8w8.lef"
+      ]
+    },
+    "LIBERTY": {
+      "20261024_de0a9a7": [
+        "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib"
+      ]
+    }
+  }
+}

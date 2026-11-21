@@ -79,6 +79,7 @@ def parser():
         check_new=sub.add_parser(command,help='基于路径式 FileFacts 执行有效版本检查并生成 Excel')
         for name in ('work','vendor','library'):check_new.add_argument('--'+name,required=True)
         check_new.add_argument('--revision',action='append',required=command=='minimal-check-revision')
+        if command=='minimal-check-revision':check_new.add_argument('--baseline',help='指定较早 Effective 版本；__none__ 表示无基线')
     query=sub.add_parser('data-query',help='只读查询 JSON 的 RAW / 历史 / 有效 / Formal 视图')
     query.add_argument('--work',required=True);query.add_argument('--runs',default='.')
     query.add_argument('--kind',required=True,choices=['raw','simple-raw','history','history-at','history-index','index-status','index-v3','logical-history','effective','effective-v2','simple-effective','formal','simple-formal','compare','deliveries','compare-revisions','compare-revisions-logical','changed-pairs','formal-effective','effective-timeline','check-context'])
@@ -164,7 +165,7 @@ def run(a):
         from ai_lib_qor.application.minimal_checks import run_revision,run_library
         if a.command=='minimal-check-revision':
             if len(a.revision)!=1:raise ValueError('单版本检查必须恰好指定一个版本')
-            return run_revision(a.work,a.vendor,a.library,a.revision[0])
+            return run_revision(a.work,a.vendor,a.library,a.revision[0],baseline=a.baseline)
         return run_library(a.work,a.vendor,a.library,revisions=a.revision)
     if a.command=='minimal-facts':
         from ai_lib_qor.application.minimal_facts import build_facts

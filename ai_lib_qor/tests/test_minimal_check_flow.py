@@ -100,3 +100,9 @@ class MinimalCheckFlowTests(unittest.TestCase):
    row=next(x for x in data['partial_comparisons'] if x['view']==view)
    self.assertTrue(row['differences']);self.assertEqual(row['coverage'],'PARTIAL')
   self.assertEqual(result['state'],'PARTIAL')
+
+ def test_cli_baseline_is_used_for_revision_report(self):
+  from ai_lib_qor.cli import parser,run
+  args=parser().parse_args(['minimal-check-revision','--work',str(self.work),'--vendor','v','--library','lib','--revision','rev_0002','--baseline','__none__'])
+  result=run(args);check=json.loads(Path(result['check']).read_text())
+  self.assertIsNone(check['baseline'])
