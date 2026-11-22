@@ -1,11 +1,13 @@
 """Rebuildable ordered path histories over the three minimal source contracts."""
+import hashlib
 import json
 import os
+import re
 from datetime import date
 from pathlib import Path, PurePosixPath
 
-from ai_lib_qor.sources.layout import library_folder
-from ai_lib_qor.sources.timestamps import instant
+from ai_lib_qor.sources.layout import library_folder,archive_files
+from ai_lib_qor.sources.timestamps import instant,utc_text
 from ai_lib_qor.versions.store import locked,write_atomic,validate
 from .minimal_effective import _deliveries,_history
 
@@ -67,7 +69,7 @@ def build_index(work,vendor,library):
                 absolute=os.path.join(root,rel);known[key]=absolute
                 node(view,rel)['raw'].append({'version':d['version'],'path':absolute})
     snapshots=[]
-    for p in folder.glob('formal_*.json'):
+    for p in archive_files(folder,'formal','formal_*.json'):
         if p.is_symlink():raise ValueError('正式快照不能为软链接')
         f=json.loads(p.read_text(encoding='utf-8'))
         validate(f,'formal_path')
@@ -108,14 +110,80 @@ def build_index(work,vendor,library):
     return index
 
 
-def refresh_index_locked(work,vendor,library):
+def _sha256_file(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def archive_fingerprint(work,vendor,library):
+    folder=library_folder(work,vendor,library)
+    effective_re=re.compile(r'^effective_'+re.escape(library)+r'_(\d+)\.json$')
+    files={}
+    if folder.is_dir():
+        candidates=[*archive_files(folder,'delivery','delivery_*.json'),
+                    *archive_files(folder,'formal','formal_*.json'),
+                    *[p for p in archive_files(folder,'effective','effective_'+library+'_*.json') if effective_re.fullmatch(p.name)]]
+        for entry in sorted(set(candidates),key=lambda p:p.relative_to(folder).as_posix()):
+            rel=entry.relative_to(folder).as_posix()
+            if entry.is_symlink() or not entry.is_file():
+                raise ValueError('归档记录不能为软链接: '+rel)
+            files[rel]=_sha256_file(entry)
+    times=_configured_times(work,vendor,library)
+    times_hash=hashlib.sha256(json.dumps(times,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf-8')).hexdigest()
+    return {'files':files,'registration_times_sha256':times_hash}
+
+
+def _manifest_path(folder):
+    return folder/'.file_index_manifest.json'
+
+
+def _write_manifest(work,vendor,library,index_path):
+    folder=library_folder(work,vendor,library)
+    mpath=_manifest_path(folder)
+    if mpath.is_symlink():raise ValueError('索引清单不能为软链接')
+    manifest={'schema':'file_index_manifest.v1','vendor':vendor,'library':library,
+              'refreshed_at':utc_text(),'archive':archive_fingerprint(work,vendor,library),
+              'file_index_sha256':_sha256_file(index_path)}
+    write_atomic(mpath,manifest)
+    return manifest
+
+
+def read_manifest(work,vendor,library):
+    folder=library_folder(work,vendor,library)
+    mpath=_manifest_path(folder)
+    if mpath.is_symlink() or not mpath.is_file():return None
+    try:
+        data=json.loads(mpath.read_text(encoding='utf-8'))
+        if isinstance(data,dict) and data.get('schema')=='file_index_manifest.v1' and (data.get('vendor'),data.get('library'))==(vendor,library):
+            return data
+    except (OSError,ValueError,TypeError):return None
+    return None
+
+
+def index_manifest_matches(work,vendor,library):
+    folder=library_folder(work,vendor,library);path=folder/'file_index.json'
+    if path.is_symlink() or not path.is_file():return False,None
+    manifest=read_manifest(work,vendor,library)
+    if not manifest:return False,None
+    try:
+        if manifest.get('file_index_sha256')!=_sha256_file(path):return False,manifest
+        if manifest.get('archive')!=archive_fingerprint(work,vendor,library):return False,manifest
+    except (OSError,ValueError,TypeError):return False,manifest
+    return True,manifest
+
+
+def refresh_index_locked(work,vendor,library,*,force_verify=False):
     folder=library_folder(work,vendor,library);path=folder/'file_index.json'
     if path.is_symlink():raise ValueError('索引不能为软链接')
+    if not force_verify:
+        matched,manifest=index_manifest_matches(work,vendor,library)
+        if matched:return {'state':'UNCHANGED','path':str(path),'refreshed_at':manifest.get('refreshed_at'),'skipped_rebuild':True}
     new=build_index(work,vendor,library)
     if path.exists():
         old=json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(old,dict) or set(old)!={'vendor','library','deliveries','nl_snapshots','revisions','views'} or (old['vendor'],old['library'])!=(vendor,library):raise ValueError('已有索引属于其他格式，拒绝覆盖')
-        if old==new:return {'state':'UNCHANGED','path':str(path)}
+        if old==new:
+            manifest=_write_manifest(work,vendor,library,path)
+            return {'state':'UNCHANGED','path':str(path),'refreshed_at':manifest['refreshed_at'],'skipped_rebuild':False}
         def contains(before,after):
             encode=lambda v:json.dumps(v,sort_keys=True,ensure_ascii=False,separators=(',',':'))
             previous=iter(map(encode,before));expected=next(previous,None)
@@ -132,13 +200,14 @@ def refresh_index_locked(work,vendor,library):
         except (KeyError,TypeError,AttributeError):preserved=False
         if not preserved:raise ValueError('已发布索引的历史记录或顺序发生变更，拒绝覆盖')
     write_atomic(path,new)
-    return {'state':'UPDATED','path':str(path)}
+    manifest=_write_manifest(work,vendor,library,path)
+    return {'state':'UPDATED','path':str(path),'refreshed_at':manifest['refreshed_at'],'skipped_rebuild':False}
 
 
-def refresh_index(work,vendor,library):
+def refresh_index(work,vendor,library,*,force_verify=False):
     folder=library_folder(work,vendor,library)
     if not folder.is_dir():raise ValueError('库目录不存在')
-    with locked(folder):return refresh_index_locked(work,vendor,library)
+    with locked(folder):return refresh_index_locked(work,vendor,library,force_verify=force_verify)
 
 
 def query_path(work,vendor,library,view,path,*,revision=None,version=None):

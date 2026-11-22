@@ -352,6 +352,12 @@
         ],
         "additionalProperties": false
       }
+    },
+    "facts_evidence": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
     }
   },
   "additionalProperties": false

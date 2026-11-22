@@ -1,0 +1,37 @@
+{
+  "check_id": "lef_liberty_alignment",
+  "implementation_version": "1.0.0",
+  "kind": "QUALITY",
+  "execution_status": "NOT_CHECKED",
+  "verdict": "NOT_CHECKED",
+  "target": {
+    "kind": "effective_revision",
+    "set_id": "rtavfs_primary",
+    "revision_id": "rev_0008"
+  },
+  "input_generation": "input_gen_008",
+  "parameters": {
+    "check_pg_pins": true
+  },
+  "findings": [
+    {
+      "code": "INCOMPLETE_COVERAGE",
+      "message": "Liberty pin geometry/cell coverage insufficient; cannot claim PASS"
+    }
+  ],
+  "metrics": [],
+  "evidence_refs": [
+    "facts/liberty_partial.json"
+  ],
+  "input_refs": [
+    {
+      "kind": "file_facts",
+      "id": "fact_core_new"
+    },
+    {
+      "kind": "file_facts",
+      "id": "fact_tt_latest"
+    }
+  ],
+  "environment_id": "parser_test_env"
+}

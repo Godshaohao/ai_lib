@@ -18,10 +18,10 @@ class RootInventoryTests(unittest.TestCase):
    result=build_from_roots(raw,nl,out,nl_version='NL2.5.3')
    self.assertEqual(result['delivery_created'],2);self.assertEqual(result['formal_created'],2)
    folder=out/'libraries/VENDOR_A/LIB_A'
-   delivery=json.loads((folder/'delivery_LIB_A_20261024_001.json').read_text())
+   delivery=json.loads((folder/'delivery/delivery_LIB_A_20261024_001.json').read_text())
    self.assertEqual(set(delivery),{'vendor','library','version','version_date','directory_created_at','root','views'})
    self.assertEqual(delivery['version_date'],'2026-10-24')
-   formal_path=next(folder.glob('formal_NL2.5.3_*.json'))
+   formal_path=next(folder.glob('formal/formal_NL2.5.3_*.json'))
    self.assertRegex(formal_path.name,r'^formal_NL2\.5\.3_\d{8}T\d{6}Z_\d{3}\.json$')
    formal=json.loads(formal_path.read_text())
    self.assertRegex(formal['observed_at'],r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
@@ -34,18 +34,18 @@ class RootInventoryTests(unittest.TestCase):
    repeat=build_from_roots(raw,nl,out,nl_version='NL2.5.3')
    self.assertTrue(any('broken.lef' in e for e in repeat['warnings']))
    self.assertEqual(repeat['delivery_created'],0);self.assertEqual(repeat['formal_created'],0)
-   self.assertEqual(len(list(folder.glob('delivery_*.json'))),1)
+   self.assertEqual(len(list(folder.glob('delivery/delivery_*.json'))),1)
    self.assertEqual((folder/'latest_delivery.json').readlink().name,'delivery_LIB_A_20261024_001.json')
    from ai_lib_qor.application.minimal_effective import initialize_from_formal,update_effective
    result=initialize_from_formal(out,'VENDOR_A','LIB_A',formal_path)
    self.assertEqual(result['revision'],'rev_0001')
-   effective=json.loads((folder/'effective_LIB_A_001.json').read_text())
+   effective=json.loads((folder/'effective/effective_LIB_A_001.json').read_text())
    self.assertRegex(effective['created_at'],r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
    self.assertEqual(effective['views']['LEF']['20261024_abcdef12'],['LEF/a.lef'])
    self.assertEqual((folder/'latest_effective.json').readlink().name,'effective_LIB_A_001.json')
    updated=update_effective(out,'VENDOR_A','LIB_A',{'set':[],'remove':[{'view':'LEF','path':'LEF/a.lef'}]})
    self.assertEqual(updated['revision'],'rev_0002')
-   self.assertEqual(json.loads((folder/'effective_LIB_A_002.json').read_text())['views'],{})
+   self.assertEqual(json.loads((folder/'effective/effective_LIB_A_002.json').read_text())['views'],{})
 
  def test_nonempty_output_inside_raw_or_formal_is_refused(self):
   from ai_lib_qor.sources.root_inventory import build_from_roots
@@ -71,10 +71,10 @@ class RootInventoryTests(unittest.TestCase):
    for name in paths[:2]:
     f=new/name;f.parent.mkdir(parents=True,exist_ok=True);f.write_text(name+'new')
    build_from_roots(raw,nl,work)
-   folder=work/'libraries/v/lib';initialize_from_formal(work,'v','lib',next(folder.glob('formal_NL2.5.3_*.json')))
+   folder=work/'libraries/v/lib';initialize_from_formal(work,'v','lib',next(folder.glob('formal/formal_NL2.5.3_*.json')))
    actions={'set':[{'view':'LEF','version':new.name,'path':'a.lef'},{'view':'LIBERTY','version':new.name,'path':'b.lib'}],'remove':[]}
    self.assertEqual(update_effective(work,'v','lib',actions)['revision'],'rev_0002')
-   views=json.loads((folder/'effective_lib_002.json').read_text())['views']
+   views=json.loads((folder/'effective/effective_lib_002.json').read_text())['views']
    self.assertEqual(sum(len(paths) for versions in views.values() for paths in versions.values()),7)
    self.assertEqual(sum(len(paths) for versions in views.values() for version,paths in versions.items() if version==new.name),2)
    self.assertEqual(sum(len(paths) for versions in views.values() for version,paths in versions.items() if version==old.name),5)
@@ -106,7 +106,7 @@ class RootInventoryTests(unittest.TestCase):
    with patch('ai_lib_qor.sources.root_inventory.utc_text',return_value='2026-11-20T12:34:56Z'):
     build_from_roots(raw,nl,work);link.unlink();link.symlink_to(raw/'v/lib/20261002_abcdef12/a.lef')
     build_from_roots(raw,nl,work);result=build_from_roots(raw,nl,work)
-   folder=work/'libraries/v/lib';files=sorted(p.name for p in folder.glob('formal_NL1_*.json'))
+   folder=work/'libraries/v/lib';files=sorted(p.name for p in folder.glob('formal/formal_NL1_*.json'))
    self.assertEqual(files,['formal_NL1_20261120T123456Z_001.json','formal_NL1_20261120T123456Z_002.json'])
    self.assertEqual((folder/'latest_formal_NL1.json').readlink().name,files[-1])
    self.assertEqual(result['formal_unchanged'],1)

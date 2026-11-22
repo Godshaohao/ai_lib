@@ -1,0 +1,19 @@
+digraph G {
+ graph [fontname="Noto Sans CJK SC",rankdir=TB,bgcolor="white",pad="0.38",nodesep="0.47",ranksep="0.60",splines=polyline,labelloc=t,label="文件事实同样允许叠加：多个提取步骤 → 单文件 file_facts.json",fontsize=21,fontcolor="#14253B",dpi=150];
+ node [shape=box,style="rounded,filled",fontname="Noto Sans CJK SC",fontsize=13,margin="0.17,0.12",color="#CAD4DD",fontcolor="#1E293B"];
+ edge [fontname="Noto Sans CJK SC",fontsize=10,color="#71849A",penwidth=1.35,arrowsize=0.72];
+ src [label="固定 FileInstance\nDelivery V08 / lef/core.lef\nfile_instance_id = fi_20261019_core",fillcolor="#E9F1FC"];
+ meta [label="metadata extractor\n路径、View、SIZE 等来源属性",fillcolor="#F7F9FC"];
+ macro [label="LEF parser\nMACRO、SIZE、OBS",fillcolor="#F7F9FC"];
+ pin [label="Pin extractor\nPin 名称、方向、几何",fillcolor="#F7F9FC"];
+ {rank=same;meta;macro;pin}
+ src->meta;src->macro;src->pin;
+ portions [label="临时事实片段（带对象键与覆盖状态）\nmeta / lef_macro / lef_pin_geometry",fillcolor="#FAF6E9",color="#D8CDA7"];
+ meta->portions;macro->portions;pin->portions;
+ build [label="Facts Assembler（唯一写入者）\n按 FileInstance + 对象身份合并\n冲突拒绝；未提取项不得判为完整",fillcolor="#EAF5EE",color="#91BCA1"];
+ portions->build;
+ facts [label="file_facts.json\n同一文件实例的一份解析事实\nMacro / Pin / Coverage / Parser Provenance",fillcolor="#DFF0E5",color="#63A37D",penwidth=1.7];
+ build->facts;
+ note [label="解析器升级 → 新 facts generation\n不同 LEF 与 Liberty 保持不同 FileInstance，不混成一份文件事实",shape=note,fillcolor="#F4F4F7",color="#CCD0D6",fontsize=11];
+ facts->note [style=dotted,arrowhead=none];
+}

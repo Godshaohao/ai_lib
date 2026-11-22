@@ -1,0 +1,25 @@
+digraph G {
+ graph [fontname="Noto Sans CJK SC",rankdir=TB,bgcolor="white",pad="0.40",nodesep="0.35",ranksep="0.49",splines=polyline,labelloc=t,label="关键机制：多个独立检查脚本 → 一份 run_001.json",fontsize=22,fontcolor="#14253B",dpi=170];
+ node [shape=box,style="rounded,filled",fontname="Noto Sans CJK SC",fontsize=12,margin="0.17,0.11",color="#CAD4DD",fontcolor="#1E293B"];
+ edge [fontname="Noto Sans CJK SC",fontsize=10,color="#71849A",penwidth=1.3,arrowsize=0.7];
+ v [label="锁定本次检查目标\nRev 008 + File Facts + 插件版本 + 参数/Corner",fillcolor="#E9F1FC"];
+ plan [label="Check Planner + Input Resolver\n给各插件分配固定输入；不让插件自己选最新文件",fillcolor="#E9F1FC"];
+ v->plan;
+ subgraph cluster_plugins {label="独立 Check 插件：可独立升级/启停/测试；均无权直接写 run_001.json";fontsize=13;style="rounded";color="#BBC9D8";
+   x1 [label="content_compare.py\n文件内容变化",fillcolor="#F7F9FC"];
+   x2 [label="lef_review.py\nMacro / Pin 差异",fillcolor="#F7F9FC"];
+   x3 [label="lef_liberty_check.py\n跨 View 质量检查",fillcolor="#F7F9FC"];
+   x4 [label="sta_qor 插件\nWNS / TNS / NVP 测量",fillcolor="#F7F9FC"];
+   x5 [label="qor_gate 插件\n读取指标并评价阈值",fillcolor="#F7F9FC"];
+   {rank=same;x1;x2;x3;x4;x5}
+ }
+ plan->x1;plan->x2;plan->x3;plan->x4; x4->x5 [color="#9E8BC0",label="依赖测量",constraint=false];
+ stage [label="临时贡献区 staging/<run>/contrib/\n每个插件只提交自己 check_id 下的结果片段\n有结果就写；失败/未执行也有明确状态",fillcolor="#FAF6E9",color="#D8CDA7"];
+ x1->stage;x2->stage;x3->stage;x4->stage;x5->stage;
+ agg [label="Check Assembler（唯一写入者）\n1 检查 ID 唯一  2 校验来源/参数/覆盖\n3 合并结果  4 汇总状态  5 原子发布",fillcolor="#EAF5EE",color="#91BCA1",penwidth=1.7];
+ stage->agg;
+ run [label="run_001.json  ← 一份统一产物\nchecks: {content_compare, macro_diff,\nlef_liberty, sta_qor, qor_gate}\nsummary: 已执行 / 未覆盖 / 风险结论",fillcolor="#DFF0E5",color="#63A37D",penwidth=1.8];
+ agg->run [label="固定版本后不可修改"];
+ model [label="统一 Report Builder → Web / HTML / Excel",fillcolor="#F1F1FA",color="#C3C4D7"];
+ run->model;
+}

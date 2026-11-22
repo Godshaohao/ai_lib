@@ -75,7 +75,7 @@ class HistoryIntegrityTests(unittest.TestCase):
    root=Path(t);raw=root/'raw';work=root/'work'
    p=raw/'v/lib/20260101_a/a.lef';p.parent.mkdir(parents=True);p.write_text('one')
    build_from_roots(raw,None,work,update_formal=False)
-   delivery=next((work/'libraries/v/lib').glob('delivery_*.json'));before=delivery.read_bytes()
+   delivery=next((work/'libraries/v/lib/delivery').glob('delivery_*.json'));before=delivery.read_bytes()
    p.write_text('changed in place')
    first=build_from_roots(raw,None,work,update_formal=False)
    second=build_from_roots(raw,None,work,update_formal=False)

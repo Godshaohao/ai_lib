@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1030" viewBox="0 0 1600 1030">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="1030" fill="#ffffff"/>
+<text x="50" y="58" class="title">02  多个检查脚本如何汇总为一份 Run</text>
+<text x="50" y="95" class="sub">目标、文件来源、Corner、插件版本和参数由检查计划固定</text>
+<rect x="475" y="135" width="650" height="105" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="493" y="167" class="label">固定本次检查输入</text>
+<text x="493" y="195" class="body">Delivery 或 Effective Revision + File Facts + Profile</text>
+<rect x="475" y="300" width="650" height="95" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="493" y="332" class="label">Planner / Input Resolver</text>
+<text x="493" y="360" class="body">选择插件和锁定输入；插件不自行猜测最新文件</text>
+<line x1="800" y1="240" x2="800" y2="297" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="800" y1="395" x2="800" y2="425" stroke="#2563eb" stroke-width="2"/>
+<line x1="220" y1="425" x2="1380" y2="425" stroke="#2563eb" stroke-width="2"/>
+<line x1="220" y1="425" x2="220" y2="457" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="606" y1="425" x2="606" y2="457" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="992" y1="425" x2="992" y2="457" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1378" y1="425" x2="1378" y2="457" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="60" y="460" width="320" height="130" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="78" y="492" class="label">内容 / Macro 差异</text>
+<text x="78" y="520" class="body">DIFF：记录变化事实</text>
+<text x="78" y="544" class="body">本身不产生 PASS / FAIL</text>
+<rect x="446" y="460" width="320" height="130" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="464" y="492" class="label">跨 View 检查</text>
+<text x="464" y="520" class="body">QUALITY：质量检查</text>
+<text x="464" y="544" class="body">覆盖不足时 NOT_CHECKED</text>
+<rect x="832" y="460" width="320" height="130" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="850" y="492" class="label">STA 测量</text>
+<text x="850" y="520" class="body">MEASUREMENT：WNS 数值</text>
+<text x="850" y="544" class="body">记录 Corner 与来源</text>
+<rect x="1218" y="460" width="320" height="130" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="1236" y="492" class="label">QoR Gate</text>
+<text x="1236" y="520" class="body">EVALUATION：引用 WNS</text>
+<text x="1236" y="544" class="body">按阈值产生 PASS / FAIL</text>
+<line x1="1152" y1="525" x2="1215" y2="525" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1160" y="510" class="small">引用</text>
+<line x1="220" y1="590" x2="220" y2="625" stroke="#2563eb" stroke-width="2"/>
+<line x1="606" y1="590" x2="606" y2="625" stroke="#2563eb" stroke-width="2"/>
+<line x1="992" y1="590" x2="992" y2="625" stroke="#2563eb" stroke-width="2"/>
+<line x1="1378" y1="590" x2="1378" y2="625" stroke="#2563eb" stroke-width="2"/>
+<line x1="220" y1="625" x2="1378" y2="625" stroke="#2563eb" stroke-width="2"/>
+<line x1="800" y1="625" x2="800" y2="667" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="400" y="670" width="800" height="108" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="418" y="702" class="label">Check Assembler：一个 check_id 一个命名空间</text>
+<text x="418" y="730" class="body">检查目标、来源、参数、覆盖与冲突；计算汇总；发布一份 Run</text>
+<line x1="800" y1="778" x2="800" y2="817" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="475" y="820" width="650" height="100" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="493" y="852" class="label">run_001.json</text>
+<text x="493" y="880" class="body">同一目标的一组检查与证据；已发布历史保持固定</text>
+<text x="50" y="990" class="small">依据：v5 Architecture 文档与合成示例  |  状态：设计讨论稿；并非生产系统运行图</text>
+</svg>

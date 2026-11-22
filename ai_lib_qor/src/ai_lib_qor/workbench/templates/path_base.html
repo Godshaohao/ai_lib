@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}AI LIB{% endblock %} · AI LIB</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='path_workbench.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="topbar-left">
+      <a class="brand" href="{{ url_for('overview') }}"><span class="brand-dot"></span>AI LIB</a>
+      <nav class="crumb" aria-label="当前位置">
+        <span class="crumb-sep">/</span>
+        {% block breadcrumbs %}<span class="crumb-curr">来源总览</span>{% endblock %}
+      </nav>
+    </div>
+    <div class="topbar-right">
+      {% block topbar_right %}
+      {% if all_libraries %}
+      <select id="global-lib-select" class="switcher" aria-label="快速切换库" onchange="switchGlobalLibrary(this.value)">
+        <option value="">切换来源库（共 {{ all_libraries|length }} 个）</option>
+        {% for item in all_libraries %}
+        <option value="{{ item.vendor }}|{{ item.library }}" {% if vendor is defined and library is defined and item.vendor==vendor and item.library==library %}selected{% endif %}>{{ item.vendor }} / {{ item.library }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+      {% endblock %}
+    </div>
+  </div>
+</header>
+
+<main class="shell">
+  <div id="async-job-banner" class="job-banner" hidden role="status" aria-live="polite">
+    <span id="async-job-status">后台任务运行中…</span>
+    <span class="tag tag-updated">异步执行</span>
+  </div>
+
+  {% if notice %}
+  <div class="notice {{ 'bad' if notice.warnings or '未完成' in notice.title or '未能' in notice.title or '无法' in notice.title else '' }}">
+    <strong>{{ notice.title }}</strong>
+    <span>
+      {{ notice.details }}
+      {% if notice.artifact and vendor is defined and library is defined %} · <a href="{{ url_for('artifact',vendor=vendor,library=library,name=notice.artifact) }}">下载 JSON</a>{% endif %}
+    </span>
+    {% if notice.warnings %}
+    <ul>{% for w in notice.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% block content %}{% endblock %}
+
+  <footer class="footer">
+    <span>工作目录：<span class="mono">{{ work_root }}</span></span>
+    <span>AI LIB · 只读查询消费，写操作均留痕审计 · <a href="{{ url_for('api_overview') }}" target="_blank">JSON API</a></span>
+  </footer>
+</main>
+
+<div class="pending" id="pending" hidden role="status" aria-live="polite">正在执行，请稍候，请勿重复提交…</div>
+<script src="{{ url_for('static', filename='path_workbench.js') }}"></script>
+</body>
+</html>

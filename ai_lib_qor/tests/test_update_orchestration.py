@@ -35,11 +35,11 @@ class UpdateOrchestrationTests(unittest.TestCase):
    for name in ('a.lef','b.lib'):
     p=raw/'v/lib'/first/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(name);(nl/name).symlink_to(p)
    build_from_roots(raw,nl,work)
-   folder=work/'libraries/v/lib';initialize_from_formal(work,'v','lib',next(folder.glob('formal_NL1_*.json')))
+   folder=work/'libraries/v/lib';initialize_from_formal(work,'v','lib',next(folder.glob('formal/formal_NL1_*.json')))
    p=raw/'v/lib/20260102_b/a.lef';p.parent.mkdir(parents=True);p.write_text('updated')
    r=build_from_roots(raw,nl,work)
    self.assertEqual(r['effective_published'],1)
-   effective=json.loads((folder/'effective_lib_002.json').read_text())
+   effective=json.loads((folder/'effective/effective_lib_002.json').read_text())
    self.assertEqual(effective['views']['LEF']['20260102_b'],['a.lef'])
    self.assertEqual(effective['views']['LIBERTY'][first],['b.lib'])
    self.assertEqual(build_from_roots(raw,nl,work)['effective_published'],0)
@@ -47,7 +47,7 @@ class UpdateOrchestrationTests(unittest.TestCase):
    build_from_roots(raw,nl,work,auto_effective=False)
    set_version_excluded(work,'v','lib','20260103_c',True)
    self.assertEqual(build_from_roots(raw,nl,work)['effective_published'],0)
-   self.assertFalse((folder/'effective_lib_003.json').exists())
+   self.assertFalse((folder/'effective/effective_lib_003.json').exists())
 
  def test_pending_same_day_retries_after_registration_and_never_regresses(self):
   from ai_lib_qor.versions.store import write_atomic
@@ -55,7 +55,7 @@ class UpdateOrchestrationTests(unittest.TestCase):
    root=Path(t);raw=root/'raw';nl=root/'NL1';nl.mkdir();work=root/'work'
    old=raw/'v/lib/20260101_a/a.lef';old.parent.mkdir(parents=True);old.write_text('old');(nl/'a.lef').symlink_to(old)
    build_from_roots(raw,nl,work);folder=work/'libraries/v/lib'
-   initialize_from_formal(work,'v','lib',next(folder.glob('formal_NL1_*.json')))
+   initialize_from_formal(work,'v','lib',next(folder.glob('formal/formal_NL1_*.json')))
    newer=raw/'v/lib/20260101_b/a.lef';newer.parent.mkdir(parents=True);newer.write_text('new')
    r=build_from_roots(raw,nl,work)
    self.assertEqual(r['effective_published'],0);self.assertEqual(r['effective_pending'],1)
@@ -96,7 +96,7 @@ class UpdateOrchestrationTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as t:
    root=Path(t);raw=root/'raw';nl=root/'NL1';nl.mkdir();work=root/'work'
    p=raw/'v/lib/20260101_a/a.lef';p.parent.mkdir(parents=True);p.write_text('one');(nl/'a.lef').symlink_to(p)
-   build_from_roots(raw,nl,work);folder=work/'libraries/v/lib';initialize_from_formal(work,'v','lib',next(folder.glob('formal_NL1_*.json')))
+   build_from_roots(raw,nl,work);folder=work/'libraries/v/lib';initialize_from_formal(work,'v','lib',next(folder.glob('formal/formal_NL1_*.json')))
    p=raw/'v/lib/20260102_b/a.lef';p.parent.mkdir(parents=True);p.write_text('two')
    def fail(folder,name,target):
     if name=='latest_effective.json':raise OSError('simulated crash')
@@ -105,11 +105,11 @@ class UpdateOrchestrationTests(unittest.TestCase):
     r=build_from_roots(raw,nl,work)
    self.assertEqual(r['effective_pending'],1)
    self.assertEqual((folder/'latest_effective.json').readlink().name,'effective_lib_001.json')
-   self.assertTrue((folder/'effective_lib_002.json').is_file())
+   self.assertTrue((folder/'effective/effective_lib_002.json').is_file())
    self.assertEqual(build_from_roots(raw,nl,work)['effective_pending'],0)
    self.assertEqual((folder/'latest_effective.json').readlink().name,'effective_lib_002.json')
    import csv
-   with (folder/'effective_operations.tsv').open(newline='') as stream:events=list(csv.DictReader(stream,delimiter='\t'))
+   with (folder/'log/effective_operations.tsv').open(newline='') as stream:events=list(csv.DictReader(stream,delimiter='\t'))
    self.assertTrue(any(x['revision']=='rev_0002' and x['status']=='RECOVERED' for x in events))
 
 if __name__=='__main__':unittest.main()

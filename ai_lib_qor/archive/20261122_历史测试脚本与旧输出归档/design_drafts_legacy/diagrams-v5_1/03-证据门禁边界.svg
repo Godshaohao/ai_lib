@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="920" viewBox="0 0 1600 920">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="920" fill="#ffffff"/>
+<text x="50" y="58" class="title">03  证据门禁：现有原型覆盖到哪里</text>
+<text x="50" y="95" class="sub">原型验证 v5 合成 Run 的引用和摘要；正式 v3 组装、覆盖语义和真实来源接入仍待实现</text>
+<rect x="50" y="150" width="700" height="585" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="68" y="182" class="label">补充包已有：evidence_guard.py</text>
+<rect x="80" y="215" width="640" height="100" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="98" y="247" class="label">输入</text>
+<text x="98" y="275" class="body">v5 fixture Run + manifest + fixture 文件</text>
+<rect x="80" y="350" width="640" height="145" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="98" y="382" class="label">已演示的检查</text>
+<text x="98" y="410" class="body">完成项需要输入引用及证据</text>
+<text x="98" y="434" class="body">来源路径须在指定目录内，SHA256 须匹配</text>
+<text x="98" y="458" class="body">默认拒绝 REUSED；Gate 有基本依赖检查</text>
+<rect x="80" y="535" width="640" height="120" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="98" y="567" class="label">局限</text>
+<text x="98" y="595" class="body">未接正式数据生产者与 v3 合并器</text>
+<text x="98" y="619" class="body">不证明文件内容是有效 Parser 结果</text>
+<line x1="400" y1="315" x2="400" y2="347" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="400" y1="495" x2="400" y2="532" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="850" y="150" width="700" height="585" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="868" y="182" class="label">目标发布流程：仍待实现</text>
+<rect x="880" y="215" width="640" height="105" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="898" y="247" class="label">可信输入与执行证据</text>
+<text x="898" y="275" class="body">确认文件身份、上下文与关联关系</text>
+<rect x="880" y="355" width="640" height="130" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="898" y="387" class="label">检查结论和覆盖</text>
+<text x="898" y="415" class="body">映射 v3 状态；无证据或覆盖不足不能 PASS</text>
+<text x="898" y="439" class="body">校验 Gate 的测量依赖与计算上下文</text>
+<rect x="880" y="525" width="640" height="130" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="898" y="557" class="label">v3 Schema + 发布</text>
+<text x="898" y="585" class="body">字段映射、结构和业务校验通过后发布</text>
+<text x="898" y="609" class="body">失败保留旧结果</text>
+<line x1="1200" y1="320" x2="1200" y2="352" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1200" y1="485" x2="1200" y2="522" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="50" y="790" class="body">复核发现：用普通文件引用替代 Gate 的测量引用，同时伪造不存在的依赖，原型仍会通过。</text>
+<text x="50" y="865" class="small">依据：v5.1 补充文档、原型代码和现有 src_qor；区分现状与方案  |  测试边界：合成夹具</text>
+</svg>

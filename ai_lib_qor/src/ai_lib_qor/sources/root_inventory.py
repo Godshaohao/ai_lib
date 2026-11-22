@@ -1,6 +1,7 @@
 """Inventory RAW and Formal roots without fabricating file or delivery identities."""
 from collections import defaultdict
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import csv
 from .minimal_delivery import directory_birthtime, version_date
 from .timestamps import utc_text,instant
 from .source_discovery import _DEFAULT_VERSION, natural_version_key
-from .layout import SAFE, library_folder, next_filename
+from .layout import SAFE, library_folder, next_filename,archive_files,storage_dir,log_file
 from ai_lib_qor.versions.store import locked, write_atomic
 
 
@@ -113,7 +114,9 @@ def _inventory_formal(root,lookup,nl_version,warnings,unresolved):
 def update_pointer(folder,name,target):
     pointer=folder/name
     if pointer.exists() and not pointer.is_symlink():raise ValueError(f'拒绝覆盖非软链接指针: {pointer}')
-    if Path(target).name!=str(target):raise ValueError('指针目标必须在本库目录')
+    target_path=Path(target)
+    if target_path.is_absolute() or '..' in target_path.parts or len(target_path.parts)>2 or (len(target_path.parts)==2 and target_path.parts[0] not in ('delivery','formal','effective','log')):raise ValueError('指针目标必须在本库目录')
+    if len(target_path.parts)==2 and (folder/target_path.parts[0]).is_symlink():raise ValueError('指针目录不能为软链接')
     if not (folder/target).is_file() or (folder/target).is_symlink():raise ValueError('指针目标无效')
     if pointer.is_symlink() and os.readlink(pointer)==target:return
     tmp=folder/('.pointer_'+uuid.uuid4().hex)
@@ -123,7 +126,7 @@ def update_pointer(folder,name,target):
 
 def _latest_delivery(folder,warnings,work,vendor,library):
     items=[]
-    for path in folder.glob('delivery_*.json'):
+    for path in archive_files(folder,'delivery','delivery_*.json'):
         if path.is_symlink():raise ValueError('交付文件不能是链接')
         value=json.loads(path.read_text(encoding='utf-8'));items.append((path,value))
     if not items:return
@@ -138,7 +141,7 @@ def _latest_delivery(folder,warnings,work,vendor,library):
         if pointer.is_symlink():pointer.unlink()
         warnings.append(f'{folder}: 版本日期缺失或重复，最新交付次序未确认')
         return
-    update_pointer(folder,'latest_delivery.json',chosen.name)
+    update_pointer(folder,'latest_delivery.json',str(chosen.relative_to(folder)))
 
 
 def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,update_formal=True,update_index=True,auto_effective=True,vendor=None,library=None):
@@ -162,19 +165,45 @@ def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,u
         status='PARTIAL' if unresolved else 'COMPLETE'
         result.update(formal_observation_status=status,formal_unresolved=unresolved)
         log=out/'formal_observations.tsv'
+        state_file=out/'.formal_observation_state.json'
+        matched_rows=[]
+        for formal in formals:
+            for kind,versions in formal['views'].items():
+                for source_version,links in versions.items():
+                    for link in links:
+                        matched_rows.append((link['path'],link['target'],link['resolved'],f"MATCHED:{formal['vendor']}/{formal['library']}/{source_version}/{kind}"))
+        obs_digest=hashlib.sha256(json.dumps({'nl_root':str(nl),'nl_version':version,'matched':matched_rows},ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()
         with locked(out):
             if log.is_symlink():raise ValueError('正式来源观察日志不能为软链接')
+            if state_file.is_symlink():raise ValueError('正式观察状态文件不能为软链接')
+            prev_state={}
+            if state_file.is_file():
+                try:
+                    loaded=json.loads(state_file.read_text(encoding='utf-8'))
+                    if isinstance(loaded,dict):prev_state=loaded
+                except (OSError,ValueError,TypeError):
+                    prev_state={}
+            expected_entry={'nl_root':str(nl),'digest':obs_digest,'matched_count':len(matched_rows)}
+            deduplicated=(not unresolved) and log.is_file() and prev_state.get(version)==expected_entry
             with log.open('a',encoding='utf-8',newline='') as stream:
                 writer=csv.writer(stream,delimiter='\t',lineterminator='\n')
                 stamp=utc_text();run=uuid.uuid4().hex
-                writer.writerow([stamp,str(nl),version,status,'','','','',run])
-                for formal in formals:
-                    for kind,versions in formal['views'].items():
-                        for source_version,links in versions.items():
-                            for link in links:
-                                writer.writerow([stamp,str(nl),version,status,link['path'],link['target'],link['resolved'],f"MATCHED:{formal['vendor']}/{formal['library']}/{source_version}/{kind}",run])
-                for item in unresolved:writer.writerow([stamp,str(nl),version,status,item['path'],item['target'] or '',item['resolved'] or '',item['reason'],run])
+                if deduplicated:
+                    writer.writerow([stamp,str(nl),version,'UNCHANGED','','','',f'SAME_AS_PREVIOUS:{len(matched_rows)}',run])
+                else:
+                    writer.writerow([stamp,str(nl),version,status,'','','','',run])
+                    for m_path,m_target,m_resolved,m_tag in matched_rows:
+                        writer.writerow([stamp,str(nl),version,status,m_path,m_target,m_resolved,m_tag,run])
+                    for item in unresolved:writer.writerow([stamp,str(nl),version,status,item['path'],item['target'] or '',item['resolved'] or '',item['reason'],run])
                 stream.flush();os.fsync(stream.fileno())
+            if not deduplicated:
+                if not unresolved:
+                    prev_state[version]=expected_entry
+                    write_atomic(state_file,prev_state)
+                elif version in prev_state:
+                    prev_state.pop(version,None)
+                    write_atomic(state_file,prev_state)
+            result['formal_observation_deduplicated']=deduplicated
     grouped=defaultdict(lambda:{'deliveries':[],'formals':[]})
     for row in deliveries if update_raw else []:grouped[(row['vendor'],row['library'])]['deliveries'].append(row)
     for row in formals:grouped[(row['vendor'],row['library'])]['formals'].append(row)
@@ -185,7 +214,7 @@ def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,u
     for (vendor,library),rows in sorted(grouped.items()):
         folder=library_folder(out,vendor,library)
         with locked(folder):
-            observation_path=folder/'raw_observations.tsv'
+            observation_path=log_file(folder,'raw_observations.tsv')
             if observation_path.is_symlink():raise ValueError('RAW 观察记录不能为软链接')
             baseline={}
             if observation_path.exists():
@@ -209,13 +238,13 @@ def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,u
                     stream.flush();os.fsync(stream.fileno())
             from ai_lib_qor.application.minimal_effective import _history
             history=_history(folder,library)
-            state_path=folder/'.auto_effective_state.json'
+            state_path=log_file(folder,'.auto_effective_state.json')
             if state_path.is_symlink():raise ValueError('自动更新状态不能为软链接')
             state=json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {'pending':[]}
             if not isinstance(state,dict) or set(state)!={'pending'} or not isinstance(state['pending'],list) or any(not isinstance(x,str) for x in state['pending']):raise ValueError('自动更新状态无效')
             for delivery in rows['deliveries']:
                 prior=[]
-                for p in sorted(folder.glob('delivery_*.json')):
+                for p in archive_files(folder,'delivery','delivery_*.json'):
                     if p.is_symlink():raise ValueError('交付文件不能是链接')
                     value=json.loads(p.read_text(encoding='utf-8'))
                     if set(value)!={'vendor','library','version','version_date','directory_created_at','root','views'}:raise ValueError('输出目录含非七字段交付，需使用独立目录')
@@ -235,11 +264,12 @@ def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,u
                 prefix=f'delivery_{library}_{stamp}'
                 if history and delivery['version'] not in state['pending']:
                     state['pending'].append(delivery['version']);write_atomic(state_path,state)
-                write_atomic(folder/next_filename(folder,prefix),delivery,immutable=True);result['delivery_created']+=1
+                delivery_dir=storage_dir(folder,'delivery')
+                write_atomic(delivery_dir/next_filename(delivery_dir,prefix),delivery,immutable=True);result['delivery_created']+=1
             if update_raw:_latest_delivery(folder,warnings,out,vendor,library)
             for formal in rows['formals']:
                 previous=[]
-                for p in sorted(folder.glob('formal_'+version+'_*.json')):
+                for p in archive_files(folder,'formal','formal_'+version+'_*.json'):
                     if p.is_symlink():raise ValueError('正式快照文件不能是链接')
                     value=json.loads(p.read_text(encoding='utf-8'))
                     previous.append((instant(value['observed_at']),p,value))
@@ -252,12 +282,13 @@ def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,u
                 compare=lambda x:{k:v for k,v in x.items() if k!='observed_at'}
                 if previous and compare(previous[-1][2])==compare(formal):
                     result['formal_unchanged']+=1
-                    update_pointer(folder,'latest_formal_'+version+'.json',previous[-1][1].name)
+                    update_pointer(folder,'latest_formal_'+version+'.json',str(previous[-1][1].relative_to(folder)))
                     continue
                 stamp=instant(formal['observed_at']).strftime('%Y%m%dT%H%M%SZ')
-                target=folder/next_filename(folder,'formal_'+version+'_'+stamp)
+                formal_dir=storage_dir(folder,'formal')
+                target=formal_dir/next_filename(formal_dir,'formal_'+version+'_'+stamp)
                 write_atomic(target,formal,immutable=True);result['formal_created']+=1
-                update_pointer(folder,'latest_formal_'+version+'.json',target.name)
+                update_pointer(folder,'latest_formal_'+version+'.json',str(target.relative_to(folder)))
             index_ok=False
             if update_index:
                 try:
@@ -281,7 +312,7 @@ def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,u
                     for pending in sorted(state['pending'],key=lambda v:ranks[v]):
                         history=_history(folder,library)
                         if history:
-                            update_pointer(folder,'latest_effective.json',history[-1][1].name)
+                            update_pointer(folder,'latest_effective.json',str(history[-1][1].relative_to(folder)))
                             _audit_recover(folder,history[-1][2]['revision'])
                         if pending not in excluded and history:
                             members=_flat(history[-1][2]['views']);delivery=deliveries[pending]

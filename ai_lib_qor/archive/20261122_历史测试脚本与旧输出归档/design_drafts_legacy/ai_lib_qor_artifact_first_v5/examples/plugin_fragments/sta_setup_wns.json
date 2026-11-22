@@ -1,0 +1,39 @@
+{
+  "check_id": "sta_setup_wns",
+  "implementation_version": "1.0.0",
+  "kind": "MEASUREMENT",
+  "execution_status": "COMPLETED",
+  "verdict": null,
+  "target": {
+    "kind": "effective_revision",
+    "set_id": "rtavfs_primary",
+    "revision_id": "rev_0008"
+  },
+  "input_generation": "input_gen_008",
+  "parameters": {
+    "corner": "tt",
+    "mode": "func",
+    "stage": "POST"
+  },
+  "findings": [],
+  "metrics": [
+    {
+      "name": "setup_wns",
+      "value": -0.08,
+      "unit": "ns",
+      "corner": "tt",
+      "mode": "func",
+      "stage": "POST"
+    }
+  ],
+  "evidence_refs": [
+    "reports/sta_tt_func.rpt"
+  ],
+  "input_refs": [
+    {
+      "kind": "external_report",
+      "id": "sta_tt_func_post"
+    }
+  ],
+  "environment_id": "pt_demo_tt_func"
+}

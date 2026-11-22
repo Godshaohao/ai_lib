@@ -1,0 +1,2329 @@
+{
+  "schema": "architecture-navigator.model.v2",
+  "status": "PROPOSED",
+  "evidence_basis": "2026-11-14 根据 ai_lib_qor/src/ai_lib_qor/versions 和 tests/test_versions.py 核对；其余模块仍是拟议，v3 JSON 为设计示例。",
+  "elements": {
+    "engineer": {
+      "id": "engineer",
+      "name": "库管理工程师",
+      "typ": "Person",
+      "summary": "配置来源、运行 CLI、检查交付并审阅证据。",
+      "role": "发起扫描、生成和检查命令",
+      "contract": "CLI 命令与 HTML/Excel 交付"
+    },
+    "supplier": {
+      "id": "supplier",
+      "name": "第三方 IP 供应商",
+      "typ": "Person",
+      "summary": "提供 FULL / INCREMENTAL / PATCH 交付包。",
+      "role": "上游交付"
+    },
+    "reviewer": {
+      "id": "reviewer",
+      "name": "IP / PD 使用者",
+      "typ": "Person",
+      "summary": "验收 Macro/Pin 变化和库质量检查结果。",
+      "role": "审查 Excel 和历史证据"
+    },
+    "ai_lib": {
+      "id": "ai_lib",
+      "name": "ai_lib_qor 库管理系统",
+      "typ": "Software System",
+      "summary": "接收 RAW 与正式 NL 来源，形成可追溯版本及检查结果。",
+      "path": "ai_lib_qor/",
+      "children": "Python Runner, 配置, work/, HTML/Excel",
+      "status": "PROPOSED 源码结构 / 已讨论业务规则"
+    },
+    "raw": {
+      "id": "raw",
+      "name": "RAW 文件区",
+      "typ": "External System",
+      "summary": "供应商交付的真实文件目录；不是 work 中的交付历史。",
+      "relation": "只读扫描，不修改源文件"
+    },
+    "formal": {
+      "id": "formal",
+      "name": "Formal NL",
+      "typ": "External System",
+      "summary": "真实的正式 NL 链接位置，由固定快照记录实际链接目标。",
+      "relation": "只读盘点，正式快照独立演进"
+    },
+    "report": {
+      "id": "report",
+      "name": "验收结果",
+      "typ": "Artifact",
+      "summary": "HTML/Excel，包含最新、次新、Macro、Check 和 Revision 历史。"
+    },
+    "runner": {
+      "id": "runner",
+      "name": "Python CLI / Runner",
+      "typ": "Container",
+      "summary": "一个 Python 运行单元，负责配置加载、来源处理、版本更新、检查及报告。",
+      "path": "src/ai_lib_qor/",
+      "status": "PROPOSED",
+      "parent": "ai_lib"
+    },
+    "registry_store": {
+      "id": "registry_store",
+      "name": "配置文件",
+      "typ": "Data Store",
+      "summary": "IP、来源库归属、交付顺序、检查规则等输入权威。",
+      "path": "config/",
+      "parent": "ai_lib"
+    },
+    "work_store": {
+      "id": "work_store",
+      "name": "work/ 业务数据",
+      "typ": "Data Store",
+      "summary": "Delivery / Formal Snapshot / Effective Revision / CheckRun 的持久记录。",
+      "path": "work/（根目录可配置）",
+      "status": "PROPOSED DATA LAYOUT",
+      "parent": "ai_lib"
+    },
+    "html_excel": {
+      "id": "html_excel",
+      "name": "HTML / Excel 报告",
+      "typ": "Artifact",
+      "summary": "只读交付视图，不作为业务权威。",
+      "path": "输出目录可配置",
+      "parent": "ai_lib"
+    },
+    "cli": {
+      "id": "cli",
+      "name": "cli.py · 命令入口",
+      "typ": "Component",
+      "summary": "编排命令，不实现业务规则",
+      "path": "src/ai_lib_qor/cli.py",
+      "inputs": "命令参数、运行上下文",
+      "outputs": "调用 sources/versions/checks/reporting",
+      "rule": "命令不修改旧 Revision",
+      "status": "PROPOSED",
+      "parent": "runner"
+    },
+    "config": {
+      "id": "config",
+      "name": "config.py · 登记与归属",
+      "typ": "Component",
+      "summary": "读取供应商、来源库、IP 归属和规则",
+      "path": "src/ai_lib_qor/config.py",
+      "inputs": "YAML / JSON 配置",
+      "outputs": "Registry / Ownership / DeliveryPolicy",
+      "rule": "不通过文件名猜 IP 归属",
+      "status": "PROPOSED",
+      "parent": "runner"
+    },
+    "sources": {
+      "id": "sources",
+      "name": "sources/ · RAW/正式来源",
+      "typ": "Component",
+      "summary": "固定 DeliveryRecord 与 FormalSnapshot",
+      "path": "src/ai_lib_qor/sources/",
+      "inputs": "RAW 文件树 / NL 链接 / 配置",
+      "outputs": "delivery.json / snap_*.json",
+      "rule": "同名 NL 可有不同固定 Snapshot",
+      "status": "PROPOSED",
+      "parent": "runner"
+    },
+    "parsers": {
+      "id": "parsers",
+      "name": "facts/ · 解析适配（拟议）",
+      "typ": "Component",
+      "summary": "复用 LEF/Liberty Parser 与 FileFacts",
+      "path": "design/blackbox_v3_1/src/ai_lib_qor/facts/",
+      "inputs": "来源文件引用、解析范围",
+      "outputs": "Macro/Cell/Pin Facts",
+      "rule": "覆盖不足标注 PARTIAL",
+      "status": "PROPOSED",
+      "parent": "runner"
+    },
+    "versions": {
+      "id": "versions",
+      "name": "versions/ · 有效版本",
+      "typ": "Component",
+      "summary": "已实现版本组合、采纳事件和索引重建；其余流水线尚未接通",
+      "path": "src/ai_lib_qor/versions/",
+      "inputs": "v3 交付记录 / 正式快照、已发布版本、采纳事件",
+      "outputs": "rev_*.json、acceptance.jsonl、index.json",
+      "rule": "计算最新 ≠ 已采纳 ≠ 正式链接",
+      "status": "VERIFIED",
+      "parent": "runner",
+      "evidence_ref": "src/ai_lib_qor/versions/__main__.py; src/ai_lib_qor/versions/composer.py; tests/test_versions.py"
+    },
+    "checks": {
+      "id": "checks",
+      "name": "checks/ · 比较/校验",
+      "typ": "Component",
+      "summary": "插件编排、文件差异、LEF-Liberty 联动",
+      "path": "src/ai_lib_qor/checks/",
+      "inputs": "目标 Rev / Delivery + Facts + 规则",
+      "outputs": "check run_*.json",
+      "rule": "检查重跑不生成新 Rev",
+      "status": "PROPOSED",
+      "parent": "runner"
+    },
+    "storage": {
+      "id": "storage",
+      "name": "storage/ · 路径/发布",
+      "typ": "Component",
+      "summary": "统一路径解析、读取和原子发布",
+      "path": "src/ai_lib_qor/storage/",
+      "inputs": "不可变记录、索引更新请求",
+      "outputs": "work/ 固定记录与 index.json",
+      "rule": "先写/校验，再切换当前指针",
+      "status": "PROPOSED",
+      "parent": "runner"
+    },
+    "reporting": {
+      "id": "reporting",
+      "name": "reporting/ · 只读报告",
+      "typ": "Component",
+      "summary": "文件定位、时间线、HTML/Excel 渲染",
+      "path": "src/ai_lib_qor/reporting/",
+      "inputs": "固定 Delivery / Snapshot / Rev / Run",
+      "outputs": "只读 HTML/Excel",
+      "rule": "报告不是第二份权威事实",
+      "status": "PROPOSED",
+      "parent": "runner"
+    },
+    "ver_entry": {
+      "id": "ver_entry",
+      "name": "__main__.py",
+      "typ": "Code element",
+      "summary": "命令入口，组织初始化、增量与采纳",
+      "parent": "versions",
+      "path": "src/ai_lib_qor/versions/__main__.py",
+      "status": "VERIFIED",
+      "rule": "工作区代码存在；行为范围以源码与模拟测试为准。",
+      "evidence_ref": "src/ai_lib_qor/versions/__main__.py"
+    },
+    "ver_selector": {
+      "id": "ver_selector",
+      "name": "slot_resolver.py",
+      "typ": "Code element",
+      "summary": "校验来源文件身份并建立固定引用",
+      "parent": "versions",
+      "path": "src/ai_lib_qor/versions/slot_resolver.py",
+      "status": "VERIFIED",
+      "rule": "工作区代码存在；行为范围以源码与模拟测试为准。",
+      "evidence_ref": "src/ai_lib_qor/versions/slot_resolver.py"
+    },
+    "ver_builder": {
+      "id": "ver_builder",
+      "name": "composer.py",
+      "typ": "Code element",
+      "summary": "完整 members 与 changes 的计算",
+      "parent": "versions",
+      "path": "src/ai_lib_qor/versions/composer.py",
+      "status": "VERIFIED",
+      "rule": "工作区代码存在；行为范围以源码与模拟测试为准。",
+      "evidence_ref": "src/ai_lib_qor/versions/composer.py"
+    },
+    "ver_delta": {
+      "id": "ver_delta",
+      "name": "delivery_policy.py",
+      "typ": "Code element",
+      "summary": "显式选择与删除，未交付成员继承",
+      "parent": "versions",
+      "path": "src/ai_lib_qor/versions/delivery_policy.py",
+      "status": "VERIFIED",
+      "rule": "工作区代码存在；行为范围以源码与模拟测试为准。",
+      "evidence_ref": "src/ai_lib_qor/versions/delivery_policy.py"
+    },
+    "ver_validate": {
+      "id": "ver_validate",
+      "name": "composer.verify_delta",
+      "typ": "Code element",
+      "summary": "校验父版本与变化的一致性",
+      "parent": "versions",
+      "path": "src/ai_lib_qor/versions/composer.py",
+      "status": "VERIFIED",
+      "rule": "工作区代码存在；行为范围以源码与模拟测试为准。",
+      "evidence_ref": "src/ai_lib_qor/versions/composer.py"
+    },
+    "ver_publish": {
+      "id": "ver_publish",
+      "name": "store.py",
+      "typ": "Code element",
+      "summary": "Schema 校验、固定记录发布与索引维护",
+      "parent": "versions",
+      "path": "src/ai_lib_qor/versions/store.py",
+      "status": "VERIFIED",
+      "rule": "工作区代码存在；行为范围以源码与模拟测试为准。",
+      "evidence_ref": "src/ai_lib_qor/versions/store.py"
+    },
+    "ck_entry": {
+      "id": "ck_entry",
+      "name": "CheckOrchestrator",
+      "typ": "Code element",
+      "summary": "确定 target、baseline 与规则集",
+      "parent": "checks",
+      "path": "src/ai_lib_qor/checks/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "跨 View 检查仅对相关的最新有效 LEF × 对应最新有效 Liberty 执行，规则需明确作用范围。"
+    },
+    "ck_registry": {
+      "id": "ck_registry",
+      "name": "RuleRegistry",
+      "typ": "Code element",
+      "summary": "规则白名单与插件 ID",
+      "parent": "checks",
+      "path": "src/ai_lib_qor/checks/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "跨 View 检查仅对相关的最新有效 LEF × 对应最新有效 Liberty 执行，规则需明确作用范围。"
+    },
+    "ck_adapter": {
+      "id": "ck_adapter",
+      "name": "PluginAdapter",
+      "typ": "Code element",
+      "summary": "运行脚本并规范化结果",
+      "parent": "checks",
+      "path": "src/ai_lib_qor/checks/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "跨 View 检查仅对相关的最新有效 LEF × 对应最新有效 Liberty 执行，规则需明确作用范围。"
+    },
+    "ck_diff": {
+      "id": "ck_diff",
+      "name": "DiffEngine",
+      "typ": "Code element",
+      "summary": "来源变化与内容变化分离",
+      "parent": "checks",
+      "path": "src/ai_lib_qor/checks/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "跨 View 检查仅对相关的最新有效 LEF × 对应最新有效 Liberty 执行，规则需明确作用范围。"
+    },
+    "ck_merge": {
+      "id": "ck_merge",
+      "name": "ResultAggregator",
+      "typ": "Code element",
+      "summary": "统一质量结论与证据",
+      "parent": "checks",
+      "path": "src/ai_lib_qor/checks/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "跨 View 检查仅对相关的最新有效 LEF × 对应最新有效 Liberty 执行，规则需明确作用范围。"
+    },
+    "ck_write": {
+      "id": "ck_write",
+      "name": "CheckRunWriter",
+      "typ": "Code element",
+      "summary": "一次运行固定 Run，不修改 Rev",
+      "parent": "checks",
+      "path": "src/ai_lib_qor/checks/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "跨 View 检查仅对相关的最新有效 LEF × 对应最新有效 Liberty 执行，规则需明确作用范围。"
+    },
+    "so_entry": {
+      "id": "so_entry",
+      "name": "SourceFacade",
+      "typ": "Code element",
+      "summary": "按任务选择 RAW / Formal",
+      "parent": "sources",
+      "path": "src/ai_lib_qor/sources/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "文件没有明确归属时保留 RAW 事实，不自动进入有效库。"
+    },
+    "so_raw": {
+      "id": "so_raw",
+      "name": "DeliveryScanner",
+      "typ": "Code element",
+      "summary": "生成交付文件清单",
+      "parent": "sources",
+      "path": "src/ai_lib_qor/sources/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "文件没有明确归属时保留 RAW 事实，不自动进入有效库。"
+    },
+    "so_policy": {
+      "id": "so_policy",
+      "name": "DeliveryPolicyResolver",
+      "typ": "Code element",
+      "summary": "确认顺序、包模式与覆盖",
+      "parent": "sources",
+      "path": "src/ai_lib_qor/sources/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "文件没有明确归属时保留 RAW 事实，不自动进入有效库。"
+    },
+    "so_formal": {
+      "id": "so_formal",
+      "name": "FormalSnapshotScanner",
+      "typ": "Code element",
+      "summary": "固定链接目标和观察范围",
+      "parent": "sources",
+      "path": "src/ai_lib_qor/sources/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "文件没有明确归属时保留 RAW 事实，不自动进入有效库。"
+    },
+    "so_match": {
+      "id": "so_match",
+      "name": "SourceReferenceMatcher",
+      "typ": "Code element",
+      "summary": "正式链接匹配 RAW 来源",
+      "parent": "sources",
+      "path": "src/ai_lib_qor/sources/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "文件没有明确归属时保留 RAW 事实，不自动进入有效库。"
+    },
+    "so_save": {
+      "id": "so_save",
+      "name": "SourceRecordWriter",
+      "typ": "Code element",
+      "summary": "写 immutable Delivery/Snapshot",
+      "parent": "sources",
+      "path": "src/ai_lib_qor/sources/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "文件没有明确归属时保留 RAW 事实，不自动进入有效库。"
+    },
+    "st_path": {
+      "id": "st_path",
+      "name": "WorkPathResolver",
+      "typ": "Code element",
+      "summary": "按配置解析 work root",
+      "parent": "storage",
+      "path": "src/ai_lib_qor/storage/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "storage 是底层基础设施组件，不能偷偷决定要不要采纳有效版本。"
+    },
+    "st_reader": {
+      "id": "st_reader",
+      "name": "RecordRepository",
+      "typ": "Code element",
+      "summary": "读取固定 Delivery/Rev/Run",
+      "parent": "storage",
+      "path": "src/ai_lib_qor/storage/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "storage 是底层基础设施组件，不能偷偷决定要不要采纳有效版本。"
+    },
+    "st_writer": {
+      "id": "st_writer",
+      "name": "ImmutableRecordWriter",
+      "typ": "Code element",
+      "summary": "先写临时文件并验证",
+      "parent": "storage",
+      "path": "src/ai_lib_qor/storage/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "storage 是底层基础设施组件，不能偷偷决定要不要采纳有效版本。"
+    },
+    "st_index": {
+      "id": "st_index",
+      "name": "IndexPublisher",
+      "typ": "Code element",
+      "summary": "原子切换 current 指针",
+      "parent": "storage",
+      "path": "src/ai_lib_qor/storage/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "storage 是底层基础设施组件，不能偷偷决定要不要采纳有效版本。"
+    },
+    "rp_query": {
+      "id": "rp_query",
+      "name": "ReadModelBuilder",
+      "typ": "Code element",
+      "summary": "读取不可变文件与当前索引",
+      "parent": "reporting",
+      "path": "src/ai_lib_qor/reporting/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "报告必须只读，不能成为重新计算有效库状态的权威输入。"
+    },
+    "rp_locator": {
+      "id": "rp_locator",
+      "name": "FileLocatorView",
+      "typ": "Code element",
+      "summary": "最新/次新出现与来源证据",
+      "parent": "reporting",
+      "path": "src/ai_lib_qor/reporting/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "报告必须只读，不能成为重新计算有效库状态的权威输入。"
+    },
+    "rp_timeline": {
+      "id": "rp_timeline",
+      "name": "HistoryView",
+      "typ": "Code element",
+      "summary": "Delivery/Rev/Formal 独立时间线",
+      "parent": "reporting",
+      "path": "src/ai_lib_qor/reporting/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "报告必须只读，不能成为重新计算有效库状态的权威输入。"
+    },
+    "rp_export": {
+      "id": "rp_export",
+      "name": "ReportRenderer",
+      "typ": "Code element",
+      "summary": "产生 HTML + Excel",
+      "parent": "reporting",
+      "path": "src/ai_lib_qor/reporting/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "报告必须只读，不能成为重新计算有效库状态的权威输入。"
+    },
+    "ps_router": {
+      "id": "ps_router",
+      "name": "ParserRouter",
+      "typ": "Code element",
+      "summary": "由 View 选择已注册解析器",
+      "parent": "parsers",
+      "path": "src/ai_lib_qor/parsers/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "解析成功的声明必须绑定 covered_sections；没有解析不等于没有变化。"
+    },
+    "ps_lef": {
+      "id": "ps_lef",
+      "name": "LEFAdapter",
+      "typ": "Code element",
+      "summary": "Macro / Pin / SIZE",
+      "parent": "parsers",
+      "path": "src/ai_lib_qor/parsers/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "解析成功的声明必须绑定 covered_sections；没有解析不等于没有变化。"
+    },
+    "ps_lib": {
+      "id": "ps_lib",
+      "name": "LibertyAdapter",
+      "typ": "Code element",
+      "summary": "Cell / Pin / Corner",
+      "parent": "parsers",
+      "path": "src/ai_lib_qor/parsers/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "解析成功的声明必须绑定 covered_sections；没有解析不等于没有变化。"
+    },
+    "ps_facts": {
+      "id": "ps_facts",
+      "name": "FileFactsNormalizer",
+      "typ": "Code element",
+      "summary": "覆盖状态、单位与事实 ID",
+      "parent": "parsers",
+      "path": "src/ai_lib_qor/parsers/（拟定内部元素）",
+      "status": "PROPOSED",
+      "rule": "解析成功的声明必须绑定 covered_sections；没有解析不等于没有变化。"
+    },
+    "cf_load": {
+      "id": "cf_load",
+      "name": "RegistryLoader",
+      "typ": "Code element",
+      "summary": "统一读取现有配置",
+      "parent": "config",
+      "path": "src/ai_lib_qor/config.py",
+      "status": "PROPOSED",
+      "rule": "配置是归属与交付规则的权威，不复制第二套独立人工真相。"
+    },
+    "cf_ownership": {
+      "id": "cf_ownership",
+      "name": "OwnershipResolver",
+      "typ": "Code element",
+      "summary": "映射 IP / SourceLibrary",
+      "parent": "config",
+      "path": "src/ai_lib_qor/config.py",
+      "status": "PROPOSED",
+      "rule": "配置是归属与交付规则的权威，不复制第二套独立人工真相。"
+    },
+    "cf_policy": {
+      "id": "cf_policy",
+      "name": "DeliveryPolicyResolver",
+      "typ": "Code element",
+      "summary": "确定包模式和交付顺序",
+      "parent": "config",
+      "path": "src/ai_lib_qor/config.py",
+      "status": "PROPOSED",
+      "rule": "配置是归属与交付规则的权威，不复制第二套独立人工真相。"
+    },
+    "cf_rules": {
+      "id": "cf_rules",
+      "name": "RulesetLoader",
+      "typ": "Code element",
+      "summary": "检查项与参数",
+      "parent": "config",
+      "path": "src/ai_lib_qor/config.py",
+      "status": "PROPOSED",
+      "rule": "配置是归属与交付规则的权威，不复制第二套独立人工真相。"
+    },
+    "cl_parse": {
+      "id": "cl_parse",
+      "name": "CliArgumentParser",
+      "typ": "Code element",
+      "summary": "解析命令和选项",
+      "parent": "cli",
+      "path": "src/ai_lib_qor/cli.py",
+      "status": "PROPOSED",
+      "rule": "CLI 不直接重写业务数据或实现 parser 算法。"
+    },
+    "cl_context": {
+      "id": "cl_context",
+      "name": "RunContextBuilder",
+      "typ": "Code element",
+      "summary": "拼装根目录及规则集",
+      "parent": "cli",
+      "path": "src/ai_lib_qor/cli.py",
+      "status": "PROPOSED",
+      "rule": "CLI 不直接重写业务数据或实现 parser 算法。"
+    },
+    "cl_dispatch": {
+      "id": "cl_dispatch",
+      "name": "UseCaseDispatcher",
+      "typ": "Code element",
+      "summary": "调用来源/版本/检查/报告",
+      "parent": "cli",
+      "path": "src/ai_lib_qor/cli.py",
+      "status": "PROPOSED",
+      "rule": "CLI 不直接重写业务数据或实现 parser 算法。"
+    },
+    "cl_result": {
+      "id": "cl_result",
+      "name": "RunSummaryPrinter",
+      "typ": "Code element",
+      "summary": "输出执行摘要和产物路径",
+      "parent": "cli",
+      "path": "src/ai_lib_qor/cli.py",
+      "status": "PROPOSED",
+      "rule": "CLI 不直接重写业务数据或实现 parser 算法。"
+    },
+    "f_raw": {
+      "id": "f_raw",
+      "name": "RAW V05",
+      "typ": "Flow step",
+      "summary": "增量交付是新的来源记录，不代表被采纳。"
+    },
+    "f_del": {
+      "id": "f_del",
+      "name": "登记 DeliveryRecord",
+      "typ": "activity",
+      "summary": "固定交付清单"
+    },
+    "f_key": {
+      "id": "f_key",
+      "name": "确认归属",
+      "typ": "Flow step",
+      "summary": "file_key 未明确时无法安全更新有效成员。"
+    },
+    "f_hold": {
+      "id": "f_hold",
+      "name": "保留未归属 RAW 历史",
+      "typ": "stop",
+      "summary": "不自动加入有效集"
+    },
+    "f_facts": {
+      "id": "f_facts",
+      "name": "仅解析变化文件",
+      "typ": "activity",
+      "summary": "生成/复用 FileFacts"
+    },
+    "f_candidate": {
+      "id": "f_candidate",
+      "name": "成员选择会改变？",
+      "typ": "question",
+      "summary": "成员选择会改变？"
+    },
+    "f_no_rev": {
+      "id": "f_no_rev",
+      "name": "保留交付与检查事实",
+      "typ": "stop",
+      "summary": "不新增 Revision"
+    },
+    "f_build": {
+      "id": "f_build",
+      "name": "生成 Rev",
+      "typ": "Flow step",
+      "summary": "仅替换已确认文件位，其余从父版继承。"
+    },
+    "f_rev": {
+      "id": "f_rev",
+      "name": "发布完整 rev_0002.json",
+      "typ": "success",
+      "summary": "members[] + changes[]"
+    },
+    "f_check": {
+      "id": "f_check",
+      "name": "执行检查",
+      "typ": "Flow step",
+      "summary": "CheckRun 与 AcceptanceEvent 分离。"
+    },
+    "f_run": {
+      "id": "f_run",
+      "name": "保存 CheckRun",
+      "typ": "activity",
+      "summary": "通过 / 失败 / 不确定"
+    },
+    "f_review": {
+      "id": "f_review",
+      "name": "人工采纳",
+      "typ": "Flow step",
+      "summary": "人工动作与计算最新/正式链接独立。"
+    },
+    "f_pending": {
+      "id": "f_pending",
+      "name": "保持当前已采纳版本",
+      "typ": "stop",
+      "summary": "candidate 仍可检查"
+    },
+    "f_accept": {
+      "id": "f_accept",
+      "name": "追加 AcceptanceEvent",
+      "typ": "success",
+      "summary": "更新 accepted index"
+    },
+    "n_start": {
+      "id": "n_start",
+      "name": "扫描正式 NL 链接",
+      "typ": "activity",
+      "summary": "记录实际 target"
+    },
+    "n_changed": {
+      "id": "n_changed",
+      "name": "可信证据表明状态变化？",
+      "typ": "question",
+      "summary": "可信证据表明状态变化？"
+    },
+    "n_none": {
+      "id": "n_none",
+      "name": "无需创建重复快照",
+      "typ": "stop",
+      "summary": "保留旧固定 Snapshot"
+    },
+    "n_snap": {
+      "id": "n_snap",
+      "name": "正式快照",
+      "typ": "Flow step",
+      "summary": "不同状态生成新 Snapshot，不按 NL 名称覆盖旧记录。"
+    },
+    "n_base": {
+      "id": "n_base",
+      "name": "此前存在有效库 E0？",
+      "typ": "question",
+      "summary": "此前存在有效库 E0？"
+    },
+    "n_init": {
+      "id": "n_init",
+      "name": "从正式快照建立首个 Rev",
+      "typ": "activity",
+      "summary": "按明确业务规则建立"
+    },
+    "n_cmp": {
+      "id": "n_cmp",
+      "name": "对照当前有效与正式来源",
+      "typ": "activity",
+      "summary": "记录差异与版本滞后"
+    },
+    "n_noauto": {
+      "id": "n_noauto",
+      "name": "不自动改写已采纳版本",
+      "typ": "stop",
+      "summary": "正式链接独立演进"
+    },
+    "p_sel": {
+      "id": "p_sel",
+      "name": "按 Check ID 选择插件",
+      "typ": "activity",
+      "summary": "规则与目标范围"
+    },
+    "p_inputs": {
+      "id": "p_inputs",
+      "name": "准备固定输入",
+      "typ": "activity",
+      "summary": "Target + Facts + Ruleset"
+    },
+    "p_exec": {
+      "id": "p_exec",
+      "name": "黑盒插件",
+      "typ": "Flow step",
+      "summary": "统一输入输出协议，不要求脚本用同种技术。"
+    },
+    "p_ok": {
+      "id": "p_ok",
+      "name": "输出符合统一 Schema？",
+      "typ": "question",
+      "summary": "输出符合统一 Schema？"
+    },
+    "p_fail": {
+      "id": "p_fail",
+      "name": "记录 INCONCLUSIVE / 失败",
+      "typ": "stop",
+      "summary": "不丢失证据"
+    },
+    "p_norm": {
+      "id": "p_norm",
+      "name": "归一化 Result",
+      "typ": "activity",
+      "summary": "check_id / coverage / refs"
+    },
+    "p_conf": {
+      "id": "p_conf",
+      "name": "Check ID 冲突？",
+      "typ": "question",
+      "summary": "Check ID 冲突？"
+    },
+    "p_reject": {
+      "id": "p_reject",
+      "name": "拒绝覆盖其他检查结果",
+      "typ": "stop",
+      "summary": "保留错误记录"
+    },
+    "p_run": {
+      "id": "p_run",
+      "name": "汇总写入 run_*.json",
+      "typ": "success",
+      "summary": "一次检查执行的结果"
+    },
+    "p_report": {
+      "id": "p_report",
+      "name": "报告 / Excel 读取 Run",
+      "typ": "activity",
+      "summary": "只读验收"
+    },
+    "DeliveryRecord": {
+      "id": "DeliveryRecord",
+      "name": "DeliveryRecord",
+      "typ": "Data contract",
+      "summary": "RAW 一次交付的文件清单",
+      "producer": "sources/"
+    },
+    "FormalSnapshot": {
+      "id": "FormalSnapshot",
+      "name": "FormalSnapshot",
+      "typ": "Data contract",
+      "summary": "正式 NL 固定链接文件",
+      "producer": "sources/"
+    },
+    "FileFacts": {
+      "id": "FileFacts",
+      "name": "FileFacts",
+      "typ": "Data contract",
+      "summary": "LEF/Liberty 解析内容",
+      "producer": "parsers/"
+    },
+    "EffectiveVersion": {
+      "id": "EffectiveVersion",
+      "name": "EffectiveVersion",
+      "typ": "Data contract",
+      "summary": "完整 members + changes",
+      "producer": "versions/"
+    },
+    "CheckRun": {
+      "id": "CheckRun",
+      "name": "CheckResult · 检查结果",
+      "typ": "Data contract",
+      "summary": "v3 check_result.v1；插件汇总仍是拟议集成",
+      "producer": "checks/"
+    },
+    "EffectiveIndex": {
+      "id": "EffectiveIndex",
+      "name": "EffectiveIndex",
+      "typ": "Data contract",
+      "summary": "计算 / 采纳两个指针",
+      "producer": "storage/"
+    },
+    "AcceptanceEvent": {
+      "id": "AcceptanceEvent",
+      "name": "AcceptanceEvent",
+      "typ": "Data contract",
+      "summary": "可选人工采纳事件",
+      "producer": "人工操作 / storage/"
+    },
+    "Views": {
+      "id": "Views",
+      "name": "HTML / Excel",
+      "typ": "Data contract",
+      "summary": "可重建只读报告",
+      "producer": "reporting/"
+    },
+    "Vendor": {
+      "id": "Vendor",
+      "name": "Vendor",
+      "typ": "Domain object",
+      "summary": "一个供应商多个来源库"
+    },
+    "SourceLibrary": {
+      "id": "SourceLibrary",
+      "name": "SourceLibrary",
+      "typ": "Domain object",
+      "summary": "RAW 历史及可独立管理有效集"
+    },
+    "BusinessIP": {
+      "id": "BusinessIP",
+      "name": "BusinessIP",
+      "typ": "Domain object",
+      "summary": "业务入口，可能跨多个库"
+    },
+    "Delivery": {
+      "id": "Delivery",
+      "name": "Delivery",
+      "typ": "Domain object",
+      "summary": "一次供应商交付事件"
+    },
+    "EffectiveSet": {
+      "id": "EffectiveSet",
+      "name": "EffectiveSet",
+      "typ": "Domain object",
+      "summary": "独立有效文件集合"
+    },
+    "Revision": {
+      "id": "Revision",
+      "name": "Revision",
+      "typ": "Domain object",
+      "summary": "成员齐全、不可变的版本"
+    },
+    "FormalNL": {
+      "id": "FormalNL",
+      "name": "Formal NL",
+      "typ": "Domain object",
+      "summary": "公共正式发布"
+    },
+    "Snapshot": {
+      "id": "Snapshot",
+      "name": "Snapshot",
+      "typ": "Domain object",
+      "summary": "一次固定链接状态"
+    },
+    "ver_acceptance": {
+      "id": "ver_acceptance",
+      "name": "acceptance.py",
+      "typ": "Code element",
+      "summary": "构造显式采纳、回退或撤销事件",
+      "parent": "versions",
+      "path": "src/ai_lib_qor/versions/acceptance.py",
+      "status": "VERIFIED",
+      "evidence_ref": "src/ai_lib_qor/versions/acceptance.py"
+    },
+    "ver_index": {
+      "id": "ver_index",
+      "name": "index_projector.py",
+      "typ": "Code element",
+      "summary": "重放事件并分别计算最新与已采纳指针",
+      "parent": "versions",
+      "path": "src/ai_lib_qor/versions/index_projector.py",
+      "status": "VERIFIED",
+      "evidence_ref": "src/ai_lib_qor/versions/index_projector.py"
+    }
+  },
+  "relationships": [
+    {
+      "id": "C1:supplier->raw:0",
+      "scope": "C1",
+      "from_id": "supplier",
+      "to_id": "raw",
+      "description": "提交库文件",
+      "style": "solid"
+    },
+    {
+      "id": "C1:engineer->ai_lib:1",
+      "scope": "C1",
+      "from_id": "engineer",
+      "to_id": "ai_lib",
+      "description": "使用 CLI",
+      "style": "solid"
+    },
+    {
+      "id": "C1:raw->ai_lib:2",
+      "scope": "C1",
+      "from_id": "raw",
+      "to_id": "ai_lib",
+      "description": "只读扫描",
+      "style": "solid"
+    },
+    {
+      "id": "C1:formal->ai_lib:3",
+      "scope": "C1",
+      "from_id": "formal",
+      "to_id": "ai_lib",
+      "description": "盘点链接",
+      "style": "solid"
+    },
+    {
+      "id": "C1:ai_lib->report:4",
+      "scope": "C1",
+      "from_id": "ai_lib",
+      "to_id": "report",
+      "description": "生成",
+      "style": "solid"
+    },
+    {
+      "id": "C1:report->reviewer:5",
+      "scope": "C1",
+      "from_id": "report",
+      "to_id": "reviewer",
+      "description": "查阅 / 验收",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_ai_lib:registry_store->runner:6",
+      "scope": "cluster_ai_lib",
+      "from_id": "registry_store",
+      "to_id": "runner",
+      "description": "读取配置",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_ai_lib:runner->work_store:7",
+      "scope": "cluster_ai_lib",
+      "from_id": "runner",
+      "to_id": "work_store",
+      "description": "读 / 写",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_ai_lib:work_store->html_excel:8",
+      "scope": "cluster_ai_lib",
+      "from_id": "work_store",
+      "to_id": "html_excel",
+      "description": "只读读取",
+      "style": "solid"
+    },
+    {
+      "id": "C2:engineer->runner:9",
+      "scope": "C2",
+      "from_id": "engineer",
+      "to_id": "runner",
+      "description": "调用命令",
+      "style": "solid"
+    },
+    {
+      "id": "C2:raw->runner:10",
+      "scope": "C2",
+      "from_id": "raw",
+      "to_id": "runner",
+      "description": "扫描交付",
+      "style": "solid"
+    },
+    {
+      "id": "C2:formal->runner:11",
+      "scope": "C2",
+      "from_id": "formal",
+      "to_id": "runner",
+      "description": "读取链接",
+      "style": "solid"
+    },
+    {
+      "id": "C2:runner->html_excel:12",
+      "scope": "C2",
+      "from_id": "runner",
+      "to_id": "html_excel",
+      "description": "生成报告",
+      "style": "solid"
+    },
+    {
+      "id": "C2:html_excel->reviewer:13",
+      "scope": "C2",
+      "from_id": "html_excel",
+      "to_id": "reviewer",
+      "description": "查看",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:cli->config:14",
+      "scope": "cluster_runner",
+      "from_id": "cli",
+      "to_id": "config",
+      "description": "读取配置",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:cli->sources:15",
+      "scope": "cluster_runner",
+      "from_id": "cli",
+      "to_id": "sources",
+      "description": "调度",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:cli->versions:16",
+      "scope": "cluster_runner",
+      "from_id": "cli",
+      "to_id": "versions",
+      "description": "计算有效版本",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:cli->checks:17",
+      "scope": "cluster_runner",
+      "from_id": "cli",
+      "to_id": "checks",
+      "description": "执行检查",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:cli->reporting:18",
+      "scope": "cluster_runner",
+      "from_id": "cli",
+      "to_id": "reporting",
+      "description": "生成报告",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:config->sources:19",
+      "scope": "cluster_runner",
+      "from_id": "config",
+      "to_id": "sources",
+      "description": "提供来源登记与规则",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:sources->parsers:20",
+      "scope": "cluster_runner",
+      "from_id": "sources",
+      "to_id": "parsers",
+      "description": "提供文件来源引用",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:sources->versions:21",
+      "scope": "cluster_runner",
+      "from_id": "sources",
+      "to_id": "versions",
+      "description": "交付/快照",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:parsers->checks:22",
+      "scope": "cluster_runner",
+      "from_id": "parsers",
+      "to_id": "checks",
+      "description": "FileFacts",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:versions->checks:23",
+      "scope": "cluster_runner",
+      "from_id": "versions",
+      "to_id": "checks",
+      "description": "指定版本检查目标",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:versions->storage:24",
+      "scope": "cluster_runner",
+      "from_id": "versions",
+      "to_id": "storage",
+      "description": "写 Rev",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:checks->storage:25",
+      "scope": "cluster_runner",
+      "from_id": "checks",
+      "to_id": "storage",
+      "description": "保存 CheckRun",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_runner:storage->reporting:26",
+      "scope": "cluster_runner",
+      "from_id": "storage",
+      "to_id": "reporting",
+      "description": "读取固定数据",
+      "style": "solid"
+    },
+    {
+      "id": "C3:raw->sources:27",
+      "scope": "C3",
+      "from_id": "raw",
+      "to_id": "sources",
+      "description": "读取",
+      "style": "solid"
+    },
+    {
+      "id": "C3:formal->sources:28",
+      "scope": "C3",
+      "from_id": "formal",
+      "to_id": "sources",
+      "description": "盘点",
+      "style": "solid"
+    },
+    {
+      "id": "C3:storage->work_store:29",
+      "scope": "C3",
+      "from_id": "storage",
+      "to_id": "work_store",
+      "description": "固定记录",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_checks:ck_entry->ck_registry:42",
+      "scope": "cluster_code_checks",
+      "from_id": "ck_entry",
+      "to_id": "ck_registry",
+      "description": "挑选检查",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_checks:ck_registry->ck_adapter:43",
+      "scope": "cluster_code_checks",
+      "from_id": "ck_registry",
+      "to_id": "ck_adapter",
+      "description": "执行插件",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_checks:ck_entry->ck_diff:44",
+      "scope": "cluster_code_checks",
+      "from_id": "ck_entry",
+      "to_id": "ck_diff",
+      "description": "比较目标",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_checks:ck_adapter->ck_merge:45",
+      "scope": "cluster_code_checks",
+      "from_id": "ck_adapter",
+      "to_id": "ck_merge",
+      "description": "结果",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_checks:ck_diff->ck_merge:46",
+      "scope": "cluster_code_checks",
+      "from_id": "ck_diff",
+      "to_id": "ck_merge",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_checks:ck_merge->ck_write:47",
+      "scope": "cluster_code_checks",
+      "from_id": "ck_merge",
+      "to_id": "ck_write",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "C4_checks:parsers->ck_diff:48",
+      "scope": "C4_checks",
+      "from_id": "parsers",
+      "to_id": "ck_diff",
+      "description": "读取证据",
+      "style": "dashed"
+    },
+    {
+      "id": "C4_checks:ck_write->storage:49",
+      "scope": "C4_checks",
+      "from_id": "ck_write",
+      "to_id": "storage",
+      "description": "原子写入",
+      "style": "dashed"
+    },
+    {
+      "id": "cluster_code_sources:so_entry->so_raw:50",
+      "scope": "cluster_code_sources",
+      "from_id": "so_entry",
+      "to_id": "so_raw",
+      "description": "RAW",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_sources:so_entry->so_formal:51",
+      "scope": "cluster_code_sources",
+      "from_id": "so_entry",
+      "to_id": "so_formal",
+      "description": "Formal",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_sources:so_raw->so_policy:52",
+      "scope": "cluster_code_sources",
+      "from_id": "so_raw",
+      "to_id": "so_policy",
+      "description": "解释包语义",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_sources:so_formal->so_match:53",
+      "scope": "cluster_code_sources",
+      "from_id": "so_formal",
+      "to_id": "so_match",
+      "description": "关联来源",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_sources:so_policy->so_save:54",
+      "scope": "cluster_code_sources",
+      "from_id": "so_policy",
+      "to_id": "so_save",
+      "description": "Delivery",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_sources:so_match->so_save:55",
+      "scope": "cluster_code_sources",
+      "from_id": "so_match",
+      "to_id": "so_save",
+      "description": "Snapshot",
+      "style": "solid"
+    },
+    {
+      "id": "C4_sources:config->so_policy:56",
+      "scope": "C4_sources",
+      "from_id": "config",
+      "to_id": "so_policy",
+      "description": "读取",
+      "style": "dashed"
+    },
+    {
+      "id": "C4_sources:so_save->storage:57",
+      "scope": "C4_sources",
+      "from_id": "so_save",
+      "to_id": "storage",
+      "description": "写入",
+      "style": "dashed"
+    },
+    {
+      "id": "cluster_code_storage:st_path->st_reader:58",
+      "scope": "cluster_code_storage",
+      "from_id": "st_path",
+      "to_id": "st_reader",
+      "description": "定位",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_storage:st_path->st_writer:59",
+      "scope": "cluster_code_storage",
+      "from_id": "st_path",
+      "to_id": "st_writer",
+      "description": "定位",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_storage:st_writer->st_index:60",
+      "scope": "cluster_code_storage",
+      "from_id": "st_writer",
+      "to_id": "st_index",
+      "description": "校验成功",
+      "style": "solid"
+    },
+    {
+      "id": "C4_storage:versions->st_writer:61",
+      "scope": "C4_storage",
+      "from_id": "versions",
+      "to_id": "st_writer",
+      "description": "写入请求",
+      "style": "dashed"
+    },
+    {
+      "id": "C4_storage:st_reader->work_store:62",
+      "scope": "C4_storage",
+      "from_id": "st_reader",
+      "to_id": "work_store",
+      "description": "读取",
+      "style": "dashed"
+    },
+    {
+      "id": "C4_storage:st_index->work_store:63",
+      "scope": "C4_storage",
+      "from_id": "st_index",
+      "to_id": "work_store",
+      "description": "发布索引",
+      "style": "dashed"
+    },
+    {
+      "id": "cluster_code_reporting:rp_query->rp_locator:64",
+      "scope": "cluster_code_reporting",
+      "from_id": "rp_query",
+      "to_id": "rp_locator",
+      "description": "文件定位",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_reporting:rp_query->rp_timeline:65",
+      "scope": "cluster_code_reporting",
+      "from_id": "rp_query",
+      "to_id": "rp_timeline",
+      "description": "版本历史",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_reporting:rp_locator->rp_export:66",
+      "scope": "cluster_code_reporting",
+      "from_id": "rp_locator",
+      "to_id": "rp_export",
+      "description": "数据视图",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_reporting:rp_timeline->rp_export:67",
+      "scope": "cluster_code_reporting",
+      "from_id": "rp_timeline",
+      "to_id": "rp_export",
+      "description": "时间线",
+      "style": "solid"
+    },
+    {
+      "id": "C4_reporting:storage->rp_query:68",
+      "scope": "C4_reporting",
+      "from_id": "storage",
+      "to_id": "rp_query",
+      "description": "读取",
+      "style": "dashed"
+    },
+    {
+      "id": "C4_reporting:rp_export->html_excel:69",
+      "scope": "C4_reporting",
+      "from_id": "rp_export",
+      "to_id": "html_excel",
+      "description": "生成",
+      "style": "dashed"
+    },
+    {
+      "id": "cluster_code_parsers:ps_router->ps_lef:70",
+      "scope": "cluster_code_parsers",
+      "from_id": "ps_router",
+      "to_id": "ps_lef",
+      "description": "LEF",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_parsers:ps_router->ps_lib:71",
+      "scope": "cluster_code_parsers",
+      "from_id": "ps_router",
+      "to_id": "ps_lib",
+      "description": "Liberty",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_parsers:ps_lef->ps_facts:72",
+      "scope": "cluster_code_parsers",
+      "from_id": "ps_lef",
+      "to_id": "ps_facts",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_parsers:ps_lib->ps_facts:73",
+      "scope": "cluster_code_parsers",
+      "from_id": "ps_lib",
+      "to_id": "ps_facts",
+      "description": "cell facts",
+      "style": "solid"
+    },
+    {
+      "id": "C4_parsers:sources->ps_router:74",
+      "scope": "C4_parsers",
+      "from_id": "sources",
+      "to_id": "ps_router",
+      "description": "文件引用",
+      "style": "dashed"
+    },
+    {
+      "id": "C4_parsers:ps_facts->checks:75",
+      "scope": "C4_parsers",
+      "from_id": "ps_facts",
+      "to_id": "checks",
+      "description": "解析证据",
+      "style": "dashed"
+    },
+    {
+      "id": "cluster_code_config:cf_load->cf_ownership:76",
+      "scope": "cluster_code_config",
+      "from_id": "cf_load",
+      "to_id": "cf_ownership",
+      "description": "名单",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_config:cf_load->cf_policy:77",
+      "scope": "cluster_code_config",
+      "from_id": "cf_load",
+      "to_id": "cf_policy",
+      "description": "交付规则",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_config:cf_load->cf_rules:78",
+      "scope": "cluster_code_config",
+      "from_id": "cf_load",
+      "to_id": "cf_rules",
+      "description": "检查配置",
+      "style": "solid"
+    },
+    {
+      "id": "C4_config:registry_store->cf_load:79",
+      "scope": "C4_config",
+      "from_id": "registry_store",
+      "to_id": "cf_load",
+      "description": "读取",
+      "style": "dashed"
+    },
+    {
+      "id": "C4_config:cf_policy->sources:80",
+      "scope": "C4_config",
+      "from_id": "cf_policy",
+      "to_id": "sources",
+      "description": "提供规则",
+      "style": "dashed"
+    },
+    {
+      "id": "cluster_code_cli:cl_parse->cl_context:81",
+      "scope": "cluster_code_cli",
+      "from_id": "cl_parse",
+      "to_id": "cl_context",
+      "description": "参数",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_cli:cl_context->cl_dispatch:82",
+      "scope": "cluster_code_cli",
+      "from_id": "cl_context",
+      "to_id": "cl_dispatch",
+      "description": "上下文",
+      "style": "solid"
+    },
+    {
+      "id": "cluster_code_cli:cl_dispatch->cl_result:83",
+      "scope": "cluster_code_cli",
+      "from_id": "cl_dispatch",
+      "to_id": "cl_result",
+      "description": "结果",
+      "style": "solid"
+    },
+    {
+      "id": "C4_cli:config->cl_context:84",
+      "scope": "C4_cli",
+      "from_id": "cl_context",
+      "to_id": "config",
+      "description": "调用配置读取接口",
+      "style": "dashed"
+    },
+    {
+      "id": "C4_cli:cl_dispatch->sources:85",
+      "scope": "C4_cli",
+      "from_id": "cl_dispatch",
+      "to_id": "sources",
+      "description": "调用",
+      "style": "dashed"
+    },
+    {
+      "id": "flow_raw:f_raw->f_del:86",
+      "scope": "flow_raw",
+      "from_id": "f_raw",
+      "to_id": "f_del",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_del->f_key:87",
+      "scope": "flow_raw",
+      "from_id": "f_del",
+      "to_id": "f_key",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_key->f_hold:88",
+      "scope": "flow_raw",
+      "from_id": "f_key",
+      "to_id": "f_hold",
+      "description": "否",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_key->f_facts:89",
+      "scope": "flow_raw",
+      "from_id": "f_key",
+      "to_id": "f_facts",
+      "description": "是",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_facts->f_candidate:90",
+      "scope": "flow_raw",
+      "from_id": "f_facts",
+      "to_id": "f_candidate",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_candidate->f_no_rev:91",
+      "scope": "flow_raw",
+      "from_id": "f_candidate",
+      "to_id": "f_no_rev",
+      "description": "否",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_candidate->f_build:92",
+      "scope": "flow_raw",
+      "from_id": "f_candidate",
+      "to_id": "f_build",
+      "description": "是",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_build->f_rev:93",
+      "scope": "flow_raw",
+      "from_id": "f_build",
+      "to_id": "f_rev",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_rev->f_check:94",
+      "scope": "flow_raw",
+      "from_id": "f_rev",
+      "to_id": "f_check",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_check->f_run:95",
+      "scope": "flow_raw",
+      "from_id": "f_check",
+      "to_id": "f_run",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_run->f_review:96",
+      "scope": "flow_raw",
+      "from_id": "f_run",
+      "to_id": "f_review",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_review->f_pending:97",
+      "scope": "flow_raw",
+      "from_id": "f_review",
+      "to_id": "f_pending",
+      "description": "否 / 待定",
+      "style": "solid"
+    },
+    {
+      "id": "flow_raw:f_review->f_accept:98",
+      "scope": "flow_raw",
+      "from_id": "f_review",
+      "to_id": "f_accept",
+      "description": "是",
+      "style": "solid"
+    },
+    {
+      "id": "flow_formal:n_start->n_changed:99",
+      "scope": "flow_formal",
+      "from_id": "n_start",
+      "to_id": "n_changed",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_formal:n_changed->n_none:100",
+      "scope": "flow_formal",
+      "from_id": "n_changed",
+      "to_id": "n_none",
+      "description": "否",
+      "style": "solid"
+    },
+    {
+      "id": "flow_formal:n_changed->n_snap:101",
+      "scope": "flow_formal",
+      "from_id": "n_changed",
+      "to_id": "n_snap",
+      "description": "是",
+      "style": "solid"
+    },
+    {
+      "id": "flow_formal:n_snap->n_base:102",
+      "scope": "flow_formal",
+      "from_id": "n_snap",
+      "to_id": "n_base",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_formal:n_base->n_init:103",
+      "scope": "flow_formal",
+      "from_id": "n_base",
+      "to_id": "n_init",
+      "description": "否",
+      "style": "solid"
+    },
+    {
+      "id": "flow_formal:n_base->n_cmp:104",
+      "scope": "flow_formal",
+      "from_id": "n_base",
+      "to_id": "n_cmp",
+      "description": "是",
+      "style": "solid"
+    },
+    {
+      "id": "flow_formal:n_init->n_noauto:105",
+      "scope": "flow_formal",
+      "from_id": "n_init",
+      "to_id": "n_noauto",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_formal:n_cmp->n_noauto:106",
+      "scope": "flow_formal",
+      "from_id": "n_cmp",
+      "to_id": "n_noauto",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_sel->p_inputs:107",
+      "scope": "flow_plugin",
+      "from_id": "p_sel",
+      "to_id": "p_inputs",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_inputs->p_exec:108",
+      "scope": "flow_plugin",
+      "from_id": "p_inputs",
+      "to_id": "p_exec",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_exec->p_ok:109",
+      "scope": "flow_plugin",
+      "from_id": "p_exec",
+      "to_id": "p_ok",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_ok->p_fail:110",
+      "scope": "flow_plugin",
+      "from_id": "p_ok",
+      "to_id": "p_fail",
+      "description": "否",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_fail->p_run:111",
+      "scope": "flow_plugin",
+      "from_id": "p_fail",
+      "to_id": "p_run",
+      "description": "记录失败",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_ok->p_norm:112",
+      "scope": "flow_plugin",
+      "from_id": "p_ok",
+      "to_id": "p_norm",
+      "description": "是",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_norm->p_conf:113",
+      "scope": "flow_plugin",
+      "from_id": "p_norm",
+      "to_id": "p_conf",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_conf->p_reject:114",
+      "scope": "flow_plugin",
+      "from_id": "p_conf",
+      "to_id": "p_reject",
+      "description": "是",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_reject->p_run:115",
+      "scope": "flow_plugin",
+      "from_id": "p_reject",
+      "to_id": "p_run",
+      "description": "保留冲突证据",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_conf->p_run:116",
+      "scope": "flow_plugin",
+      "from_id": "p_conf",
+      "to_id": "p_run",
+      "description": "否",
+      "style": "solid"
+    },
+    {
+      "id": "flow_plugin:p_run->p_report:117",
+      "scope": "flow_plugin",
+      "from_id": "p_run",
+      "to_id": "p_report",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:DeliveryRecord->FileFacts:118",
+      "scope": "data_lineage",
+      "from_id": "DeliveryRecord",
+      "to_id": "FileFacts",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:DeliveryRecord->EffectiveVersion:119",
+      "scope": "data_lineage",
+      "from_id": "DeliveryRecord",
+      "to_id": "EffectiveVersion",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:FormalSnapshot->EffectiveVersion:120",
+      "scope": "data_lineage",
+      "from_id": "FormalSnapshot",
+      "to_id": "EffectiveVersion",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:FileFacts->CheckRun:121",
+      "scope": "data_lineage",
+      "from_id": "FileFacts",
+      "to_id": "CheckRun",
+      "description": "证据",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:EffectiveVersion->CheckRun:122",
+      "scope": "data_lineage",
+      "from_id": "EffectiveVersion",
+      "to_id": "CheckRun",
+      "description": "目标",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:EffectiveVersion->EffectiveIndex:123",
+      "scope": "data_lineage",
+      "from_id": "EffectiveVersion",
+      "to_id": "EffectiveIndex",
+      "description": "计算指针",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:AcceptanceEvent->EffectiveIndex:124",
+      "scope": "data_lineage",
+      "from_id": "AcceptanceEvent",
+      "to_id": "EffectiveIndex",
+      "description": "采纳指针",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:CheckRun->Views:125",
+      "scope": "data_lineage",
+      "from_id": "CheckRun",
+      "to_id": "Views",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:EffectiveIndex->Views:126",
+      "scope": "data_lineage",
+      "from_id": "EffectiveIndex",
+      "to_id": "Views",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "data_lineage:FormalSnapshot->Views:127",
+      "scope": "data_lineage",
+      "from_id": "FormalSnapshot",
+      "to_id": "Views",
+      "description": "",
+      "style": "solid"
+    },
+    {
+      "id": "domain:Vendor->SourceLibrary:128",
+      "scope": "domain",
+      "from_id": "Vendor",
+      "to_id": "SourceLibrary",
+      "description": "1 : N",
+      "style": "solid"
+    },
+    {
+      "id": "domain:SourceLibrary->Delivery:129",
+      "scope": "domain",
+      "from_id": "SourceLibrary",
+      "to_id": "Delivery",
+      "description": "1 : N",
+      "style": "solid"
+    },
+    {
+      "id": "domain:SourceLibrary->BusinessIP:130",
+      "scope": "domain",
+      "from_id": "SourceLibrary",
+      "to_id": "BusinessIP",
+      "description": "多对多关联",
+      "style": "solid"
+    },
+    {
+      "id": "domain:BusinessIP->EffectiveSet:131",
+      "scope": "domain",
+      "from_id": "BusinessIP",
+      "to_id": "EffectiveSet",
+      "description": "默认一套",
+      "style": "solid"
+    },
+    {
+      "id": "domain:SourceLibrary->EffectiveSet:132",
+      "scope": "domain",
+      "from_id": "SourceLibrary",
+      "to_id": "EffectiveSet",
+      "description": "无 IP 可独立",
+      "style": "solid"
+    },
+    {
+      "id": "domain:EffectiveSet->Revision:133",
+      "scope": "domain",
+      "from_id": "EffectiveSet",
+      "to_id": "Revision",
+      "description": "版本链",
+      "style": "solid"
+    },
+    {
+      "id": "domain:FormalNL->Snapshot:134",
+      "scope": "domain",
+      "from_id": "FormalNL",
+      "to_id": "Snapshot",
+      "description": "固定历史",
+      "style": "solid"
+    },
+    {
+      "id": "domain:Snapshot->Revision:135",
+      "scope": "domain",
+      "from_id": "Snapshot",
+      "to_id": "Revision",
+      "description": "来源参考（非自动采纳）",
+      "style": "dashed"
+    },
+    {
+      "id": "domain:Delivery->Revision:136",
+      "scope": "domain",
+      "from_id": "Delivery",
+      "to_id": "Revision",
+      "description": "已选来源引用",
+      "style": "dashed"
+    },
+    {
+      "id": "cluster_runner:sources->storage:NEW",
+      "scope": "cluster_runner",
+      "from_id": "sources",
+      "to_id": "storage",
+      "description": "保存固定交付与正式快照",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:ver_entry->ver_selector",
+      "scope": "cluster_code_versions",
+      "from_id": "ver_entry",
+      "to_id": "ver_selector",
+      "description": "读取固定来源",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:ver_entry->ver_delta",
+      "scope": "cluster_code_versions",
+      "from_id": "ver_entry",
+      "to_id": "ver_delta",
+      "description": "应用交付",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:ver_entry->ver_builder",
+      "scope": "cluster_code_versions",
+      "from_id": "ver_entry",
+      "to_id": "ver_builder",
+      "description": "组合版本",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:ver_entry->ver_publish",
+      "scope": "cluster_code_versions",
+      "from_id": "ver_entry",
+      "to_id": "ver_publish",
+      "description": "读取 / 发布",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:ver_entry->ver_acceptance",
+      "scope": "cluster_code_versions",
+      "from_id": "ver_entry",
+      "to_id": "ver_acceptance",
+      "description": "构造事件",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:ver_entry->ver_index",
+      "scope": "cluster_code_versions",
+      "from_id": "ver_entry",
+      "to_id": "ver_index",
+      "description": "验证事件",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:ver_delta->ver_selector",
+      "scope": "cluster_code_versions",
+      "from_id": "ver_delta",
+      "to_id": "ver_selector",
+      "description": "解析交付成员",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:ver_publish->ver_validate",
+      "scope": "cluster_code_versions",
+      "from_id": "ver_publish",
+      "to_id": "ver_validate",
+      "description": "验证历史差异",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:ver_publish->ver_index",
+      "scope": "cluster_code_versions",
+      "from_id": "ver_publish",
+      "to_id": "ver_index",
+      "description": "重建索引",
+      "style": "solid"
+    },
+    {
+      "id": "actual_versions:store->work_store",
+      "scope": "C4_versions",
+      "from_id": "ver_publish",
+      "to_id": "work_store",
+      "description": "读写 effective 目录",
+      "style": "dashed"
+    }
+  ],
+  "views": [
+    "c1",
+    "c2",
+    "c3",
+    "c4_versions",
+    "c4_checks",
+    "c4_sources",
+    "c4_storage",
+    "c4_reporting",
+    "c4_parsers",
+    "c4_config",
+    "c4_cli",
+    "flow_raw",
+    "flow_formal",
+    "flow_plugin",
+    "lineage",
+    "domain"
+  ],
+  "contracts": [
+    "DeliveryRecord",
+    "FormalSnapshot",
+    "EffectiveVersion",
+    "CheckRun",
+    "FileFacts",
+    "EffectiveIndex",
+    "AcceptanceEvent"
+  ],
+  "model_status": "PROPOSED",
+  "source_note": "混合状态：versions 模块与命令已在工作区实现并有模拟测试；扫描、插件调度、统一报告等仍为拟议设计。",
+  "module_order": [
+    "cli",
+    "config",
+    "sources",
+    "parsers",
+    "versions",
+    "checks",
+    "storage",
+    "reporting"
+  ],
+  "directory_tree": [
+    {
+      "path": "ai_lib_qor/",
+      "ref": "ai_lib",
+      "description": "源码项目根"
+    },
+    {
+      "path": "  src/ai_lib_qor/",
+      "ref": "runner",
+      "description": "Python 包"
+    },
+    {
+      "path": "    cli.py",
+      "ref": "cli",
+      "description": "命令入口"
+    },
+    {
+      "path": "    config.py",
+      "ref": "config",
+      "description": "登记与归属"
+    },
+    {
+      "path": "    sources/",
+      "ref": "sources",
+      "description": "RAW / Formal"
+    },
+    {
+      "path": "    parsers/",
+      "ref": "parsers",
+      "description": "解析事实"
+    },
+    {
+      "path": "    versions/",
+      "ref": "versions",
+      "description": "有效库迭代"
+    },
+    {
+      "path": "    checks/",
+      "ref": "checks",
+      "description": "规则与检查"
+    },
+    {
+      "path": "    storage/",
+      "ref": "storage",
+      "description": "存储与发布"
+    },
+    {
+      "path": "    reporting/",
+      "ref": "reporting",
+      "description": "报告"
+    },
+    {
+      "path": "  config/",
+      "ref": "registry_store",
+      "description": "登记与业务规则"
+    },
+    {
+      "path": "  schemas/",
+      "ref": "registry_store",
+      "description": "schema 定义"
+    },
+    {
+      "path": "  tests/",
+      "ref": "runner",
+      "description": "测试"
+    },
+    {
+      "path": "  docs/",
+      "ref": "runner",
+      "description": "文档"
+    },
+    {
+      "path": "  work/  [可配置]",
+      "ref": "work_store",
+      "description": "以下为业务记录根"
+    },
+    {
+      "path": "    vendors/<vendor_id>/",
+      "ref": "Vendor",
+      "description": "供应商"
+    },
+    {
+      "path": "      libraries/<source_library_id>/",
+      "ref": "SourceLibrary",
+      "description": "来源库"
+    },
+    {
+      "path": "        deliveries/<delivery_id>.json",
+      "ref": "DeliveryRecord",
+      "description": "拟议位置：固定交付记录"
+    },
+    {
+      "path": "        file_facts/<facts_id>.json",
+      "ref": "FileFacts",
+      "description": "拟议位置：文件解析事实"
+    },
+    {
+      "path": "          checks/run_*.json",
+      "ref": "CheckRun",
+      "description": "可选交付前检查"
+    },
+    {
+      "path": "        ips/<business_ip_id>/",
+      "ref": "BusinessIP",
+      "description": "业务 IP"
+    },
+    {
+      "path": "          effective/index.json",
+      "ref": "EffectiveIndex",
+      "description": "当前指针"
+    },
+    {
+      "path": "          effective/versions/rev_*.json",
+      "ref": "EffectiveVersion",
+      "description": "完整有效版本"
+    },
+    {
+      "path": "          effective/acceptance.jsonl",
+      "ref": "AcceptanceEvent",
+      "description": "可选采纳日志"
+    },
+    {
+      "path": "          checks/<rev_id>/run_*.json",
+      "ref": "CheckRun",
+      "description": "有效版本检查"
+    },
+    {
+      "path": "        effective/",
+      "ref": "EffectiveVersion",
+      "description": "无 BusinessIP 的独立集合"
+    },
+    {
+      "path": "    formal_nl/<formal_nl_id>/",
+      "ref": "FormalSnapshot",
+      "description": "公共正式 NL；index.json 拟议、字段未定义；snapshots/<snapshot_id>/snapshot.json"
+    },
+    {
+      "path": "      snapshots/<snapshot_id>.json",
+      "ref": "FormalSnapshot",
+      "description": "一份固定正式快照"
+    },
+    {
+      "path": "    file_facts/<facts_id>.json",
+      "ref": "FileFacts",
+      "description": "可复用原有解析产物"
+    }
+  ],
+  "contract_details": {
+    "DeliveryRecord": {
+      "filename": "deliveries/<delivery_id>.json（拟议路径）",
+      "producer": "sources/",
+      "consumers": "versions/ · parsers/ · checks/",
+      "purpose": "每次实际交付发生过什么",
+      "fields": "delivery_id, delivery_order, package_mode, scope, files[]",
+      "invariant": "不可用供应商版本号替代交付 ID"
+    },
+    "FormalSnapshot": {
+      "filename": "snapshots/<snapshot_id>/snapshot.json（拟议路径）",
+      "producer": "sources/",
+      "consumers": "versions/ · reporting/",
+      "purpose": "正式 NL 在确认时刻实际链接什么",
+      "fields": "formal_snapshot_id, coverage, linked_files[]",
+      "invariant": "历史不能引用会变化的 latest"
+    },
+    "EffectiveVersion": {
+      "filename": "rev_*.json",
+      "producer": "versions/",
+      "consumers": "checks/ · reporting/",
+      "purpose": "这一版采用的完整文件集合",
+      "fields": "revision_id, parent_revision_id, members[], changes[]",
+      "invariant": "changes 不等于内容差异；已采纳另记"
+    },
+    "CheckRun": {
+      "filename": "checks/<target>/run_*.json（v3 check_result.v1）",
+      "producer": "checks/",
+      "consumers": "reporting/ · 验收",
+      "purpose": "本次执行比较了什么、结果和证据",
+      "fields": "target, ruleset_id, file_changes[], quality_checks[]",
+      "invariant": "v5 check_run.v1 与 v3 不可直接互换；检查不自动采纳"
+    },
+    "FileFacts": {
+      "filename": "file_facts/*.json",
+      "producer": "parsers/",
+      "consumers": "checks/",
+      "purpose": "Macro/Cell/Pin 可复核的解析事实",
+      "fields": "source_ref, objects, parse_status, covered_sections",
+      "invariant": "不足覆盖不能判 PASS"
+    },
+    "EffectiveIndex": {
+      "filename": "index.json",
+      "producer": "storage/",
+      "consumers": "reporting/ · CLI",
+      "purpose": "最新计算与当前采纳指针",
+      "fields": "latest_calculated_revision, current_accepted_revision",
+      "invariant": "不能把两个指针自动设成一致"
+    },
+    "AcceptanceEvent": {
+      "filename": "acceptance.jsonl",
+      "producer": "采纳操作",
+      "consumers": "storage/ · reporting/",
+      "purpose": "人工采纳、回退、撤销",
+      "fields": "action, revision_id, acted_at, actor",
+      "invariant": "只有真实采纳流程时才启用"
+    }
+  },
+  "code_view_notes": {
+    "versions": "已核对 versions 源码及合成测试。CLI 使用 v3 JSON；身份认证、正式生产数据与共享文件系统语义仍需验证。",
+    "checks": "跨 View 检查仅对相关的最新有效 LEF × 对应最新有效 Liberty 执行，规则需明确作用范围。",
+    "sources": "文件没有明确归属时保留 RAW 事实，不自动进入有效库。",
+    "storage": "storage 是底层基础设施组件，不能偷偷决定要不要采纳有效版本。",
+    "reporting": "报告必须只读，不能成为重新计算有效库状态的权威输入。",
+    "parsers": "解析成功的声明必须绑定 covered_sections；没有解析不等于没有变化。",
+    "config": "配置是归属与交付规则的权威，不复制第二套独立人工真相。",
+    "cli": "CLI 不直接重写业务数据或实现 parser 算法。"
+  },
+  "view_settings": {
+    "c1": {
+      "rankdir": "TB"
+    },
+    "c2": {
+      "rankdir": "TB"
+    },
+    "c3": {
+      "rankdir": "TB"
+    },
+    "flow_raw": {
+      "rankdir": "TB"
+    },
+    "flow_formal": {
+      "rankdir": "TB"
+    },
+    "flow_plugin": {
+      "rankdir": "TB"
+    },
+    "lineage": {
+      "rankdir": "LR"
+    },
+    "domain": {
+      "rankdir": "TB"
+    },
+    "c4_cli": {
+      "rankdir": "TB"
+    },
+    "c4_config": {
+      "rankdir": "TB"
+    },
+    "c4_sources": {
+      "rankdir": "TB"
+    },
+    "c4_parsers": {
+      "rankdir": "TB"
+    },
+    "c4_versions": {
+      "rankdir": "TB"
+    },
+    "c4_checks": {
+      "rankdir": "TB"
+    },
+    "c4_storage": {
+      "rankdir": "TB"
+    },
+    "c4_reporting": {
+      "rankdir": "TB"
+    }
+  },
+  "primary_system_id": "ai_lib",
+  "primary_container_id": "runner",
+  "page_content": {
+    "app_title": "ai_lib_qor · 架构导航实验",
+    "system_short": "ai_lib",
+    "container_short": "Python / work",
+    "descriptions": {
+      "c1": [
+        "C1 · System Context",
+        "系统边界与外部交互",
+        "只聚焦 ai_lib_qor 在整体环境中的职责。RAW 是来源目录，Formal NL 是独立的正式链接来源。"
+      ],
+      "c2": [
+        "C2 · Containers",
+        "放大 ai_lib_qor 系统",
+        "Python CLI / Runner 是执行单元，config/ 与 work/ 是用途不同的存储。HTML/Excel 是只读交付产物。"
+      ],
+      "c3": [
+        "C3 · Components",
+        "放大 Python CLI / Runner",
+        "蓝图包含已实现的 versions 模块和其他拟议组件；请查看节点状态及证据，箭头中的拟议集成尚未接通。"
+      ],
+      "c4": [
+        "C4 · Code",
+        "放大选定组件",
+        "versions 展示已检查的代码；其他组件仍为拟议，不代表已实现或端到端接通。"
+      ]
+    },
+    "flow_descriptions": {
+      "raw": [
+        "RAW 增量更新 → 完整有效版本",
+        "含归属、成员变化与采纳分支；运行行为不应替代静态 C4 组件图。"
+      ],
+      "formal": [
+        "正式 NL 链接 → 固定快照",
+        "正式 NL、RAW、有效版本可以不同步，不应自动合成一个版本号。"
+      ],
+      "plugin": [
+        "检查插件 → v3 CheckResult（拟议）",
+        "检查脚本可黑盒调用；各插件独立实现，统一检查目标、输入输出和证据。"
+      ]
+    },
+    "scenario_question": "V08 增量只更新部分文件时，如何保留旧成员，并将最新计算与人工采纳分开？"
+  }
+}

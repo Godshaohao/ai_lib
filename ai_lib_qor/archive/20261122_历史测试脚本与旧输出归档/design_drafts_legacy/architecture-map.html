@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ai_lib_qor · 架构与文件地图</title>
+<style>
+:root{--ink:#172c3d;--muted:#536b79;--line:#d8e3e4;--paper:#fff;--bg:#f4f7f5;--teal:#087d72;--navy:#1c465b;--gold:#a96813}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}a{color:inherit}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}code{font-size:.88em;color:#24596a}header{background:#102f3b;color:white;padding:48px 24px 40px}.wrap{max-width:1160px;margin:auto}.eyebrow{color:#9ce1d0;font-size:12px;letter-spacing:.16em;font-weight:700}h1{font-size:clamp(32px,5vw,52px);line-height:1.15;letter-spacing:-.035em;margin:12px 0}header p{max-width:780px;color:#c9d9d8;margin:0}.status{display:inline-block;border:1px solid #668d8c;border-radius:4px;padding:3px 9px;font-size:12px;margin-top:20px;color:#cce8df}nav{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:4}nav .wrap{display:flex;gap:25px;overflow-x:auto;padding:12px 24px;white-space:nowrap}nav a{font-size:13px;font-weight:700;color:#46616d;text-decoration:none}nav a:hover{color:var(--teal)}main{padding:0 24px 80px}section{padding:48px 0 8px;scroll-margin-top:55px}.section-top{display:flex;gap:20px;align-items:baseline;margin-bottom:15px}.section-top .num{color:var(--teal);font-size:12px;font-weight:800;letter-spacing:.1em}h2{font-size:27px;letter-spacing:-.025em;line-height:1.25;margin:0}h3{font-size:18px;margin:0 0 8px}p{margin:0 0 12px}.lead{color:var(--muted);max-width:820px}.intro{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:22px}.intro div{padding:20px;background:white}.intro b{display:block;color:var(--teal);font-size:12px;margin-bottom:4px}.intro p{font-size:15px;margin:0}.surface{background:white;border:1px solid var(--line);border-radius:9px}.diagram{padding:20px;overflow-x:auto}.diagram svg{display:block;width:100%;min-width:760px;height:auto}.diagram text{font-family:system-ui,"Microsoft YaHei",sans-serif;fill:#173647}.diagram .box{fill:#f5f9f8;stroke:#c7d9d8;stroke-width:1.5}.diagram .highlight{fill:#e5f5ef;stroke:#73bea7}.diagram .line{fill:none;stroke:#6b8490;stroke-width:1.6;marker-end:url(#arrow)}.diagram .label{font-size:12px;fill:#617b84}.diagram .title{font-size:16px;font-weight:700}.diagram .sub{font-size:12px;fill:#59717d}.caption{font-size:13px;color:var(--muted);margin:10px 2px 0}.matrix-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:800px;font-size:14px}th,td{text-align:left;padding:13px 14px;border-bottom:1px solid #e6eeec;vertical-align:top}th{font-size:12px;color:#59717b;background:#f6f9f8;white-space:nowrap}tbody tr:last-child td{border-bottom:0}td small{display:block;color:#71848b}.file-button{border:0;padding:0;background:transparent;color:#006c65;font:inherit;font-weight:700;text-align:left;text-decoration:underline;text-underline-offset:3px;cursor:pointer}.file-button:hover,.file-button:focus-visible{color:#bb710c}.detail-panel{padding:18px 20px;border-top:1px solid var(--line);background:#f2faf7;min-height:84px}.detail-panel strong{color:#006e64}.detail-panel p{margin:3px 0 0;font-size:14px}.note{font-size:13px;color:var(--muted);margin-top:10px}.timeline{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0}.step{border-top:3px solid #83bcb0;padding:12px 10px 2px 0}.step time{font-size:12px;font-weight:700;color:var(--teal)}.step b{display:block;margin:3px 0}.step p{font-size:14px;color:var(--muted)}.flow{display:flex;align-items:stretch;gap:9px;flex-wrap:wrap;margin:18px 0}.flow span{background:#eff5f4;border:1px solid #d8e7e4;padding:9px 13px;border-radius:6px;font-weight:650;font-size:14px}.flow i{font-style:normal;color:#7c9696;align-self:center}.modules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:20px}details{background:white;border:1px solid var(--line);border-radius:8px}details[open]{border-color:#8abdb2}summary{cursor:pointer;list-style:none;padding:16px 18px;font-weight:700}summary::-webkit-details-marker{display:none}summary:focus-visible{outline:3px solid #74c9b6;outline-offset:-3px}summary:after{content:'+';float:right;font-size:21px;line-height:1;color:var(--teal)}details[open]>summary:after{content:'−'}summary small{display:block;font-size:12px;font-weight:400;color:var(--muted);margin:3px 20px 0 0}.inside{padding:0 18px 17px;color:#3f5965;font-size:14px}.inside p:last-child{margin-bottom:0}.fields{display:grid;gap:8px;margin-top:18px}.fields summary code{color:#075e5a}.fields .inside{overflow-x:auto}.fieldtable{min-width:520px;font-size:13px}.fieldtable th,.fieldtable td{padding:8px 10px}.tag{font-size:11px;padding:2px 7px;border-radius:3px;background:#e6f3ef;color:#087267;margin-left:8px;font-weight:700}.callout{border-left:3px solid #d6a853;padding:10px 16px;background:#fffaf0;color:#64532f;font-size:14px;margin-top:16px}.appendix{margin-top:14px}.appendix pre{background:#122f39;color:#dbece9;border-radius:6px;padding:16px;overflow:auto;line-height:1.5;font-size:12px}.appendix .inside{padding-top:0}footer{padding:32px 0;color:#71858c;font-size:12px}@media(max-width:700px){header{padding:36px 20px}main{padding:0 16px 60px}nav .wrap{padding-left:16px;gap:20px}.intro,.modules{grid-template-columns:1fr}.timeline{grid-template-columns:repeat(2,1fr)}section{padding-top:38px}.section-top{gap:12px}h2{font-size:23px}.flow i{display:none}}
+</style>
+</head>
+<body>
+<header><div class="wrap"><div class="eyebrow">AI_LIB_QOR / ARCHITECTURE MAP</div><h1>从交付到有效库，<br>看清文件的来处与变化。</h1><p>一张面向业务理解的架构地图：先看对象与文件，再看版本流转，最后查看拟议的程序模块和 JSON 字段。</p><span class="status">设计梳理 · 示例数据 · 程序模块待实现</span></div></header>
+<nav aria-label="页面导航"><div class="wrap"><a href="#purpose">解决什么</a><a href="#objects">核心对象</a><a href="#files">文件与版本</a><a href="#delivery">交付流程</a><a href="#modules">程序模块</a><a href="#json">JSON 字段</a></div></nav>
+<main class="wrap">
+<section id="purpose"><div class="section-top"><span class="num">01 / PURPOSE</span><h2>这个系统解决什么问题？</h2></div><p class="lead">供应商会反复交付不同视图的文件，正式库也可能指向不同批次。ai_lib_qor 的目标是把来源、有效版本和检查结果串起来，让人知道当前使用的文件是什么、它从哪里来、变化在哪里。</p><div class="intro"><div><b>01 · 找到文件</b><p>按供应商、来源库和业务 IP 追踪每个文件的交付来源。</p></div><div><b>02 · 理解版本</b><p>区分最新交付、计算出的有效版本、已采纳版本与正式快照。</p></div><div><b>03 · 发现变化</b><p>比较文件和 Macro / Pin 事实，保留检查范围与结果。</p></div></div></section>
+<section id="objects"><div class="section-top"><span class="num">02 / OBJECTS</span><h2>核心对象如何关联？</h2></div><p class="lead">这是业务对象关系图，不代表已经部署了多个服务。箭头表示提供、关联、引用或解析，具体含义标在连线上。</p><div class="surface diagram"><svg viewBox="0 0 1050 390" role="img" aria-labelledby="diagramTitle diagramDesc"><title id="diagramTitle">业务对象与文件来源关系</title><desc id="diagramDesc">供应商提供来源库，来源库接收交付；业务 IP 关联来源库并拥有有效版本；有效版本引用交付文件或正式快照，文件解析后产生 Macro 和 Pin 事实。</desc><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6b8490"/></marker></defs>
+<path class="line" d="M195 72 H235"/><path class="line" d="M430 72 H475"/><path class="line" d="M680 72 H740"/><path class="line" d="M332 155 V105"/><path class="line" d="M430 188 H705 V99 H740"/><path class="line" d="M680 305 H975 V82 H930"/><path class="line" d="M560 105 V127 H125 V270"/><path class="line" d="M195 305 H235"/><path class="line" d="M835 105 V155"/>
+<text class="label" x="198" y="61">提供</text><text class="label" x="437" y="61">接收</text><text class="label" x="683" y="61">选择文件</text><text class="label" x="342" y="135">关联</text><text class="label" x="495" y="179">拥有 / 管理</text><text class="label" x="859" y="294">引用正式文件</text><text class="label" x="135" y="145">解析交付文件</text><text class="label" x="199" y="294">提取</text><text class="label" x="845" y="140">检查</text>
+<rect class="box" x="30" y="40" width="165" height="65" rx="9"/><text class="title" x="47" y="67">Vendor</text><text class="sub" x="47" y="88">供应商</text>
+<rect class="box" x="235" y="40" width="195" height="65" rx="9"/><text class="title" x="252" y="67">SourceLibrary</text><text class="sub" x="252" y="88">来源库</text>
+<rect class="box" x="475" y="40" width="205" height="65" rx="9"/><text class="title" x="492" y="67">Delivery</text><text class="sub" x="492" y="88">交付记录与文件</text>
+<rect class="box highlight" x="740" y="40" width="190" height="65" rx="9"/><text class="title" x="757" y="67">Effective Version</text><text class="sub" x="757" y="88">完整有效文件集合</text>
+<rect class="box" x="235" y="155" width="195" height="65" rx="9"/><text class="title" x="252" y="182">BusinessIP</text><text class="sub" x="252" y="203">业务 IP</text>
+<rect class="box" x="740" y="155" width="190" height="65" rx="9"/><text class="title" x="757" y="182">Check Result</text><text class="sub" x="757" y="203">差异与质量结果</text>
+<rect class="box" x="30" y="270" width="165" height="65" rx="9"/><text class="title" x="47" y="297">File Facts</text><text class="sub" x="47" y="318">文件解析事实</text>
+<rect class="box" x="235" y="270" width="195" height="65" rx="9"/><text class="title" x="252" y="297">Macro / Pin</text><text class="sub" x="252" y="318">文件中的设计对象</text>
+<rect class="box" x="475" y="270" width="205" height="65" rx="9"/><text class="title" x="492" y="297">Formal Snapshot</text><text class="sub" x="492" y="318">公共正式库的观察快照</text></svg><p class="caption">一次交付可以更新有效版本的一部分；其他成员可继续引用原来的正式快照。文件事实描述实际解析到的内容。</p></div></section>
+<section id="files"><div class="section-top"><span class="num">03 / FILES</span><h2>同一个文件，现在处于哪个版本？</h2></div><p class="lead">以下为文档中的合成示例：<strong>vendor_orion / lib_rtavfs / rtavfs</strong>。点击文件名查看该行解释。</p><div class="surface"><div class="matrix-wrap"><table><thead><tr><th>文件</th><th>最新交付</th><th>次新交付</th><th>最新计算 Rev 002</th><th>已采纳 Rev 001</th><th>正式 Snapshot 002</th></tr></thead><tbody><tr><td><button class="file-button" data-file="lef" aria-pressed="true">core.lef</button><small>LEF</small></td><td>V08</td><td>V07</td><td>V08 RAW</td><td>V07 正式快照 001</td><td>V07</td></tr><tr><td><button class="file-button" data-file="tt" aria-pressed="false">func_tt.lib</button><small>Liberty / tt</small></td><td>V08</td><td>V07</td><td>V08 RAW</td><td>V07 正式快照 001</td><td>V08</td></tr><tr><td><button class="file-button" data-file="ff" aria-pressed="false">func_ff.lib</button><small>Liberty / ff</small></td><td>V07</td><td>未知</td><td>V07 正式快照 001</td><td>V07 正式快照 001</td><td>V07</td></tr></tbody></table></div><div class="detail-panel" aria-live="polite"><strong id="file-title">core.lef · V08 替换 V07</strong><p id="file-detail">Rev 002 使用 V08 交付文件；已采纳 Rev 001 和正式快照 002 仍指向 V07。示例中 MAC_A 尺寸从 120 × 80 变为 124 × 80 μm，并新增信号 Pin C。</p></div></div><p class="note">最新交付按文件分别判断；次新“未知”表示示例未提供更早历史。最新计算不等于已经采纳；正式快照是独立观察结果。</p></section>
+<section id="delivery"><div class="section-top"><span class="num">04 / DELIVERY</span><h2>一次交付如何影响有效库？</h2></div><p class="lead">V08 是增量交付，只包含 LEF 和 tt Liberty；没有交付 ff 并不代表删除 ff。</p><div class="timeline"><div class="step"><time>09.07 / 2026</time><b>收到 V07</b><p>交付 LEF、tt 与 ff 三个文件。</p></div><div class="step"><time>09.09 — 09.11</time><b>建立并采纳 Rev 001</b><p>以正式快照 001 的三个文件作为基线。</p></div><div class="step"><time>10.19 — 10.20</time><b>V08 → Rev 002</b><p>替换 LEF 和 tt；ff 沿用快照 001。Rev 002 尚非已采纳版本。</p></div><div class="step"><time>10.21</time><b>观察正式快照 002</b><p>正式库中 tt 已指向 V08，LEF 与 ff 仍指向 V07。</p></div></div><h3>处理路径 · 拟议数据流</h3><div class="flow" aria-label="拟议数据流"><span>登记交付 / 正式快照</span><i>→</i><span>选择有效文件成员</span><i>→</i><span>解析与比较</span><i>→</i><span>记录结果与采纳</span></div><p class="note">交付也可直接做预检查，无须先生成有效版本。文件来源变化与文件内容变化需要分别判断。</p></section>
+<section id="modules"><div class="section-top"><span class="num">05 / MODULES</span><h2>程序模块如何分工？</h2></div><p class="lead">下列为拟议的逻辑模块和示意路径，当前页面未核实其已实现。点击每一项查看职责、输入和输出；它们不表示独立部署单元。</p><div class="modules">
+<details><summary>来源登记 <code>sources/</code><small>交付、文件与正式快照的入口</small></summary><div class="inside"><p><b>职责：</b>扫描、识别并登记供应商交付和正式库链接，保留可追溯来源。</p><p><b>输入 → 输出：</b>交付文件或正式库 → Delivery / Formal Snapshot 记录。</p><p><b>拟议路径：</b><code>src/ai_lib_qor/sources/</code></p></div></details>
+<details><summary>文件解析 <code>parsers/</code><small>提取 LEF / Liberty 等文件事实</small></summary><div class="inside"><p><b>职责：</b>复用适用的解析能力，记录 Macro、Pin 和解析覆盖范围。</p><p><b>输入 → 输出：</b>具体来源文件 → File Facts；缺失解析内容保持未知。</p><p><b>拟议路径：</b><code>src/ai_lib_qor/parsers/</code></p></div></details>
+<details><summary>有效版本 <code>versions/</code><small>选择成员与管理版本关系</small></summary><div class="inside"><p><b>职责：</b>组合完整成员清单，记录父版本和来源变化。</p><p><b>输入 → 输出：</b>上一个版本、交付和正式来源 → Effective Version。</p><p><b>拟议路径：</b><code>src/ai_lib_qor/versions/</code></p></div></details>
+<details><summary>差异与检查 <code>checks/</code><small>比较文件、对象和视图</small></summary><div class="inside"><p><b>职责：</b>对目标和基线做文件差异与可覆盖的质量检查。</p><p><b>输入 → 输出：</b>来源引用、文件事实、规则 → Check Result；支持交付预检查。</p><p><b>拟议路径：</b><code>src/ai_lib_qor/checks/</code></p></div></details>
+<details><summary>记录与索引 <code>storage/</code><small>保存版本索引、事件和检查记录</small></summary><div class="inside"><p><b>职责：</b>读取与保存记录，区分最新计算版本和已采纳版本。</p><p><b>输入 → 输出：</b>版本、采纳事件和结果 → 可追溯的持久化记录。并发与原子写策略待设计。</p><p><b>拟议路径：</b><code>src/ai_lib_qor/storage/</code></p></div></details>
+<details><summary>报告呈现 <code>reporting/</code><small>让人查看来源、变化与结果</small></summary><div class="inside"><p><b>职责：</b>将结构化结果组织为文件定位、版本差异和检查视图。</p><p><b>输入 → 输出：</b>索引、版本、检查结果 → 人可读报告；展示形式待定。</p><p><b>拟议路径：</b><code>src/ai_lib_qor/reporting/</code></p></div></details></div></section>
+<section id="json"><div class="section-top"><span class="num">06 / DATA CONTRACT</span><h2>JSON 里需要表达什么？</h2></div><p class="lead">点击对象查看示例中的关键字段。上面概览取自 v3 设计与合成示例；完整字段定义和中英文术语见下方可展开附录。最终契约与人工确认仍待完成。</p><div class="fields">
+<details><summary>Delivery · 交付记录 <span class="tag">来源登记</span><small>交付了什么，文件来自哪里</small></summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段</th><th>含义与关联</th><th>示例</th></tr></thead><tbody><tr><td><code>delivery_id</code></td><td>交付标识</td><td>dlv_20261019_001</td></tr><tr><td><code>vendor_id</code> / <code>source_library_id</code></td><td>所属供应商与来源库</td><td>vendor_orion / lib_rtavfs</td></tr><tr><td><code>supplier_version</code> / <code>delivery_order</code></td><td>供应商版本与交付顺序</td><td>V08 / 8</td></tr><tr><td><code>package_mode</code> / <code>package_scope</code></td><td>交付模式与范围</td><td>INCREMENTAL</td></tr><tr><td><code>files[].file_key</code> / <code>file_id</code></td><td>文件逻辑键与本次交付内文件标识</td><td>lib_rtavfs:lef:core / f001</td></tr><tr><td><code>files[].relative_path</code> / <code>view</code></td><td>文件位置与视图类型</td><td>lef/core.lef / LEF</td></tr><tr><td><code>explicit_removed_file_keys</code></td><td>明确声明移除的文件；未交付不自动等于删除</td><td>[]</td></tr></tbody></table></div></details>
+<details><summary>Formal Snapshot · 正式快照 <span class="tag">来源登记</span><small>正式库在某时刻实际指向什么</small></summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段</th><th>含义与关联</th><th>示例</th></tr></thead><tbody><tr><td><code>formal_nl_id</code> / <code>formal_snapshot_id</code></td><td>正式库和本次快照标识</td><td>NL2.5.3 / snap_nl253_0002</td></tr><tr><td><code>previous_snapshot_id</code> / <code>observed_at</code></td><td>上次快照与观察时间</td><td>snap_nl253_0001</td></tr><tr><td><code>scope</code> / <code>coverage</code></td><td>扫描范围及覆盖情况</td><td>LEF、LIBERTY</td></tr><tr><td><code>linked_files[].file_key</code></td><td>正式链接对应的逻辑文件</td><td>lib_rtavfs:liberty:func_tt</td></tr><tr><td><code>linked_files[].link_path</code> / <code>resolved_path</code></td><td>链接位置与解析后的实际路径</td><td>lib/func_tt.lib</td></tr><tr><td><code>linked_files[].source_ref</code> / <code>source_match</code></td><td>匹配到的交付来源及匹配状态</td><td>MATCHED_RAW</td></tr></tbody></table></div></details>
+<details><summary>Effective Version · 有效版本 <span class="tag">版本管理</span><small>某一版本完整包含哪些来源文件</small></summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段</th><th>含义与关联</th><th>示例</th></tr></thead><tbody><tr><td><code>effective_set_id</code> / <code>owner</code></td><td>有效集及其业务所有者</td><td>rtavfs_primary / rtavfs</td></tr><tr><td><code>revision_id</code> / <code>parent_revision_id</code></td><td>本次版本与父版本</td><td>rev_0002 / rev_0001</td></tr><tr><td><code>reason.kind</code> / <code>reason.ref_id</code></td><td>创建版本的原因及依据</td><td>RAW_DELIVERY / dlv_20261019_001</td></tr><tr><td><code>members[].file_key</code> / <code>source_ref</code></td><td>每个成员的逻辑键与具体交付或正式来源</td><td>core → V08；ff → 快照 001</td></tr><tr><td><code>changes[].action</code> / <code>old_source_ref</code> / <code>new_source_ref</code></td><td>相对父版本的来源变化</td><td>REPLACED</td></tr></tbody></table></div></details>
+<details><summary>Index &amp; Acceptance · 索引与采纳 <span class="tag">版本状态</span><small>最新计算版本和已采纳版本分开记录</small></summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段</th><th>含义与关联</th><th>示例</th></tr></thead><tbody><tr><td><code>latest_calculated_revision</code></td><td>最新计算出的版本</td><td>rev_0002</td></tr><tr><td><code>current_accepted_revision</code></td><td>当前已采纳版本</td><td>rev_0001</td></tr><tr><td><code>event_id</code> / <code>action</code> / <code>revision_id</code></td><td>采纳事件标识、动作及目标版本</td><td>accept_0001 / ACCEPT / rev_0001</td></tr><tr><td><code>acted_at</code> / <code>actor</code> / <code>reason</code></td><td>采纳时间、操作者和原因</td><td>ip_owner</td></tr></tbody></table></div></details>
+<details><summary>File Facts · 文件事实 <span class="tag">文件解析</span><small>描述解析到了什么以及覆盖了哪些内容</small></summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段</th><th>含义与关联</th><th>示例</th></tr></thead><tbody><tr><td><code>facts_id</code> / <code>source_ref</code></td><td>事实标识与对应来源文件</td><td>facts_core_v08</td></tr><tr><td><code>view</code> / <code>parser</code></td><td>视图类型、解析器及版本</td><td>LEF / lef_parser</td></tr><tr><td><code>parse_status</code> / <code>covered_sections</code></td><td>解析状态与实际覆盖范围</td><td>COMPLETE / MACRO_SIZE</td></tr><tr><td><code>objects.macros[].name</code> / <code>size_um</code></td><td>Macro 名称和尺寸</td><td>MAC_A / [124, 80]</td></tr><tr><td><code>objects.macros[].pins[].name</code> / <code>direction</code></td><td>Pin 名称与方向</td><td>C / INPUT</td></tr></tbody></table></div></details>
+<details><summary>Check Result · 检查结果 <span class="tag">差异检查</span><small>对谁做了什么比较，发现了什么变化</small></summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段</th><th>含义与关联</th><th>示例</th></tr></thead><tbody><tr><td><code>check_run_id</code> / <code>run_at</code> / <code>ruleset_id</code></td><td>本次运行、时间及规则集</td><td>run_001</td></tr><tr><td><code>target.kind</code> / <code>target.id</code></td><td>检查目标；交付和有效版本需要区分</td><td>EFFECTIVE_REVISION / rev_0002</td></tr><tr><td><code>baseline.kind</code> / <code>baseline.id</code></td><td>比较基线</td><td>EFFECTIVE_REVISION / rev_0001</td></tr><tr><td><code>file_changes[].source_changed</code> / <code>content_status</code></td><td>来源变化与内容变化分别记录</td><td>true / CHANGED</td></tr><tr><td><code>file_changes[].object_changes</code></td><td>对象、属性和新旧值的差异</td><td>MAC_A.SIZE</td></tr></tbody></table></div></details></div><details class="appendix" id="field-appendix"><summary>完整字段附录 · 116 条 v3 设计确认项<small>按七类记录展开；保留原文中的字段路径、必需性、类型和解释</small></summary><div class="inside"><p>来源：v3《逐字段确认表》；这里的“必需性”是设计文档的表述，LEF / Liberty 表示对应视图，具体约束以 Schema 和后续人工确认共同核对。原表的人工确认列目前均为空。浏览器可使用 Ctrl+F 搜索字段。</p>
+<details class="appendix"><summary>4. JSON-01：交付记录 delivery.json · 20 条</summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段路径</th><th>必需性 / 视图</th><th>类型</th><th>含义和检查要点</th></tr></thead><tbody>
+<tr><td><code>schema_version</code></td><td>是</td><td>string</td><td>delivery_record.v1；解析契约版本</td></tr>
+<tr><td><code>delivery_id</code></td><td>是</td><td>string</td><td>单次交付唯一；不得简单等于供应商的 V08</td></tr>
+<tr><td><code>vendor_id</code></td><td>是</td><td>string</td><td>可解析回 Vendor 登记</td></tr>
+<tr><td><code>source_library_id</code></td><td>是</td><td>string</td><td>可解析回 SourceLibrary 登记</td></tr>
+<tr><td><code>supplier_version</code></td><td>是</td><td>string</td><td>原始供应商版本号，原样展示</td></tr>
+<tr><td><code>delivery_order</code></td><td>是</td><td>integer</td><td>此库内的交付顺序；优先使用已确认的 delivery_order.yaml，不能仅按字符串版本或文件 mtime 排序</td></tr>
+<tr><td><code>received_at</code></td><td>是</td><td>ISO 时间</td><td>交付被接收时间，不等于文件修改时间</td></tr>
+<tr><td><code>source_root</code></td><td>是</td><td>path string</td><td>该交付的只读来源路径；不得依赖目前仍存在来证明历史内容可读</td></tr>
+<tr><td><code>package_mode</code></td><td>是</td><td>enum</td><td>FULL/INCREMENTAL/PATCH/UNKNOWN</td></tr>
+<tr><td><code>package_scope.file_keys[]</code></td><td>是</td><td>array</td><td>已声明的交付覆盖范围（本例用明确的逻辑文件位）；复杂真实包可由现有配置进一步限定 View/Corner/Mode</td></tr>
+<tr><td><code>package_scope.scope_confirmed</code></td><td>是</td><td>boolean</td><td>是否人工/来源确认覆盖范围；未知时不能推断隐式删除</td></tr>
+<tr><td><code>explicit_removed_file_keys[]</code></td><td>是</td><td>array</td><td>供应商明确声明移除的文件位，默认为空；不要由“包里缺失”自动推断</td></tr>
+<tr><td><code>files[]</code></td><td>是</td><td>array</td><td>本次**实际出现**的文件记录</td></tr>
+<tr><td><code>files[].file_id</code></td><td>是</td><td>string</td><td>本交付中的文件行 ID</td></tr>
+<tr><td><code>files[].file_key</code></td><td>是</td><td>string/null</td><td>跨多次交付关联同一个逻辑文件位；未知为 null</td></tr>
+<tr><td><code>files[].classification</code></td><td>是</td><td>enum</td><td>RESOLVED/UNRESOLVED；不确定不自动采用</td></tr>
+<tr><td><code>files[].relative_path</code></td><td>是</td><td>string</td><td>相对 source_root 的真实文件路径，保留实际名字</td></tr>
+<tr><td><code>files[].view</code></td><td>是</td><td>enum</td><td>LEF/LIBERTY/VERILOG/CDL/SDC/UPF/CPF/SPEF/DB/GDS/OTHER</td></tr>
+<tr><td><code>files[].corner</code></td><td>是</td><td>string/null</td><td>corner 可解析时写值；不适用的视图为 null</td></tr>
+<tr><td><code>files[].mode</code></td><td>是</td><td>string/null</td><td>func/scan 等，未知或不适用为 null</td></tr>
+</tbody></table></div></details>
+<details class="appendix"><summary>5. JSON-02：正式文件快照 &lt;snapshot_id&gt;.json · 17 条</summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段路径</th><th>必需性 / 视图</th><th>类型</th><th>含义和检查要点</th></tr></thead><tbody>
+<tr><td><code>schema_version</code></td><td>是</td><td>string</td><td>formal_snapshot.v1</td></tr>
+<tr><td><code>formal_nl_id</code></td><td>是</td><td>string</td><td>NL 标签，不能作为唯一时间状态身份</td></tr>
+<tr><td><code>formal_snapshot_id</code></td><td>是</td><td>string</td><td>固定状态 ID，历史版本引用它</td></tr>
+<tr><td><code>previous_snapshot_id</code></td><td>是</td><td>string/null</td><td>上一次不同的固定状态；首次为 null</td></tr>
+<tr><td><code>observed_at</code></td><td>是</td><td>ISO 时间</td><td>本次盘点时刻</td></tr>
+<tr><td><code>source_root</code></td><td>是</td><td>string</td><td>正式 NL 根路径</td></tr>
+<tr><td><code>coverage</code></td><td>是</td><td>enum</td><td>COMPLETE_IN_SCOPE/PARTIAL/UNKNOWN，不能把某个 IP 完整误报为整个 NL 完整</td></tr>
+<tr><td><code>scope.source_library_ids[]</code></td><td>是</td><td>array</td><td>此 Snapshot 统计了哪些来源库，或实际适用的已定义范围</td></tr>
+<tr><td><code>scope.views[]</code></td><td>是</td><td>array</td><td>覆盖的视图；可为空但不能同时声称无依据的完全覆盖</td></tr>
+<tr><td><code>scope.note</code></td><td>是</td><td>string</td><td>给人看的范围文字，防止误会“全部 NL 完整”</td></tr>
+<tr><td><code>linked_files[]</code></td><td>是</td><td>array</td><td>本次状态实际链接的文件集合</td></tr>
+<tr><td><code>linked_files[].file_id</code></td><td>是</td><td>string</td><td>固定快照内文件行 ID</td></tr>
+<tr><td><code>linked_files[].file_key</code></td><td>是</td><td>string/null</td><td>归属明确的逻辑文件位</td></tr>
+<tr><td><code>linked_files[].link_path</code></td><td>是</td><td>string</td><td>相对正式 NL 根的链接位置</td></tr>
+<tr><td><code>linked_files[].resolved_path</code></td><td>是</td><td>string</td><td>扫描当时所解析的实际目标路径</td></tr>
+<tr><td><code>linked_files[].source_match</code></td><td>是</td><td>enum</td><td>是否已匹配 RAW 文件来源</td></tr>
+<tr><td><code>linked_files[].source_ref</code></td><td>是</td><td>object/null</td><td>能匹配时引用对应 delivery_file；未知时 null，不得编造交付记录</td></tr>
+</tbody></table></div></details>
+<details class="appendix"><summary>6. JSON-03：有效版本 rev_0002.json · 18 条</summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段路径</th><th>必需性 / 视图</th><th>类型</th><th>含义和检查要点</th></tr></thead><tbody>
+<tr><td><code>schema_version</code></td><td>是</td><td>string</td><td>effective_version.v1</td></tr>
+<tr><td><code>effective_set_id</code></td><td>是</td><td>string</td><td>有效文件集标识；默认一个 IP 一套</td></tr>
+<tr><td><code>owner.owner_type</code></td><td>是</td><td>enum</td><td>BUSINESS_IP 或 SOURCE_LIBRARY</td></tr>
+<tr><td><code>owner.owner_id</code></td><td>是</td><td>string</td><td>对应 IP ID 或无 IP 的来源库 ID</td></tr>
+<tr><td><code>owner.home_source_library_id</code></td><td>是</td><td>string</td><td>唯一权威文件存放位置的来源库</td></tr>
+<tr><td><code>revision_id</code></td><td>是</td><td>string</td><td>rev_0001、rev_0002，只在当前 Effective Set 内有序</td></tr>
+<tr><td><code>parent_revision_id</code></td><td>是</td><td>string/null</td><td>继承的上一个 Rev，初次构建可为 null</td></tr>
+<tr><td><code>created_at</code></td><td>是</td><td>ISO 时间</td><td>有效版本被计算并固定的时间</td></tr>
+<tr><td><code>reason.kind</code></td><td>是</td><td>enum</td><td>FORMAL_BASELINE / RAW_DELIVERY / FORMAL_ADOPTION / MANUAL_CORRECTION / IMPORT_BASELINE</td></tr>
+<tr><td><code>reason.ref_id</code></td><td>是</td><td>string</td><td>本次主要触发来源的固定 ID，不能引用 latest 指针</td></tr>
+<tr><td><code>members[]</code></td><td>是</td><td>array</td><td>**完整**有效文件成员集合，不只本次变更文件</td></tr>
+<tr><td><code>members[].file_key</code></td><td>是</td><td>string</td><td>不允许重复；同时引用相同文件位不同来源时属于冲突，需先解决</td></tr>
+<tr><td><code>members[].source_ref</code></td><td>是</td><td>object</td><td>这个文件位最终选用的 RAW 或正式来源</td></tr>
+<tr><td><code>changes[]</code></td><td>是</td><td>array</td><td>与前驱 Rev 的文件成员差异，**不是 Macro/PIN 语义差异**</td></tr>
+<tr><td><code>changes[].file_key</code></td><td>是</td><td>string</td><td>哪个逻辑文件位发生采用变化</td></tr>
+<tr><td><code>changes[].action</code></td><td>是</td><td>enum</td><td>ADDED / REPLACED / REMOVED</td></tr>
+<tr><td><code>changes[].old_source_ref</code></td><td>是</td><td>object/null</td><td>旧版选用的来源；新增文件为 null</td></tr>
+<tr><td><code>changes[].new_source_ref</code></td><td>是</td><td>object/null</td><td>新版选用的来源；移除文件为 null</td></tr>
+</tbody></table></div></details>
+<details class="appendix"><summary>7. JSON-04：检查结果 run_001.json · 31 条</summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段路径</th><th>必需性 / 视图</th><th>类型</th><th>含义和检查要点</th></tr></thead><tbody>
+<tr><td><code>schema_version</code></td><td>是</td><td>string</td><td>check_result.v1</td></tr>
+<tr><td><code>check_run_id</code></td><td>是</td><td>string</td><td>在目标目录下唯一，允许 run_001、run_002 重跑</td></tr>
+<tr><td><code>target.kind</code></td><td>是</td><td>enum</td><td>RAW_DELIVERY / EFFECTIVE_REVISION</td></tr>
+<tr><td><code>target.id</code></td><td>是</td><td>string</td><td>所检查的交付 ID 或 Rev ID</td></tr>
+<tr><td><code>baseline.kind</code></td><td>是</td><td>enum/null</td><td>旧交付或旧 Rev，与 target 同类型；不需要比较时 baseline 为 null</td></tr>
+<tr><td><code>baseline.id</code></td><td>是</td><td>string/null</td><td>前一次选定的比较目标 ID</td></tr>
+<tr><td><code>effective_set_id</code></td><td>是</td><td>string/null</td><td>有效版本检查时必填；交付前检查可为 null</td></tr>
+<tr><td><code>run_at</code></td><td>是</td><td>ISO 时间</td><td>本次检查实际执行时间</td></tr>
+<tr><td><code>ruleset_id</code></td><td>是</td><td>string</td><td>使用的规则版本；换规则可以重跑同一个 Rev</td></tr>
+<tr><td><code>file_changes[]</code></td><td>是</td><td>array</td><td>文件层来源变化、内容变化结论</td></tr>
+<tr><td><code>file_changes[].file_key</code></td><td>是</td><td>string</td><td>哪个逻辑文件位</td></tr>
+<tr><td><code>file_changes[].old_source_ref</code></td><td>是</td><td>object/null</td><td>比较前来源；引用旧交付或旧 Rev 的文件成员</td></tr>
+<tr><td><code>file_changes[].new_source_ref</code></td><td>是</td><td>object/null</td><td>比较后来源</td></tr>
+<tr><td><code>file_changes[].source_changed</code></td><td>是</td><td>bool</td><td>两份来源引用是否不同（不等于内容变化）</td></tr>
+<tr><td><code>file_changes[].content_status</code></td><td>是</td><td>enum</td><td>CHANGED/UNCHANGED/UNKNOWN/NOT_CHECKED</td></tr>
+<tr><td><code>file_changes[].object_changes[]</code></td><td>是</td><td>array</td><td>例如 MACRO SIZE、PIN 名称/方向、Cell 属性变化；只有查明内容差异时才填</td></tr>
+<tr><td><code>object_changes[].object_type</code></td><td>是</td><td>enum</td><td>MACRO/PIN/CELL/ATTRIBUTE/OTHER</td></tr>
+<tr><td><code>object_changes[].object_name</code></td><td>是</td><td>string</td><td>精确对象名，如 MAC_A 或 MAC_A/C</td></tr>
+<tr><td><code>object_changes[].attribute</code></td><td>是</td><td>string</td><td>SIZE/PRESENCE/DIRECTION/...</td></tr>
+<tr><td><code>object_changes[].old_value/new_value</code></td><td>是</td><td>JSON value</td><td>差异两侧值，值类型依赖属性；不能用无说明的摘要代替</td></tr>
+<tr><td><code>object_changes[].unit</code></td><td>是</td><td>string/null</td><td>SIZE 用 um 等，布尔存在性为 null</td></tr>
+<tr><td><code>object_changes[].facts_refs[]</code></td><td>是</td><td>array</td><td>对应 Parser 事实 ID，能复核结果</td></tr>
+<tr><td><code>quality_checks[]</code></td><td>是</td><td>array</td><td>具体质量规则及结果；没有执行可以为空</td></tr>
+<tr><td><code>quality_checks[].check_id</code></td><td>是</td><td>string</td><td>例如 LEF_LIBERTY_PIN_MATCH</td></tr>
+<tr><td><code>quality_checks[].scope_file_keys[]</code></td><td>是</td><td>array</td><td>本次检查的相关文件范围</td></tr>
+<tr><td><code>quality_checks[].result</code></td><td>是</td><td>enum</td><td>PASS/FAIL/INCONCLUSIVE/NOT_RUN</td></tr>
+<tr><td><code>quality_checks[].coverage</code></td><td>是</td><td>enum</td><td>COMPLETE/PARTIAL/UNKNOWN；PASS 不能在证据不足时给出</td></tr>
+<tr><td><code>quality_checks[].facts_refs[]</code></td><td>是</td><td>array</td><td>此质量检查实际消费的解析证据</td></tr>
+<tr><td><code>quality_checks[].detail</code></td><td>是</td><td>string</td><td>面向使用者的一句解释，注明排除项</td></tr>
+<tr><td><code>summary</code></td><td>是</td><td>object</td><td>本 Run 的简单计数：文件来源更新数、已证实内容变化数、失败数、不确定数</td></tr>
+<tr><td><code>evidence_note</code></td><td>是</td><td>string</td><td>本次证据范围和局限，例如只检查 Pin，不含时序弧</td></tr>
+</tbody></table></div></details>
+<details class="appendix"><summary>8. JSON-05：文件解析事实 file_facts/&lt;facts_id&gt;.json（适配已有 Parser） · 15 条</summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段路径</th><th>必需性 / 视图</th><th>类型</th><th>含义和检查要点</th></tr></thead><tbody>
+<tr><td><code>schema_version</code></td><td>是</td><td>string</td><td>本文示例适配层为 file_facts.v1，实际可以保留现有语义事实模型</td></tr>
+<tr><td><code>facts_id</code></td><td>是</td><td>string</td><td>单次解析事实记录 ID；Check 可复用它</td></tr>
+<tr><td><code>source_ref</code></td><td>是</td><td>object</td><td>哪份 RAW 或正式来源对应这份事实</td></tr>
+<tr><td><code>view</code></td><td>是</td><td>enum</td><td>示例 LEF / LIBERTY；其他 View 沿用各自既有 Parser</td></tr>
+<tr><td><code>parse_status</code></td><td>是</td><td>enum</td><td>COMPLETE/PARTIAL/FAILED，但限定在 covered_sections 已声明的能力范围</td></tr>
+<tr><td><code>covered_sections[]</code></td><td>是</td><td>array</td><td>例如 MACRO_SIZE、PIN_NAME、PIN_DIRECTION；没有列的内容不宣称被解析</td></tr>
+<tr><td><code>units</code></td><td>是</td><td>object</td><td>例如 LEF 长度 um、Liberty time ns/capacitance pf；需由解析器证明并归一化</td></tr>
+<tr><td><code>objects.macros[]</code></td><td>LEF</td><td>array</td><td>Macro 名称、SIZE、PINS；必要时从既有事实补充 ORIGIN/SYMMETRY/PG/OBS 等</td></tr>
+<tr><td><code>objects.macros[].name</code></td><td>LEF</td><td>string</td><td>Macro 唯一名（文件内部范围）</td></tr>
+<tr><td><code>objects.macros[].size_um</code></td><td>LEF</td><td>number[2]</td><td>尺寸，统一 um；示例只包含明确已解析的属性</td></tr>
+<tr><td><code>objects.macros[].pins[].name</code></td><td>LEF</td><td>string</td><td>Pin 名称（可扩展多个 PORT）</td></tr>
+<tr><td><code>objects.macros[].pins[].direction</code></td><td>LEF</td><td>string</td><td>方向；不得用默认值填补缺失字段</td></tr>
+<tr><td><code>objects.cells[]</code></td><td>Liberty</td><td>array</td><td>Liberty Cell 名称及属性</td></tr>
+<tr><td><code>objects.cells[].name</code></td><td>Liberty</td><td>string</td><td>Cell 名称，对应 Macro 需通过匹配规则比较</td></tr>
+<tr><td><code>objects.cells[].pins[].name/direction</code></td><td>Liberty</td><td>string</td><td>Cell 信号 Pin；PG Pin、Timing Arc 应由更完整解析范围承载</td></tr>
+</tbody></table></div></details>
+<details class="appendix"><summary>9. JSON-06：有效集索引 effective/index.json · 7 条</summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段路径</th><th>必需性 / 视图</th><th>类型</th><th>含义和检查要点</th></tr></thead><tbody>
+<tr><td><code>schema_version</code></td><td>是</td><td>string</td><td>effective_index.v1</td></tr>
+<tr><td><code>effective_set_id</code></td><td>是</td><td>string</td><td>该索引属于哪套有效文件集合</td></tr>
+<tr><td><code>owner.owner_type / owner.owner_id</code></td><td>是</td><td>enum/string</td><td>业务 IP 或无归属 SourceLibrary</td></tr>
+<tr><td><code>owner.home_source_library_id</code></td><td>是</td><td>string</td><td>权威 Rev 的唯一保存位置</td></tr>
+<tr><td><code>latest_calculated_revision</code></td><td>是</td><td>string/null</td><td>当前最新**计算成功并发布**的 Rev</td></tr>
+<tr><td><code>current_accepted_revision</code></td><td>是</td><td>string/null</td><td>当前已采纳 Rev；可落后于最新计算，未启用采纳时为 null</td></tr>
+<tr><td><code>updated_at</code></td><td>是</td><td>ISO 时间</td><td>最近一次索引切换时间</td></tr>
+</tbody></table></div></details>
+<details class="appendix"><summary>10. JSONL-07：采纳记录 acceptance.jsonl（可选） · 8 条</summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段路径</th><th>必需性 / 视图</th><th>类型</th><th>含义和检查要点</th></tr></thead><tbody>
+<tr><td><code>schema_version</code></td><td>是</td><td>string</td><td>acceptance_event.v1</td></tr>
+<tr><td><code>event_id</code></td><td>是</td><td>string</td><td>采纳事件唯一 ID</td></tr>
+<tr><td><code>effective_set_id</code></td><td>是</td><td>string</td><td>被决定的有效文件集</td></tr>
+<tr><td><code>action</code></td><td>是</td><td>enum</td><td>ACCEPT/ROLLBACK/REVOKE；对应界面“采用/回退/撤销采用”</td></tr>
+<tr><td><code>revision_id</code></td><td>是</td><td>string</td><td>作用于哪个固定 Rev</td></tr>
+<tr><td><code>acted_at</code></td><td>是</td><td>ISO 时间</td><td>决策发生时间</td></tr>
+<tr><td><code>actor</code></td><td>是</td><td>string</td><td>作出决策的责任人/角色</td></tr>
+<tr><td><code>reason</code></td><td>是</td><td>string</td><td>业务理由，不是 Parser 检查状态</td></tr>
+</tbody></table></div></details>
+</div></details>
+<details class="appendix" id="term-appendix"><summary>中英文术语附录 · 业务对象、技术字段与工程名词<small>收录 v3 附录 A—D；界面用中文，JSON 字段保持英文</small></summary><div class="inside">
+<details class="appendix"><summary>A. 用户必须理解的业务词（界面一级导航建议只用这些）</summary><div class="inside"><table class="fieldtable"><thead><tr><th>中文推荐名称</th><th>English</th><th>统一含义</th><th>不建议的混用方式</th></tr></thead><tbody>
+<tr><td>供应商</td><td>Vendor</td><td>提供原始交付的公司或组织</td><td>不与 SourceLibrary 同义</td></tr>
+<tr><td>原始库 / 来源库</td><td>Source Library</td><td>一个有稳定身份的 RAW 文件集合与交付历史</td><td>不叫 BusinessIP，也不是某一次交付</td></tr>
+<tr><td>业务 IP</td><td>Business IP</td><td>验收、归属与业务操作主体，可关联多个来源库</td><td>不强制当作一个 Vendor Library 的永久唯一子对象</td></tr>
+<tr><td>交付</td><td>Delivery</td><td>一次供应商交付事件（V07/V08 只是外部版本名）</td><td>不叫 Effective Version</td></tr>
+<tr><td>交付版本</td><td>Supplier Version</td><td>供应商原始版本标签 V07、V08</td><td>不等于 delivery_id</td></tr>
+<tr><td>正式 NL</td><td>Formal NL</td><td>实际 Release/Link 环境的正式库集合，如 NL2.5.3</td><td>不等于当前有效版本</td></tr>
+<tr><td>正式文件快照</td><td>Formal Snapshot</td><td>正式 NL 在一次确认时刻的固定文件引用状态</td><td>不叫 g1/g2，正式标签不等于快照 ID</td></tr>
+<tr><td>有效文件集</td><td>Effective Set</td><td>一个 IP（或无归属库）独立维护的一套有效文件组合系列</td><td>不与单个 Rev 混用</td></tr>
+<tr><td>有效版本</td><td>Effective Version</td><td>有效文件集的一个完整不可变文件组合 Rev</td><td>UI 建议叫 Rev 008</td></tr>
+<tr><td>文件变化</td><td>File Changes</td><td>文件来源、Macro/Pin/Cell 内容的前后差异</td><td>不等同于质量不合格</td></tr>
+<tr><td>质量检查</td><td>Quality Checks</td><td>LEF–Liberty Pin、结构/文件等规则判定</td><td>不代替采纳决定</td></tr>
+<tr><td>采纳 / 回退</td><td>Accept / Rollback</td><td>业务上采用哪个有效版本</td><td>不由新交付/新正式 Snapshot 自动触发</td></tr>
+</tbody></table></div></details>
+<details class="appendix"><summary>B. 数据契约名（开发者使用）</summary><div class="inside"><table class="fieldtable"><thead><tr><th>JSON/技术名</th><th>页面展示</th><th>一句话职责</th><th>保存位置</th></tr></thead><tbody>
+<tr><td>DeliveryRecord</td><td>本次交付文件</td><td>某次交付具体有哪些物理文件</td><td>&lt;delivery_id&gt;/delivery.json</td></tr>
+<tr><td>FormalSnapshot</td><td>正式库文件记录</td><td>某次正式 NL 固定状态中的真实链接</td><td>formal_nl/.../snapshots/*.json</td></tr>
+<tr><td>EffectiveVersion</td><td>有效版本</td><td>一个 Rev 的完整成员及相对上一 Rev 的采用变化</td><td>effective/versions/rev_*.json</td></tr>
+<tr><td>CheckResult</td><td>文件变化与检查结果</td><td>针对特定交付或有效 Rev 的一次检查</td><td>checks/.../run_*.json</td></tr>
+<tr><td>FileFacts</td><td>文件解析结果</td><td>LEF Macro/Pin、Liberty Cell/Pin 等已抽取事实</td><td>现有 Parser / file_facts/</td></tr>
+<tr><td>EffectiveIndex</td><td>当前版本</td><td>最新计算 Rev、当前采纳 Rev 的查询入口</td><td>effective/index.json</td></tr>
+<tr><td>AcceptanceEvent</td><td>版本采纳记录</td><td>一次明确的人工采纳、撤销或回退事件</td><td>effective/acceptance.jsonl（可选）</td></tr>
+</tbody></table></div></details>
+<details class="appendix"><summary>C. 重要技术字段</summary><div class="inside"><table class="fieldtable"><thead><tr><th>字段 / 术语</th><th>中文解释</th><th>使用与边界</th></tr></thead><tbody>
+<tr><td>vendor_id</td><td>供应商 ID</td><td>跨文件稳定，不要仅凭显示名称连接</td></tr>
+<tr><td>source_library_id</td><td>原始库 ID</td><td>物理文件归属来源库</td></tr>
+<tr><td>business_ip_id</td><td>业务 IP ID</td><td>管理主体，可能跨来源库</td></tr>
+<tr><td>home_source_library_id</td><td>主存放库 ID</td><td>仅指定有效版本的权威存放位置，不意味着所有成员来源该库</td></tr>
+<tr><td>delivery_id</td><td>交付事件 ID</td><td>同名 V08 再交付时不得沿用旧 ID</td></tr>
+<tr><td>supplier_version</td><td>供应商交付标签</td><td>可长、可重复，界面原样显示</td></tr>
+<tr><td>delivery_order</td><td>已确认交付顺序</td><td>Latest/Previous 以此为优先顺序</td></tr>
+<tr><td>file_key</td><td>逻辑文件位标识</td><td>对应跨版本同一 LEF/Liberty 角色；需包含 Corner/Mode 等区分</td></tr>
+<tr><td>file_id</td><td>单次记录中的文件行 ID</td><td>只有配合 delivery/snapshot 才全局唯一</td></tr>
+<tr><td>source_ref</td><td>文件来源引用</td><td>指向特定交付行或正式快照行；不能指向可变的 latest</td></tr>
+<tr><td>formal_nl_id</td><td>正式 NL 名称/ID</td><td>NL2.5.3 标签可长期不变</td></tr>
+<tr><td>formal_snapshot_id</td><td>正式状态快照 ID</td><td>链接发生变化则新建固定 ID</td></tr>
+<tr><td>effective_set_id</td><td>有效文件集 ID</td><td>默认一 IP 一套，必要时支持多套</td></tr>
+<tr><td>revision_id</td><td>有效版本 ID</td><td>格式如 rev_0008，UI 叫 Rev 008</td></tr>
+<tr><td>parent_revision_id</td><td>前驱有效版本</td><td>版本继承关系，不是交付历史中的上一次 V</td></tr>
+<tr><td>members</td><td>有效成员全集</td><td>每个 Rev 必须能独立还原所有文件来源</td></tr>
+<tr><td>changes</td><td>本次成员采用变化</td><td>ADDED/REPLACED/REMOVED，不代表 Macro 内容改变</td></tr>
+<tr><td>analysis</td><td>分析</td><td>建议不用作目录顶层混合一切；本文统一 checks 保存具体执行结果</td></tr>
+<tr><td>review</td><td>审查/验收活动</td><td>既有 Python 模块可保留；新持久结果具体叫 CheckResult</td></tr>
+<tr><td>file_changes</td><td>文件内容/来源差异</td><td>source_changed 与 content_status 必须分开</td></tr>
+<tr><td>object_changes</td><td>Macro/Pin/Cell 属性变化</td><td>有对象名、属性、前后值与对应 Parser 证据</td></tr>
+<tr><td>parse_status</td><td>解析完成状态</td><td>只对 covered_sections 声明范围有效</td></tr>
+<tr><td>coverage</td><td>检查覆盖范围</td><td>未覆盖不能称 PASS</td></tr>
+<tr><td>current_accepted_revision</td><td>当前已采纳版本</td><td>与最新计算 Rev、正式 NL 当前链接彼此独立</td></tr>
+<tr><td>latest_calculated_revision</td><td>最新计算版本</td><td>只是当前入口，不代表业务已接受</td></tr>
+<tr><td>snapshot</td><td>固定状态快照</td><td>**仅**用于固定 Formal NL 状态，不对全部对象滥用</td></tr>
+<tr><td>projection</td><td>派生查询视图</td><td>缓存、页面数据可重建，不是权威历史</td></tr>
+<tr><td>idempotent update</td><td>幂等更新</td><td>同一交付/运行重复执行不产生重复对象</td></tr>
+<tr><td>reconciliation</td><td>历史核对</td><td>定期检查旧路径是否漂移，不等于每天全量重新解析</td></tr>
+</tbody></table></div></details>
+<details class="appendix"><summary>D. 工程专有名词</summary><div class="inside"><table class="fieldtable"><thead><tr><th>English</th><th>中文</th><th>对象含义</th></tr></thead><tbody>
+<tr><td>LEF</td><td>版图抽象文件</td><td>Macro、SIZE、PIN、OBS、SITE 等物理接口事实</td></tr>
+<tr><td>Liberty (.lib)</td><td>时序库文件</td><td>Library、Cell、Pin、时序/功耗模型等；本契约示例仅演示 Cell/Pin</td></tr>
+<tr><td>Macro</td><td>宏单元</td><td>LEF 中定义的物理宏对象</td></tr>
+<tr><td>Cell</td><td>库单元</td><td>Liberty 中的 cell 对象，不要与 LEF Macro 在存储层强制合成同一对象</td></tr>
+<tr><td>Pin</td><td>引脚</td><td>需要区分方向、Signal/Power/Ground、PG Pin 和物理/逻辑接口</td></tr>
+<tr><td>Corner</td><td>工艺/电压/温度角及 RC 条件</td><td>影响 Liberty 等文件的逻辑身份</td></tr>
+<tr><td>View</td><td>库视图</td><td>LEF/Liberty/Verilog/CDL/SDC/UPF/CPF/SPEF/DB/GDS 等</td></tr>
+<tr><td>QoR</td><td>质量指标</td><td>指标口径明确才称 QoR；不能把文件数变化简单称作 PPA 改善</td></tr>
+<tr><td>RAW-first</td><td>优先依据 RAW 文件历史</td><td>不依赖正式 NL 也能定位和比较最新/次新交付文件</td></tr>
+<tr><td>Delta</td><td>差异</td><td>指明是“采用来源差异”还是“解析内容差异”</td></tr>
+</tbody></table></div></details>
+</div></details>
+<div class="callout">关联关键：<code>file_key</code> 标识逻辑文件；<code>source_ref</code> 指向某次交付或某个正式快照中的具体文件。不要用最新交付或正式链接直接替代已采纳版本。</div></section>
+<section id="details"><div class="section-top"><span class="num">07 / REFERENCE</span><h2>目录与依据</h2></div><p class="lead">需要进一步核对时展开；下面的路径是架构示意，具体落盘方式仍待设计。</p><details class="appendix"><summary>展开拟议目录：供应商与公共正式库</summary><div class="inside"><pre>work/
+├── vendors/vendor_a/libraries/library_x/
+│   ├── deliveries/
+│   │   ├── delivery_v07.json
+│   │   └── delivery_v08.json
+│   └── ips/rtavfs/
+│       ├── effective/
+│       │   ├── index.json
+│       │   ├── versions/rev_007.json
+│       │   ├── versions/rev_008.json
+│       │   └── acceptance.jsonl
+│       └── checks/rev_008/run_001.json
+└── formal_nl/NL2.5.3/
+    ├── index.json
+    └── snapshots/
+        ├── snap_0001/snapshot.json
+        └── snap_0002/snapshot.json</pre><p>公共正式库独立存放，不复制到 Vendor。这里的 formal_nl 索引与 effective 索引职责不同，前者字段尚未定义；本目录也不是对示例现有文件路径的逐字复刻。</p></div></details>
+<details class="appendix"><summary>展开证据、限制与对象图 Mermaid 源码</summary><div class="inside"><p><b>文档设计：</b>项目 docs 中的《文件架构与 JSON 契约》《每份 JSON 内容审查》及《所有示例 JSON 完整正文》；字段与时间线依据其中的合成示例。</p><p><b>拟议：</b>模块路径、页面中的新目录组织和 formal_nl 的索引结构；不代表生产实现或已确定契约。现有设计材料与隔离原型不等于完整业务代码。</p><p><b>边界：</b>示例信号 Pin 比较通过只覆盖所示名称和方向；未覆盖时序弧、PG Pin 等。旧 tt 解析事实不足时，内容差异保持未知。</p><pre>flowchart LR
+    Vendor -- 提供 --> SourceLibrary
+    SourceLibrary -- 接收 --> Delivery
+    BusinessIP -- 关联 --> SourceLibrary
+    BusinessIP -- 管理 --> EffectiveVersion
+    Delivery -- 选择文件 --> EffectiveVersion
+    FormalSnapshot -- 引用正式文件 --> EffectiveVersion
+    Delivery -- 解析文件 --> FileFacts
+    FileFacts -- 提取 --> MacroPin[Macro / Pin]
+    EffectiveVersion -- 检查 --> CheckResult</pre><p>图示表达概念关系，并非部署视图；一个业务 IP 与来源库的实际映射和最终目录约束需结合项目规则确认。</p></div></details></section>
+<footer>ai_lib_qor · 独立架构地图 · 合成示例与拟议设计</footer></main>
+<script>
+(function(){
+  const data={
+    lef:{title:'core.lef · V08 替换 V07',detail:'Rev 002 使用 V08 交付文件；已采纳 Rev 001 和正式快照 002 仍指向 V07。示例中 MAC_A 尺寸从 120 × 80 变为 124 × 80 μm，并新增信号 Pin C。'},
+    tt:{title:'func_tt.lib · 最新交付与正式快照均为 V08',detail:'Rev 002 使用 V08 RAW；已采纳 Rev 001 仍使用快照 001 中的 V07。快照 002 的 tt 已指向 V08；旧 tt 解析事实不足，不能据此断言内容变化。'},
+    ff:{title:'func_ff.lib · 增量交付中保持原来源',detail:'V08 未交付该文件；Rev 002 继续引用快照 001 的 V07，已采纳 Rev 001 与正式快照 002 也对应 V07。更早的交付历史在示例中未知。'}
+  };
+  const buttons=document.querySelectorAll('[data-file]');
+  buttons.forEach(button=>button.addEventListener('click',()=>{
+    const item=data[button.dataset.file]; if(!item)return;
+    document.getElementById('file-title').textContent=item.title;
+    document.getElementById('file-detail').textContent=item.detail;
+    buttons.forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
+  }));
+})();
+</script></body></html>

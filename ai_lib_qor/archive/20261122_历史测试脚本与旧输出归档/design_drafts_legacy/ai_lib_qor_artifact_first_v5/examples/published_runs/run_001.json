@@ -1,0 +1,222 @@
+{
+  "schema_version": "check_run.v1",
+  "run_id": "run_001",
+  "target": {
+    "kind": "effective_revision",
+    "set_id": "rtavfs_primary",
+    "revision_id": "rev_0008"
+  },
+  "input_generation": "input_gen_008",
+  "expected_checks": [
+    "content_compare",
+    "macro_diff",
+    "lef_liberty_alignment",
+    "sta_setup_wns",
+    "qor_gate"
+  ],
+  "checks": {
+    "content_compare": {
+      "check_id": "content_compare",
+      "implementation_version": "1.0.0",
+      "kind": "DIFF",
+      "execution_status": "COMPLETED",
+      "verdict": null,
+      "target": {
+        "kind": "effective_revision",
+        "set_id": "rtavfs_primary",
+        "revision_id": "rev_0008"
+      },
+      "input_generation": "input_gen_008",
+      "parameters": {
+        "comparison": "PREVIOUS_APPEARANCE"
+      },
+      "findings": [
+        {
+          "file_slot": "rtavfs:lef:core",
+          "change": "CONTENT_CHANGED",
+          "description": "LEF core macro definition differs"
+        }
+      ],
+      "metrics": [],
+      "evidence_refs": [
+        "evidence/raw_compare_001.rpt"
+      ],
+      "input_refs": [
+        {
+          "kind": "raw_occurrence",
+          "id": "fi_core_old"
+        },
+        {
+          "kind": "raw_occurrence",
+          "id": "fi_core_new"
+        }
+      ],
+      "environment_id": "parser_test_env"
+    },
+    "lef_liberty_alignment": {
+      "check_id": "lef_liberty_alignment",
+      "implementation_version": "1.0.0",
+      "kind": "QUALITY",
+      "execution_status": "NOT_CHECKED",
+      "verdict": "NOT_CHECKED",
+      "target": {
+        "kind": "effective_revision",
+        "set_id": "rtavfs_primary",
+        "revision_id": "rev_0008"
+      },
+      "input_generation": "input_gen_008",
+      "parameters": {
+        "check_pg_pins": true
+      },
+      "findings": [
+        {
+          "code": "INCOMPLETE_COVERAGE",
+          "message": "Liberty pin geometry/cell coverage insufficient; cannot claim PASS"
+        }
+      ],
+      "metrics": [],
+      "evidence_refs": [
+        "facts/liberty_partial.json"
+      ],
+      "input_refs": [
+        {
+          "kind": "file_facts",
+          "id": "fact_core_new"
+        },
+        {
+          "kind": "file_facts",
+          "id": "fact_tt_latest"
+        }
+      ],
+      "environment_id": "parser_test_env"
+    },
+    "macro_diff": {
+      "check_id": "macro_diff",
+      "implementation_version": "1.0.0",
+      "kind": "DIFF",
+      "execution_status": "COMPLETED",
+      "verdict": null,
+      "target": {
+        "kind": "effective_revision",
+        "set_id": "rtavfs_primary",
+        "revision_id": "rev_0008"
+      },
+      "input_generation": "input_gen_008",
+      "parameters": {},
+      "findings": [
+        {
+          "file_slot": "rtavfs:lef:core",
+          "macro": "MAC_A",
+          "property": "SIZE_X",
+          "old_value": 120.0,
+          "new_value": 124.0,
+          "unit": "um"
+        },
+        {
+          "file_slot": "rtavfs:lef:core",
+          "macro": "MAC_A",
+          "change": "PIN_ADDED",
+          "pin": "TEST_EN"
+        }
+      ],
+      "metrics": [],
+      "evidence_refs": [
+        "facts/fi_old.json",
+        "facts/fi_new.json"
+      ],
+      "input_refs": [
+        {
+          "kind": "file_facts",
+          "id": "fact_core_old"
+        },
+        {
+          "kind": "file_facts",
+          "id": "fact_core_new"
+        }
+      ],
+      "environment_id": "parser_test_env"
+    },
+    "qor_gate": {
+      "check_id": "qor_gate",
+      "implementation_version": "1.0.0",
+      "kind": "EVALUATION",
+      "execution_status": "COMPLETED",
+      "verdict": "PASS",
+      "target": {
+        "kind": "effective_revision",
+        "set_id": "rtavfs_primary",
+        "revision_id": "rev_0008"
+      },
+      "input_generation": "input_gen_008",
+      "parameters": {
+        "metric": "setup_wns",
+        "threshold": -0.1,
+        "comparison": ">="
+      },
+      "findings": [],
+      "metrics": [],
+      "evidence_refs": [],
+      "input_refs": [
+        {
+          "kind": "check_metric",
+          "id": "sta_setup_wns.setup_wns"
+        }
+      ],
+      "environment_id": "parser_test_env",
+      "depends_on": {
+        "check_id": "sta_setup_wns",
+        "metric_name": "setup_wns"
+      }
+    },
+    "sta_setup_wns": {
+      "check_id": "sta_setup_wns",
+      "implementation_version": "1.0.0",
+      "kind": "MEASUREMENT",
+      "execution_status": "COMPLETED",
+      "verdict": null,
+      "target": {
+        "kind": "effective_revision",
+        "set_id": "rtavfs_primary",
+        "revision_id": "rev_0008"
+      },
+      "input_generation": "input_gen_008",
+      "parameters": {
+        "corner": "tt",
+        "mode": "func",
+        "stage": "POST"
+      },
+      "findings": [],
+      "metrics": [
+        {
+          "name": "setup_wns",
+          "value": -0.08,
+          "unit": "ns",
+          "corner": "tt",
+          "mode": "func",
+          "stage": "POST"
+        }
+      ],
+      "evidence_refs": [
+        "reports/sta_tt_func.rpt"
+      ],
+      "input_refs": [
+        {
+          "kind": "external_report",
+          "id": "sta_tt_func_post"
+        }
+      ],
+      "environment_id": "pt_demo_tt_func"
+    }
+  },
+  "summary": {
+    "overall_verdict": "INCOMPLETE",
+    "total_plugins": 5,
+    "completed_or_reused": 4,
+    "not_checked_or_failed": [
+      "lef_liberty_alignment"
+    ],
+    "quality_evaluations": 2
+  },
+  "published_state": "FINAL",
+  "note": "SYNTHETIC DEMO: extracted old-script output is represented by fixture fragments; no real RAW/EDA content was scanned"
+}

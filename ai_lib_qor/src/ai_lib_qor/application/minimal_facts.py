@@ -4,7 +4,7 @@ import json
 import csv
 
 from ai_lib_qor.facts import parsers
-from ai_lib_qor.sources.layout import library_folder,next_filename
+from ai_lib_qor.sources.layout import library_folder,next_filename,log_file,storage_dir
 from ai_lib_qor.sources.timestamps import instant,utc_text
 from ai_lib_qor.versions.store import locked,validate,write_atomic
 from .minimal_file_index import build_index,query_path
@@ -15,9 +15,9 @@ def _stat_key(path):
     return (stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns)
 
 
-def build_facts(work,vendor,library,view,relative_path,*,version=None,revision=None,_capture=False):
+def build_facts(work,vendor,library,view,relative_path,*,version=None,revision=None,_capture=False,_in_memory=False):
     if (version is None)==(revision is None):raise ValueError('必须且只能指定一个交付版本或有效版本')
-    if view not in ('LEF','LIBERTY','VERILOG','CDL','SPICE'):raise ValueError('此 View 暂不支持 FileFacts 解析')
+    if view not in parsers.supported_views():raise ValueError('此 View 暂不支持 FileFacts 解析')
     row=query_path(work,vendor,library,view,relative_path,revision=revision,version=version)
     chosen=row['effective'] if revision else row['as_of']
     if not chosen or (version and chosen['version']!=version):raise ValueError('指定版本没有该文件')
@@ -31,7 +31,7 @@ def build_facts(work,vendor,library,view,relative_path,*,version=None,revision=N
     root=Path(deliveries[0]['root']).resolve(strict=True)
     real=absolute.resolve(strict=True)
     if not real.is_relative_to(root) or not real.is_file() or real!=absolute:raise ValueError('RAW 文件不存在、越界或包含符号链接')
-    observation=folder/'raw_observations.tsv'
+    observation=log_file(folder,'raw_observations.tsv')
     if observation.is_symlink():raise ValueError('RAW 观察记录不能为软链接')
     if observation.is_file():
         with observation.open(encoding='utf-8',newline='') as stream:
@@ -64,8 +64,10 @@ def build_facts(work,vendor,library,view,relative_path,*,version=None,revision=N
             raise ValueError('解析期间文件来源发生变化')
         if _stat_key(real)!=before:raise ValueError('保存前 RAW 文件发生变化')
         stamp=instant(at).strftime('%Y%m%dT%H%M%SZ')
-        output=folder/next_filename(folder,f'facts_{view}_{stamp}')
-        write_atomic(output,facts,immutable=True)
-    result={'state':'CREATED','path':str(output),'view':view,'version':source_version}
+        if not _in_memory:
+            outdir=storage_dir(folder,'log');output=outdir/next_filename(outdir,f'facts_{view}_{stamp}')
+            write_atomic(output,facts,immutable=True)
+    result={'state':'CREATED','path':str(output) if not _in_memory else None,'view':view,'version':source_version}
+    if _in_memory:result['_facts']=facts
     if _capture:result['_source_stamp']=(before,digest)
     return result

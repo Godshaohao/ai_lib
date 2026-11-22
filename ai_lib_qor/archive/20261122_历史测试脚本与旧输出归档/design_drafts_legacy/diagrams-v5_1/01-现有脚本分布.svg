@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="930" viewBox="0 0 1600 930">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="930" fill="#ffffff"/>
+<text x="50" y="58" class="title">01  现有 src_qor：主要脚本如何分布</text>
+<text x="50" y="95" class="sub">基于已有仓库与 README 梳理；每条流程可独立选择，正式 NL 不等于已采纳版本</text>
+<rect x="40" y="145" width="350" height="590" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="58" y="177" class="label">输入与选择</text>
+<rect x="420" y="145" width="370" height="590" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="438" y="177" class="label">发现与文件视图</text>
+<rect x="820" y="145" width="360" height="590" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="838" y="177" class="label">检查与证据</text>
+<rect x="1210" y="145" width="350" height="590" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="1228" y="177" class="label">结果与查看</text>
+<rect x="60" y="220" width="310" height="100" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="78" y="252" class="label">RAW 目录 / 登记</text>
+<text x="78" y="280" class="body">Vendor / Library / 交付</text>
+<rect x="60" y="360" width="310" height="100" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="78" y="392" class="label">正式 NL / 清单</text>
+<text x="78" y="420" class="body">链接目标与来源线索</text>
+<rect x="60" y="500" width="310" height="100" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="78" y="532" class="label">人工选择</text>
+<text x="78" y="560" class="body">版本、文件与检查项</text>
+<rect x="440" y="215" width="330" height="110" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="458" y="247" class="label">raw_discovery.py</text>
+<text x="458" y="275" class="body">RAW 发现与登记候选</text>
+<rect x="440" y="365" width="330" height="110" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="458" y="397" class="label">ip_file_history.py</text>
+<text x="458" y="425" class="body">名单、正式清单与 RAW</text>
+<rect x="440" y="515" width="330" height="110" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="458" y="547" class="label">file_version_projection.py</text>
+<text x="458" y="575" class="body">文件出现历史与来源视图</text>
+<rect x="840" y="215" width="320" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="858" y="247" class="label">content_compare.py</text>
+<text x="858" y="275" class="body">选定文件的内容比较</text>
+<rect x="840" y="365" width="320" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="858" y="397" class="label">lef_review.py</text>
+<text x="858" y="425" class="body">LEF Macro / Pin 差异</text>
+<rect x="840" y="515" width="320" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="858" y="547" class="label">lef_liberty_check.py</text>
+<text x="858" y="575" class="body">选定文件跨 View 检查</text>
+<rect x="1230" y="215" width="310" height="110" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="1248" y="247" class="label">review_runner.py</text>
+<text x="1248" y="275" class="body">组织已选择的检查</text>
+<rect x="1230" y="365" width="310" height="110" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="1248" y="397" class="label">Review 结果 / Excel</text>
+<text x="1248" y="425" class="body">review_result 与工作簿</text>
+<rect x="1230" y="515" width="310" height="110" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="1248" y="547" class="label">workbench.py</text>
+<text x="1248" y="575" class="body">配置、运行与查看</text>
+<line x1="390" y1="440" x2="417" y2="440" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="790" y1="440" x2="817" y2="440" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1180" y1="440" x2="1207" y2="440" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="50" y="790" class="body">阶段箭头表达主要信息流；现有工作台、内容比较与 Review Runner 不是单一强制串行链。</text>
+<text x="50" y="870" class="small">依据：v5.1 补充文档、原型代码和现有 src_qor；区分现状与方案  |  来源：src_qor/README.md</text>
+</svg>

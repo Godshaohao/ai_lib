@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="990" viewBox="0 0 1600 990">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="990" fill="#ffffff"/>
+<text x="50" y="58" class="title">04  文件结构与脚本分布</text>
+<text x="50" y="95" class="sub">左列为职责，中列是已存在的文件，右列是 v5.1 提案中的拟新增模块</text>
+<rect x="45" y="145" width="285" height="58" rx="8" fill="#eaf2ff"/>
+<text x="60" y="183" class="label">职责</text>
+<rect x="350" y="145" width="630" height="58" rx="8" fill="#eaf2ff"/>
+<text x="365" y="183" class="label">已存在：repo/src_qor 或补充包</text>
+<rect x="1000" y="145" width="550" height="58" rx="8" fill="#eaf2ff"/>
+<text x="1015" y="183" class="label">建议：src_qor_next（未实现）</text>
+<rect x="45" y="220" width="285" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="59" y="264" class="body">发现 / 来源</text>
+<rect x="350" y="220" width="630" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="364" y="264" class="body">raw_discovery.py；ip_file_history.py</text>
+<rect x="1000" y="220" width="550" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="1014" y="264" class="body">runner/prepare_inputs.py</text>
+<rect x="45" y="310" width="285" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="59" y="354" class="body">版本 / 文件视图</text>
+<rect x="350" y="310" width="630" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="364" y="354" class="body">current_library_set.py；file_version_projection.py</text>
+<rect x="1000" y="310" width="550" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="1014" y="354" class="body">复用既有选择；确认输入身份</text>
+<rect x="45" y="400" width="285" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="59" y="444" class="body">文件检查</text>
+<rect x="350" y="400" width="630" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="364" y="444" class="body">content_compare.py；lef_review.py</text>
+<rect x="1000" y="400" width="550" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="1014" y="444" class="body">adapters/lef_compare.py</text>
+<rect x="45" y="490" width="285" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="59" y="534" class="body">跨 View 检查</text>
+<rect x="350" y="490" width="630" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="364" y="534" class="body">lef_liberty_check.py</text>
+<rect x="1000" y="490" width="550" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="1014" y="534" class="body">adapters/lef_liberty.py</text>
+<rect x="45" y="580" width="285" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="59" y="624" class="body">汇总 / 证据</text>
+<rect x="350" y="580" width="630" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="364" y="624" class="body">review_runner.py；v5.1 evidence_guard.py 原型</text>
+<rect x="1000" y="580" width="550" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="1014" y="624" class="body">runner/assemble_check_result.py</text>
+<rect x="45" y="670" width="285" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="59" y="714" class="body">输出 / 交互</text>
+<rect x="350" y="670" width="630" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="364" y="714" class="body">workbench.py；export_review_excel.py</text>
+<rect x="1000" y="670" width="550" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="1014" y="714" class="body">presentation/report_data.py 等</text>
+<rect x="45" y="760" width="285" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="59" y="804" class="body">合同 / 测试</text>
+<rect x="350" y="760" width="630" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="364" y="804" class="body">v3 schemas；v5.1 test_evidence_guard.py</text>
+<rect x="1000" y="760" width="550" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="1014" y="804" class="body">contracts/；真实输入回归用例</text>
+<text x="50" y="890" class="body">说明：提案目录只是职责草图，不代表应复制现有 Runner 或一次性建立全部文件。</text>
+<text x="50" y="955" class="small">依据：v5.1 补充文档、原型代码和现有 src_qor；区分现状与方案</text>
+</svg>

@@ -8,7 +8,7 @@ import csv
 import os
 import uuid
 
-from ai_lib_qor.sources.layout import library_folder
+from ai_lib_qor.sources.layout import library_folder,archive_files,storage_dir,log_file
 from ai_lib_qor.sources.root_inventory import update_pointer
 from ai_lib_qor.sources.timestamps import utc_text
 from ai_lib_qor.versions.store import locked,write_atomic,validate
@@ -16,7 +16,7 @@ from ai_lib_qor.versions.store import locked,write_atomic,validate
 
 def _deliveries(folder,vendor,library):
     result={}
-    for path in folder.glob('delivery_*.json'):
+    for path in archive_files(folder,'delivery','delivery_*.json'):
         if path.is_symlink():raise ValueError('交付文件不能是软链接')
         item=json.loads(path.read_text(encoding='utf-8'))
         validate(item,'delivery_minimal')
@@ -29,7 +29,7 @@ def _deliveries(folder,vendor,library):
 def _history(folder,library):
     regex=re.compile(r'^effective_'+re.escape(library)+r'_(\d+)\.json$')
     rows=[]
-    for path in folder.glob('effective_'+library+'_*.json'):
+    for path in archive_files(folder,'effective','effective_'+library+'_*.json'):
         match=regex.fullmatch(path.name)
         if not match:continue
         if path.is_symlink():raise ValueError('有效版本不能是软链接')
@@ -51,7 +51,7 @@ def _make(vendor,library,number,views):
 
 def _audit(folder,operation,actor,action,parent,revision,status,changes,detail=''):
     if not isinstance(actor,str) or not actor.strip() or len(actor)>128:raise ValueError('操作来源无效')
-    path=folder/'effective_operations.tsv'
+    path=log_file(folder,'effective_operations.tsv')
     if path.is_symlink():raise ValueError('操作审计不能为软链接')
     new=not path.exists()
     with path.open('a',encoding='utf-8',newline='') as stream:
@@ -62,7 +62,7 @@ def _audit(folder,operation,actor,action,parent,revision,status,changes,detail='
 
 
 def _audit_recover(folder,revision):
-    path=folder/'effective_operations.tsv'
+    path=log_file(folder,'effective_operations.tsv')
     if path.is_symlink():raise ValueError('操作审计不能为软链接')
     if not path.is_file():return
     with path.open(encoding='utf-8',newline='') as stream:
@@ -74,7 +74,7 @@ def _audit_recover(folder,revision):
 
 def _save(folder,library,number,row,work,*,actor='local',action='update'):
     validate(row,'effective_path')
-    target=folder/f'effective_{library}_{number:03d}.json'
+    target=storage_dir(folder,'effective')/f'effective_{library}_{number:03d}.json'
     history=_history(folder,library);parent=history[-1][2] if history else None
     before=_flat(parent['views']) if parent else {};after=_flat(row['views'])
     changes=[{'view':v,'path':p,'before':before.get((v,p)),'after':after.get((v,p))}
@@ -83,7 +83,7 @@ def _save(folder,library,number,row,work,*,actor='local',action='update'):
     _audit(folder,operation,actor,action,parent_rev,row['revision'],'INTENT',changes)
     try:
         write_atomic(target,row,immutable=True)
-        update_pointer(folder,'latest_effective.json',target.name)
+        update_pointer(folder,'latest_effective.json',str(target.relative_to(folder)))
     except (OSError,ValueError,KeyError,TypeError) as exc:
         _audit(folder,operation,actor,action,parent_rev,row['revision'],'INTERRUPTED',changes,str(exc))
         raise
@@ -101,7 +101,7 @@ def initialize_from_formal(work,vendor,library,formal_path,*,include=None,actor=
     folder=library_folder(work,vendor,library)
     with locked(folder):
         path=Path(formal_path)
-        if path.is_symlink() or not path.is_file() or path.parent.resolve()!=folder.resolve():raise ValueError('正式快照必须为当前库的普通文件')
+        if (folder/'formal').is_symlink() or path.is_symlink() or not path.is_file() or path.parent.resolve() not in (folder.resolve(),(folder/'formal').resolve()):raise ValueError('正式快照必须为当前库的普通文件')
         formal=json.loads(path.read_text(encoding='utf-8'))
         validate(formal,'formal_path')
         if set(formal)!={'version','vendor','library','root','observed_at','views'} or (formal['vendor'],formal['library'])!=(vendor,library):raise ValueError('正式快照格式或归属不匹配')

@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1010" viewBox="0 0 1600 1010">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="1010" fill="#ffffff"/>
+<text x="50" y="58" class="title">02  v5.1 建议：一次检查如何形成正式结果</text>
+<text x="50" y="95" class="sub">蓝色为输入，绿色为计划与现有算法，紫色为拟新增处理；目前未证明已端到端接通</text>
+<rect x="425" y="135" width="750" height="100" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="443" y="167" class="label">固定目标与输入</text>
+<text x="443" y="195" class="body">已确认的 Delivery / Snapshot / Rev / File Facts</text>
+<line x1="800" y1="235" x2="800" y2="273" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="425" y="275" width="750" height="95" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="443" y="307" class="label">准备输入 + Check Plan</text>
+<text x="443" y="335" class="body">明确文件、Corner、检查项与参数</text>
+<line x1="800" y1="370" x2="800" y2="405" stroke="#2563eb" stroke-width="2"/>
+<line x1="250" y1="405" x2="1350" y2="405" stroke="#2563eb" stroke-width="2"/>
+<line x1="250" y1="405" x2="250" y2="437" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="800" y1="405" x2="800" y2="437" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1350" y1="405" x2="1350" y2="437" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="70" y="440" width="360" height="100" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="88" y="472" class="label">content_compare</text>
+<text x="88" y="500" class="body">文件正文比较</text>
+<rect x="620" y="440" width="360" height="100" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="638" y="472" class="label">lef_review</text>
+<text x="638" y="500" class="body">LEF Macro / Pin 差异</text>
+<rect x="1170" y="440" width="360" height="100" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="1188" y="472" class="label">lef_liberty_check</text>
+<text x="1188" y="500" class="body">跨 View 质量检查</text>
+<text x="1188" y="524" class="body">绑定对应 LEF 证据</text>
+<line x1="250" y1="540" x2="250" y2="570" stroke="#2563eb" stroke-width="2"/>
+<line x1="800" y1="540" x2="800" y2="570" stroke="#2563eb" stroke-width="2"/>
+<line x1="1350" y1="540" x2="1350" y2="570" stroke="#2563eb" stroke-width="2"/>
+<line x1="250" y1="570" x2="1350" y2="570" stroke="#2563eb" stroke-width="2"/>
+<line x1="800" y1="570" x2="800" y2="600" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="250" y="603" width="1100" height="95" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="268" y="635" class="label">Contribution：内存或暂存中的检查贡献</text>
+<text x="268" y="663" class="body">统一目标、来源、覆盖范围和证据；不是新的正式业务契约</text>
+<line x1="300" y1="698" x2="300" y2="725" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="70" y="728" width="455" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="88" y="760" class="label">证据与来源门禁</text>
+<text x="88" y="788" class="body">拟与真实可信登记对接</text>
+<text x="88" y="812" class="body">当前仅有独立演示原型</text>
+<rect x="575" y="728" width="450" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="593" y="760" class="label">v3 合并器 + Schema 校验</text>
+<text x="593" y="788" class="body">字段映射、聚合、校验</text>
+<text x="593" y="812" class="body">尚待实现及真实数据验证</text>
+<rect x="1075" y="728" width="455" height="110" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="1093" y="760" class="label">发布并提供读取</text>
+<text x="1093" y="788" class="body">check_result.v1 → HTML / Excel</text>
+<text x="1093" y="812" class="body">发布失败不更新正式入口</text>
+<line x1="525" y1="783" x2="572" y2="783" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1025" y1="783" x2="1072" y2="783" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="50" y="955" class="small">依据：v5.1 补充文档、原型代码和现有 src_qor；区分现状与方案  |  状态：目标流程，非生产调用链</text>
+</svg>

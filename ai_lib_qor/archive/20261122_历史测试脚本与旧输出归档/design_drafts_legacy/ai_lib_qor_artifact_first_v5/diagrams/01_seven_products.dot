@@ -1,0 +1,44 @@
+digraph G {
+  graph [fontname="Noto Sans CJK SC",rankdir=TB,bgcolor="white",pad="0.36",nodesep="0.35",ranksep="0.54",splines=polyline,labelloc=t,label="ai_lib_qor：从输入到七类 JSON 的真实产物流",fontsize=22,fontcolor="#14253B",dpi=150];
+  node [shape=box,style="rounded,filled",fontname="Noto Sans CJK SC",fontsize=12,margin="0.16,0.12",color="#CAD4DD",penwidth=1.2,fontcolor="#1E293B",fillcolor="#F7F9FB"];
+  edge [fontname="Noto Sans CJK SC",fontsize=10,color="#73849A",penwidth=1.35,arrowsize=0.70];
+  subgraph cluster_input {label="输入层：外部文件与人工规则（并非 7 类业务 JSON）";color="#D9E0E7";style="rounded,dashed";fontsize=13;
+    raw [label="RAW 交付目录\nVendor / SourceLibrary / Delivery",fillcolor="#E8F0FC"];
+    formal [label="正式 NL 实际链接\n同名 NL 可发生变化",fillcolor="#E8F0FC"];
+    rules [label="归属/交付顺序/包范围\n人工配置",fillcolor="#E8F0FC"];
+    {rank=same;raw;formal;rules}
+  }
+  subgraph cluster_shared {label="事实与来源层：多个脚本协作构建，同一产物只有一个发布者";color="#B3C9DF";style="rounded";fontsize=13;
+    d [label="① delivery.json\n每次交付文件清单",fillcolor="#F0F6FE"];
+    s [label="② snapshot.json\n固定正式 NL 引用状态",fillcolor="#F0F6FE"];
+    f [label="③ file_facts.json\n每个 FileInstance 的解析事实",fillcolor="#F0F6FE"];
+    {rank=same;d;s;f}
+  }
+  subgraph cluster_business {label="版本与质量层：不同脚本输出叠加，不复制来源事实";color="#BED7C8";style="rounded";fontsize=13;
+    r [label="④ rev_0008.json\n完整有效文件引用 + 本轮采用差异",fillcolor="#EDF7F1"];
+    c [label="⑤ run_001.json\n同一目标上多插件差异/检查/QoR 汇总",fillcolor="#EDF7F1"];
+    {rank=same;r;c}
+  }
+  subgraph cluster_state {label="采纳与索引：权威事件与查询入口严格分离";color="#E4D3AE";style="rounded";fontsize=13;
+    a [label="⑥ acceptance.jsonl\n真实采纳/回退事件（追加）",fillcolor="#FCF6EB"];
+    ix [label="⑦ index.json\n最新计算/当前已采纳指针",fillcolor="#FCF6EB"];
+    {rank=same;a;ix}
+  }
+  read [label="统一查询组装器 Read Model（内存/缓存，不是新的权威 JSON）",fillcolor="#F3F3FA",color="#C2C5DD"];
+  out [label="Web 工作台  ·  HTML  ·  Excel（同一业务数据口径）",fillcolor="#F3F3FA",color="#C2C5DD"];
+  raw->d [label="scan + normalize"];
+  formal->s [label="observe + resolve"];
+  rules->d [style=dashed,label="交付范围"];
+  rules->s [style=dashed,label="归属范围"];
+  d->f [label="逐文件解析"];
+  s->f [style=dashed,label="仅未解析的正式文件",constraint=false];
+  d->r [label="增量采用"];
+  s->r [style=dashed,label="初始参考/显式采纳"];
+  f->c [label="差异和质量证据"];
+  r->c [label="固定版本检查"];
+  r->ix [label="最新计算"];
+  a->ix [label="已采纳"];
+  r->a [style=dashed,label="人工决策目标"];
+  c->read;ix->read;a->read [style=dashed];d->read [style=dashed];s->read [style=dashed];
+  read->out;
+}

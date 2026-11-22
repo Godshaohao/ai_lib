@@ -2,19 +2,23 @@
 import json
 from ai_lib_qor.sources.layout import library_folder
 from ai_lib_qor.versions.store import locked
-from .minimal_file_index import build_index
+from .minimal_file_index import build_index, index_manifest_matches, read_manifest
 
 
 class PathDataQuery:
     def __init__(self, work):
         self.work = work
 
-    def index(self, vendor, library):
+    def index(self, vendor, library, *, verify='manifest'):
         folder = library_folder(self.work, vendor, library)
         path = folder/'file_index.json'
         if path.is_symlink() or not path.is_file():
             raise ValueError('文件索引不存在')
         with locked(folder):
+            if verify == 'manifest':
+                matched, _ = index_manifest_matches(self.work, vendor, library)
+                if matched:
+                    return json.loads(path.read_text(encoding='utf-8'))
             saved = json.loads(path.read_text(encoding='utf-8'))
             try:
                 current = build_index(self.work, vendor, library)
@@ -23,6 +27,17 @@ class PathDataQuery:
             if saved != current:
                 raise ValueError('文件索引过期或格式不兼容')
         return saved
+
+    def index_status(self, vendor, library):
+        folder = library_folder(self.work, vendor, library)
+        path = folder/'file_index.json'
+        if path.is_symlink() or not path.is_file():
+            return {'status': 'MISSING', 'refreshed_at': None}
+        matched, manifest = index_manifest_matches(self.work, vendor, library)
+        if matched:
+            return {'status': 'FRESH', 'refreshed_at': manifest.get('refreshed_at')}
+        return {'status': 'UNVERIFIED' if manifest is None else 'STALE',
+                'refreshed_at': manifest.get('refreshed_at') if manifest else None}
 
     def get_check_context(self, vendor, library, revision, baseline=None):
         index = self.index(vendor, library)

@@ -1,0 +1,46 @@
+{
+  "check_id": "macro_diff",
+  "implementation_version": "1.0.0",
+  "kind": "DIFF",
+  "execution_status": "COMPLETED",
+  "verdict": null,
+  "target": {
+    "kind": "effective_revision",
+    "set_id": "rtavfs_primary",
+    "revision_id": "rev_0008"
+  },
+  "input_generation": "input_gen_008",
+  "parameters": {},
+  "findings": [
+    {
+      "file_slot": "rtavfs:lef:core",
+      "macro": "MAC_A",
+      "property": "SIZE_X",
+      "old_value": 120.0,
+      "new_value": 124.0,
+      "unit": "um"
+    },
+    {
+      "file_slot": "rtavfs:lef:core",
+      "macro": "MAC_A",
+      "change": "PIN_ADDED",
+      "pin": "TEST_EN"
+    }
+  ],
+  "metrics": [],
+  "evidence_refs": [
+    "facts/fi_old.json",
+    "facts/fi_new.json"
+  ],
+  "input_refs": [
+    {
+      "kind": "file_facts",
+      "id": "fact_core_old"
+    },
+    {
+      "kind": "file_facts",
+      "id": "fact_core_new"
+    }
+  ],
+  "environment_id": "parser_test_env"
+}

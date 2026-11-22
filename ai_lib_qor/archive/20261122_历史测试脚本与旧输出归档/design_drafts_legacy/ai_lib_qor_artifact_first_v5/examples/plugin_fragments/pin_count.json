@@ -1,0 +1,33 @@
+{
+  "check_id": "pin_count",
+  "implementation_version": "1.0.0",
+  "kind": "MEASUREMENT",
+  "execution_status": "COMPLETED",
+  "verdict": null,
+  "target": {
+    "kind": "effective_revision",
+    "set_id": "rtavfs_primary",
+    "revision_id": "rev_0008"
+  },
+  "input_generation": "input_gen_008",
+  "parameters": {},
+  "findings": [],
+  "metrics": [
+    {
+      "name": "lef_pin_count",
+      "value": 3,
+      "unit": "count",
+      "file_slot": "rtavfs:lef:core"
+    }
+  ],
+  "evidence_refs": [
+    "facts/fi_new.json"
+  ],
+  "input_refs": [
+    {
+      "kind": "file_facts",
+      "id": "fact_core_new"
+    }
+  ],
+  "environment_id": "parser_test_env"
+}

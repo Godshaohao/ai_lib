@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1010" viewBox="0 0 1600 1010">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="1010" fill="#ffffff"/>
+<text x="50" y="58" class="title">03  有效版本与采纳：两条不同的事实</text>
+<text x="50" y="95" class="sub">来源按场景选择：RAW-only 可不依赖正式 NL；跨库成员通过固定引用关联</text>
+<rect x="50" y="165" width="420" height="115" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="68" y="197" class="label">Delivery 交付记录</text>
+<text x="68" y="225" class="body">这次交付实际出现的文件</text>
+<text x="68" y="249" class="body">未归属文件保留，不能自动采用</text>
+<rect x="590" y="165" width="420" height="115" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="608" y="197" class="label">Formal Snapshot 正式快照</text>
+<text x="608" y="225" class="body">某次正式 NL 的固定链接状态</text>
+<text x="608" y="249" class="body">无法匹配 RAW 时仍保留正式来源</text>
+<rect x="1130" y="165" width="420" height="115" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="1148" y="197" class="label">上一版 Revision</text>
+<text x="1148" y="225" class="body">完整成员集合与固定来源引用</text>
+<line x1="260" y1="280" x2="260" y2="330" stroke="#2563eb" stroke-width="2"/>
+<line x1="800" y1="280" x2="800" y2="330" stroke="#2563eb" stroke-width="2"/>
+<line x1="1340" y1="280" x2="1340" y2="330" stroke="#2563eb" stroke-width="2"/>
+<line x1="260" y1="330" x2="1340" y2="330" stroke="#2563eb" stroke-width="2"/>
+<line x1="800" y1="330" x2="800" y2="377" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="470" y="380" width="660" height="120" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="488" y="412" class="label">Effective Composer</text>
+<text x="488" y="440" class="body">继承旧成员，应用明确可采用的变更</text>
+<text x="488" y="464" class="body">members 是全集；changes 是相对父版的差异</text>
+<line x1="800" y1="500" x2="800" y2="557" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="470" y="560" width="660" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="488" y="592" class="label">rev_0008.json：固定有效版本</text>
+<text x="488" y="620" class="body">成员没有变化则不新建 Rev；质量检查可多次运行</text>
+<line x1="1130" y1="615" x2="1247" y2="615" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="1250" y="550" width="300" height="130" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="1268" y="582" class="label">index.json</text>
+<text x="1268" y="610" class="body">最新计算 Rev</text>
+<text x="1268" y="634" class="body">当前已采纳 Rev</text>
+<rect x="50" y="755" width="330" height="110" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="68" y="787" class="label">人工采纳 / 回退</text>
+<text x="68" y="815" class="body">明确决定与对象</text>
+<rect x="470" y="755" width="460" height="110" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="488" y="787" class="label">acceptance.jsonl</text>
+<text x="488" y="815" class="body">真实决策事件只追加</text>
+<line x1="380" y1="810" x2="467" y2="810" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M 930 810 H 1400 V 683" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1050" y="780" class="small">事件更新采纳指针</text>
+<text x="50" y="965" class="small">依据：v5 Architecture 文档与合成示例  |  状态：设计讨论稿；并非生产系统运行图</text>
+</svg>

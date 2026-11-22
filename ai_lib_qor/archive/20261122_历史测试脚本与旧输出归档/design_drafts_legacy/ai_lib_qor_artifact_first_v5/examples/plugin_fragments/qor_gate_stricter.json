@@ -1,0 +1,32 @@
+{
+  "check_id": "qor_gate",
+  "implementation_version": "1.0.1",
+  "kind": "EVALUATION",
+  "execution_status": "COMPLETED",
+  "verdict": "FAIL",
+  "target": {
+    "kind": "effective_revision",
+    "set_id": "rtavfs_primary",
+    "revision_id": "rev_0008"
+  },
+  "input_generation": "input_gen_008",
+  "parameters": {
+    "metric": "setup_wns",
+    "threshold": -0.05,
+    "comparison": ">="
+  },
+  "findings": [],
+  "metrics": [],
+  "evidence_refs": [],
+  "input_refs": [
+    {
+      "kind": "check_metric",
+      "id": "sta_setup_wns.setup_wns"
+    }
+  ],
+  "environment_id": "parser_test_env",
+  "depends_on": {
+    "check_id": "sta_setup_wns",
+    "metric_name": "setup_wns"
+  }
+}

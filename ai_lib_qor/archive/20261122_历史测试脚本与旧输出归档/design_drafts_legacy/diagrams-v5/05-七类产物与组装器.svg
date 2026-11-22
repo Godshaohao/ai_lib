@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="1000" fill="#ffffff"/>
+<text x="50" y="58" class="title">05  七类产物：谁组装、记录什么</text>
+<text x="50" y="95" class="sub">单写入者是 v5 的设计原则；贡献脚本、临时片段和读模型不是新增的权威业务契约</text>
+<rect x="50" y="145" width="320" height="58" rx="8" fill="#eaf2ff"/>
+<text x="66" y="182" class="label">贡献来源</text>
+<rect x="390" y="145" width="410" height="58" rx="8" fill="#eaf2ff"/>
+<text x="406" y="182" class="label">组装器 / 写入者</text>
+<rect x="820" y="145" width="320" height="58" rx="8" fill="#eaf2ff"/>
+<text x="836" y="182" class="label">产物</text>
+<rect x="1160" y="145" width="390" height="58" rx="8" fill="#eaf2ff"/>
+<text x="1176" y="182" class="label">主要职责</text>
+<rect x="50" y="220" width="320" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="64" y="264" class="body">RAW 扫描 + 交付规则</text>
+<rect x="390" y="220" width="410" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="404" y="264" class="body">Delivery Assembler</text>
+<rect x="820" y="220" width="320" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="834" y="264" class="body">delivery.json</text>
+<rect x="1160" y="220" width="390" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="1174" y="264" class="body">记录一次交付</text>
+<rect x="50" y="310" width="320" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="64" y="354" class="body">正式链接 + 来源匹配</text>
+<rect x="390" y="310" width="410" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="404" y="354" class="body">Formal Snapshot Builder</text>
+<rect x="820" y="310" width="320" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="834" y="354" class="body">snapshot.json</text>
+<rect x="1160" y="310" width="390" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="1174" y="354" class="body">固定正式链接状态</text>
+<rect x="50" y="400" width="320" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="64" y="444" class="body">元数据 + 多个 Parser</text>
+<rect x="390" y="400" width="410" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="404" y="444" class="body">Facts Assembler</text>
+<rect x="820" y="400" width="320" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="834" y="444" class="body">file_facts.json</text>
+<rect x="1160" y="400" width="390" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="1174" y="444" class="body">一个文件实例的事实</text>
+<rect x="50" y="490" width="320" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="64" y="534" class="body">前版成员 + 文件选择</text>
+<rect x="390" y="490" width="410" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="404" y="534" class="body">Effective Composer</text>
+<rect x="820" y="490" width="320" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="834" y="534" class="body">rev_*.json</text>
+<rect x="1160" y="490" width="390" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="1174" y="534" class="body">完整成员与采用差异</text>
+<rect x="50" y="580" width="320" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="64" y="624" class="body">差异 / 质量 / STA 插件</text>
+<rect x="390" y="580" width="410" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="404" y="624" class="body">Check Assembler</text>
+<rect x="820" y="580" width="320" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="834" y="624" class="body">run_*.json</text>
+<rect x="1160" y="580" width="390" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="1174" y="624" class="body">同一目标的检查集合</text>
+<rect x="50" y="670" width="320" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="64" y="714" class="body">人工或授权流程决定</text>
+<rect x="390" y="670" width="410" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="404" y="714" class="body">Acceptance Writer</text>
+<rect x="820" y="670" width="320" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="834" y="714" class="body">acceptance.jsonl</text>
+<rect x="1160" y="670" width="390" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="1174" y="714" class="body">追加采纳与回退事件</text>
+<rect x="50" y="760" width="320" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="64" y="804" class="body">版本记录 + 采纳事件</text>
+<rect x="390" y="760" width="410" height="72" rx="7" fill="#f0fdf4" stroke="#d1d5db"/>
+<text x="404" y="804" class="body">Index Projector</text>
+<rect x="820" y="760" width="320" height="72" rx="7" fill="#faf5ff" stroke="#d1d5db"/>
+<text x="834" y="804" class="body">index.json</text>
+<rect x="1160" y="760" width="390" height="72" rx="7" fill="#ffffff" stroke="#d1d5db"/>
+<text x="1174" y="804" class="body">可重建的当前指针</text>
+<text x="50" y="890" class="body">备注：检查结果的 v5 示例字段与 v3 Schema 不同，实施前需要逐字段映射与兼容性审查。</text>
+<text x="50" y="955" class="small">依据：v5 Architecture 文档与合成示例  |  状态：设计讨论稿；并非生产系统运行图</text>
+</svg>

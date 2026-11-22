@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="860" viewBox="0 0 1600 860">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="860" fill="#ffffff"/>
+<text x="50" y="58" class="title">01  总体框图：从输入到七类产物</text>
+<text x="50" y="95" class="sub">v5 提议以业务产物为中心；每类产物由指定组装器或写入者发布</text>
+<rect x="40" y="145" width="275" height="565" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="58" y="177" class="label">输入与规则</text>
+<rect x="350" y="145" width="285" height="565" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="368" y="177" class="label">脚本与组装</text>
+<rect x="670" y="145" width="535" height="565" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="688" y="177" class="label">七类业务产物</text>
+<rect x="1240" y="145" width="320" height="565" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="1258" y="177" class="label">查询与交付</text>
+<rect x="60" y="215" width="235" height="110" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="78" y="247" class="label">RAW 交付</text>
+<text x="78" y="275" class="body">供应商文件与交付</text>
+<rect x="60" y="355" width="235" height="110" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="78" y="387" class="label">正式 NL</text>
+<text x="78" y="415" class="body">固定链接状态</text>
+<rect x="60" y="495" width="235" height="110" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="78" y="527" class="label">已确认规则</text>
+<text x="78" y="555" class="body">归属、顺序与包范围</text>
+<rect x="370" y="215" width="245" height="110" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="388" y="247" class="label">发现与解析</text>
+<text x="388" y="275" class="body">扫描、来源匹配、提取</text>
+<rect x="370" y="355" width="245" height="110" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="388" y="387" class="label">专业检查</text>
+<text x="388" y="415" class="body">差异、跨 View、测量</text>
+<rect x="370" y="495" width="245" height="110" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="388" y="527" class="label">对应组装器</text>
+<text x="388" y="555" class="body">校验、合并、单一发布</text>
+<rect x="690" y="210" width="230" height="90" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="708" y="242" class="label">交付记录</text>
+<text x="708" y="270" class="body">delivery.json</text>
+<rect x="940" y="210" width="230" height="90" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="958" y="242" class="label">正式快照</text>
+<text x="958" y="270" class="body">snapshot.json</text>
+<rect x="690" y="322" width="230" height="90" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="708" y="354" class="label">文件解析事实</text>
+<text x="708" y="382" class="body">file_facts.json</text>
+<rect x="940" y="322" width="230" height="90" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="958" y="354" class="label">有效版本</text>
+<text x="958" y="382" class="body">rev_*.json</text>
+<rect x="690" y="434" width="230" height="90" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="708" y="466" class="label">检查结果</text>
+<text x="708" y="494" class="body">run_*.json</text>
+<rect x="940" y="434" width="230" height="90" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="958" y="466" class="label">采纳事件</text>
+<text x="958" y="494" class="body">acceptance.jsonl</text>
+<rect x="690" y="546" width="230" height="90" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="708" y="578" class="label">当前索引</text>
+<text x="708" y="606" class="body">index.json</text>
+<rect x="1260" y="250" width="280" height="120" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="1278" y="282" class="label">可重建查询视图</text>
+<text x="1278" y="310" class="body">Read Model / 索引</text>
+<rect x="1260" y="440" width="280" height="120" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="1278" y="472" class="label">面向用户</text>
+<text x="1278" y="500" class="body">Web · HTML · Excel</text>
+<line x1="315" y1="425" x2="347" y2="425" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="635" y1="425" x2="667" y2="425" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1205" y1="425" x2="1237" y2="425" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1400" y1="370" x2="1400" y2="437" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="50" y="760" class="body">每类是一个契约类别，可以有多份记录；历史版本固定，Index 可重建。</text>
+<text x="50" y="815" class="small">依据：v5 Architecture 文档与合成示例  |  状态：设计讨论稿；并非生产系统运行图</text>
+</svg>

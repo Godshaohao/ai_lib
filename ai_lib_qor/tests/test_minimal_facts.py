@@ -20,7 +20,7 @@ class MinimalFactsTests(unittest.TestCase):
    (nl/file.name).symlink_to(file)
   build_from_roots(raw,nl,self.work)
   self.folder=self.work/'libraries/v/lib'
-  initialize_from_formal(self.work,'v','lib',next(self.folder.glob('formal_NL1_*.json')))
+  initialize_from_formal(self.work,'v','lib',next(self.folder.glob('formal/formal_NL1_*.json')))
 
  def test_revision_file_facts_use_paths_and_no_old_ids(self):
   from ai_lib_qor.application.minimal_facts import build_facts
@@ -63,7 +63,7 @@ class MinimalFactsTests(unittest.TestCase):
   update_effective(self.work,'v','lib',{'set':[],'remove':[{'view':'LEF','path':'LEF/a.lef'}]})
   with self.assertRaisesRegex(ValueError,'没有该文件'):
    build_facts(self.work,'v','lib','LEF','LEF/a.lef',revision='rev_0002')
-  archive=next(self.folder.glob('delivery_*.json'));archive.write_text(archive.read_text().replace('LEF/a.lef','LEF/other.lef'))
+  archive=next(self.folder.glob('delivery/delivery_*.json'));archive.write_text(archive.read_text().replace('LEF/a.lef','LEF/other.lef'))
   with self.assertRaisesRegex(ValueError,'索引'):
    build_facts(self.work,'v','lib','LIBERTY','LIB/a.lib',version=self.version)
   self.assertFalse(list(self.folder.glob('facts_*.json')))

@@ -1,0 +1,33 @@
+digraph G {
+ graph [fontname="Noto Sans CJK SC",rankdir=LR,bgcolor="white",pad="0.35",nodesep="0.34",ranksep="0.50",splines=polyline,labelloc=t,label="具体旧能力 → 新产物组装器 → 七类 JSON（多脚本，一份权威结果）",fontsize=22,fontcolor="#14253B",dpi=160];
+ node [shape=box,style="rounded,filled",fontname="Noto Sans CJK SC",fontsize=12,margin="0.16,0.10",color="#C4D0DA",fontcolor="#1E293B"];
+ edge [color="#708196",penwidth=1.3,arrowsize=0.7];
+ subgraph cluster_s {label="可提取的旧能力 / 新增处理";color="#D9E0E7";style="rounded";
+  e1 [label="raw_discovery / raw_scan\ndelivery_order / slot_identity",fillcolor="#E9F1FC"];
+  e2 [label="effective_file_tracker / readlink\nformal owner mapping",fillcolor="#E9F1FC"];
+  e3 [label="parsers/lef,liberty\nmacro_index_parsers / metadata",fillcolor="#E9F1FC"];
+  e4 [label="current_library_set 中继承算法\nraw_e0_builder / delta",fillcolor="#E9F1FC"];
+  e5 [label="content_compare / lef_review\nlef_liberty_check / STA QoR",fillcolor="#E9F1FC"];
+  e6 [label="采纳/回退 API（人或经授权流程）",fillcolor="#E9F1FC"];
+  e7 [label="固定 Revision + Acceptance 读取",fillcolor="#E9F1FC"];
+ }
+ subgraph cluster_b {label="新工程：每类产物一个 Builder / Writer";color="#B5D3BE";style="rounded";
+  b1 [label="Delivery Assembler",fillcolor="#EAF5EE"];
+  b2 [label="Formal Snapshot Builder",fillcolor="#EAF5EE"];
+  b3 [label="Facts Assembler",fillcolor="#EAF5EE"];
+  b4 [label="Effective Composer",fillcolor="#EAF5EE"];
+  b5 [label="Check Assembler",fillcolor="#EAF5EE"];
+  b6 [label="Acceptance Writer",fillcolor="#EAF5EE"];
+  b7 [label="Index Projector",fillcolor="#EAF5EE"];
+ }
+ subgraph cluster_o {label="对外稳定的七类产物";color="#D4C9E3";style="rounded";
+  o1 [label="delivery.json",fillcolor="#F5F1FA"];
+  o2 [label="snapshot.json",fillcolor="#F5F1FA"];
+  o3 [label="file_facts.json",fillcolor="#F5F1FA"];
+  o4 [label="rev_0008.json",fillcolor="#F5F1FA"];
+  o5 [label="run_001.json",fillcolor="#F5F1FA"];
+  o6 [label="acceptance.jsonl",fillcolor="#F5F1FA"];
+  o7 [label="index.json",fillcolor="#F5F1FA"];
+ }
+ e1->b1->o1;e2->b2->o2;e3->b3->o3;e4->b4->o4;e5->b5->o5;e6->b6->o6;e7->b7->o7;
+}

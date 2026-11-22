@@ -21,7 +21,7 @@ class MinimalCheckFlowTests(unittest.TestCase):
     p=self.raw/'v/lib'/version/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content)
     if version==self.v1:(nl/p.name).symlink_to(p)
   build_from_roots(self.raw,nl,self.work);self.folder=self.work/'libraries/v/lib'
-  initialize_from_formal(self.work,'v','lib',next(self.folder.glob('formal_NL1_*.json')))
+  initialize_from_formal(self.work,'v','lib',next(self.folder.glob('formal/formal_NL1_*.json')))
   ops={'set':[{'view':'LEF','version':self.v2,'path':'LEF/a.lef'},{'view':'LIBERTY','version':self.v2,'path':'LIB/a.lib'}],'remove':[]}
   update_effective(self.work,'v','lib',ops)
 
@@ -36,7 +36,7 @@ class MinimalCheckFlowTests(unittest.TestCase):
   self.assertTrue(any(f['view']=='GDS' and f['status']=='NOT_CHECKED' for f in check['files']))
   book=load_workbook(single['excel'],read_only=True,data_only=True)
   self.assertIn('文件版本矩阵',book.sheetnames);self.assertIn('12-有效文件来源',book.sheetnames)
-  batch=run_library(self.work,'v','lib')
+  batch=run_library(self.work,'v','lib',rerun=True)
   self.assertEqual(batch['state'],'PARTIAL',batch)
   data=json.loads(Path(batch['overall']).read_text())
   self.assertEqual([r['revision'] for r in data['versions']],['rev_0001','rev_0002'])
@@ -53,7 +53,7 @@ class MinimalCheckFlowTests(unittest.TestCase):
   self.assertFalse(any(c['check_id']=='LEF_LIBERTY_PIN_MATCH' and c['result']=='PASS' for c in check['checks']))
   from ai_lib_qor.application.minimal_checks import run_library
   from openpyxl import load_workbook
-  batch=run_library(self.work,'v','lib')
+  batch=run_library(self.work,'v','lib',rerun=True)
   rows=list(load_workbook(batch['excel'],read_only=True,data_only=True)['版本运行汇总'].values)
   self.assertTrue(any(any('解析失败' in str(v) for v in row if v is not None) for row in rows))
 
@@ -66,7 +66,7 @@ class MinimalCheckFlowTests(unittest.TestCase):
    if result['revision']=='rev_0001':
     (self.raw/'v/lib'/self.v1/'LEF/a.lef').write_text('changed after first revision')
    return result
-  with patch.object(checks,'_run',side_effect=run):result=checks.run_library(self.work,'v','lib')
+  with patch.object(checks,'_run',side_effect=run):result=checks.run_library(self.work,'v','lib',rerun=True)
   self.assertEqual(result['state'],'PARTIAL')
   check=json.loads(Path(result['versions'][1]['check']).read_text())
   self.assertTrue(any(x['check_id']=='LEF_MACRO_DIFF' and x['result']=='INCONCLUSIVE' for x in check['checks']))

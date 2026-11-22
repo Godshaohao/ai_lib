@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="900" fill="#ffffff"/>
+<text x="50" y="58" class="title">04  增量示例：同一 Rev，检查结果可以重用</text>
+<text x="50" y="95" class="sub">合成示例：修改阈值与新增插件，产生新 Run；固定的旧 Run 和 Rev 保留</text>
+<rect x="50" y="145" width="1500" height="90" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="68" y="177" class="label">固定输入：rev_0008 + input_gen_008</text>
+<text x="68" y="205" class="body">相同目标与输入代次；仅在版本、参数、来源和环境满足条件时复用</text>
+<rect x="50" y="285" width="650" height="440" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="68" y="317" class="label">Run 001：已发布</text>
+<rect x="75" y="345" width="600" height="110" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="93" y="377" class="label">STA 测量</text>
+<text x="93" y="405" class="body">setup WNS = -0.08 ns</text>
+<rect x="75" y="485" width="600" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="93" y="517" class="label">QoR Gate</text>
+<text x="93" y="545" class="body">阈值 -0.10 ns  →  PASS</text>
+<rect x="75" y="625" width="600" height="75" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="93" y="657" class="label">整体：INCOMPLETE</text>
+<text x="93" y="685" class="body">LEF / Liberty 未检查</text>
+<rect x="900" y="285" width="650" height="440" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="918" y="317" class="label">Run 002：新一轮检查</text>
+<rect x="925" y="345" width="600" height="110" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="943" y="377" class="label">STA 测量：复用 Run 001</text>
+<text x="943" y="405" class="body">setup WNS 仍为 -0.08 ns</text>
+<rect x="925" y="485" width="600" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="943" y="517" class="label">QoR Gate：重新判定</text>
+<text x="943" y="545" class="body">阈值 -0.05 ns  →  FAIL</text>
+<rect x="925" y="625" width="600" height="75" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="943" y="657" class="label">整体：FAIL</text>
+<text x="943" y="685" class="body">新增 pin_count；跨 View 仍未执行</text>
+<line x1="700" y1="400" x2="897" y2="400" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="720" y="385" class="small">可追溯复用</text>
+<line x1="700" y1="540" x2="897" y2="540" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="720" y="525" class="small">阈值改变，重判</text>
+<text x="50" y="785" class="body">复用条件未满足、结果失败或不完整时，应重新执行或明确标记未检查。</text>
+<text x="50" y="850" class="small">依据：v5 Architecture 文档与合成示例  |  状态：设计讨论稿；并非生产系统运行图</text>
+</svg>

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1010" viewBox="0 0 1600 1010">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="1010" fill="#ffffff"/>
+<text x="50" y="58" class="title">06  文件解析事实：多个提取器汇总同一个文件</text>
+<text x="50" y="95" class="sub">每个 FileInstance 独立建立事实；LEF 和 Liberty 的关系放在跨 View 检查中</text>
+<rect x="70" y="150" width="860" height="105" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="88" y="182" class="label">LEF 文件实例</text>
+<text x="88" y="210" class="body">固定来源引用与文件实例身份</text>
+<rect x="1040" y="150" width="490" height="105" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="1058" y="182" class="label">Liberty 文件实例</text>
+<text x="1058" y="210" class="body">独立来源，独立解析</text>
+<line x1="500" y1="255" x2="500" y2="295" stroke="#2563eb" stroke-width="2"/>
+<line x1="195" y1="295" x2="805" y2="295" stroke="#2563eb" stroke-width="2"/>
+<line x1="195" y1="295" x2="195" y2="337" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="500" y1="295" x2="500" y2="337" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="805" y1="295" x2="805" y2="337" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="70" y="340" width="250" height="120" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="88" y="372" class="label">元数据提取</text>
+<text x="88" y="400" class="body">来源 / 类型 / 属性</text>
+<rect x="375" y="340" width="250" height="120" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="393" y="372" class="label">LEF Parser</text>
+<text x="393" y="400" class="body">Macro / SIZE</text>
+<rect x="680" y="340" width="250" height="120" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="698" y="372" class="label">Pin 提取</text>
+<text x="698" y="400" class="body">名称 / 方向 / 几何</text>
+<line x1="195" y1="460" x2="195" y2="510" stroke="#2563eb" stroke-width="2"/>
+<line x1="500" y1="460" x2="500" y2="510" stroke="#2563eb" stroke-width="2"/>
+<line x1="805" y1="460" x2="805" y2="510" stroke="#2563eb" stroke-width="2"/>
+<line x1="195" y1="510" x2="805" y2="510" stroke="#2563eb" stroke-width="2"/>
+<line x1="500" y1="510" x2="500" y2="557" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="200" y="560" width="600" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="218" y="592" class="label">Facts Assembler</text>
+<text x="218" y="620" class="body">按文件实例与对象键合并；字段冲突拒绝</text>
+<line x1="500" y1="670" x2="500" y2="727" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="100" y="730" width="500" height="110" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="118" y="762" class="label">LEF file_facts</text>
+<text x="118" y="790" class="body">解析范围、对象和来源证据</text>
+<line x1="1285" y1="255" x2="1285" y2="427" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="1040" y="430" width="490" height="120" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="1058" y="462" class="label">Liberty Parser / Assembler</text>
+<text x="1058" y="490" class="body">Cell / Pin 等独立文件事实</text>
+<line x1="1285" y1="550" x2="1285" y2="727" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="1000" y="730" width="500" height="110" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="1018" y="762" class="label">Liberty file_facts</text>
+<text x="1018" y="790" class="body">解析范围、对象和来源证据</text>
+<rect x="680" y="730" width="240" height="110" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="698" y="762" class="label">跨 View 检查</text>
+<text x="698" y="790" class="body">引用两份事实</text>
+<line x1="600" y1="785" x2="677" y2="785" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1000" y1="785" x2="923" y2="785" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="70" y="910" class="body">解析器升级时生成受影响文件的新事实代次；未提取的范围不能当作已验证。</text>
+<text x="50" y="975" class="small">依据：v5 Architecture 文档与合成示例  |  状态：设计讨论稿；并非生产系统运行图</text>
+</svg>

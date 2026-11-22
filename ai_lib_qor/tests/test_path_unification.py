@@ -24,7 +24,7 @@ class PathUnificationTests(unittest.TestCase):
         (self.nl/'a.lib').symlink_to(self.raw/'v'/'lib'/self.versions[0]/'LIB/a.lib')
         build_from_roots(self.raw, self.nl, self.work)
         self.folder = self.work/'libraries'/'v'/'lib'
-        initialize_from_formal(self.work, 'v', 'lib', next(self.folder.glob('formal_NL1_*.json')))
+        initialize_from_formal(self.work, 'v', 'lib', next(self.folder.glob('formal/formal_NL1_*.json')))
 
     def test_check_context_contains_only_actual_members_and_baseline(self):
         from ai_lib_qor.application.path_query import PathDataQuery
@@ -44,15 +44,15 @@ class PathUnificationTests(unittest.TestCase):
         preview = preview_update(self.work, 'v', 'lib', ops)
         self.assertEqual(preview['parent'], 'rev_0001')
         self.assertEqual(len(preview['changes']), 1)
-        self.assertEqual(len(list(self.folder.glob('effective_lib_*.json'))), 1)
+        self.assertEqual(len(list(self.folder.glob('effective/effective_lib_*.json'))), 1)
         result = apply_update(self.work, 'v', 'lib', ops, expected_parent='rev_0001')
         self.assertEqual(result['revision'], 'rev_0002')
         with self.assertRaisesRegex(ValueError, '父版本'):
             apply_update(self.work, 'v', 'lib', ops, expected_parent='rev_0001')
         result = restore_revision(self.work, 'v', 'lib', 'rev_0001', expected_parent='rev_0002')
         self.assertEqual(result['revision'], 'rev_0003')
-        first = json.loads((self.folder/'effective_lib_001.json').read_text())
-        restored = json.loads((self.folder/'effective_lib_003.json').read_text())
+        first = json.loads((self.folder/'effective/effective_lib_001.json').read_text())
+        restored = json.loads((self.folder/'effective/effective_lib_003.json').read_text())
         self.assertEqual(first['views'], restored['views'])
 
     def test_batch_apply_records_audit_and_invalid_batch_is_atomic(self):
@@ -64,14 +64,14 @@ class PathUnificationTests(unittest.TestCase):
         self.assertEqual(len(preview['changes']),2)
         result=apply_update(self.work,'v','lib',ops,expected_parent='rev_0001',actor='test')
         self.assertEqual(result['revision'],'rev_0002')
-        with (self.folder/'effective_operations.tsv').open(newline='') as stream:rows=list(csv.DictReader(stream,delimiter='\t'))
+        with (self.folder/'log/effective_operations.tsv').open(newline='') as stream:rows=list(csv.DictReader(stream,delimiter='\t'))
         event=next(r for r in rows if r['revision']=='rev_0002' and r['status']=='PUBLISHED')
         self.assertEqual(event['actor'],'test');self.assertEqual(event['parent'],'rev_0001')
         self.assertEqual(len(json.loads(event['changes'])),2)
         with self.assertRaises(ValueError):
             apply_update(self.work,'v','lib',{'set':[{'view':'LEF','version':self.versions[0],'path':'missing'}],'remove':[]},expected_parent='rev_0002',actor='test')
-        self.assertFalse((self.folder/'effective_lib_003.json').exists())
-        with (self.folder/'effective_operations.tsv').open(newline='') as stream:rows=list(csv.DictReader(stream,delimiter='\t'))
+        self.assertFalse((self.folder/'effective/effective_lib_003.json').exists())
+        with (self.folder/'log/effective_operations.tsv').open(newline='') as stream:rows=list(csv.DictReader(stream,delimiter='\t'))
         self.assertTrue(any(r['actor']=='test' and r['status']=='REJECTED' for r in rows))
 
     def test_unified_configuration_registration_times(self):
@@ -88,7 +88,7 @@ class PathUnificationTests(unittest.TestCase):
         self.assertEqual(len(result['changes']), 2)
         self.assertEqual(len(result['operations']['set']), 2)
         set_version_excluded(self.work, 'v', 'lib', self.versions[1], True)
-        self.assertTrue((self.folder/'delivery_lib_20260102_001.json').exists())
+        self.assertTrue((self.folder/'delivery/delivery_lib_20260102_001.json').exists())
         with self.assertRaisesRegex(ValueError, '排除'):
             preview_delivery(self.work, 'v', 'lib', self.versions[1])
         with self.assertRaisesRegex(ValueError, '排除'):
@@ -97,20 +97,20 @@ class PathUnificationTests(unittest.TestCase):
         self.assertEqual(apply_update(self.work, 'v', 'lib', result['operations'], expected_parent='rev_0001')['revision'], 'rev_0002')
         impact = set_version_excluded(self.work, 'v', 'lib', self.versions[1], True)
         self.assertTrue(impact['currently_used'])
-        self.assertEqual(json.loads((self.folder/'effective_lib_002.json').read_text())['revision'], 'rev_0002')
+        self.assertEqual(json.loads((self.folder/'effective/effective_lib_002.json').read_text())['revision'], 'rev_0002')
 
     def test_legacy_migration_translates_members_without_identity_sidecars(self):
         from ai_lib_qor.application.path_migration import migrate_legacy_library
         import shutil
         legacy=Path(self.tmp.name)/'legacy';folder=legacy/'libraries/v/lib';folder.mkdir(parents=True)
         for i,version in enumerate(self.versions,1):
-            source=next(self.folder.glob('delivery_lib_'+version[:8]+'_*.json'))
+            source=next(self.folder.glob('delivery/delivery_lib_'+version[:8]+'_*.json'))
             shutil.copy(source,folder/f'delivery_{i:03}.json')
             delivery=json.loads(source.read_text())
             evidence={'legacy_compatibility':{'metadata':{'delivery_id':f'old{i}'},
                      'files':{path:{'file_id':f'{view}-{path}', 'view':view} for view,paths in delivery['views'].items() for path in paths}}}
             (folder/f'evidence_delivery_{i:03}.json').write_text(json.dumps(evidence))
-        formal=json.loads(next(self.folder.glob('formal_NL1_*.json')).read_text())
+        formal=json.loads(next(self.folder.glob('formal/formal_NL1_*.json')).read_text())
         (folder/'formal_NL1_001.json').write_text(json.dumps(formal))
         for i in (1,2):
             old={'schema_version':'effective_version.v1','owner':{'owner_type':'SOURCE_LIBRARY','owner_id':'lib'},

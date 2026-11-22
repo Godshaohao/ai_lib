@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1020" viewBox="0 0 1600 1020">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#2563eb"/></marker></defs>
+<style>text {font-family: "Noto Sans CJK SC", sans-serif;} .title{font-size:31px;font-weight:700;fill:#111827}.sub{font-size:17px;fill:#64748b}.label{font-size:21px;font-weight:700;fill:#111827}.body{font-size:17px;fill:#475569}.small{font-size:15px;fill:#64748b}.tiny{font-size:14px;fill:#64748b}</style>
+<rect width="1600" height="1020" fill="#ffffff"/>
+<text x="50" y="58" class="title">02 新架构：代码职责与检查流程</text>
+<text x="50" y="95" class="sub">源码位于 src/ai_lib_qor/；运行结果位于 work/，模块名称为提案</text>
+<rect x="55" y="155" width="450" height="105" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="73" y="187" class="label">sources/  来源扫描</text>
+<text x="73" y="215" class="body">RAW 交付、正式 NL 状态</text>
+<rect x="575" y="155" width="450" height="105" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="593" y="187" class="label">parsers/  解析事实</text>
+<text x="593" y="215" class="body">LEF Macro / Pin；Liberty Cell / Pin</text>
+<rect x="1095" y="155" width="450" height="105" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="1113" y="187" class="label">versions/  有效版本</text>
+<text x="1113" y="215" class="body">完整成员 + 本次采用差异</text>
+<line x1="505" y1="208" x2="572" y2="208" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="425" y="340" width="750" height="105" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+<text x="443" y="372" class="label">锁定本次检查目标与输入</text>
+<text x="443" y="400" class="body">Delivery 或 Revision；确认文件、范围与参数</text>
+<line x1="1320" y1="260" x2="1320" y2="292" stroke="#2563eb" stroke-width="2"/>
+<path d="M 1320 292 H 800 V 337" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="800" y1="445" x2="800" y2="478" stroke="#2563eb" stroke-width="2"/>
+<line x1="250" y1="478" x2="1350" y2="478" stroke="#2563eb" stroke-width="2"/>
+<line x1="250" y1="478" x2="250" y2="507" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="800" y1="478" x2="800" y2="507" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1350" y1="478" x2="1350" y2="507" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="70" y="510" width="360" height="105" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="88" y="542" class="label">checks/content_diff.py</text>
+<text x="88" y="570" class="body">文件内容比较</text>
+<rect x="620" y="510" width="360" height="105" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="638" y="542" class="label">checks/lef_diff.py</text>
+<text x="638" y="570" class="body">Macro / Pin 变化</text>
+<rect x="1170" y="510" width="360" height="105" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+<text x="1188" y="542" class="label">checks/lef_liberty.py</text>
+<text x="1188" y="570" class="body">跨 View 一致性检查</text>
+<line x1="250" y1="615" x2="250" y2="650" stroke="#2563eb" stroke-width="2"/>
+<line x1="800" y1="615" x2="800" y2="650" stroke="#2563eb" stroke-width="2"/>
+<line x1="1350" y1="615" x2="1350" y2="650" stroke="#2563eb" stroke-width="2"/>
+<line x1="250" y1="650" x2="1350" y2="650" stroke="#2563eb" stroke-width="2"/>
+<line x1="800" y1="650" x2="800" y2="680" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="210" y="683" width="1180" height="100" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+<text x="228" y="715" class="label">checks/evidence.py + assembler.py</text>
+<text x="228" y="743" class="body">核对来源、证据和覆盖；多个贡献合并成一次检查</text>
+<line x1="800" y1="783" x2="800" y2="800" stroke="#2563eb" stroke-width="2"/>
+<rect x="70" y="820" width="450" height="105" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="88" y="852" class="label">storage/publisher.py</text>
+<text x="88" y="880" class="body">Schema 和业务校验后发布</text>
+<rect x="575" y="820" width="450" height="105" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="593" y="852" class="label">work/  固定结果</text>
+<text x="593" y="880" class="body">run_001.json + 对应证据</text>
+<rect x="1095" y="820" width="450" height="105" rx="10" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+<text x="1113" y="852" class="label">reporting/  报告</text>
+<text x="1113" y="880" class="body">选择 Run → HTML / Excel</text>
+<path d="M 800 800 H 295 V 817" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="520" y1="872" x2="572" y2="872" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1025" y1="872" x2="1092" y2="872" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="50" y="985" class="small">新架构设计草案  |  按 Vendor / Library / IP 保存；目录与模块均待实现</text>
+</svg>

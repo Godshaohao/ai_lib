@@ -1,0 +1,263 @@
+{% extends "path_base.html" %}
+{% block title %}来源总览{% endblock %}
+{% block breadcrumbs %}<span class="crumb-curr">来源总览</span>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-title-group">
+    <div class="vendor-kicker">Workspace Overview</div>
+    <h1>来源总览与数据管道</h1>
+    <p>按三层管道自动同步来源与索引；页面浏览仅只读消费已归档数据。</p>
+  </div>
+  <div class="toolbar-group">
+    <form method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="layer" value="all">
+      <button type="submit">一键三层自动同步</button>
+    </form>
+    <form method="post" action="{{ url_for('api_job_check') }}" data-async-url="{{ url_for('api_job_check') }}" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="kind" value="pending">
+      <input type="hidden" name="lazy_excel" value="1">
+      <button type="submit" class="secondary">增量检查待检库</button>
+    </form>
+  </div>
+</div>
+
+{% if summary %}
+<div class="kpi-row">
+  <div class="kpi">
+    <div class="kpi-label">已建有效版 / 来源库</div>
+    <div class="kpi-val">{{ summary.with_effective }} / {{ summary.libraries }}</div>
+    <div class="kpi-sub">共 {{ summary.vendors }} 个供应商 · {{ summary.libraries - summary.with_effective }} 个待建版</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">有效版本 / 已采纳库</div>
+    <div class="kpi-val">{{ summary.revisions }} 版 / {{ summary.accepted }} 库</div>
+    <div class="kpi-sub">计算版本与人工采纳指针严格分离</div>
+  </div>
+  <div class="kpi {{ 'ok' if summary.issues==0 else 'warn' }}">
+    <div class="kpi-label">索引同步状态</div>
+    <div class="kpi-val">{% if summary.libraries==0 %}暂无库{% elif summary.issues==0 %}{{ summary.libraries }} 可查询{% else %}{{ summary.issues }} 需处理{% endif %}</div>
+    <div class="kpi-sub">
+      {% if summary.issues > 0 %}
+        <a href="#libraries-table" onclick="var b=document.querySelector('#lib-status-seg button:last-child');if(b)b.click()">点击定位待处理库 →</a>
+      {% else %}
+        仅核验归档索引，不代表内容或质检通过
+      {% endif %}
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">工作区存储</div>
+    <div class="kpi-val">{{ storage_display.total if storage_display else '—' }}</div>
+    <div class="kpi-sub">{% if storage_display %}权威历史 {{ storage_display.auth }} · 可重建缓存 {{ storage_display.cache }}{% else %}只读统计{% endif %}</div>
+  </div>
+</div>
+{% endif %}
+
+{% if refresh_info %}
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h2>三层数据刷新中心</h2>
+      <p>L1 原始与正式来源 → L2 有效版本自动演进 → L3 FileIndex 只读索引（未变更库自动跳过重建）</p>
+    </div>
+    <span class="tag">{{ refresh_info.totals.deliveries }} 次归档交付</span>
+  </div>
+  <div class="pipeline-grid">
+    <div class="layer-box">
+      <div>
+        <div class="layer-top">
+          <span class="layer-step">L1 · 来源层</span>
+          <span class="layer-meta">{{ refresh_info.totals.deliveries }} 交付</span>
+        </div>
+        <div class="layer-title">RAW 与 Formal NL 盘点</div>
+        <div class="layer-meta" style="margin-top:4px">上次刷新：{{ refresh_info.last_by_layer.L1.at[:19].replace('T',' ') if refresh_info.last_by_layer.L1 else '未记录' }}</div>
+      </div>
+      <div class="layer-foot">
+        <span class="muted" style="font-size:11.5px">扫描新增交付与快照</span>
+        <form method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}" style="margin:0">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="layer" value="l1">
+          <button type="submit" class="secondary btn-xs">刷新 L1</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="layer-box">
+      <div>
+        <div class="layer-top">
+          <span class="layer-step">L2 · 版本层</span>
+          <span class="layer-meta">{{ refresh_info.totals.libraries_with_effective }}/{{ refresh_info.totals.libraries }} 库已建版</span>
+        </div>
+        <div class="layer-title">有效版本自动演化</div>
+        <div class="layer-meta" style="margin-top:4px">上次推进：{{ refresh_info.last_by_layer.L2.at[:19].replace('T',' ') if refresh_info.last_by_layer.L2 else '未记录' }}</div>
+      </div>
+      <div class="layer-foot">
+        <span class="muted" style="font-size:11.5px">纯基于 L1 自动演进</span>
+        <form method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}" style="margin:0">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="layer" value="l2">
+          <button type="submit" class="secondary btn-xs">推进 L2</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="layer-box">
+      <div>
+        <div class="layer-top">
+          <span class="layer-step">L3 · 索引层</span>
+          <span class="layer-meta">{{ refresh_info.totals.index_fresh }}/{{ refresh_info.totals.libraries }} 已同步</span>
+        </div>
+        <div class="layer-title">FileIndex 统一索引</div>
+        <div class="layer-meta" style="margin-top:4px">上次刷新：{{ refresh_info.last_by_layer.L3.at[:19].replace('T',' ') if refresh_info.last_by_layer.L3 else '未记录' }}</div>
+      </div>
+      <div class="layer-foot">
+        <span class="muted" style="font-size:11.5px">指纹未变自动跳过</span>
+        <form method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}" style="margin:0">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="layer" value="l3">
+          <button type="submit" class="secondary btn-xs">刷新 L3</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {% if refresh_info.recent_runs %}
+  <details class="panel" style="border-top:1px solid var(--border)">
+    <summary><span>最近刷新与变更明细（{{ refresh_info.recent_runs|length }} 条记录）</span><span class="muted">展开 ▾</span></summary>
+    <div class="table-wrap" style="padding:0 16px 14px">
+      <table>
+        <thead><tr><th>时间 (UTC)</th><th>层级</th><th>变动库与摘要</th><th>告警</th></tr></thead>
+        <tbody>
+          {% for r in refresh_info.recent_runs %}
+          <tr>
+            <td class="mono">{{ r.at[:19].replace('T',' ') }}</td>
+            <td><span class="tag tag-accent">{{ r.layer }}</span></td>
+            <td>
+              {% if r.libraries_changed %}
+                {% for c in r.libraries_changed[:6] %}
+                  <a href="{{ url_for('library_page',vendor=c.vendor,library=c.library) }}">{{ c.vendor }}/{{ c.library }}</a>{% if c.new_deliveries %}<span class="muted"> +{{ c.new_deliveries|length }}交付</span>{% endif %}{% if c.events %}<span class="muted"> +{{ c.events|length }}版</span>{% endif %}{% if not loop.last %} · {% endif %}
+                {% endfor %}
+              {% else %}<span class="muted">无新增变化</span>{% endif %}
+            </td>
+            <td>{% if r.warnings %}<span class="tag tag-partial">{{ r.warnings|length }} 条</span>{% else %}<span class="muted">0</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endif %}
+
+  <details class="panel" style="border-top:1px solid var(--border)">
+    <summary><span>扫描来源目录与更新选项配置</span><span class="muted">展开 ▾</span></summary>
+    <form class="card-body" method="post" action="{{ url_for('update') }}" style="border-top:1px solid #f1f5f9">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="save_settings" value="1">
+      <div class="form-grid">
+        <div class="field"><label>RAW 总目录</label><input type="text" name="raw_root" value="{{ config.raw_root|default('') }}" placeholder="/path/to/3rd_IP"></div>
+        <div class="field"><label>Formal NL 总目录</label><input type="text" name="nl_root" value="{{ config.nl_root|default('') }}" placeholder="/path/to/lib_NL2.5_3"></div>
+        <div class="field"><label>NL 版本</label><input type="text" name="nl_version" value="{{ config.nl_version|default('') }}" placeholder="自动识别"></div>
+      </div>
+      <div class="toolbar-group" style="margin:12px 0">
+        <label class="check-inline"><input type="checkbox" name="raw" value="1" {% if config.get("update_raw",true) %}checked{% endif %}> 更新 RAW 交付</label>
+        <label class="check-inline"><input type="checkbox" name="formal" value="1" {% if config.get("update_formal",true) %}checked{% endif %}> 更新 Formal 快照</label>
+        <label class="check-inline"><input type="checkbox" name="index" value="1" {% if config.get("update_index",true) %}checked{% endif %}> 刷新文件索引</label>
+        <label class="check-inline"><input type="checkbox" name="auto_effective" value="1" {% if config.get("auto_effective",true) %}checked{% endif %}> 新交付自动发布有效版本</label>
+      </div>
+      <button type="submit" class="secondary btn-sm">保存配置并执行所选步骤</button>
+    </form>
+  </details>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h2>来源库清单</h2>
+      <p>按供应商、建版状态或关键字快速筛选，同时区分最新计算版本与人工采纳版本。</p>
+    </div>
+    <span class="muted num" id="lib-visible-count" style="font-size:12px">共 {{ libraries|length }} 个库</span>
+  </div>
+
+  {% set vendor_groups = libraries|groupby('vendor') %}
+  <div class="toolbar">
+    <div class="toolbar-group">
+      <div class="seg" id="lib-status-seg">
+        <button type="button" class="active" onclick="setLibFilter('status','all',this)">全部</button>
+        <button type="button" onclick="setLibFilter('status','has_rev',this)">已建有效版</button>
+        <button type="button" onclick="setLibFilter('status','no_rev',this)">待建版</button>
+        <button type="button" onclick="setLibFilter('status','issue',this)">待处理</button>
+      </div>
+      <select id="lib-vendor-select" aria-label="按供应商筛选" style="height:30px;font-size:12.5px" onchange="setLibFilter('vendor',this.value)">
+        <option value="">全部供应商</option>
+        {% for g in vendor_groups %}
+        <option value="{{ g.grouper }}">{{ g.grouper }} ({{ g.list|length }})</option>
+        {% endfor %}
+      </select>
+      <label class="check-inline">
+        <input type="checkbox" id="hide-sim-cb" onchange="applyLibFilters()"> 隐藏模拟库
+      </label>
+    </div>
+    <input type="search" id="lib-search-input" class="search-input" style="height:30px" placeholder="搜索库名或供应商..." oninput="applyLibFilters()">
+  </div>
+
+  {% if libraries %}
+  <div class="table-wrap scroll-box">
+    <table id="libraries-table">
+      <thead>
+        <tr>
+          <th style="width:110px">供应商</th>
+          <th>来源库</th>
+          <th style="width:80px">交付数</th>
+          <th style="width:140px">最新计算 / 采纳</th>
+          <th style="width:155px">索引状态</th>
+          <th style="width:160px;text-align:right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in libraries %}
+        <tr data-vendor="{{ row.vendor }}"
+            data-library="{{ row.library|lower }}"
+            data-has-rev="{{ '1' if (row.revision_count or 0) > 0 else '0' }}"
+            data-issue="{{ '1' if row.error else '0' }}"
+            data-sim="{{ '1' if row.library.startswith('SIMULATION_') else '0' }}">
+          <td><span class="tag">{{ row.vendor }}</span></td>
+          <td><strong>{{ row.library }}</strong></td>
+          <td class="num">{{ row.delivery_count if row.delivery_count is not none else '—' }}</td>
+          <td class="num">
+            {% if (row.revision_count or 0) > 0 %}
+              <span class="tag tag-accent">{{ row.latest_revision or (row.revision_count ~ ' 版') }}</span>
+              {% if row.accepted_revision %}
+                <span class="sub-text"><span class="tag tag-new" style="padding:1px 6px;font-size:11px">已采纳 {{ row.accepted_revision }}</span></span>
+              {% else %}
+                <span class="sub-text"><span class="tag tag-partial" style="padding:1px 6px;font-size:11px">待人工采纳</span></span>
+              {% endif %}
+            {% else %}
+              <span class="tag tag-inherited">未建版</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.error %}
+              <span class="tag tag-partial"><span class="dot"></span>需处理</span>
+              <span class="sub-text">{{ row.error }}</span>
+            {% elif row.index_status == 'FRESH' %}
+              <span class="tag tag-new"><span class="dot"></span>指纹已同步</span>
+            {% elif row.index_status == 'UNVERIFIED' %}
+              <span class="tag tag-inherited"><span class="dot"></span>可查询（旧版无清单）</span>
+            {% else %}
+              <span class="tag tag-inherited"><span class="dot"></span>可查询</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right;white-space:nowrap">
+            <a class="btn secondary btn-xs" href="{{ url_for('library_page',vendor=row.vendor,library=row.library) }}">库与版本</a>
+            <a class="btn ghost btn-xs" href="{{ url_for('index_page',vendor=row.vendor,library=row.library) }}">索引</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">暂无库。请展开上方配置根目录并执行 L1 刷新。</p>
+  {% endif %}
+</section>
+{% endblock %}

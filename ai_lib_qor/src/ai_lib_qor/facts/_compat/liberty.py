@@ -12,7 +12,7 @@ import sys
 SCHEMA_VERSION = 'lef_liberty_check.v1'
 OUTPUT_JSON = 'lef_liberty_check.json'
 OUTPUT_MD = 'lef_liberty_check.md'
-LIBERTY_PARSER_VERSION = 'standalone-interface-2'
+LIBERTY_PARSER_VERSION = 'standalone-interface-3'
 _POWER_TYPES = {'primary_power', 'backup_power', 'internal_power'}
 _GROUND_TYPES = {'primary_ground', 'backup_ground', 'internal_ground'}
 _PROCESS_CORNER_RE = re.compile(r'(?:^|[_.-])(SSG|FFG|TTG|FFPG|SSPG|TTNOMINAL|FAST|SLOW|TYP|TT|SS|FF|SF|FS)(?=$|[_.-])', re.IGNORECASE)
@@ -70,14 +70,19 @@ def parse_liberty_interface_data_file(path: str | Path, *, chunk_size: int = 102
                 if not name or name in result['libraries']:
                     complete = False
                 value = {'name': name, 'line_start': event_line, 'cells': {}, 'cell_order': [],
-                         'operating_conditions': {}}
+                         'operating_conditions': {}, 'bus_types': {}}
                 result['libraries'][name] = value
                 result['library_order'].append(name)
+            elif kind == 'type' and parent == 'library' and record is not None:
+                value = {'name': name, 'bit_from': None, 'bit_to': None, 'bit_width': None, 'downto': None}
+                if name:
+                    record['bus_types'][name] = value
             elif kind == 'cell' and parent == 'library' and record is not None:
                 if not name or name in record['cells']:
                     complete = False
                 value = {'name': name, 'line_start': event_line, 'area': None, 'is_macro': None,
-                         'is_pad': None, 'attrs': {}, 'attr_lines': {}, 'pins': {}, 'pin_order': [], 'pg_pins': {}}
+                         'is_pad': None, 'attrs': {}, 'attr_lines': {}, 'pins': {}, 'pin_order': [], 'pg_pins': {},
+                         '_library': record}
                 record['cells'][name] = value
                 record['cell_order'].append(name)
             elif kind in {'pin', 'pg_pin'} and parent in {'cell', 'bus', 'bundle'} and record is not None:
@@ -103,7 +108,7 @@ def parse_liberty_interface_data_file(path: str | Path, *, chunk_size: int = 102
                 value = {'name': name}
                 record['operating_conditions'][name] = value
             elif kind in {'bus', 'bundle'} and parent == 'cell' and record is not None:
-                value = {'name': name, 'cell': record, 'direction': None, 'explicit_pin_count': 0}
+                value = {'name': name, 'cell': record, 'direction': None, 'bus_type': None, 'explicit_pin_count': 0, 'line_start': event_line}
             stack.append((kind, value))
         elif delimiter == '}':
             if text or not stack:
@@ -111,9 +116,39 @@ def parse_liberty_interface_data_file(path: str | Path, *, chunk_size: int = 102
                 note('unbalanced_group_close', text)
             else:
                 closed_kind, closed_record = stack.pop()
-                if closed_kind in {'bus', 'bundle'} and closed_record.get('explicit_pin_count', 0) == 0:
-                    complete = False
-                    note('bus_without_explicit_member_pins', closed_record.get('name', ''))
+                if closed_kind == 'cell' and isinstance(closed_record, dict):
+                    closed_record.pop('_library', None)
+                elif closed_kind in {'bus', 'bundle'} and closed_record.get('explicit_pin_count', 0) == 0:
+                    expanded = False
+                    if closed_kind == 'bus' and closed_record.get('bus_type') and closed_record.get('direction'):
+                        cell = closed_record.get('cell')
+                        lib_rec = cell.get('_library') if isinstance(cell, dict) else None
+                        btype = (lib_rec or {}).get('bus_types', {}).get(closed_record['bus_type'])
+                        if btype and btype.get('bit_from') is not None and btype.get('bit_to') is not None:
+                            try:
+                                b_from = int(btype['bit_from'])
+                                b_to = int(btype['bit_to'])
+                                count = abs(b_from - b_to) + 1
+                                if 1 <= count <= 4096:
+                                    step = -1 if b_from >= b_to else 1
+                                    for bit in range(b_from, b_to + step, step):
+                                        member_name = f"{closed_record['name']}[{bit}]"
+                                        if member_name in cell['pins']:
+                                            complete = False
+                                        cell['pins'][member_name] = {
+                                            'name': member_name,
+                                            'line_start': closed_record.get('line_start', event_line),
+                                            'direction': closed_record['direction'],
+                                            'capacitance': None,
+                                            'function': None,
+                                        }
+                                        cell['pin_order'].append(member_name)
+                                    expanded = True
+                            except (TypeError, ValueError):
+                                expanded = False
+                    if not expanded:
+                        complete = False
+                        note('bus_without_explicit_member_pins', closed_record.get('name', ''))
         elif delimiter == ';':
             if re.match(r'^(pin|pg_pin|bus|bundle|cell|library)\s*\(', text, re.I):
                 complete = False
@@ -135,6 +170,8 @@ def parse_liberty_interface_data_file(path: str | Path, *, chunk_size: int = 102
                     record[key] = value
                 elif parent in {'bus', 'bundle'} and key in {'direction', 'bus_type'}:
                     record[key] = value
+                elif parent == 'type' and key in {'bit_from', 'bit_to', 'bit_width', 'downto'}:
+                    record[key] = value
                 elif parent == 'pg_pin' and key in {'pg_type', 'voltage_name'}:
                     record[key] = value
                 elif parent == 'operating_conditions':
@@ -142,7 +179,7 @@ def parse_liberty_interface_data_file(path: str | Path, *, chunk_size: int = 102
         statement_start = line_no
 
     def should_capture() -> bool:
-        return not stack or stack[-1][0] in {'library', 'cell', 'pin', 'pg_pin', 'bus', 'bundle', 'operating_conditions'}
+        return not stack or stack[-1][0] in {'library', 'type', 'cell', 'pin', 'pg_pin', 'bus', 'bundle', 'operating_conditions'}
 
     try:
         with opener(source, 'rt', encoding='utf-8', errors='replace', newline='') as stream:

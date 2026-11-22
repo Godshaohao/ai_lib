@@ -15,6 +15,25 @@ def library_folder(work, vendor, library):
     return folder
 
 
+def storage_dir(folder, name):
+    if name not in ('delivery','formal','effective','log','facts'):raise ValueError('目录类别无效')
+    path=Path(folder)/name
+    if path.is_symlink():raise ValueError('存储目录不能为软链接')
+    path.mkdir(parents=True,exist_ok=True)
+    return path
+
+
+def archive_files(folder, name, pattern):
+    folder=Path(folder);directory=folder/name
+    if directory.is_symlink():raise ValueError('存储目录不能为软链接')
+    return sorted([*folder.glob(pattern),*directory.glob(pattern)])
+
+
+def log_file(folder, name):
+    old=Path(folder)/name
+    return old if old.exists() else storage_dir(folder,'log')/name
+
+
 def evidence_path(delivery_path):
     path=Path(delivery_path)
     if path.name=='delivery.json' or path.parent.name=='deliveries':return path.parent/'source_evidence.json'

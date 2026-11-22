@@ -1,0 +1,12 @@
+digraph G {
+ graph [fontname="Noto Sans CJK SC",rankdir=LR,bgcolor="white",pad="0.35",nodesep="0.46",ranksep="0.64",splines=polyline,labelloc=t,label="可叠加 ≠ 发布后随意覆盖：按 generation 构建不可变结果",fontsize=21,fontcolor="#14253B",dpi=150];
+ node [shape=box,style="rounded,filled",fontname="Noto Sans CJK SC",fontsize=12,margin="0.20,0.14",color="#CAD4DD",fontcolor="#1E293B"];
+ edge [fontname="Noto Sans CJK SC",fontsize=11,color="#71849A",arrowsize=0.72,penwidth=1.35];
+ r [label="同一有效版本\nrev_0008.json\n不变",fillcolor="#E9F1FC"];
+ a [label="run_001.json（固定）\nMacro + Pin + Qor WNS\n检查参数集 P1",fillcolor="#EDF7F1"];
+ b [label="新增 Check 或修改参数\n只执行受影响插件\n未变的结果按规则复用",fillcolor="#FAF6E9"];
+ c [label="run_002.json（固定）\n旧结果来源可追溯\n+ 新 QoR / 重算规则\n检查参数集 P2",fillcolor="#EDF7F1"];
+ index [label="结果选择策略\n最新完整检查组合 / 历史选择\n不能混用不同来源版本",fillcolor="#F5F2FA"];
+ outputs [label="ReportModel（派生）\nHTML 和 Excel 同步刷新",fillcolor="#F5F2FA"];
+ r->a;r->b [style=dashed];a->b [label="可复用证据",style=dashed];b->c;c->index;index->outputs;
+}

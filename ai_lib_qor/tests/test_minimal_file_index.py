@@ -28,7 +28,7 @@ class MinimalFileIndexTests(unittest.TestCase):
   row=index['views']['LEF']['LEF/a.lef']
   self.assertEqual([x['version'] for x in row['raw']],list(self.versions))
   self.assertEqual(row['nl'][0]['source_match'],'MATCHED_RAW');self.assertEqual(row['effective'],[])
-  formal=next(self.folder.glob('formal_NL1_*.json'))
+  formal=next(self.folder.glob('formal/formal_NL1_*.json'))
   initialize_from_formal(self.work,'v','lib',formal,include=[('LEF','LEF/a.lef')])
   result=update_effective(self.work,'v','lib',{'set':[{'view':'LEF','version':self.versions[1],'path':'LEF/a.lef'}],'remove':[]})
   self.assertEqual(result['revision'],'rev_0002')
@@ -42,27 +42,27 @@ class MinimalFileIndexTests(unittest.TestCase):
 
  def test_stale_and_missing_sources_cannot_serve_wrong_results(self):
   from ai_lib_qor.application.minimal_file_index import refresh_index,query_path
-  path=next(self.folder.glob('delivery_*20261001*.json'))
+  path=next(self.folder.glob('delivery/delivery_*20261001*.json'))
   obj=json.loads(path.read_text());obj['views']['LEF']=[];path.write_text(json.dumps(obj))
   with self.assertRaisesRegex(ValueError,'索引.*过期'):query_path(self.work,'v','lib','LEF','LEF/a.lef')
   with self.assertRaisesRegex(ValueError,'正式|来源'):refresh_index(self.work,'v','lib')
 
  def test_same_date_order_needs_confirmation(self):
   from ai_lib_qor.application.minimal_file_index import refresh_index
-  path=next(self.folder.glob('delivery_*20261002*.json'));value=json.loads(path.read_text())
+  path=next(self.folder.glob('delivery/delivery_*20261002*.json'));value=json.loads(path.read_text())
   value['version_date']='2026-10-01';path.write_text(json.dumps(value))
   with self.assertRaisesRegex(ValueError,'顺序'):refresh_index(self.work,'v','lib')
 
  def test_archived_resolved_path_does_not_override_conflicting_link_text(self):
   from ai_lib_qor.application.minimal_file_index import build_index
-  path=next(self.folder.glob('formal_NL1_*.json'));data=json.loads(path.read_text())
+  path=next(self.folder.glob('formal/formal_NL1_*.json'));data=json.loads(path.read_text())
   data['views']['LEF'][self.versions[0]][0]['target']='/another/source/a.lef';path.write_text(json.dumps(data))
   index=build_index(self.work,'v','lib')
   self.assertEqual(index['views']['LEF']['LEF/a.lef']['nl'][0]['source_match'],'UNVERIFIED')
 
  def test_changed_archived_history_does_not_overwrite_published_index(self):
   from ai_lib_qor.application.minimal_file_index import refresh_index
-  path=next(self.folder.glob('delivery_*20261002*.json'));data=json.loads(path.read_text())
+  path=next(self.folder.glob('delivery/delivery_*20261002*.json'));data=json.loads(path.read_text())
   data['views']['LIBERTY']=[];path.write_text(json.dumps(data))
   index=self.folder/'file_index.json';before=index.read_bytes()
   with self.assertRaisesRegex(ValueError,'历史'):refresh_index(self.work,'v','lib')
