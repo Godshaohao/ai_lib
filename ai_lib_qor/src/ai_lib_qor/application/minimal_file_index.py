@@ -114,19 +114,39 @@ def _sha256_file(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _archive_candidates(folder,library):
+    effective_re=re.compile(r'^effective_'+re.escape(library)+r'_(\d+)\.json$')
+    if not folder.is_dir():return []
+    candidates=[*archive_files(folder,'delivery','delivery_*.json'),
+                *archive_files(folder,'formal','formal_*.json'),
+                *[p for p in archive_files(folder,'effective','effective_'+library+'_*.json') if effective_re.fullmatch(p.name)]]
+    return sorted(set(candidates),key=lambda p:p.relative_to(folder).as_posix())
+
+
+def _archive_stat_summary(work,vendor,library,index_path):
+    """Lightweight stat-only summary for fast multi-library overview status checks (zero JSON reads)."""
+    folder=library_folder(work,vendor,library)
+    entries=[]
+    for entry in _archive_candidates(folder,library):
+        rel=entry.relative_to(folder).as_posix()
+        if entry.is_symlink() or not entry.is_file():
+            raise ValueError('归档记录不能为软链接: '+rel)
+        st=entry.stat()
+        entries.append([rel,st.st_size,st.st_mtime_ns])
+    idx_st=index_path.stat()
+    times=_configured_times(work,vendor,library)
+    times_hash=hashlib.sha256(json.dumps(times,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf-8')).hexdigest()
+    return {'entries':entries,'index':[idx_st.st_size,idx_st.st_mtime_ns],'registration_times_sha256':times_hash}
+
+
 def archive_fingerprint(work,vendor,library):
     folder=library_folder(work,vendor,library)
-    effective_re=re.compile(r'^effective_'+re.escape(library)+r'_(\d+)\.json$')
     files={}
-    if folder.is_dir():
-        candidates=[*archive_files(folder,'delivery','delivery_*.json'),
-                    *archive_files(folder,'formal','formal_*.json'),
-                    *[p for p in archive_files(folder,'effective','effective_'+library+'_*.json') if effective_re.fullmatch(p.name)]]
-        for entry in sorted(set(candidates),key=lambda p:p.relative_to(folder).as_posix()):
-            rel=entry.relative_to(folder).as_posix()
-            if entry.is_symlink() or not entry.is_file():
-                raise ValueError('归档记录不能为软链接: '+rel)
-            files[rel]=_sha256_file(entry)
+    for entry in _archive_candidates(folder,library):
+        rel=entry.relative_to(folder).as_posix()
+        if entry.is_symlink() or not entry.is_file():
+            raise ValueError('归档记录不能为软链接: '+rel)
+        files[rel]=_sha256_file(entry)
     times=_configured_times(work,vendor,library)
     times_hash=hashlib.sha256(json.dumps(times,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf-8')).hexdigest()
     return {'files':files,'registration_times_sha256':times_hash}
@@ -142,6 +162,7 @@ def _write_manifest(work,vendor,library,index_path):
     if mpath.is_symlink():raise ValueError('索引清单不能为软链接')
     manifest={'schema':'file_index_manifest.v1','vendor':vendor,'library':library,
               'refreshed_at':utc_text(),'archive':archive_fingerprint(work,vendor,library),
+              'fast_stat':_archive_stat_summary(work,vendor,library,index_path),
               'file_index_sha256':_sha256_file(index_path)}
     write_atomic(mpath,manifest)
     return manifest
@@ -159,12 +180,14 @@ def read_manifest(work,vendor,library):
     return None
 
 
-def index_manifest_matches(work,vendor,library):
+def index_manifest_matches(work,vendor,library,*,fast=False):
     folder=library_folder(work,vendor,library);path=folder/'file_index.json'
     if path.is_symlink() or not path.is_file():return False,None
     manifest=read_manifest(work,vendor,library)
     if not manifest:return False,None
     try:
+        if fast and isinstance(manifest.get('fast_stat'),dict):
+            return manifest['fast_stat']==_archive_stat_summary(work,vendor,library,path),manifest
         if manifest.get('file_index_sha256')!=_sha256_file(path):return False,manifest
         if manifest.get('archive')!=archive_fingerprint(work,vendor,library):return False,manifest
     except (OSError,ValueError,TypeError):return False,manifest

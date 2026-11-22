@@ -1,9 +1,0 @@
-{
-  "kind": "CHANGED_LEF_COMPARISON",
-  "vendor": "SRAM22",
-  "library": "sram22_256x16m8w8",
-  "set_id": "sram22_256x16m8w8",
-  "before": "rev_0001",
-  "after": "rev_0002",
-  "pin_liberty_path": "LIB/NLDM/sram22_256x16m8w8_ff_n40C_1v95.lib"
-}

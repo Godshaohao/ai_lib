@@ -192,8 +192,10 @@ def render_excel_from_check(work, vendor, library, check_filename, excel_path=No
     return str(excel_path)
 
 
-def _run(work, vendor, library, revision, cache, *, baseline=None, plugins=None, render=True):
+def _run(work, vendor, library, revision, cache, *, baseline=None, plugins=None, render=True, progress_cb=None, cancel_event=None):
     from .path_query import PathDataQuery
+    from ai_lib_qor.workbench.jobs import check_cancel, emit_progress
+    check_cancel(cancel_event, f'检查 {vendor}/{library} {revision} 已终止')
     context = PathDataQuery(work).get_check_context(vendor, library, revision, baseline=baseline)
     folder = library_folder(work, vendor, library)
     index = context['index']
@@ -328,7 +330,11 @@ def _run(work, vendor, library, revision, cache, *, baseline=None, plugins=None,
         evidence[str(p)] = pointer
         return p, data
 
-    for (view, path), source in sorted(target.items()):
+    target_items = sorted(target.items())
+    total_files = len(target_items)
+    for f_idx, ((view, path), source) in enumerate(target_items, 1):
+        check_cancel(cancel_event, f'解析 {view} {path} 前任务已终止')
+        emit_progress(progress_cb, 'PARSE', f'处理 {revision} 文件 {view} {path} ({f_idx}/{total_files})', completed=f_idx - 1, total=total_files)
         row = {
             'view': view,
             'path': path,
@@ -440,11 +446,12 @@ def _append_run(log, event):
         os.fsync(stream.fileno())
 
 
-def run_revision(work, vendor, library, revision, *, baseline=None, plugins=None, render=True):
-    return _run(work, vendor, library, revision, {}, baseline=baseline, plugins=plugins, render=render)
+def run_revision(work, vendor, library, revision, *, baseline=None, plugins=None, render=True, progress_cb=None, cancel_event=None):
+    return _run(work, vendor, library, revision, {}, baseline=baseline, plugins=plugins, render=render, progress_cb=progress_cb, cancel_event=cancel_event)
 
 
-def run_library(work, vendor, library, *, revisions=None, rerun=False, plugins=None, render_single_excel=True):
+def run_library(work, vendor, library, *, revisions=None, rerun=False, plugins=None, render_single_excel=True, progress_cb=None, cancel_event=None):
+    from ai_lib_qor.workbench.jobs import check_cancel, emit_progress
     folder, index = _fresh(work, vendor, library)
     available = index['revisions']
     if revisions is not None and (not revisions or len(set(revisions)) != len(revisions) or not set(revisions) <= set(available)):
@@ -475,11 +482,14 @@ def run_library(work, vendor, library, *, revisions=None, rerun=False, plugins=N
                     existing[item['revision']] = (key, entry)
             except (OSError, ValueError, KeyError, TypeError):
                 continue
-    for revision in selected:
+    total_revs = len(selected)
+    for r_idx, revision in enumerate(selected, 1):
+        check_cancel(cancel_event, f'库级检查 {vendor}/{library} 在 {revision} 处已终止')
+        emit_progress(progress_cb, 'CHECK', f'库级检查 {vendor}/{library} · {revision} ({r_idx}/{total_revs})', completed=r_idx - 1, total=total_revs)
         _, current = _fresh(work, vendor, library)
         if current != index:
             raise ValueError('整体运行期间归档发生变化')
-        run = _run(work, vendor, library, revision, cache, plugins=plugins, render=render_single_excel) if rerun else existing.get(revision, (None, None))[1]
+        run = _run(work, vendor, library, revision, cache, plugins=plugins, render=render_single_excel, cancel_event=cancel_event) if rerun else existing.get(revision, (None, None))[1]
         if not run:
             runs.append({'revision': revision, 'state': 'NOT_CHECKED', 'run_id': None, 'check': None, 'excel': None})
             rows.append({'revision': revision, 'run_id': '', 'state': 'NOT_CHECKED', 'plan': '未执行', 'note': '无已保存的单版本检查结果', 'checks': []})

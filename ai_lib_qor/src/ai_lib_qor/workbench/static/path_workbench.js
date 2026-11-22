@@ -13,52 +13,203 @@ document.addEventListener('submit', function(e) {
   form.querySelectorAll('button[type="submit"],button:not([type])').forEach(function(b){ b.disabled = true; });
 });
 
+/* Live Async Job Monitor with Real-time Progress Bar & Cooperative Cancellation */
+var activeJobId = null;
+var activeJobTimer = null;
+var activeJobButtons = [];
+
+function _csrfToken() {
+  var m = document.querySelector('meta[name="csrf-token"]');
+  return m ? m.getAttribute('content') : '';
+}
+
 function runAsyncJobForm(form, asyncUrl) {
-  var banner = document.getElementById('async-job-banner');
-  var statusEl = document.getElementById('async-job-status');
-  var buttons = form.querySelectorAll('button[type="submit"],button:not([type])');
-  buttons.forEach(function(b){ b.disabled = true; });
-  if (banner) {
-    banner.hidden = false;
-    statusEl.textContent = '已提交后台任务，正在排队执行…';
-  }
+  activeJobButtons = Array.prototype.slice.call(form.querySelectorAll('button[type="submit"],button:not([type])'));
+  activeJobButtons.forEach(function(b){ b.disabled = true; });
+  showJobPanel({
+    label: '后台任务提交中…', status: 'QUEUED', stage: 'QUEUED',
+    message: '正在向本地服务提交后台任务…', elapsed_seconds: 0, percent: null, events: []
+  });
   var body = new FormData(form);
   fetch(asyncUrl, {method: 'POST', body: body, credentials: 'same-origin'})
     .then(function(r){ return r.json().then(function(d){ return {ok: r.ok, data: d}; }); })
     .then(function(res){
       if (!res.ok || !res.data.job_id) {
-        if (statusEl) statusEl.textContent = '后台任务提交失败：' + (res.data && res.data.error || '未知错误');
-        buttons.forEach(function(b){ b.disabled = false; });
+        renderJobState({
+          label: '提交失败', status: 'FAILED', message: (res.data && res.data.error) || '未知错误',
+          elapsed_seconds: 0, percent: 0, events: []
+        });
+        activeJobButtons.forEach(function(b){ b.disabled = false; });
         return;
       }
-      pollAsyncJob(res.data.job_id, buttons);
+      activeJobId = res.data.job_id;
+      try { sessionStorage.setItem('ai_lib_active_job', activeJobId); } catch (e) {}
+      renderJobState(res.data);
+      scheduleJobPoll();
     })
     .catch(function(err){
-      if (statusEl) statusEl.textContent = '网络请求失败：' + err;
-      buttons.forEach(function(b){ b.disabled = false; });
+      renderJobState({label: '网络异常', status: 'FAILED', message: String(err), elapsed_seconds: 0, percent: 0, events: []});
+      activeJobButtons.forEach(function(b){ b.disabled = false; });
     });
 }
 
-function pollAsyncJob(jobId, buttons) {
-  var statusEl = document.getElementById('async-job-status');
-  fetch('/api/v1/jobs/' + encodeURIComponent(jobId), {credentials: 'same-origin'})
+function showJobPanel(job) {
+  var panel = document.getElementById('async-job-panel');
+  var reopen = document.getElementById('job-reopen-btn');
+  if (panel) panel.hidden = false;
+  if (reopen) reopen.hidden = true;
+  renderJobState(job);
+}
+
+function minimizeJobPanel() {
+  var panel = document.getElementById('async-job-panel');
+  var reopen = document.getElementById('job-reopen-btn');
+  if (panel) panel.hidden = true;
+  if (reopen) reopen.hidden = false;
+}
+
+function reopenJobPanel() {
+  var panel = document.getElementById('async-job-panel');
+  var reopen = document.getElementById('job-reopen-btn');
+  if (panel) panel.hidden = false;
+  if (reopen) reopen.hidden = true;
+}
+
+function closeJobPanel() {
+  var panel = document.getElementById('async-job-panel');
+  var reopen = document.getElementById('job-reopen-btn');
+  if (panel) panel.hidden = true;
+  if (reopen) reopen.hidden = true;
+  activeJobId = null;
+  try { sessionStorage.removeItem('ai_lib_active_job'); } catch (e) {}
+}
+
+function renderJobState(job) {
+  var panel = document.getElementById('async-job-panel');
+  if (!panel) return;
+  panel.classList.remove('job-ok', 'job-warn', 'job-err');
+  var badge = document.getElementById('job-status-badge');
+  var title = document.getElementById('job-title');
+  var elapsed = document.getElementById('job-elapsed');
+  var bar = document.getElementById('job-progress-bar');
+  var pct = document.getElementById('job-progress-pct');
+  var msg = document.getElementById('job-message');
+  var list = document.getElementById('job-events-list');
+  var cancelBtn = document.getElementById('job-cancel-btn');
+  var reloadBtn = document.getElementById('job-reload-btn');
+  var closeBtn = document.getElementById('job-close-btn');
+  var reopen = document.getElementById('job-reopen-btn');
+
+  var st = job.status || 'RUNNING';
+  var isActive = (st === 'QUEUED' || st === 'RUNNING' || st === 'CANCELLING');
+  if (title) title.textContent = job.label || '后台任务';
+  if (elapsed) elapsed.textContent = (job.elapsed_seconds != null ? job.elapsed_seconds : 0) + 's';
+  if (msg) msg.textContent = job.message || '';
+
+  if (badge) {
+    badge.className = 'tag ' + (
+      st === 'SUCCEEDED' ? 'tag-new' :
+      st === 'FAILED' ? 'tag-failed' :
+      (st === 'CANCELLED' || st === 'CANCELLING') ? 'tag-partial' : 'tag-updated'
+    );
+    var labelMap = {QUEUED:'排队中', RUNNING:'运行中', CANCELLING:'正在终止…', CANCELLED:'已安全终止', SUCCEEDED:'已完成', FAILED:'执行失败'};
+    badge.innerHTML = '<span class="dot"></span>' + (labelMap[st] || st);
+  }
+  if (st === 'SUCCEEDED') panel.classList.add('job-ok');
+  else if (st === 'CANCELLED' || st === 'CANCELLING') panel.classList.add('job-warn');
+  else if (st === 'FAILED') panel.classList.add('job-err');
+
+  if (bar && pct) {
+    if (job.percent != null) {
+      bar.value = job.percent;
+      bar.max = 100;
+      pct.textContent = (job.total ? (job.completed + '/' + job.total + ' · ') : '') + job.percent + '%';
+    } else if (!isActive) {
+      bar.value = st === 'SUCCEEDED' ? 100 : 0;
+      bar.max = 100;
+      pct.textContent = st === 'SUCCEEDED' ? '100%' : '已停止';
+    } else {
+      bar.removeAttribute('value');
+      pct.textContent = (job.stage || '执行中') + '…';
+    }
+  }
+
+  if (list && Array.isArray(job.events)) {
+    list.innerHTML = '';
+    job.events.forEach(function(ev) {
+      var li = document.createElement('li');
+      li.textContent = ev;
+      list.appendChild(li);
+    });
+    list.scrollTop = list.scrollHeight;
+  }
+
+  if (cancelBtn) {
+    cancelBtn.hidden = !isActive;
+    cancelBtn.disabled = (st === 'CANCELLING');
+    cancelBtn.textContent = (st === 'CANCELLING') ? '正在安全停止…' : '终止任务';
+  }
+  if (reloadBtn) reloadBtn.hidden = (st !== 'SUCCEEDED' && st !== 'CANCELLED');
+  if (closeBtn) closeBtn.hidden = isActive;
+  if (reopen && !reopen.hidden) {
+    reopen.textContent = isActive ? ('查看运行进度 (' + (job.percent != null ? job.percent + '%' : (job.stage || '运行中')) + ')') : '查看任务结果';
+  }
+}
+
+function scheduleJobPoll() {
+  if (activeJobTimer) clearTimeout(activeJobTimer);
+  if (!activeJobId) return;
+  activeJobTimer = setTimeout(function() {
+    var jid = activeJobId;
+    fetch('/api/v1/jobs/' + encodeURIComponent(jid), {credentials: 'same-origin'})
+      .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(job){
+        renderJobState(job);
+        if (job.status === 'QUEUED' || job.status === 'RUNNING' || job.status === 'CANCELLING') {
+          scheduleJobPoll();
+        } else {
+          activeJobButtons.forEach(function(b){ b.disabled = false; });
+          try { sessionStorage.removeItem('ai_lib_active_job'); } catch (e) {}
+        }
+      })
+      .catch(function(){
+        activeJobButtons.forEach(function(b){ b.disabled = false; });
+      });
+  }, 500);
+}
+
+function cancelActiveJob() {
+  if (!activeJobId) return;
+  var cancelBtn = document.getElementById('job-cancel-btn');
+  if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.textContent = '正在发送终止指令…'; }
+  fetch('/api/v1/jobs/' + encodeURIComponent(activeJobId) + '/cancel', {
+    method: 'POST',
+    headers: {'X-CSRF-Token': _csrfToken()},
+    credentials: 'same-origin'
+  })
     .then(function(r){ return r.json(); })
+    .then(function(job){ renderJobState(job); })
+    .catch(function(){ if (cancelBtn) cancelBtn.disabled = false; });
+}
+
+/* Reconnect to an in-flight background job across page reloads */
+(function reconnectActiveJob() {
+  var saved = null;
+  try { saved = sessionStorage.getItem('ai_lib_active_job'); } catch (e) {}
+  if (!saved) return;
+  fetch('/api/v1/jobs/' + encodeURIComponent(saved), {credentials: 'same-origin'})
+    .then(function(r){ if (!r.ok) throw new Error('missing'); return r.json(); })
     .then(function(job){
-      if (job.status === 'QUEUED' || job.status === 'RUNNING') {
-        if (statusEl) statusEl.textContent = job.label + ' · 状态 ' + job.status + ' · 已耗时 ' + job.elapsed_seconds + 's';
-        setTimeout(function(){ pollAsyncJob(jobId, buttons); }, 700);
-      } else if (job.status === 'SUCCEEDED') {
-        if (statusEl) statusEl.textContent = job.label + ' 已完成（' + job.elapsed_seconds + 's），正在刷新页面…';
-        setTimeout(function(){ window.location.reload(); }, 400);
+      activeJobId = job.job_id;
+      showJobPanel(job);
+      if (job.status === 'QUEUED' || job.status === 'RUNNING' || job.status === 'CANCELLING') {
+        scheduleJobPoll();
       } else {
-        if (statusEl) statusEl.textContent = job.label + ' 失败：' + (job.error || '未知错误');
-        buttons.forEach(function(b){ b.disabled = false; });
+        try { sessionStorage.removeItem('ai_lib_active_job'); } catch (e) {}
       }
     })
-    .catch(function(){
-      setTimeout(function(){ pollAsyncJob(jobId, buttons); }, 1200);
-    });
-}
+    .catch(function(){ try { sessionStorage.removeItem('ai_lib_active_job'); } catch (e) {} });
+})();
 
 function switchGlobalLibrary(val) {
   if (!val) return;

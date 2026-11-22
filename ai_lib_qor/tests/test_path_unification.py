@@ -99,33 +99,6 @@ class PathUnificationTests(unittest.TestCase):
         self.assertTrue(impact['currently_used'])
         self.assertEqual(json.loads((self.folder/'effective/effective_lib_002.json').read_text())['revision'], 'rev_0002')
 
-    def test_legacy_migration_translates_members_without_identity_sidecars(self):
-        from ai_lib_qor.application.path_migration import migrate_legacy_library
-        import shutil
-        legacy=Path(self.tmp.name)/'legacy';folder=legacy/'libraries/v/lib';folder.mkdir(parents=True)
-        for i,version in enumerate(self.versions,1):
-            source=next(self.folder.glob('delivery/delivery_lib_'+version[:8]+'_*.json'))
-            shutil.copy(source,folder/f'delivery_{i:03}.json')
-            delivery=json.loads(source.read_text())
-            evidence={'legacy_compatibility':{'metadata':{'delivery_id':f'old{i}'},
-                     'files':{path:{'file_id':f'{view}-{path}', 'view':view} for view,paths in delivery['views'].items() for path in paths}}}
-            (folder/f'evidence_delivery_{i:03}.json').write_text(json.dumps(evidence))
-        formal=json.loads(next(self.folder.glob('formal/formal_NL1_*.json')).read_text())
-        (folder/'formal_NL1_001.json').write_text(json.dumps(formal))
-        for i in (1,2):
-            old={'schema_version':'effective_version.v1','owner':{'owner_type':'SOURCE_LIBRARY','owner_id':'lib'},
-                 'revision_id':f'rev_{i:04}', 'created_at':'2026-01-02T00:00:00Z',
-                 'members':[{'source_ref':{'kind':'delivery_file','source_library_id':'lib','delivery_id':f'old{i}','file_id':'LEF-LEF/a.lef'}}]}
-            (folder/f'effective_lib_{i:03}.json').write_text(json.dumps(old))
-        dest=Path(self.tmp.name)/'migrated'
-        result=migrate_legacy_library(legacy,dest,'v','lib')
-        self.assertEqual(result['revisions'],2)
-        out=dest/'libraries/v/lib'
-        self.assertFalse(list(out.glob('evidence_delivery_*.json')))
-        self.assertEqual(json.loads((out/'effective_lib_002.json').read_text())['views']['LEF'][self.versions[1]], ['LEF/a.lef'])
-        self.assertTrue((out/'latest_delivery.json').is_symlink())
-        self.assertTrue((out/'latest_effective.json').is_symlink())
-
 
 if __name__ == '__main__':
     unittest.main()

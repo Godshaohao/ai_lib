@@ -41,15 +41,15 @@ QoR 检查与报告层（数据持久化与报表渲染解耦）
 | 位置 | 当前职责 | 边界与说明 |
 |---|---|---|
 | `cli.py` | 统一 CLI 入口（主线命令分四组呈现，支持 `--format json\|table`；历史 v1/v2/v3 命令隐藏但保持兼容） | 主线涵盖 `refresh*`、`check-pending`、`minimal-check-*`、`accept-revision`、`storage-stats`、`cache-clean`。 |
-| `sources/root_inventory.py`、`sources/layout.py` | L1 RAW/Formal 盘点、受控 5 子目录布局、`formal_observations.tsv` 去重 | 拒绝符号链接越界；观察不完整（存在 `unresolved`）时不替换前序 Formal 快照且记录全量明细。 |
+| `sources/root_inventory.py`、`sources/layout.py` | L1 RAW/Formal 盘点（默认跳过已归档历史版本目录遍历、`--vendor/--library` 单库直达、支持 `ignore_patterns` 过滤、`--verify-raw` 按需复核原地篡改）、受控 5 子目录布局、`formal_observations.tsv` 去重 | 绝不读取 `.gds`/`.db` 等原始文件内容；观察不完整（存在 `unresolved`）时不替换前序 Formal 快照且记录全量明细。 |
 | `application/minimal_effective.py`、`application/path_acceptance.py` | L2 有效版本初始化/演化/预览/恢复；独立的人工采纳与回退（`accepted_effective.json`） | `CheckResult PASS` 绝不自动改写采纳指针；历史版本只读不可篡改。 |
-| `application/minimal_file_index.py`、`application/path_query.py`、`application/path_refresh.py` | L3 FileIndex 与 SHA-256 manifest 校验、只读统一查询、三层自动刷新编排 | 打开 Web 页面或查询时直接按内容指纹验真，未变库跳过重建；可拦截保持 `mtime` 不变的篡改。 |
-| `facts/registry.py`、`facts/parsers.py`、`facts/_compat/` | 可插拔 View → Parser 注册表与签名（`parser_signature`） | 已支持 LEF、Liberty（含 `type()` + `bus()` SRAM 端口展开）、Verilog/CDL/SPICE（`PARTIAL`）；未覆盖 View 明确标为 `NOT_CHECKED`。 |
-| `checks/path_plugins.py`、`application/minimal_checks.py`、`application/path_batch.py` | 可插拔检查插件编排、内容寻址共享池复用、原子懒渲染 Excel、增量批量检查 `check_pending` | `load_check_bundle()` 透明还原共享池事实并兼容旧内嵌格式。 |
+| `application/minimal_file_index.py`、`application/path_query.py`、`application/path_refresh.py` | L3 FileIndex 与双级 manifest 校验（首页 `fast_stat` 快速态 + 单库读取/检查严格 SHA-256 验真）、只读统一查询、三层自动刷新编排 | 打开 Web 页面或查询时不扫描 RAW、未变库跳过重建；单库读取仍严格拦截保持 `mtime` 不变的篡改。 |
+| `facts/registry.py`、`facts/parsers.py`、`facts/_compat/` | 可插拔 View → Parser 注册表与签名（`parser_signature`） | 已支持 LEF、Liberty（含 `type()` + `bus()` SRAM 端口展开）、Verilog/CDL/SPICE（`PARTIAL`）；`GDS`/`DB` 等非解析 View 全程跳过不哈希，显式标为 `NOT_CHECKED`。 |
+| `checks/path_plugins.py`、`application/minimal_checks.py`、`application/path_batch.py` | 可插拔检查插件编排、内容寻址共享池复用、原子懒渲染 Excel、增量批量检查 `check_pending` | `load_check_bundle()` 透明还原共享池事实；全部长耗时循环均支持进度回调与安全协作式终止。 |
 | `application/path_storage.py` | 只读磁盘占用统计（区分权威历史与可重建缓存）与安全缓存清理 | `clean_cache` 默认 `dry_run=True`，仅清理有完好 JSON 支撑的 Excel 缓存或无引用孤儿共享事实。 |
 | `reporting/qor_views.py`、`reporting/excel.py` | 可插拔 FileFacts 视图适配器、服务端分页/筛选、单版本对比视图与 Excel 渲染 | `paginate_facts_view` / `paginate_facts_diff` 避免大工艺库数千 Pin 一次性撑爆浏览器 DOM。 |
-| `workbench/path_app.py`、`workbench/jobs.py`、`workbench/templates/path_*.html`、`workbench/static/` | 拆分的模块化 Web 模板、静态资源、只读 `/api/v1/*` JSON API 与有界异步后台任务队列 | 仅监听本机回环地址并强制 CSRF 校验；长耗时刷新/检查支持后台异步提交与轮询。 |
-| 旧代兼容模块（`workbench/app.py`、`application/v2_*`、`v3_*`、`versions/` 等） | 保留旧测试与历史迁移兼容 | 未获明确下线授权前保留兼容，不作为新功能开发主线。 |
+| `workbench/path_app.py`、`workbench/jobs.py`、`workbench/templates/path_*.html`、`workbench/static/` | 拆分的模块化 Web 模板、静态资源、只读 `/api/v1/*` JSON API、实时进度面板与可终止后台任务（`POST /api/v1/jobs/<id>/cancel`） | 仅监听本机回环地址并强制 CSRF 校验；长耗时刷新/检查支持实时步骤日志、进度条、收起续跑与安全终止。 |
+| 旧代模块与 Schema 归档 | 已全部无损归档至 `archive/20261122_旧代源码与Schema归档/` | 源码包已收口为纯路径式主线（36 个 `.py` 模块、6 份 Schema、6 个 `path_*.html` 模板），纯 `PYTHONPATH=src` 独立运行，无外部 `lib_guard` 依赖。 |
 
 ## 核心状态分离红线
 

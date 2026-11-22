@@ -76,10 +76,13 @@ def _snapshot_library_l1(work, vendor=None, library=None):
     return state
 
 
-def refresh_l1(work, raw_root=None, nl_root=None, *, nl_version=None, raw=True, formal=True, vendor=None, library=None, actor='local'):
-    """Layer 1: Scan and archive RAW deliveries and Formal NL snapshots only."""
+def refresh_l1(work, raw_root=None, nl_root=None, *, nl_version=None, raw=True, formal=True, verify_raw=False, vendor=None, library=None, actor='local', progress_cb=None, cancel_event=None):
+    """Layer 1: Scan and archive RAW deliveries and Formal NL snapshots only (incremental skip by default)."""
+    from ai_lib_qor.workbench.jobs import check_cancel, emit_progress
     if not (raw or formal):
         raise ValueError('L1 刷新至少需要启用 RAW 或 Formal 之一')
+    check_cancel(cancel_event, 'L1 刷新已终止')
+    emit_progress(progress_cb, 'L1', '准备 L1 来源盘点…')
     config = load_path_config(work)
     effective_raw = raw_root if raw_root is not None else config.get('raw_root')
     effective_nl = nl_root if nl_root is not None else config.get('nl_root')
@@ -97,6 +100,9 @@ def refresh_l1(work, raw_root=None, nl_root=None, *, nl_version=None, raw=True, 
         auto_effective=False,
         vendor=vendor,
         library=library,
+        verify_raw=verify_raw,
+        progress_cb=progress_cb,
+        cancel_event=cancel_event,
     )
     after = _snapshot_library_l1(work, vendor, library)
 
@@ -119,16 +125,19 @@ def refresh_l1(work, raw_root=None, nl_root=None, *, nl_version=None, raw=True, 
         'at': utc_text(),
         'actor': actor,
         'scope': {'vendor': vendor, 'library': library},
-        'options': {'raw': raw, 'formal': formal, 'nl_version': effective_nl_ver},
+        'options': {'raw': raw, 'formal': formal, 'nl_version': effective_nl_ver, 'verify_raw': verify_raw},
         'delivery_created': inv['delivery_created'],
         'delivery_unchanged': inv['delivery_unchanged'],
         'formal_created': inv['formal_created'],
         'formal_unchanged': inv['formal_unchanged'],
+        'raw_versions_walked': inv.get('raw_versions_walked', 0),
+        'raw_versions_skipped': inv.get('raw_versions_skipped', 0),
         'formal_observation_status': inv.get('formal_observation_status'),
         'libraries_changed': libraries_changed,
         'warnings': inv['warnings'],
     }
     _append_refresh_history(work, summary)
+    emit_progress(progress_cb, 'L1', f"L1 完成：新增交付 {inv['delivery_created']} · 跳过已归档版本 {inv.get('raw_versions_skipped', 0)}")
     return summary
 
 
@@ -149,8 +158,9 @@ def _latest_formal_file(folder):
     return candidates[-1][2]
 
 
-def refresh_l2(work, *, auto_init_from_formal=True, vendor=None, library=None, actor='automatic'):
+def refresh_l2(work, *, auto_init_from_formal=True, vendor=None, library=None, actor='automatic', progress_cb=None, cancel_event=None):
     """Layer 2: Auto-initialize (from Formal) and auto-evolve Effective revisions from archived L1 records."""
+    from ai_lib_qor.workbench.jobs import check_cancel, emit_progress
     initialized = 0
     published = 0
     unchanged = 0
@@ -158,7 +168,11 @@ def refresh_l2(work, *, auto_init_from_formal=True, vendor=None, library=None, a
     warnings = []
     libraries_changed = []
 
-    for v, lib, folder in _target_libraries(work, vendor, library):
+    targets = _target_libraries(work, vendor, library)
+    total = len(targets)
+    for idx, (v, lib, folder) in enumerate(targets, 1):
+        check_cancel(cancel_event, 'L2 推进已由用户终止')
+        emit_progress(progress_cb, 'L2', f'L2 推进有效版本 {v}/{lib} ({idx}/{total})', completed=idx - 1, total=total)
         lib_events = []
         try:
             with locked(folder):
@@ -274,8 +288,9 @@ def refresh_l2(work, *, auto_init_from_formal=True, vendor=None, library=None, a
     return summary
 
 
-def refresh_l3(work, *, force_verify=False, vendor=None, library=None, actor='local'):
+def refresh_l3(work, *, force_verify=False, vendor=None, library=None, actor='local', progress_cb=None, cancel_event=None):
     """Layer 3: Refresh file_index.json only for libraries whose archived L1/L2 fingerprint changed."""
+    from ai_lib_qor.workbench.jobs import check_cancel, emit_progress
     updated = 0
     unchanged = 0
     skipped_rebuild = 0
@@ -283,7 +298,11 @@ def refresh_l3(work, *, force_verify=False, vendor=None, library=None, actor='lo
     warnings = []
     libraries_changed = []
 
-    for v, lib, _ in _target_libraries(work, vendor, library):
+    targets = _target_libraries(work, vendor, library)
+    total = len(targets)
+    for idx, (v, lib, _) in enumerate(targets, 1):
+        check_cancel(cancel_event, 'L3 索引刷新已由用户终止')
+        emit_progress(progress_cb, 'L3', f'L3 校验/刷新索引 {v}/{lib} ({idx}/{total})', completed=idx - 1, total=total)
         try:
             res = refresh_index(work, v, lib, force_verify=force_verify)
             if res['state'] == 'UPDATED':
@@ -311,14 +330,18 @@ def refresh_l3(work, *, force_verify=False, vendor=None, library=None, actor='lo
         'warnings': warnings,
     }
     _append_refresh_history(work, summary)
+    emit_progress(progress_cb, 'L3', f'L3 完成：更新 {updated} · 跳过重建 {skipped_rebuild}', completed=total, total=total)
     return summary
 
 
-def refresh_all(work, raw_root=None, nl_root=None, *, nl_version=None, raw=True, formal=True, auto_init_from_formal=True, force_verify=False, vendor=None, library=None, actor='local'):
+def refresh_all(work, raw_root=None, nl_root=None, *, nl_version=None, raw=True, formal=True, auto_init_from_formal=True, force_verify=False, verify_raw=False, vendor=None, library=None, actor='local', progress_cb=None, cancel_event=None):
     """Run full automated pipeline L1 -> L2 -> L3."""
-    l1 = refresh_l1(work, raw_root, nl_root, nl_version=nl_version, raw=raw, formal=formal, vendor=vendor, library=library, actor=actor)
-    l2 = refresh_l2(work, auto_init_from_formal=auto_init_from_formal, vendor=vendor, library=library, actor='automatic' if actor == 'local' else actor)
-    l3 = refresh_l3(work, force_verify=force_verify, vendor=vendor, library=library, actor=actor)
+    from ai_lib_qor.workbench.jobs import check_cancel
+    l1 = refresh_l1(work, raw_root, nl_root, nl_version=nl_version, raw=raw, formal=formal, verify_raw=verify_raw, vendor=vendor, library=library, actor=actor, progress_cb=progress_cb, cancel_event=cancel_event)
+    check_cancel(cancel_event, '三层刷新在 L2 前已由用户终止')
+    l2 = refresh_l2(work, auto_init_from_formal=auto_init_from_formal, vendor=vendor, library=library, actor='automatic' if actor == 'local' else actor, progress_cb=progress_cb, cancel_event=cancel_event)
+    check_cancel(cancel_event, '三层刷新在 L3 前已由用户终止')
+    l3 = refresh_l3(work, force_verify=force_verify, vendor=vendor, library=library, actor=actor, progress_cb=progress_cb, cancel_event=cancel_event)
     summary = {
         'layer': 'ALL',
         'at': utc_text(),
@@ -374,7 +397,7 @@ def refresh_status(work, *, limit=10):
             idx_state, refreshed_at = 'MISSING', None
             missing_count += 1
         else:
-            matched, manifest = index_manifest_matches(work, v, lib)
+            matched, manifest = index_manifest_matches(work, v, lib, fast=True)
             if matched:
                 idx_state, refreshed_at = 'FRESH', manifest.get('refreshed_at')
                 fresh_count += 1

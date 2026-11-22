@@ -570,14 +570,15 @@ def create_path_app(work_root):
         formal_flag=request.form.get('formal','1')=='1'
         auto_init=request.form.get('auto_init','1')=='1'
         force_verify=request.form.get('force_verify')=='1'
+        verify_raw=request.form.get('verify_raw')=='1'
         if layer=='l1':
-            fn=lambda:refresh_l1(work,raw or None,nl or None,nl_version=nl_ver,raw=raw_flag,formal=formal_flag,vendor=vendor,library=library,actor='web-async')
+            fn=lambda cb,ev:refresh_l1(work,raw or None,nl or None,nl_version=nl_ver,raw=raw_flag,formal=formal_flag,verify_raw=verify_raw,vendor=vendor,library=library,actor='web-async',progress_cb=cb,cancel_event=ev)
         elif layer=='l2':
-            fn=lambda:refresh_l2(work,auto_init_from_formal=auto_init,vendor=vendor,library=library,actor='web-async')
+            fn=lambda cb,ev:refresh_l2(work,auto_init_from_formal=auto_init,vendor=vendor,library=library,actor='web-async',progress_cb=cb,cancel_event=ev)
         elif layer=='l3':
-            fn=lambda:refresh_l3(work,force_verify=force_verify,vendor=vendor,library=library,actor='web-async')
+            fn=lambda cb,ev:refresh_l3(work,force_verify=force_verify,vendor=vendor,library=library,actor='web-async',progress_cb=cb,cancel_event=ev)
         elif layer=='all':
-            fn=lambda:refresh_all(work,raw or None,nl or None,nl_version=nl_ver,raw=raw_flag,formal=formal_flag,auto_init_from_formal=auto_init,force_verify=force_verify,vendor=vendor,library=library,actor='web-async')
+            fn=lambda cb,ev:refresh_all(work,raw or None,nl or None,nl_version=nl_ver,raw=raw_flag,formal=formal_flag,auto_init_from_formal=auto_init,force_verify=force_verify,verify_raw=verify_raw,vendor=vendor,library=library,actor='web-async',progress_cb=cb,cancel_event=ev)
         else:
             return jsonify({'error':'无效的刷新层级'}),400
         job=jobs.submit('refresh',f'刷新 {layer.upper()}'+(f' ({vendor}/{library})' if vendor else ''),fn)
@@ -593,7 +594,7 @@ def create_path_app(work_root):
             v=request.form.get('vendor') or None;lib=request.form.get('library') or None
             if bool(v)!=bool(lib):return jsonify({'error':'vendor 和 library 必须同时指定'}),400
             rerun_flag=request.form.get('rerun')=='1'
-            fn=lambda:check_pending(work,vendor=v,library=lib,render_excel=not lazy_excel,rerun=rerun_flag)
+            fn=lambda cb,ev:check_pending(work,vendor=v,library=lib,render_excel=not lazy_excel,rerun=rerun_flag,progress_cb=cb,cancel_event=ev)
             job=jobs.submit('check_pending','增量检查待检库',fn)
             return jsonify(job),202
         vendor,library,folder=scope()
@@ -601,10 +602,10 @@ def create_path_app(work_root):
         baseline=request.form.get('baseline') or None
         if kind=='all':
             rerun=request.form.get('rerun')=='1'
-            fn=lambda:run_library(work,vendor,library,rerun=rerun,render_single_excel=not lazy_excel)
+            fn=lambda cb,ev:run_library(work,vendor,library,rerun=rerun,render_single_excel=not lazy_excel,progress_cb=cb,cancel_event=ev)
             job=jobs.submit('check_library',f'库级检查 {vendor}/{library}',fn)
             return jsonify(job),202
-        fn=lambda:run_revision(work,vendor,library,revision,baseline=baseline,render=not lazy_excel)
+        fn=lambda cb,ev:run_revision(work,vendor,library,revision,baseline=baseline,render=not lazy_excel,progress_cb=cb,cancel_event=ev)
         job=jobs.submit('check_revision',f'单版本检查 {vendor}/{library} {revision}',fn)
         return jsonify(job),202
 
@@ -615,6 +616,12 @@ def create_path_app(work_root):
     @app.get('/api/v1/jobs/<job_id>')
     def api_job_status(job_id):
         job=jobs.get(job_id)
+        if not job:abort(404)
+        return jsonify(job)
+
+    @app.post('/api/v1/jobs/<job_id>/cancel')
+    def api_job_cancel(job_id):
+        job=jobs.cancel(job_id)
         if not job:abort(404)
         return jsonify(job)
 

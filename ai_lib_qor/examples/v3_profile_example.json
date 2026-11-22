@@ -1,8 +1,0 @@
-{
-  "pin_pairs": [
-    {
-      "lef_path": "lef/core.lef",
-      "liberty_path": "lib/core.lib"
-    }
-  ]
-}

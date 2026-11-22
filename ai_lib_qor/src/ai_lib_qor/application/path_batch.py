@@ -29,11 +29,13 @@ def _iter_targets(work: Path, vendor=None, library=None):
     return out
 
 
-def check_pending(work, *, vendor=None, library=None, render_excel=False, rerun=False, limit=None):
+def check_pending(work, *, vendor=None, library=None, render_excel=False, rerun=False, limit=None, progress_cb=None, cancel_event=None):
     """Run single-revision checks ONLY for libraries whose latest effective revision lacks a saved check."""
+    from ai_lib_qor.workbench.jobs import check_cancel, emit_progress
     root = Path(work).resolve(strict=True)
     query = PathDataQuery(root)
     targets = _iter_targets(root, vendor=vendor, library=library)
+    total = len(targets)
 
     checked = []
     skipped_already_checked = []
@@ -41,7 +43,9 @@ def check_pending(work, *, vendor=None, library=None, render_excel=False, rerun=
     errors = []
     failed_checks_total = 0
 
-    for v, lib in targets:
+    for idx, (v, lib) in enumerate(targets, 1):
+        check_cancel(cancel_event, '增量批量检查已由用户终止')
+        emit_progress(progress_cb, 'CHECK', f'检查进度 {v}/{lib} ({idx}/{total})', completed=idx - 1, total=total)
         if limit is not None and len(checked) >= limit:
             break
         try:
@@ -68,7 +72,7 @@ def check_pending(work, *, vendor=None, library=None, render_excel=False, rerun=
                 })
                 continue
         try:
-            res = run_revision(root, v, lib, latest, baseline=baseline, render=render_excel)
+            res = run_revision(root, v, lib, latest, baseline=baseline, render=render_excel, cancel_event=cancel_event)
             import json
             report = json.loads(Path(res['check']).read_text(encoding='utf-8'))
             f_checks = report.get('summary', {}).get('failed_checks', 0)
@@ -88,6 +92,8 @@ def check_pending(work, *, vendor=None, library=None, render_excel=False, rerun=
             })
         except (OSError, ValueError, KeyError, TypeError) as exc:
             errors.append({'vendor': v, 'library': lib, 'revision': latest, 'error': str(exc)})
+
+    emit_progress(progress_cb, 'CHECK', f'批量检查完成：新检查 {len(checked)} 库 · 跳过 {len(skipped_already_checked)} 库', completed=total, total=total)
 
     overall_state = (
         'FAILED' if errors else (

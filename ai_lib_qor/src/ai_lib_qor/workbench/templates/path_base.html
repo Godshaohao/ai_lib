@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf }}">
 <title>{% block title %}AI LIB{% endblock %} · AI LIB</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='path_workbench.css') }}">
 </head>
@@ -33,10 +34,34 @@
 </header>
 
 <main class="shell">
-  <div id="async-job-banner" class="job-banner" hidden role="status" aria-live="polite">
-    <span id="async-job-status">后台任务运行中…</span>
-    <span class="tag tag-updated">异步执行</span>
-  </div>
+  <!-- 实时后台运行监控面板（带进度条、步骤日志与可安全终止按钮） -->
+  <section id="async-job-panel" class="job-panel" hidden role="status" aria-live="polite">
+    <div class="job-panel-head">
+      <div class="toolbar-group">
+        <span id="job-status-badge" class="tag tag-updated"><span class="dot"></span>运行中</span>
+        <strong id="job-title">后台任务</strong>
+        <span id="job-elapsed" class="muted mono" style="font-size:12px">0.0s</span>
+      </div>
+      <div class="toolbar-group">
+        <button type="button" id="job-cancel-btn" class="danger-ghost btn-xs" onclick="cancelActiveJob()">终止任务</button>
+        <button type="button" id="job-reload-btn" class="btn-xs" hidden onclick="window.location.reload()">刷新查看结果</button>
+        <button type="button" id="job-minimize-btn" class="secondary btn-xs" onclick="minimizeJobPanel()">收起</button>
+        <button type="button" id="job-close-btn" class="ghost btn-xs" hidden onclick="closeJobPanel()">关闭</button>
+      </div>
+    </div>
+    <div class="job-panel-body">
+      <div class="job-progress-row">
+        <progress id="job-progress-bar" max="100"></progress>
+        <span id="job-progress-pct" class="mono num" style="font-size:12px;min-width:96px;text-align:right">执行中…</span>
+      </div>
+      <div id="job-message" class="job-message">正在连接后台任务…</div>
+      <details class="job-log-details" open>
+        <summary>运行步骤明细</summary>
+        <ol id="job-events-list" class="job-events"></ol>
+      </details>
+      <div class="job-footnote">收起不会中止后台任务；点击「终止任务」会在当前原子步骤结束后安全停止，不破坏任何归档历史；执行完成不代表质量通过或人工采纳。</div>
+    </div>
+  </section>
 
   {% if notice %}
   <div class="notice {{ 'bad' if notice.warnings or '未完成' in notice.title or '未能' in notice.title or '无法' in notice.title else '' }}">
@@ -59,6 +84,7 @@
   </footer>
 </main>
 
+<button type="button" id="job-reopen-btn" class="job-reopen" hidden onclick="reopenJobPanel()">查看运行进度</button>
 <div class="pending" id="pending" hidden role="status" aria-live="polite">正在执行，请稍候，请勿重复提交…</div>
 <script src="{{ url_for('static', filename='path_workbench.js') }}"></script>
 </body>

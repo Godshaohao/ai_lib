@@ -1,6 +1,7 @@
 """Inventory RAW and Formal roots without fabricating file or delivery identities."""
 from collections import defaultdict
 from datetime import datetime, timezone
+import fnmatch
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from .timestamps import utc_text,instant
 from .source_discovery import _DEFAULT_VERSION, natural_version_key
 from .layout import SAFE, library_folder, next_filename,archive_files,storage_dir,log_file
 from ai_lib_qor.versions.store import locked, write_atomic
+from ai_lib_qor.workbench.jobs import check_cancel, emit_progress
 
 
 def _view(path):
@@ -36,41 +38,116 @@ def _version_directory(name):
     return bool(_DEFAULT_VERSION.fullmatch(name))
 
 
-def _inventory_raw(raw,warnings,observations=None):
+def _matches_ignore(name: str, rel: str, patterns) -> bool:
+    if not patterns:
+        return False
+    for pat in patterns:
+        if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(rel, pat):
+            return True
+    return False
+
+
+def _load_archived_deliveries(out: Path):
+    """Load already-archived immutable deliveries (plus observed version set) to enable fast incremental L1 skips."""
+    archived = {}
+    libs_root = out / 'libraries'
+    if not libs_root.is_dir() or libs_root.is_symlink():
+        return archived
+    for folder in libs_root.glob('*/*'):
+        if folder.is_symlink() or not folder.is_dir() or folder.parent.is_symlink():
+            continue
+        obs_path = log_file(folder, 'raw_observations.tsv')
+        observed_versions = set()
+        if obs_path.is_file() and not obs_path.is_symlink():
+            try:
+                with obs_path.open(encoding='utf-8', newline='') as stream:
+                    for row in csv.reader(stream, delimiter='\t'):
+                        if len(row) == 5:
+                            observed_versions.add(row[0])
+            except OSError:
+                continue
+        for p in archive_files(folder, 'delivery', 'delivery_*.json'):
+            if p.is_symlink():
+                continue
+            try:
+                val = json.loads(p.read_text(encoding='utf-8'))
+                if set(val) == {'vendor', 'library', 'version', 'version_date', 'directory_created_at', 'root', 'views'}:
+                    key = (val['vendor'], val['library'], val['version'])
+                    if val['version'] in observed_versions:
+                        archived[key] = val
+            except (OSError, ValueError, TypeError):
+                continue
+    return archived
+
+
+def _inventory_raw(raw,warnings,observations=None,*,scope_vendor=None,scope_library=None,archived=None,ignore_patterns=None,stats=None,progress_cb=None,cancel_event=None):
     records=[];lookup={}
-    for vendor in sorted(raw.iterdir()):
-        if vendor.is_symlink() or not vendor.is_dir() or not SAFE.fullmatch(vendor.name):continue
-        for library in sorted(vendor.iterdir()):
-            if library.is_symlink() or not library.is_dir() or not SAFE.fullmatch(library.name):continue
-            children=[x for x in library.iterdir() if not x.is_symlink() and x.is_dir()]
-            versions=[x for x in children if SAFE.fullmatch(x.name) and _version_directory(x.name)]
-            if versions:
-                for item in children:
-                    if item not in versions:warnings.append(f'未识别为版本目录，已跳过: {item}')
-            for version in sorted(versions,key=lambda p:natural_version_key(p.name)):
-                files=[];errors=[];metadata={}
-                for current,dirs,names in os.walk(version,followlinks=False,onerror=lambda e:errors.append(str(e))):
-                    dirs.sort();names.sort()
-                    for name in list(dirs):
-                        if (Path(current)/name).is_symlink():errors.append('目录链接未扫描: '+str(Path(current)/name));dirs.remove(name)
-                    for name in names:
-                        p=Path(current)/name
-                        if p.is_symlink() or not p.is_file():errors.append('非普通文件未扫描: '+str(p));continue
-                        rel=p.relative_to(version).as_posix()
-                        try:info=p.stat()
-                        except OSError as exc:errors.append(str(exc));continue
-                        files.append(rel);metadata[rel]=(info.st_size,info.st_mtime_ns)
-                if errors:
-                    warnings.extend(errors);warnings.append(f'{version}: 盘点不完整，不发布');continue
-                if not files:continue
-                views=defaultdict(list)
-                for path in files:views[_view(path)].append(path)
-                row={'vendor':vendor.name,'library':library.name,'version':version.name,
-                     'version_date':version_date(version.name),'directory_created_at':directory_birthtime(version),
-                     'root':str(version),'views':dict(sorted(views.items()))}
-                records.append(row)
-                if observations is not None:observations[(vendor.name,library.name,version.name)]=metadata
-                for path in files:lookup.setdefault(str(version/path),[]).append((vendor.name,library.name,version.name,_view(path)))
+    walked=0;skipped=0
+    if scope_vendor and scope_library:
+        v_dir=raw/scope_vendor;l_dir=v_dir/scope_library
+        targets=[(v_dir,l_dir)] if (not v_dir.is_symlink() and v_dir.is_dir() and not l_dir.is_symlink() and l_dir.is_dir()) else []
+    else:
+        targets=[]
+        for vendor in sorted(raw.iterdir()):
+            if vendor.is_symlink() or not vendor.is_dir() or not SAFE.fullmatch(vendor.name):continue
+            for library in sorted(vendor.iterdir()):
+                if library.is_symlink() or not library.is_dir() or not SAFE.fullmatch(library.name):continue
+                targets.append((vendor,library))
+    total_libs=len(targets)
+    for idx,(vendor,library) in enumerate(targets,1):
+        check_cancel(cancel_event,'L1 RAW 盘点已由用户终止')
+        emit_progress(progress_cb,'L1',f'L1 盘点 RAW {vendor.name}/{library.name} ({idx}/{total_libs})',completed=idx-1,total=total_libs)
+        children=[x for x in library.iterdir() if not x.is_symlink() and x.is_dir()]
+        versions=[x for x in children if SAFE.fullmatch(x.name) and _version_directory(x.name)]
+        if versions:
+            for item in children:
+                if item not in versions and not _matches_ignore(item.name,item.name,ignore_patterns):
+                    warnings.append(f'未识别为版本目录，已跳过: {item}')
+        for version in sorted(versions,key=lambda p:natural_version_key(p.name)):
+            check_cancel(cancel_event,'L1 RAW 盘点已由用户终止')
+            key=(vendor.name,library.name,version.name)
+            cached=archived.get(key) if archived else None
+            if cached and cached.get('root')==str(version):
+                # Incremental fast path: already-archived version directory skips full os.walk over .db/.gds trees
+                records.append(cached)
+                for kind,paths in cached['views'].items():
+                    for rel in paths:
+                        lookup.setdefault(str(version/rel),[]).append((vendor.name,library.name,version.name,kind))
+                skipped+=1
+                continue
+            walked+=1
+            files=[];errors=[];metadata={}
+            for current,dirs,names in os.walk(version,followlinks=False,onerror=lambda e:errors.append(str(e))):
+                check_cancel(cancel_event,'L1 RAW 盘点已由用户终止')
+                dirs.sort();names.sort()
+                for name in list(dirs):
+                    dpath=Path(current)/name
+                    drel=dpath.relative_to(version).as_posix()
+                    if _matches_ignore(name,drel,ignore_patterns):
+                        dirs.remove(name);continue
+                    if dpath.is_symlink():errors.append('目录链接未扫描: '+str(dpath));dirs.remove(name)
+                for name in names:
+                    p=Path(current)/name
+                    rel=p.relative_to(version).as_posix()
+                    if _matches_ignore(name,rel,ignore_patterns):continue
+                    if p.is_symlink() or not p.is_file():errors.append('非普通文件未扫描: '+str(p));continue
+                    try:info=p.stat()
+                    except OSError as exc:errors.append(str(exc));continue
+                    files.append(rel);metadata[rel]=(info.st_size,info.st_mtime_ns)
+            if errors:
+                warnings.extend(errors);warnings.append(f'{version}: 盘点不完整，不发布');continue
+            if not files:continue
+            views=defaultdict(list)
+            for path in files:views[_view(path)].append(path)
+            row={'vendor':vendor.name,'library':library.name,'version':version.name,
+                 'version_date':version_date(version.name),'directory_created_at':directory_birthtime(version),
+                 'root':str(version),'views':dict(sorted(views.items()))}
+            records.append(row)
+            if observations is not None:observations[key]=metadata
+            for path in files:lookup.setdefault(str(version/path),[]).append((vendor.name,library.name,version.name,_view(path)))
+    if stats is not None:
+        stats['raw_versions_walked']=walked
+        stats['raw_versions_skipped']=skipped
     return records,lookup
 
 
@@ -144,7 +221,7 @@ def _latest_delivery(folder,warnings,work,vendor,library):
     update_pointer(folder,'latest_delivery.json',str(chosen.relative_to(folder)))
 
 
-def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,update_formal=True,update_index=True,auto_effective=True,vendor=None,library=None):
+def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,update_formal=True,update_index=True,auto_effective=True,vendor=None,library=None,verify_raw=True,ignore_patterns=None,progress_cb=None,cancel_event=None):
     if not any((update_raw,update_formal,update_index)):raise ValueError('至少选择一项更新')
     if bool(vendor)!=bool(library) or any(x and (not SAFE.fullmatch(x) or x in ('.','..')) for x in (vendor,library)):raise ValueError('供应商和库必须同时指定且名称安全')
     raw=Path(raw_root).resolve(strict=True) if (update_raw or update_formal) and raw_root else None
@@ -155,12 +232,31 @@ def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,u
     if any(out.is_relative_to(p) or p.is_relative_to(out) for p in (raw,nl) if p is not None):raise ValueError('输出目录不得与 RAW 或 NL 目录重叠')
     version=(nl_version or infer_nl_version(nl)) if update_formal else None
     if version and (not SAFE.fullmatch(version) or version in ('.','..')):raise ValueError('NL 版本名称不安全')
-    observations={}
-    warnings=[];deliveries,lookup=_inventory_raw(raw,warnings,observations) if raw else ([],{})
+    if ignore_patterns is None and (out/'path_sources.json').is_file() and not (out/'path_sources.json').is_symlink():
+        try:
+            cfg=json.loads((out/'path_sources.json').read_text(encoding='utf-8'))
+            if isinstance(cfg.get('ignore_patterns'),list):
+                ignore_patterns=[str(x) for x in cfg['ignore_patterns'] if isinstance(x,str) and x.strip()]
+        except (OSError,ValueError,TypeError):
+            ignore_patterns=None
+    archived=_load_archived_deliveries(out) if (raw and not verify_raw) else None
+    scope_v=vendor if (vendor and not update_formal) else None
+    scope_l=library if (library and not update_formal) else None
+    observations={};raw_stats={}
+    warnings=[]
+    deliveries,lookup=_inventory_raw(
+        raw,warnings,observations,
+        scope_vendor=scope_v,scope_library=scope_l,
+        archived=archived,ignore_patterns=ignore_patterns,
+        stats=raw_stats,progress_cb=progress_cb,cancel_event=cancel_event,
+    ) if raw else ([],{})
+    check_cancel(cancel_event,'L1 扫描已由用户终止')
     unresolved=[]
+    if update_formal:
+        emit_progress(progress_cb,'L1',f'L1 盘点 Formal NL ({version})…')
     formals=_inventory_formal(nl,lookup,version,warnings,unresolved) if update_formal else []
     out.mkdir(parents=True,exist_ok=True)
-    result={'delivery_created':0,'delivery_unchanged':0,'formal_created':0,'formal_unchanged':0,'indexes_updated':0,'indexes_unchanged':0,'indexes_failed':0,'effective_published':0,'effective_pending':0,'warnings':warnings}
+    result={'delivery_created':0,'delivery_unchanged':0,'formal_created':0,'formal_unchanged':0,'indexes_updated':0,'indexes_unchanged':0,'indexes_failed':0,'effective_published':0,'effective_pending':0,'raw_versions_walked':raw_stats.get('raw_versions_walked',0),'raw_versions_skipped':raw_stats.get('raw_versions_skipped',0),'warnings':warnings}
     if update_formal:
         status='PARTIAL' if unresolved else 'COMPLETE'
         result.update(formal_observation_status=status,formal_unresolved=unresolved)
@@ -225,7 +321,9 @@ def build_from_roots(raw_root,nl_root,output,*,nl_version=None,update_raw=True,u
                         baseline.setdefault(old_version,{})[old_path]=(int(size),int(mtime))
             new_observations=[]
             for delivery in rows['deliveries']:
-                version_name=delivery['version'];current=observations[(vendor,library,version_name)]
+                version_name=delivery['version'];current=observations.get((vendor,library,version_name))
+                if current is None:
+                    continue
                 if version_name in baseline:
                     changed=[name for name,stat in current.items() if name in baseline[version_name] and baseline[version_name][name]!=stat]
                     if changed:warnings.append(f'{vendor}/{library}/{version_name}: {len(changed)} 个文件大小或修改时间变化，疑似原地修改；不证明内容相同或历史可还原')
