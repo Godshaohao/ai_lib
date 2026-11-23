@@ -40,12 +40,6 @@ def evidence_path(delivery_path):
     return path.with_name('evidence_'+path.stem+'.json')
 
 
-def delivery_filename(delivery_id):
-    if not isinstance(delivery_id,str) or not SAFE.fullmatch(delivery_id) or delivery_id in ('.','..'):
-        raise ValueError('交付标识不安全')
-    return (delivery_id if delivery_id.startswith('delivery_') else 'delivery_'+delivery_id)+'.json'
-
-
 def next_filename(folder, prefix, *, with_evidence=False):
     """Caller holds the library lock; display sequence is not business order."""
     folder=Path(folder)
@@ -57,9 +51,3 @@ def next_filename(folder, prefix, *, with_evidence=False):
         name=f'{prefix}_{number:03d}.json'; path=folder/name
         if not path.exists() and (not with_evidence or not evidence_path(path).exists()):return name
         number+=1
-
-
-def formal_filename(nl, sid):
-    if any(not isinstance(v,str) or not SAFE.fullmatch(v) or v in ('.','..') for v in (nl,sid)):
-        raise ValueError('NL 或快照标识不安全')
-    return f'formal_{nl}_{sid}.json'

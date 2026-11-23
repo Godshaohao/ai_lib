@@ -2,80 +2,86 @@
 {% block title %}文件索引 · {{ library }}{% endblock %}
 {% block breadcrumbs %}
   <a href="{{ url_for('overview') }}">来源总览</a>
-  <span class="crumb-sep">/</span>
-  <a href="{{ url_for('library_page',vendor=vendor,library=library,revision=revision) }}">{{ vendor }} · {{ library }}</a>
-  <span class="crumb-sep">/</span>
+  <span class="crumb-sep" aria-hidden="true">/</span>
+  <a href="{{ url_for('library_page',vendor=vendor,library=library,revision=revision) }}" translate="no">{{ vendor }} · {{ library }}</a>
+  <span class="crumb-sep" aria-hidden="true">/</span>
   <span class="crumb-curr">文件索引</span>
 {% endblock %}
 
 {% block content %}
 <div class="page-head">
   <div class="page-title-group">
-    <div class="vendor-kicker">{{ vendor }} · {{ library }} · File Index</div>
-    <h1>文件索引与多维历史</h1>
-    <p>按文件路径对照 RAW 交付、Formal 快照与有效版本采用状态。</p>
+    <div class="page-eyebrow">文件索引 · <span translate="no">{{ vendor }} / {{ library }}</span></div>
+    <h1>文件历史与来源对照</h1>
+    <p>按文件路径对照 RAW 交付、Formal 快照与有效版本采用记录。</p>
   </div>
   <div class="toolbar-group">
-    <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library,revision=revision) }}">← 返回库与版本</a>
+    <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library,revision=revision) }}">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      返回库与版本
+    </a>
     {% if index %}
-    <a class="btn secondary btn-sm" href="{{ url_for('artifact',vendor=vendor,library=library,name='file_index.json') }}">下载索引 JSON</a>
+    <a class="btn secondary btn-sm" href="{{ url_for('artifact',vendor=vendor,library=library,name='file_index.json') }}">导出索引 JSON</a>
     {% endif %}
   </div>
 </div>
 
 {% if error %}
-<div class="notice bad"><strong>索引不可用</strong><span>{{ error }}。请返回库页面刷新 L3 索引。</span></div>
+<div class="notice bad" role="alert"><strong>索引不可用</strong><span>{{ error }}。请返回库页面刷新索引。</span></div>
 {% else %}
-<section class="card">
+<section class="card" aria-label="文件索引筛选与清单">
   <form method="get">
     <input type="hidden" name="vendor" value="{{ vendor }}">
     <input type="hidden" name="library" value="{{ library }}">
-    <!-- 上下文条：决定对照基准，而非行过滤 -->
+    <!-- 对照基准上下文 -->
     <div class="context-strip">
       <div class="toolbar-group">
-        <span class="context-strip-label">对照上下文</span>
+        <span class="context-strip-label">对照基准</span>
         {% if index.revisions %}
-        <label class="muted" style="font-size:12px">有效版本</label>
-        <select name="revision" aria-label="目标有效版本" style="height:28px;font-size:12.5px;font-weight:600" onchange="this.form.submit()">
+        <label for="idx-rev-select" class="context-field-label">有效版本</label>
+        <select id="idx-rev-select" name="revision" class="ctrl-sm ctrl-bold" aria-label="目标有效版本" onchange="this.form.submit()">
           {% for r in index.revisions|reverse %}
           <option value="{{ r }}" {% if r==revision %}selected{% endif %}>{{ r }}</option>
           {% endfor %}
         </select>
         {% endif %}
         {% if nl_versions %}
-        <label class="muted" style="font-size:12px;margin-left:6px">Formal 基准</label>
-        <select name="nl_version" aria-label="按 Formal 版本筛选" style="height:28px;font-size:12.5px" onchange="this.form.submit()">
+        <label for="idx-nl-select" class="context-field-label ml-xs">Formal 阶段</label>
+        <select id="idx-nl-select" name="nl_version" class="ctrl-sm" aria-label="按 Formal 阶段筛选" onchange="this.form.submit()">
           {% for nv in nl_versions %}<option value="{{ nv }}" {% if nl_version==nv %}selected{% endif %}>{{ nv }}</option>{% endfor %}
         </select>
         {% endif %}
       </div>
-      <span class="muted num" style="font-size:12px">共匹配 {{ total }} 个文件路径</span>
+      <span class="muted num text-xs">匹配 {{ total }} 个文件路径</span>
     </div>
-    <!-- 行筛选条：按 View / 交付 / 采用状态 / Formal 关系 / 关键字过滤 -->
-    <div class="toolbar" style="gap:8px">
+    <!-- 行筛选条 -->
+    <div class="toolbar">
       <div class="toolbar-group">
-        <select name="view" aria-label="按 View 筛选" style="height:28px;font-size:12.5px">
+        <select name="view" class="ctrl-sm" aria-label="按 View 筛选">
           <option value="">全部 View</option>
           {% for v in views %}<option value="{{ v }}" {% if view==v %}selected{% endif %}>{{ v }}</option>{% endfor %}
         </select>
-        <select name="delivery" aria-label="按交付筛选" style="height:28px;font-size:12.5px">
+        <select name="delivery" class="ctrl-sm" aria-label="按交付筛选">
           <option value="">全部交付</option>
           {% for d in index.deliveries|reverse %}<option value="{{ d.version }}" {% if delivery==d.version %}selected{% endif %}>{{ d.version }}</option>{% endfor %}
         </select>
-        <select name="adoption" aria-label="按采用状态筛选" style="height:28px;font-size:12.5px">
+        <select name="adoption" class="ctrl-sm" aria-label="按采用状态筛选">
           <option value="">全部采用状态</option>
           <option value="adopted" {% if adoption=='adopted' %}selected{% endif %}>当前版已采用</option>
           <option value="unadopted" {% if adoption=='unadopted' %}selected{% endif %}>当前版未采用</option>
         </select>
-        <select name="nl_rel" aria-label="按 Formal 对照筛选" style="height:28px;font-size:12.5px">
+        <select name="nl_rel" class="ctrl-sm" aria-label="按 Formal 对照筛选">
           <option value="">全部 Formal 关系</option>
-          {% for rel in ('来源相同','来源不同','无法确认','无法对照') %}
+          {% for rel in ('来源相同','来源不同','无法确认','无法对照','最新快照未观察到','尚无 Formal 快照') %}
           <option value="{{ rel }}" {% if nl_rel==rel %}selected{% endif %}>{{ rel }}</option>
           {% endfor %}
         </select>
       </div>
       <div class="toolbar-group">
-        <input type="search" name="q" value="{{ q }}" class="search-input" style="height:28px;min-width:170px" placeholder="搜索路径或版本...">
+        <div class="search-wrap">
+          <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="search" name="q" value="{{ q }}" class="search-input ctrl-sm" aria-label="搜索路径或版本" placeholder="搜索路径或版本…" autocomplete="off" spellcheck="false">
+        </div>
         <button type="submit" class="btn-sm">筛选</button>
         <a class="btn ghost btn-sm" href="{{ url_for('index_page',vendor=vendor,library=library,revision=revision) }}">重置</a>
       </div>
@@ -86,49 +92,51 @@
     <table>
       <thead>
         <tr>
-          <th style="width:82px">View</th>
-          <th>相对路径</th>
-          <th style="width:170px">RAW 交付</th>
-          <th style="width:185px">Formal ({{ nl_version or '无' }})</th>
-          <th style="width:170px">{{ revision or '有效集' }} 状态</th>
-          <th style="width:92px;text-align:right">时间线</th>
+          <th scope="col" class="w-96">View</th>
+          <th scope="col">相对路径</th>
+          <th scope="col" class="w-170">RAW 交付</th>
+          <th scope="col" class="w-180">Formal (<span translate="no">{{ nl_version or '无' }}</span>)</th>
+          <th scope="col" class="w-170"><span translate="no">{{ revision or '有效集' }}</span> 状态</th>
+          <th scope="col" class="w-96 align-right">时间线</th>
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
         <tr>
-          <td><span class="tag">{{ row.view }}</span></td>
+          <td><span class="chip" translate="no">{{ row.view }}</span></td>
           <td>
             <div class="path-cell">
-              <span class="mono">{{ row.path }}</span>
-              <button type="button" class="copy-btn" onclick="copyPath(this,'{{ row.path }}')">复制</button>
+              <span class="mono" translate="no">{{ row.path }}</span>
+              <button type="button" class="copy-icon-btn" aria-label="复制路径 {{ row.path }}" title="复制路径" onclick="copyPath(this,'{{ row.path }}')">
+                <svg class="ico ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
             </div>
           </td>
           <td>
             <span class="num">{{ row.raw|length }} 次</span>
-            {% if row.raw %}<span class="sub-text mono">{{ row.raw[-1].version }}</span>{% endif %}
+            {% if row.raw %}<span class="sub-text mono" translate="no">{{ row.raw[-1].version }}</span>{% endif %}
           </td>
           <td>
             {% if row.nl_latest %}
               <span class="tag {{ 'tag-new' if row.nl_relation=='来源相同' else ('tag-updated' if row.nl_relation=='来源不同' else 'tag-partial') }}">{{ row.nl_relation }}</span>
-              <span class="sub-text">{{ row.nl_latest.version }} · {{ row.nl_latest.source_match }}</span>
+              <span class="sub-text"><span translate="no">{{ row.nl_latest.version }}</span> · {{ row.nl_latest.source_match|source_match_label }}</span>
             {% else %}
-              <span class="muted" style="font-size:12px">最新快照未观察到</span>
+              <span class="muted text-xs">最新快照未观察到</span>
             {% endif %}
           </td>
           <td>
             {% if row.effective_in_rev %}
-              <span class="tag tag-accent">{{ revision }}</span>
-              <span class="sub-text mono">{{ row.effective_in_rev.version }}</span>
+              <span class="chip chip-accent" translate="no">{{ revision }}</span>
+              <span class="sub-text mono" translate="no">{{ row.effective_in_rev.version }}</span>
             {% elif row.effective %}
               <span class="tag tag-inherited">历史采用</span>
-              <span class="sub-text">{{ row.effective[-1].revision }}</span>
+              <span class="sub-text mono" translate="no">{{ row.effective[-1].revision }}</span>
             {% else %}
               <span class="muted">未采用</span>
             {% endif %}
           </td>
-          <td style="text-align:right">
-            <button type="button" class="secondary btn-xs" onclick="toggleTimeline('subrow-{{ loop.index0 }}',this)">展开 ▾</button>
+          <td class="align-right">
+            <button type="button" class="secondary btn-xs" aria-expanded="false" aria-controls="subrow-{{ loop.index0 }}" onclick="toggleTimeline('subrow-{{ loop.index0 }}',this)">展开</button>
           </td>
         </tr>
         <tr id="subrow-{{ loop.index0 }}" class="subrow" style="display:none">
@@ -139,18 +147,18 @@
                 <div class="tl-scroll">
                   {% for x in row.raw %}
                   <div class="tl-item">
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
-                      <strong class="mono">{{ x.version }}</strong>
+                    <div class="tl-item-head">
+                      <strong class="mono" translate="no">{{ x.version }}</strong>
                       {% if index.revisions %}
-                      <form method="post" action="{{ url_for('effective_preview') }}" style="margin:0">
+                      <form class="inline-form" method="post" action="{{ url_for('effective_preview') }}">
                         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="action" value="set"><input type="hidden" name="view" value="{{ row.view }}"><input type="hidden" name="path" value="{{ row.path }}"><input type="hidden" name="version" value="{{ x.version }}">
                         <button type="submit" class="ghost btn-xs">预览选用</button>
                       </form>
                       {% endif %}
                     </div>
-                    <div class="mono muted" style="font-size:11px;margin-top:2px;overflow-wrap:anywhere">{{ x.path }}</div>
+                    <div class="mono muted tl-path" translate="no">{{ x.path }}</div>
                   </div>
-                  {% else %}<p class="muted">无记录</p>{% endfor %}
+                  {% else %}<p class="muted text-xs">无记录</p>{% endfor %}
                 </div>
               </div>
               <div class="tl-col">
@@ -158,31 +166,31 @@
                 <div class="tl-scroll">
                   {% for x in row.nl %}
                   <div class="tl-item">
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
-                      <span><span class="tag">{{ x.source_match }}</span> <strong>{{ x.version }}</strong></span>
-                      <span class="muted" style="font-size:11px">{{ x.observed_at[:19].replace('T',' ') }}</span>
+                    <div class="tl-item-head">
+                      <span><span class="chip">{{ x.source_match|source_match_label }}</span> <strong class="ml-xs" translate="no">{{ x.version }}</strong></span>
+                      <span class="muted num text-xs" translate="no">{{ x.observed_at[:19].replace('T',' ') }}</span>
                     </div>
                     <div class="tl-kv">
-                      <div class="tl-kv-row"><span class="tl-kv-key">链接</span><span class="mono tl-kv-val">{{ x.link_path }}</span></div>
-                      <div class="tl-kv-row"><span class="tl-kv-key">目标</span><span class="mono tl-kv-val">{{ x.link_target }}</span><button type="button" class="copy-btn" onclick="copyPath(this,'{{ x.link_target }}')">复制</button></div>
+                      <div class="tl-kv-row"><span class="tl-kv-key">链接</span><span class="mono tl-kv-val" translate="no">{{ x.link_path }}</span></div>
+                      <div class="tl-kv-row"><span class="tl-kv-key">目标</span><span class="mono tl-kv-val" translate="no">{{ x.link_target }}</span><button type="button" class="copy-icon-btn" aria-label="复制软链目标" title="复制软链目标" onclick="copyPath(this,'{{ x.link_target }}')"><svg class="ico ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
                     </div>
                   </div>
-                  {% else %}<p class="muted">无快照记录</p>{% endfor %}
+                  {% else %}<p class="muted text-xs">无快照记录</p>{% endfor %}
                 </div>
               </div>
               <div class="tl-col">
-                <h4><span>有效版本采用与解析</span><span class="muted num">{{ row.effective|length }}</span></h4>
+                <h4><span>有效版本采用记录</span><span class="muted num">{{ row.effective|length }}</span></h4>
                 <div class="tl-scroll">
                   {% for x in row.effective %}
                   <div class="tl-item">
-                    <div><span class="tag tag-accent">{{ x.revision }}</span> <span class="mono">{{ x.version }}</span></div>
-                    <div class="mono muted" style="font-size:11px;margin-top:2px;overflow-wrap:anywhere">{{ x.path }}</div>
+                    <div><span class="chip chip-accent" translate="no">{{ x.revision }}</span> <span class="mono ml-xs" translate="no">{{ x.version }}</span></div>
+                    <div class="mono muted tl-path" translate="no">{{ x.path }}</div>
                   </div>
-                  {% else %}<p class="muted">尚未被有效版本采用</p>{% endfor %}
+                  {% else %}<p class="muted text-xs">尚未纳入有效版本</p>{% endfor %}
                   {% if row.view in ['LEF','LIBERTY','VERILOG','CDL','SPICE'] and row.raw %}
-                  <form method="post" action="{{ url_for('facts') }}" style="margin-top:10px">
+                  <form class="mt-sm" method="post" action="{{ url_for('facts') }}">
                     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="view" value="{{ row.view }}"><input type="hidden" name="path" value="{{ row.path }}"><input type="hidden" name="version" value="{{ row.raw[-1].version }}">
-                    <button type="submit" class="secondary btn-xs">提取最新 FileFacts ({{ row.raw[-1].version }})</button>
+                    <button type="submit" class="secondary btn-xs">提取最新结构数据 (<span translate="no">{{ row.raw[-1].version }}</span>)</button>
                   </form>
                   {% endif %}
                 </div>
@@ -191,7 +199,12 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="6" class="empty">当前筛选条件下没有匹配的文件。</td></tr>
+        <tr>
+          <td colspan="6" class="empty">
+            当前筛选条件下没有匹配的文件。
+            <a class="ml-xs" href="{{ url_for('index_page',vendor=vendor,library=library,revision=revision) }}">重置筛选条件</a>
+          </td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
@@ -208,28 +221,31 @@
 {% if index.revisions and rows %}
 <details class="card panel">
   <summary>
-    <span>例外与高级维护：手工批量调整有效文件（常规流转请使用 L2 自动推进）</span>
-    <span class="tag">展开例外面板 ▾</span>
+    <span>高级维护：手工批量调整有效版本成员</span>
+    <span class="toolbar-group">
+      <span class="chip">批量调整</span>
+      <svg class="ico chevron muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+    </span>
   </summary>
-  <form class="card-body" method="post" action="{{ url_for('effective_preview') }}" style="border-top:1px solid var(--border)">
-    <p class="muted" style="margin:0 0 12px;font-size:12.5px">以最新有效版本 <strong>{{ index.revisions[-1] }}</strong> 为父版本生成新版本；历史版本只读不可改写。</p>
+  <form class="card-body panel-divider" method="post" action="{{ url_for('effective_preview') }}">
+    <p class="muted text-sm mb-md" style="margin-top:0">以最新有效版本 <strong class="mono" translate="no">{{ index.revisions[-1] }}</strong> 为父版本生成新版本；历史版本只读不可改写，常规更新建议通过自动同步推进。</p>
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="action" value="batch">
     {% for row in rows %}
     {% set row_number=loop.index0 %}
     <fieldset class="batch-fieldset">
-      <legend>{{ row.view }} · {{ row.path }}</legend>
-      <div class="toolbar-group" style="gap:14px">
+      <legend translate="no">{{ row.view }} · {{ row.path }}</legend>
+      <div class="toolbar-group gap-md">
         <label class="check-inline"><input type="radio" name="selection_{{ row_number }}" value="" checked> 不修改</label>
         {% for x in row.raw %}
-        <label class="check-inline"><input type="radio" name="selection_{{ row_number }}" value="{{ {'action':'set','view':row.view,'path':row.path,'version':x.version}|tojson|forceescape }}"> 使用 {{ x.version }}</label>
+        <label class="check-inline"><input type="radio" name="selection_{{ row_number }}" value="{{ {'action':'set','view':row.view,'path':row.path,'version':x.version}|tojson|forceescape }}"> 使用 <span translate="no">{{ x.version }}</span></label>
         {% endfor %}
         {% for x in row.effective if x.revision==index.revisions[-1] %}
-        <label class="check-inline" style="color:var(--red)"><input type="radio" name="selection_{{ row_number }}" value="{{ {'action':'remove','view':row.view,'path':row.path}|tojson|forceescape }}"> 移除</label>
+        <label class="check-inline text-danger"><input type="radio" name="selection_{{ row_number }}" value="{{ {'action':'remove','view':row.view,'path':row.path}|tojson|forceescape }}"> 移除</label>
         {% endfor %}
       </div>
     </fieldset>
     {% endfor %}
-    <p class="muted" style="font-size:12px;margin:10px 0">每次最多 50 项，选择内容合计不超过 2000 字节；如有多页请分批处理。</p>
+    <p class="muted text-xs mt-sm mb-md">每次最多 50 项，选择内容合计不超过 2000 字节；如有多页请分批处理。</p>
     <button type="submit" class="btn-sm">预览批量变更</button>
   </form>
 </details>

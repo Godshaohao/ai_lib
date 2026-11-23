@@ -104,9 +104,17 @@ def parse_verilog(path, *, allow_pg=False):
     }
 
 
-parse_lef._parser_sig = f'src_qor_lef:{LEF_PARSER_VERSION}+adapter-{ADAPTER_VERSION}'
-parse_liberty._parser_sig = f'src_qor_liberty_interface:{LIBERTY_PARSER_VERSION}+adapter-{ADAPTER_VERSION}'
-parse_verilog._parser_sig = f'src_qor_verilog:{VERILOG_PARSER_VERSION}'
+parse_lef._parser_name = 'src_qor_lef'
+parse_lef._parser_version = f'{LEF_PARSER_VERSION}+adapter-{ADAPTER_VERSION}'
+parse_lef._parser_sig = f'{parse_lef._parser_name}:{parse_lef._parser_version}'
+
+parse_liberty._parser_name = 'src_qor_liberty_interface'
+parse_liberty._parser_version = f'{LIBERTY_PARSER_VERSION}+adapter-{ADAPTER_VERSION}'
+parse_liberty._parser_sig = f'{parse_liberty._parser_name}:{parse_liberty._parser_version}'
+
+parse_verilog._parser_name = 'src_qor_verilog'
+parse_verilog._parser_version = VERILOG_PARSER_VERSION
+parse_verilog._parser_sig = f'{parse_verilog._parser_name}:{parse_verilog._parser_version}'
 
 
 def _make_netlist_parser(view_name):
@@ -122,6 +130,8 @@ def _make_netlist_parser(view_name):
             'units': {},
             'objects': {'subcircuits': list(parsed['subckts'].values()), 'includes': parsed['includes']},
         }
+    _parse._parser_name = 'src_qor_cdl'
+    _parse._parser_version = CDL_PARSER_VERSION
     _parse._parser_sig = f'src_qor_cdl:{CDL_PARSER_VERSION}:{view_name}'
     return _parse
 
@@ -161,3 +171,18 @@ def parser_signature(view, *, allow_pg=False, registry=PARSER_REGISTRY):
     if not sig:
         sig = f'custom:{getattr(handler, "__module__", "")}.{getattr(handler, "__qualname__", repr(handler))}'
     return f'{view}|{sig}|pg={int(bool(allow_pg))}'
+
+
+def current_parser_info(view, *, allow_pg=True, registry=PARSER_REGISTRY):
+    """Return active parser metadata (name, version, signature) for tooling freshness comparison."""
+    handler = registry.get(view)
+    if handler is None:
+        return None
+    name = getattr(handler, '_parser_name', None)
+    version = getattr(handler, '_parser_version', None) or getattr(handler, 'parser_version', None)
+    return {
+        'view': view,
+        'name': name,
+        'version': version,
+        'signature': parser_signature(view, allow_pg=allow_pg, registry=registry),
+    }

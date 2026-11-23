@@ -23,7 +23,7 @@ def _classify_file(folder: Path, path: Path) -> str:
         return 'formal'
     if name.startswith('effective_') and name.endswith('.json'):
         return 'effective'
-    if name in ('file_index.json', '.file_index_manifest.json'):
+    if name in ('file_index.json', '.file_index_manifest.json', '.auto_effective_state.json', '.view_extensions_state.json'):
         return 'file_index'
     if parent_name == 'facts' or name.startswith('fact_ca_') or (name.startswith('facts_') and name.endswith('.json')):
         return 'facts_pool'

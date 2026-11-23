@@ -35,7 +35,7 @@ class MinimalCheckFlowTests(unittest.TestCase):
   self.assertTrue(any(c['attribute']=='SIZE' and c['new_value']==[4.0,3.0] for c in check['changes']))
   self.assertTrue(any(f['view']=='GDS' and f['status']=='NOT_CHECKED' for f in check['files']))
   book=load_workbook(single['excel'],read_only=True,data_only=True)
-  self.assertIn('文件版本矩阵',book.sheetnames);self.assertIn('12-有效文件来源',book.sheetnames)
+  self.assertIn('00-决策概览',book.sheetnames);self.assertIn('02-文件版本矩阵',book.sheetnames);self.assertIn('07-正式库与证据溯源',book.sheetnames)
   batch=run_library(self.work,'v','lib',rerun=True)
   self.assertEqual(batch['state'],'PARTIAL',batch)
   data=json.loads(Path(batch['overall']).read_text())
@@ -54,7 +54,7 @@ class MinimalCheckFlowTests(unittest.TestCase):
   from ai_lib_qor.application.minimal_checks import run_library
   from openpyxl import load_workbook
   batch=run_library(self.work,'v','lib',rerun=True)
-  rows=list(load_workbook(batch['excel'],read_only=True,data_only=True)['版本运行汇总'].values)
+  rows=list(load_workbook(batch['excel'],read_only=True,data_only=True)['00-版本运行汇总'].values)
   self.assertTrue(any(any('解析失败' in str(v) for v in row if v is not None) for row in rows))
 
  def test_changed_source_cannot_reuse_fact_within_batch(self):

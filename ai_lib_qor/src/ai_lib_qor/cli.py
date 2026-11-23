@@ -31,6 +31,16 @@ def format_table(command: str, result: dict) -> str:
                 f"{lib['vendor']:<14} {lib['library']:<28} {lib['delivery_count']:>5} {lib['revision_count']:>4} "
                 f"{(lib.get('latest_revision') or '—'):<10} {(lib.get('accepted_revision') or '未采纳'):<10} {lib['index_status']:<10}"
             )
+            sources = lib.get('source_verifications', {})
+            raw_time = sources.get('RAW', {}).get('verified_at') or '—'
+            formal_times = ', '.join(
+                f"{nl} {evidence.get('verified_at') or '—'}"
+                for nl, evidence in sorted(sources.get('FORMAL', {}).items())
+            ) or '—'
+            lines.append(f'  完整核验 UTC · RAW {raw_time} · Formal {formal_times}')
+            attempt = lib.get('index_attempt') or {}
+            if attempt.get('status') == 'FAILED':
+                lines.append(f"  索引刷新失败 · {attempt['reason']}")
         return '\n'.join(lines)
     if command == 'storage-stats':
         lines.append(
@@ -57,14 +67,17 @@ def format_table(command: str, result: dict) -> str:
             lines.append(f"  ... 共 {len(result['removed'])} 项")
         return '\n'.join(lines)
     if command == 'check-pending':
+        outdated_n = result.get('outdated_tooling_count', 0)
+        outdated_txt = f" · 解析器已升级 {outdated_n}" if outdated_n else ''
         lines.append(
             f"增量批量检查 [{result.get('state')}] | 新检查 {result.get('checked_count', 0)} · "
-            f"已检查跳过 {result.get('skipped_already_checked_count', 0)} · 无版本跳过 {result.get('skipped_no_revision_count', 0)} · "
-            f"质检失败项 {result.get('failed_checks_total', 0)} · 异常 {result.get('error_count', 0)}"
+            f"已检查跳过 {result.get('skipped_already_checked_count', 0)} · 无版本跳过 {result.get('skipped_no_revision_count', 0)}"
+            f"{outdated_txt} · 质检失败项 {result.get('failed_checks_total', 0)} · 异常 {result.get('error_count', 0)}"
         )
         for row in result.get('checked', []):
+            reason_tag = f" [{row['rerun_reason']}]" if row.get('rerun_reason') else ''
             lines.append(
-                f"  - {row['vendor']}/{row['library']} {row['revision']} (vs {row.get('baseline') or '无基线'}) "
+                f"  - {row['vendor']}/{row['library']} {row['revision']} (vs {row.get('baseline') or '无基线'}){reason_tag} "
                 f"-> {row['state']} | fail={row['failed_checks']} inconclusive={row['inconclusive_checks']} file_fail={row['failed_files']}"
             )
         for err in result.get('errors', []):
@@ -87,7 +100,7 @@ def parser():
     epilog = (
         '主线命令分组：\n'
         '  1. 三层刷新:     refresh | refresh-sources | refresh-effective | refresh-index | refresh-status\n'
-        '  2. 检查与报告:   check-pending | minimal-check-revision | minimal-check-library | minimal-render-excel | minimal-facts\n'
+        '  2. 检查与报告:   check-pending | minimal-check-revision | minimal-check-library | minimal-render-excel | export-overview-excel | minimal-facts\n'
         '  3. 版本与采纳:   accept-revision | rollback-acceptance | acceptance-status | path-effective-preview/apply/restore\n'
         '  4. 存储与运维:   storage-stats | cache-clean | path-migrate-layout | path-check-context'
     )
@@ -104,8 +117,10 @@ def parser():
     # --- 1. Three-Layer Refresh ---
     ref_all = sub.add_parser('refresh', parents=[fmt_parent], help='一键三层自动刷新：L1(RAW/NL) → L2(有效版本) → L3(FileIndex)')
     ref_all.add_argument('--work', required=True); ref_all.add_argument('--raw-root'); ref_all.add_argument('--nl-root'); ref_all.add_argument('--nl-version')
-    ref_all.add_argument('--no-raw', dest='raw', action='store_false', default=True)
-    ref_all.add_argument('--no-formal', dest='formal', action='store_false', default=True)
+    ref_all.add_argument('--raw', action=argparse.BooleanOptionalAction, help='覆盖配置中的 RAW 同步选项')
+    ref_all.add_argument('--formal', action=argparse.BooleanOptionalAction, help='覆盖配置中的 Formal 同步选项')
+    ref_all.add_argument('--index', dest='update_index', action=argparse.BooleanOptionalAction, help='覆盖配置中的 FileIndex 刷新选项')
+    ref_all.add_argument('--auto-effective', action=argparse.BooleanOptionalAction, help='覆盖配置中的有效版本自动推进选项')
     ref_all.add_argument('--no-auto-init', dest='auto_init_from_formal', action='store_false', default=True)
     ref_all.add_argument('--verify', dest='force_verify', action='store_true', default=False, help='强制校验 L3 索引内容')
     ref_all.add_argument('--verify-raw', dest='verify_raw', action='store_true', default=False, help='强制重扫已归档历史 RAW 版本目录核查原地篡改')
@@ -113,8 +128,8 @@ def parser():
 
     ref_l1 = sub.add_parser('refresh-sources', parents=[fmt_parent], help='仅执行 L1 刷新：盘点 RAW 交付与 Formal NL 快照')
     ref_l1.add_argument('--work', required=True); ref_l1.add_argument('--raw-root'); ref_l1.add_argument('--nl-root'); ref_l1.add_argument('--nl-version')
-    ref_l1.add_argument('--no-raw', dest='raw', action='store_false', default=True)
-    ref_l1.add_argument('--no-formal', dest='formal', action='store_false', default=True)
+    ref_l1.add_argument('--raw', action=argparse.BooleanOptionalAction)
+    ref_l1.add_argument('--formal', action=argparse.BooleanOptionalAction)
     ref_l1.add_argument('--verify-raw', dest='verify_raw', action='store_true', default=False, help='强制重扫已归档历史 RAW 版本目录')
     ref_l1.add_argument('--vendor'); ref_l1.add_argument('--library')
 
@@ -136,12 +151,15 @@ def parser():
     cpend.add_argument('--work', required=True); cpend.add_argument('--vendor'); cpend.add_argument('--library')
     cpend.add_argument('--excel', action='store_true', help='同时立即渲染 Excel（默认仅保存 JSON + 共享事实池）')
     cpend.add_argument('--rerun', action='store_true', help='忽略已有结果，强制重新检查全部库最新版本')
+    cpend.add_argument('--include-outdated', action='store_true', help='对解析器版本已升级（STALE_TOOLING）的库同时触发重检')
+    cpend.add_argument('--plugins', help='逗号分隔的检查插件名称列表（省略则执行全部已注册插件）')
     cpend.add_argument('--limit', type=int, help='单次最多检查库数量')
 
     for command in ('minimal-check-revision', 'minimal-check-library'):
         check_new = sub.add_parser(command, parents=[fmt_parent], help='执行单版本或单库有效版本检查（支持内容寻址共享池与懒 Excel）')
         for name in ('work', 'vendor', 'library'): check_new.add_argument('--' + name, required=True)
         check_new.add_argument('--revision', action='append', required=command == 'minimal-check-revision')
+        check_new.add_argument('--plugins', help='逗号分隔的检查插件名称列表（省略则执行全部已注册插件）')
         if command == 'minimal-check-revision':
             check_new.add_argument('--baseline', help='指定较早 Effective 版本；__none__ 表示无基线')
             check_new.add_argument('--no-excel', action='store_true', help='仅保存检查结果 JSON 与内容寻址事实，不立即渲染 Excel')
@@ -152,6 +170,11 @@ def parser():
     render_xlsx = sub.add_parser('minimal-render-excel', parents=[fmt_parent], help='从已保存的单版本检查 JSON 按需渲染 Excel 报告')
     for name in ('work', 'vendor', 'library', 'check'): render_xlsx.add_argument('--' + name, required=True)
     render_xlsx.add_argument('--out', help='可选：自定义 Excel 输出路径')
+
+    ov_xlsx = sub.add_parser('export-overview-excel', parents=[fmt_parent], help='只读导出全工作区跨库总览与待处理清单 Excel')
+    ov_xlsx.add_argument('--work', required=True)
+    ov_xlsx.add_argument('--out', required=True, help='输出 .xlsx 文件路径')
+    ov_xlsx.add_argument('--overwrite', action='store_true', help='允许覆盖已有目标文件')
 
     path_facts = sub.add_parser('minimal-facts', parents=[fmt_parent], help='使用路径式 file_index 为指定文件构建 FileFacts')
     for name in ('work', 'vendor', 'library', 'view', 'path'): path_facts.add_argument('--' + name, required=True)
@@ -184,6 +207,12 @@ def parser():
     for command in ('path-delivery-exclude', 'path-delivery-include'):
         policy = sub.add_parser(command, parents=[fmt_parent], help='设置路径式交付是否参与后续有效版本更新')
         for name in ('work', 'vendor', 'library', 'version'): policy.add_argument('--' + name, required=True)
+    for command, help_txt in (
+        ('path-unadopted-ignore', '确认忽略最新交付中指定未纳入新文件的提醒（不改写 Effective）'),
+        ('path-unadopted-unignore', '取消对指定未纳入新文件的忽略提醒'),
+    ):
+        uign = sub.add_parser(command, parents=[fmt_parent], help=help_txt)
+        for name in ('work', 'vendor', 'library', 'view', 'path'): uign.add_argument('--' + name, required=True)
 
     # --- 4. Storage & Maintenance ---
     sstat = sub.add_parser('storage-stats', parents=[fmt_parent], help='只读统计 work 目录磁盘占用（区分权威历史与可重建缓存）')
@@ -221,15 +250,29 @@ def parser():
     return p
 
 
+def _parse_plugins_arg(raw):
+    if raw is None:
+        return None
+    items = [x.strip() for x in raw.split(',') if x.strip()]
+    if not items:
+        raise ValueError('--plugins 不能为空')
+    return items
+
+
 def read(path):
     return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
 def run(a):
+    work_dir = getattr(a, 'work', None) or getattr(a, 'output', None)
+    if work_dir:
+        from ai_lib_qor.application.plugin_loader import load_configured_plugins
+        load_configured_plugins(work_dir)
     if a.command == 'refresh':
         from ai_lib_qor.application.path_refresh import refresh_all
         return refresh_all(
             a.work, a.raw_root, a.nl_root, nl_version=a.nl_version, raw=a.raw, formal=a.formal,
+            auto_effective=a.auto_effective, update_index=a.update_index,
             auto_init_from_formal=a.auto_init_from_formal, force_verify=a.force_verify,
             verify_raw=a.verify_raw, vendor=a.vendor, library=a.library, actor='cli',
         )
@@ -250,7 +293,16 @@ def run(a):
         return refresh_status(a.work, limit=a.limit)
     if a.command == 'check-pending':
         from ai_lib_qor.application.path_batch import check_pending
-        return check_pending(a.work, vendor=a.vendor, library=a.library, render_excel=a.excel, rerun=a.rerun, limit=a.limit)
+        return check_pending(
+            a.work,
+            vendor=a.vendor,
+            library=a.library,
+            render_excel=a.excel,
+            rerun=a.rerun,
+            include_outdated=a.include_outdated,
+            plugins=_parse_plugins_arg(a.plugins),
+            limit=a.limit,
+        )
     if a.command in ('accept-revision', 'rollback-acceptance', 'acceptance-status'):
         from ai_lib_qor.application.path_acceptance import accept_revision, acceptance_status, rollback_acceptance
         if a.command == 'acceptance-status':
@@ -270,6 +322,9 @@ def run(a):
     if a.command in ('path-delivery-exclude', 'path-delivery-include'):
         from ai_lib_qor.application.path_config import set_version_excluded
         return set_version_excluded(a.work, a.vendor, a.library, a.version, a.command == 'path-delivery-exclude')
+    if a.command in ('path-unadopted-ignore', 'path-unadopted-unignore'):
+        from ai_lib_qor.application.path_config import set_unadopted_ignored
+        return set_unadopted_ignored(a.work, a.vendor, a.library, a.view, a.path, a.command == 'path-unadopted-ignore')
     if a.command == 'path-migrate-layout':
         from ai_lib_qor.application.library_layout_migration import migrate_library_layout
         return migrate_library_layout(a.work, a.vendor, a.library)
@@ -287,14 +342,29 @@ def run(a):
         return restore_revision(*args, a.revision, expected_parent=a.expected_parent, actor='cli')
     if a.command in ('minimal-check-revision', 'minimal-check-library'):
         from ai_lib_qor.application.minimal_checks import run_library, run_revision
+        from ai_lib_qor.reporting.check_renderer import render_excel_from_check, render_overall_excel_rows
+        plugins = _parse_plugins_arg(a.plugins)
         if a.command == 'minimal-check-revision':
             if len(a.revision) != 1:
                 raise ValueError('单版本检查必须恰好指定一个版本')
-            return run_revision(a.work, a.vendor, a.library, a.revision[0], baseline=a.baseline, render=not a.no_excel)
-        return run_library(a.work, a.vendor, a.library, revisions=a.revision, rerun=a.rerun, render_single_excel=not a.no_single_excel)
+            return run_revision(
+                a.work, a.vendor, a.library, a.revision[0],
+                baseline=a.baseline, plugins=plugins, render=not a.no_excel,
+                single_renderer=render_excel_from_check,
+            )
+        return run_library(
+            a.work, a.vendor, a.library,
+            revisions=a.revision, rerun=a.rerun, plugins=plugins,
+            render_single_excel=not a.no_single_excel,
+            single_renderer=render_excel_from_check,
+            overall_renderer=render_overall_excel_rows,
+        )
     if a.command == 'minimal-render-excel':
-        from ai_lib_qor.application.minimal_checks import render_excel_from_check
+        from ai_lib_qor.reporting.check_renderer import render_excel_from_check
         return {'state': 'SUCCEEDED', 'excel': render_excel_from_check(a.work, a.vendor, a.library, a.check, a.out)}
+    if a.command == 'export-overview-excel':
+        from ai_lib_qor.reporting.work_overview_excel import render_work_overview_excel
+        return render_work_overview_excel(a.work, a.out, overwrite=a.overwrite)
     if a.command == 'minimal-facts':
         from ai_lib_qor.application.minimal_facts import build_facts
         return build_facts(a.work, a.vendor, a.library, a.view, a.path, version=a.version, revision=a.revision)
@@ -342,7 +412,7 @@ def main():
             if result.get('failed_checks_total', 0):
                 return 2
             return 0
-        if args.command == 'inventory-roots' and result.get('indexes_failed', 0):
+        if args.command in ('refresh', 'refresh-index', 'refresh-effective', 'inventory-roots') and result.get('indexes_failed', 0):
             return 1
         if args.command == 'inventory-roots' and result.get('effective_pending', 0) and any('自动发布' in x for x in result.get('warnings', [])):
             return 1

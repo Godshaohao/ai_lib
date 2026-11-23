@@ -69,13 +69,7 @@
     },
     "view": {
       "type": "string",
-      "enum": [
-        "LEF",
-        "LIBERTY",
-        "VERILOG",
-        "CDL",
-        "SPICE"
-      ]
+      "pattern": "^[A-Z][A-Z0-9_]{1,31}$"
     },
     "parser": {
       "type": "object",
@@ -250,6 +244,12 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "pg_pins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
                     }
                   },
                   "required": [
@@ -257,6 +257,12 @@
                     "pins"
                   ],
                   "additionalProperties": false
+                }
+              },
+              "operating_conditions": {
+                "type": "array",
+                "items": {
+                  "type": "object"
                 }
               }
             },

@@ -1,203 +1,552 @@
 {% extends "path_base.html" %}
+{% import "json_inventory_controls.html" as json_controls %}
 {% block title %}来源总览{% endblock %}
 {% block breadcrumbs %}<span class="crumb-curr">来源总览</span>{% endblock %}
 
 {% block content %}
 <div class="page-head">
   <div class="page-title-group">
-    <div class="vendor-kicker">Workspace Overview</div>
-    <h1>来源总览与数据管道</h1>
-    <p>按三层管道自动同步来源与索引；页面浏览仅只读消费已归档数据。</p>
+    <div class="page-eyebrow">工作区总览</div>
+    <h1>来源库与数据同步</h1>
+    <p>统一管理来源归档、有效版本与文件索引，页面浏览不触发目录扫描。</p>
   </div>
   <div class="toolbar-group">
-    <form method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}" style="margin:0">
+    <form class="inline-form" method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="layer" value="all">
-      <button type="submit">一键三层自动同步</button>
+      <button type="submit">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        一键三层自动同步
+      </button>
     </form>
-    <form method="post" action="{{ url_for('api_job_check') }}" data-async-url="{{ url_for('api_job_check') }}" style="margin:0">
+    <form class="inline-form" method="post" action="{{ url_for('api_job_check') }}" data-async-url="{{ url_for('api_job_check') }}">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="kind" value="pending">
       <input type="hidden" name="lazy_excel" value="1">
-      <button type="submit" class="secondary">增量检查待检库</button>
+      <button type="submit" class="secondary">检查待检库</button>
     </form>
+    <a class="btn secondary" href="{{ url_for('overview_export_excel') }}">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      导出总览 Excel
+    </a>
   </div>
 </div>
 
+{% set total_formals = libraries|sum(attribute='formal_count') if libraries else 0 %}
+
 {% if summary %}
-<div class="kpi-row">
-  <div class="kpi">
-    <div class="kpi-label">已建有效版 / 来源库</div>
-    <div class="kpi-val">{{ summary.with_effective }} / {{ summary.libraries }}</div>
-    <div class="kpi-sub">共 {{ summary.vendors }} 个供应商 · {{ summary.libraries - summary.with_effective }} 个待建版</div>
+<div class="kpi-strip" aria-label="工作区核心指标">
+  <div class="kpi-cell">
+    <div class="kpi-head"><span class="kpi-label">已建有效版</span></div>
+    <div class="kpi-val">{{ summary.with_effective }}<span class="kpi-denom">/ {{ summary.libraries }} 库</span></div>
+    <div class="kpi-sub">{{ summary.vendors }} 个供应商 · {{ summary.libraries - summary.with_effective }} 个待建版</div>
   </div>
-  <div class="kpi">
-    <div class="kpi-label">有效版本 / 已采纳库</div>
-    <div class="kpi-val">{{ summary.revisions }} 版 / {{ summary.accepted }} 库</div>
-    <div class="kpi-sub">计算版本与人工采纳指针严格分离</div>
+  <div class="kpi-cell">
+    <div class="kpi-head"><span class="kpi-label">有效版本与采纳</span></div>
+    <div class="kpi-val">{{ summary.revisions }}<span class="kpi-denom">版</span><span class="kpi-denom">·</span>{{ summary.accepted }}<span class="kpi-denom">已采纳</span></div>
+    <div class="kpi-sub">最新版本与采纳版本独立维护</div>
   </div>
-  <div class="kpi {{ 'ok' if summary.issues==0 else 'warn' }}">
-    <div class="kpi-label">索引同步状态</div>
-    <div class="kpi-val">{% if summary.libraries==0 %}暂无库{% elif summary.issues==0 %}{{ summary.libraries }} 可查询{% else %}{{ summary.issues }} 需处理{% endif %}</div>
+  <div class="kpi-cell {{ 'ok' if summary.libraries > 0 and summary.issues == 0 else ('warn' if summary.issues > 0 else '') }}">
+    <div class="kpi-head">
+      <span class="kpi-label">索引同步</span>
+      {% if summary.issues > 0 %}
+        <span class="tag tag-partial tag-sm"><span class="dot" aria-hidden="true"></span>待处理</span>
+      {% elif summary.libraries > 0 %}
+        <span class="tag tag-new tag-sm"><span class="dot" aria-hidden="true"></span>正常</span>
+      {% endif %}
+    </div>
+    <div class="kpi-val">
+      {% if summary.libraries == 0 %}暂无库{% elif summary.issues == 0 %}{{ summary.libraries }}<span class="kpi-denom">可查询</span>{% else %}{{ summary.issues }}<span class="kpi-denom">需处理</span>{% endif %}
+    </div>
     <div class="kpi-sub">
       {% if summary.issues > 0 %}
-        <a href="#libraries-table" onclick="var b=document.querySelector('#lib-status-seg button:last-child');if(b)b.click()">点击定位待处理库 →</a>
+        <a href="#libraries-section" onclick="var b=document.querySelector('#lib-status-seg button:last-child');if(b)b.click()">筛选待处理库</a>
       {% else %}
-        仅核验归档索引，不代表内容或质检通过
+        仅校验索引完整性，不含质检结论
       {% endif %}
     </div>
   </div>
-  <div class="kpi">
-    <div class="kpi-label">工作区存储</div>
-    <div class="kpi-val">{{ storage_display.total if storage_display else '—' }}</div>
-    <div class="kpi-sub">{% if storage_display %}权威历史 {{ storage_display.auth }} · 可重建缓存 {{ storage_display.cache }}{% else %}只读统计{% endif %}</div>
+  <div class="kpi-cell">
+    <div class="kpi-head"><span class="kpi-label">工作区占用</span></div>
+    <div class="kpi-val" translate="no">{{ storage_display.total if storage_display else '—' }}</div>
+    <div class="kpi-sub">{% if storage_display %}归档 {{ storage_display.auth }} · 缓存 {{ storage_display.cache }}{% else %}只读统计{% endif %}</div>
   </div>
 </div>
 {% endif %}
 
 {% if refresh_info %}
-<section class="card">
+{% set r1 = refresh_info.last_by_layer.L1 %}
+{% set r2 = refresh_info.last_by_layer.L2 %}
+{% set r3 = refresh_info.last_by_layer.L3 %}
+<section class="card" aria-label="三层数据刷新中心">
   <div class="card-head">
     <div>
       <h2>三层数据刷新中心</h2>
-      <p>L1 原始与正式来源 → L2 有效版本自动演进 → L3 FileIndex 只读索引（未变更库自动跳过重建）</p>
+      <p>来源归档（L1）→ 有效版本（L2）→ 文件索引（L3），按层展示同步数据范围、JSON 产物明细与最近更新时间。</p>
     </div>
-    <span class="tag">{{ refresh_info.totals.deliveries }} 次归档交付</span>
-  </div>
-  <div class="pipeline-grid">
-    <div class="layer-box">
-      <div>
-        <div class="layer-top">
-          <span class="layer-step">L1 · 来源层</span>
-          <span class="layer-meta">{{ refresh_info.totals.deliveries }} 交付</span>
-        </div>
-        <div class="layer-title">RAW 与 Formal NL 盘点</div>
-        <div class="layer-meta" style="margin-top:4px">上次刷新：{{ refresh_info.last_by_layer.L1.at[:19].replace('T',' ') if refresh_info.last_by_layer.L1 else '未记录' }}</div>
-      </div>
-      <div class="layer-foot">
-        <span class="muted" style="font-size:11.5px">扫描新增交付与快照</span>
-        <form method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}" style="margin:0">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="layer" value="l1">
-          <button type="submit" class="secondary btn-xs">刷新 L1</button>
-        </form>
-      </div>
-    </div>
-
-    <div class="layer-box">
-      <div>
-        <div class="layer-top">
-          <span class="layer-step">L2 · 版本层</span>
-          <span class="layer-meta">{{ refresh_info.totals.libraries_with_effective }}/{{ refresh_info.totals.libraries }} 库已建版</span>
-        </div>
-        <div class="layer-title">有效版本自动演化</div>
-        <div class="layer-meta" style="margin-top:4px">上次推进：{{ refresh_info.last_by_layer.L2.at[:19].replace('T',' ') if refresh_info.last_by_layer.L2 else '未记录' }}</div>
-      </div>
-      <div class="layer-foot">
-        <span class="muted" style="font-size:11.5px">纯基于 L1 自动演进</span>
-        <form method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}" style="margin:0">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="layer" value="l2">
-          <button type="submit" class="secondary btn-xs">推进 L2</button>
-        </form>
-      </div>
-    </div>
-
-    <div class="layer-box">
-      <div>
-        <div class="layer-top">
-          <span class="layer-step">L3 · 索引层</span>
-          <span class="layer-meta">{{ refresh_info.totals.index_fresh }}/{{ refresh_info.totals.libraries }} 已同步</span>
-        </div>
-        <div class="layer-title">FileIndex 统一索引</div>
-        <div class="layer-meta" style="margin-top:4px">上次刷新：{{ refresh_info.last_by_layer.L3.at[:19].replace('T',' ') if refresh_info.last_by_layer.L3 else '未记录' }}</div>
-      </div>
-      <div class="layer-foot">
-        <span class="muted" style="font-size:11.5px">指纹未变自动跳过</span>
-        <form method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}" style="margin:0">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="layer" value="l3">
-          <button type="submit" class="secondary btn-xs">刷新 L3</button>
-        </form>
-      </div>
+    <div class="seg" id="sync-center-seg" role="tablist" aria-label="刷新中心视图切换">
+      <button type="button" id="sync-tab-layers" class="active" role="tab" aria-selected="true" aria-controls="sync-pane-layers" tabindex="0" data-sync-tab="layers" onclick="switchSyncTab('layers',this)">各层与 JSON 明细</button>
+      <button type="button" id="sync-tab-history" role="tab" aria-selected="false" aria-controls="sync-pane-history" tabindex="-1" data-sync-tab="history" onclick="switchSyncTab('history',this)">批次记录 ({{ refresh_info.recent_runs|length }})</button>
+      <button type="button" id="sync-tab-config" role="tab" aria-selected="false" aria-controls="sync-pane-config" tabindex="-1" data-sync-tab="config" onclick="switchSyncTab('config',this)">目录配置</button>
     </div>
   </div>
 
-  {% if refresh_info.recent_runs %}
-  <details class="panel" style="border-top:1px solid var(--border)">
-    <summary><span>最近刷新与变更明细（{{ refresh_info.recent_runs|length }} 条记录）</span><span class="muted">展开 ▾</span></summary>
-    <div class="table-wrap" style="padding:0 16px 14px">
-      <table>
-        <thead><tr><th>时间 (UTC)</th><th>层级</th><th>变动库与摘要</th><th>告警</th></tr></thead>
+  <!-- 视图 1：三层同步汇总 + JSON 数据产物明细表 -->
+  <div id="sync-pane-layers" class="sync-pane" role="tabpanel" aria-labelledby="sync-tab-layers">
+    <div class="table-wrap">
+      <table id="pipeline-layers-table" aria-label="各层同步数据范围与最新执行结果">
+        <thead>
+          <tr>
+            <th scope="col" class="w-130">同步层级</th>
+            <th scope="col" class="w-260">同步数据内容</th>
+            <th scope="col" class="w-170">已同步规模</th>
+            <th scope="col">最近一次同步结果与涉及数据</th>
+            <th scope="col" class="w-230 align-right">最近同步与操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- L1 -->
+          <tr>
+            <td>
+              <div class="layer-badge-cell">
+                <span class="layer-num" translate="no">01</span>
+                <strong>L1 来源层</strong>
+              </div>
+            </td>
+            <td>
+              <div>RAW 原始交付与 Formal 快照</div>
+              <span class="sub-text">
+                {% if config.nl_version %}Formal 阶段：<span class="mono" translate="no">{{ config.nl_version }}</span>{% else %}自动识别 Formal 阶段{% endif %}
+                {% if json_inventory %} · <a class="nowrap" href="{{ url_for('overview', json_layer='L1', _anchor='sync-json-section') }}">查看 {{ json_inventory.counts.L1 }} 份 JSON</a>{% endif %}
+              </span>
+            </td>
+            <td class="num nowrap">
+              <div><strong>{{ refresh_info.totals.deliveries }}</strong> 份交付</div>
+              <span class="sub-text">{{ total_formals }} 份快照 · {{ refresh_info.totals.libraries }} 个库</span>
+            </td>
+            <td>
+              <div class="sync-detail-list">
+                {% if r1 %}
+                  <div class="num">
+                    RAW 新增 <strong>+{{ r1.delivery_created }}</strong>（沿用 {{ r1.delivery_unchanged }}）· Formal 新增 <strong>+{{ r1.formal_created }}</strong>（一致 {{ r1.formal_unchanged }}）
+                  </div>
+                  {% if r1.libraries_changed %}
+                  <div class="sync-lib-pills">
+                    {% for c in r1.libraries_changed %}
+                      <a class="chip" href="{{ url_for('library_page',vendor=c.vendor,library=c.library) }}" translate="no">
+                        {{ c.vendor }}/{{ c.library }}{% if c.new_deliveries %} +{{ c.new_deliveries|length }}交付{% endif %}{% if c.new_formals %} +{{ c.new_formals|length }}快照{% endif %}
+                      </a>
+                    {% endfor %}
+                  </div>
+                  {% endif %}
+                  {% if r1.warnings %}
+                    {% for w in r1.warnings[:2] %}
+                    <div class="warn-inline"><span class="tag tag-partial tag-sm">需关注</span><span>{{ w|clean_warning }}</span></div>
+                    {% endfor %}
+                  {% endif %}
+                {% else %}
+                  <span class="muted">尚未执行来源同步</span>
+                {% endif %}
+              </div>
+            </td>
+            <td class="align-right">
+              <div class="sync-time-cell">
+                <div class="sync-time-stack">
+                  <div class="mono num text-xs" translate="no">{{ r1.at[:16].replace('T',' ') if r1 else '未同步' }}</div>
+                  <div class="muted text-xs">{{ (r1.actor|actor_label) if r1 else '—' }}</div>
+                </div>
+                <form class="inline-form" method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}">
+                  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="layer" value="l1">
+                  <button type="submit" class="secondary btn-xs">刷新 L1</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+
+          <!-- L2 -->
+          <tr>
+            <td>
+              <div class="layer-badge-cell">
+                <span class="layer-num" translate="no">02</span>
+                <strong>L2 版本层</strong>
+              </div>
+            </td>
+            <td>
+              <div>有效版本成员组合演进</div>
+              <span class="sub-text">
+                依据已归档来源初始化或演化
+                {% if json_inventory %} · <a class="nowrap" href="{{ url_for('overview', json_layer='L2', _anchor='sync-json-section') }}">查看 {{ json_inventory.counts.L2 }} 项 JSON</a>{% endif %}
+              </span>
+            </td>
+            <td class="num nowrap">
+              <div><strong>{{ refresh_info.totals.revisions }}</strong> 个版本</div>
+              <span class="sub-text">{{ refresh_info.totals.libraries_with_effective }} / {{ refresh_info.totals.libraries }} 库已建版</span>
+            </td>
+            <td>
+              <div class="sync-detail-list">
+                {% if r2 %}
+                  <div class="num">
+                    初始化 <strong>+{{ r2.initialized }}</strong> · 演进发布 <strong>+{{ r2.effective_published }}</strong> · 无变化 {{ r2.unchanged }} 库{% if r2.unadopted_new_files_total %} · 待评估新文件 <strong>{{ r2.unadopted_new_files_total }}</strong> 个{% endif %}
+                  </div>
+                  {% if r2.libraries_changed %}
+                  <div class="sync-lib-pills">
+                    {% for c in r2.libraries_changed %}
+                      <a class="chip" href="{{ url_for('library_page',vendor=c.vendor,library=c.library) }}" translate="no">
+                        {{ c.vendor }}/{{ c.library }}{% if c.events %} → {% for ev in c.events %}{{ ev.revision }}{% if not loop.last %},{% endif %}{% endfor %}{% endif %}
+                      </a>
+                    {% endfor %}
+                  </div>
+                  {% endif %}
+                  {% if r2.libraries_with_unadopted %}
+                  <div class="sync-lib-pills">
+                    <span class="muted text-xs">待评估新交付：</span>
+                    {% for u in r2.libraries_with_unadopted %}
+                      <a class="chip" href="{{ url_for('index_page',vendor=u.vendor,library=u.library,revision=u.latest_revision,adoption='unadopted') }}" title="最新交付 {{ u.latest_delivery }} 含 {{ u.count }} 个文件未纳入 {{ u.latest_revision }}" translate="no">
+                        {{ u.vendor }}/{{ u.library }} +{{ u.count }}
+                      </a>
+                    {% endfor %}
+                  </div>
+                  {% endif %}
+                  {% if r2.warnings %}
+                    {% for w in r2.warnings[:2] %}
+                    <div class="warn-inline"><span class="tag tag-partial tag-sm">需关注</span><span>{{ w|clean_warning }}</span></div>
+                    {% endfor %}
+                  {% endif %}
+                {% else %}
+                  <span class="muted">尚未执行版本推进</span>
+                {% endif %}
+              </div>
+            </td>
+            <td class="align-right">
+              <div class="sync-time-cell">
+                <div class="sync-time-stack">
+                  <div class="mono num text-xs" translate="no">{{ r2.at[:16].replace('T',' ') if r2 else '未推进' }}</div>
+                  <div class="muted text-xs">{{ (r2.actor|actor_label) if r2 else '—' }}</div>
+                </div>
+                <form class="inline-form" method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}">
+                  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="layer" value="l2">
+                  <button type="submit" class="secondary btn-xs">推进 L2</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+
+          <!-- L3 -->
+          <tr>
+            <td>
+              <div class="layer-badge-cell">
+                <span class="layer-num" translate="no">03</span>
+                <strong>L3 索引层</strong>
+              </div>
+            </td>
+            <td>
+              <div>跨版本文件路径历史索引</div>
+              <span class="sub-text">
+                供库浏览、对照与检查检索
+                {% if json_inventory %} · <a class="nowrap" href="{{ url_for('overview', json_layer='L3', _anchor='sync-json-section') }}">查看 {{ json_inventory.counts.L3 }} 项 JSON</a>{% endif %}
+              </span>
+            </td>
+            <td class="num nowrap">
+              <div><strong>{{ refresh_info.totals.index_fresh }} / {{ refresh_info.totals.libraries }}</strong> 已同步</div>
+              <span class="sub-text">待刷新 {{ refresh_info.totals.index_stale_or_unverified }} · 缺失 {{ refresh_info.totals.index_missing }}</span>
+            </td>
+            <td>
+              <div class="sync-detail-list">
+                {% if r3 %}
+                  <div class="num">
+                    更新索引 <strong>+{{ r3.indexes_updated }}</strong> · 一致跳过 {{ r3.indexes_unchanged }} 库{% if r3.indexes_failed %} · 失败 <strong>{{ r3.indexes_failed }}</strong> 库{% endif %}
+                  </div>
+                  {% if r3.libraries_changed %}
+                  <div class="sync-lib-pills">
+                    {% for c in r3.libraries_changed %}
+                      <a class="chip" href="{{ url_for('index_page',vendor=c.vendor,library=c.library) }}" translate="no">{{ c.vendor }}/{{ c.library }}</a>
+                    {% endfor %}
+                  </div>
+                  {% endif %}
+                  {% for failure in r3.libraries_failed %}
+                    <div class="warn-inline"><span class="tag tag-failed tag-sm">刷新失败</span><span>{{ failure.vendor }}/{{ failure.library }} · {{ failure.reason }}</span></div>
+                  {% endfor %}
+                  {% if r3.warnings and not r3.libraries_failed %}
+                    {% for w in r3.warnings[:2] %}
+                    <div class="warn-inline"><span class="tag tag-partial tag-sm">需关注</span><span>{{ w|clean_warning }}</span></div>
+                    {% endfor %}
+                  {% endif %}
+                {% else %}
+                  <span class="muted">尚未执行索引刷新</span>
+                {% endif %}
+              </div>
+            </td>
+            <td class="align-right">
+              <div class="sync-time-cell">
+                <div class="sync-time-stack">
+                  <div class="mono num text-xs" translate="no">{{ r3.at[:16].replace('T',' ') if r3 else '未刷新' }}</div>
+                  <div class="muted text-xs">{{ (r3.actor|actor_label) if r3 else '—' }}</div>
+                </div>
+                <form class="inline-form" method="post" action="{{ url_for('refresh_layer') }}" data-async-url="{{ url_for('api_job_refresh') }}">
+                  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="layer" value="l3">
+                  <button type="submit" class="secondary btn-xs">刷新 L3</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    {% if json_inventory %}
+    <!-- JSON 数据产物与更新时间明细表 -->
+    <div id="sync-json-section" class="scroll-anchor">
+      <div class="section-subhead">
+        <div class="toolbar-group">
+          <h3>JSON 数据产物与更新时间明细</h3>
+          <div class="json-summary-pills">
+            <span>共 <strong>{{ json_inventory.counts.total }}</strong> 项</span>
+            <span class="stat-ok">本轮更新 <strong>{{ json_inventory.counts.updated }}</strong></span>
+            <span class="stat-warn">待刷新 / 未生成 <strong>{{ json_inventory.counts.issue }}</strong></span>
+            <span>未变化 <strong>{{ json_inventory.counts.unchanged }}</strong></span>
+          </div>
+        </div>
+      </div>
+      {{ json_controls.filters(json_inventory, 'overview', 'sync-json-section', libraries=libraries) }}
+
+      {% if json_inventory.rows %}
+      <div class="table-wrap scroll-box-md">
+        <table id="sync-json-table" aria-label="各层 JSON 数据产物同步与更新时间明细">
+          <thead>
+            <tr>
+              <th scope="col" class="w-96">层级</th>
+              <th scope="col">JSON 数据文件与类别</th>
+              <th scope="col" class="w-210">所属来源库</th>
+              <th scope="col" class="w-190">同步状态</th>
+              <th scope="col" class="w-165">更新时间 (UTC)</th>
+              <th scope="col" class="w-140 align-right">大小与操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in json_inventory.rows %}
+            <tr class="{{ 'row-missing' if not item.exists else '' }}">
+              <td class="nowrap">
+                <span class="chip {{ 'chip-accent' if item.layer == 'L3' else '' }}" translate="no">{{ item.layer_label }}</span>
+              </td>
+              <td>
+                <div class="json-file-cell">
+                  <div class="json-file-head">
+                    <span class="json-file-cat">{{ item.category }}</span>
+                    {% if item.pointer_badge %}<span class="tag tag-accent tag-sm">{{ item.pointer_badge }}</span>{% endif %}
+                  </div>
+                  <div class="path-cell">
+                    <span class="mono json-file-path" title="{{ item.rel_path }}" translate="no">{{ item.filename }}</span>
+                    <button type="button" class="copy-icon-btn" aria-label="复制文件路径 {{ item.rel_path }}" title="复制相对路径" onclick="copyPath(this,'{{ item.rel_path }}')">
+                      <svg class="ico ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </td>
+              <td>
+                {% if item.vendor and item.library %}
+                  <a href="{{ url_for('library_page',vendor=item.vendor,library=item.library,revision=item.revision or '') }}" translate="no"><strong>{{ item.library }}</strong></a>
+                  <span class="sub-text" translate="no">{{ item.vendor }}</span>
+                {% else %}
+                  <span class="muted">工作区全局</span>
+                {% endif %}
+              </td>
+              <td>
+                <span class="tag {{ item.tag_cls }} tag-sm"><span class="dot" aria-hidden="true"></span>{{ item.status_label }}</span>
+                <span class="sub-text">{{ item.status_note }}</span>
+              </td>
+              <td class="mono num text-xs nowrap" translate="no">
+                {% if item.exists %}
+                  <strong>{{ item.updated_at }}</strong>
+                {% else %}
+                  <span class="muted">尚未生成</span>
+                {% endif %}
+              </td>
+              <td class="align-right nowrap">
+                <span class="muted num text-xs mr-xs" translate="no">{{ item.size_text }}</span>
+                {% if item.action_kind == 'download_index' and item.exists %}
+                  <a class="btn ghost btn-xs" href="{{ url_for('artifact',vendor=item.vendor,library=item.library,name='file_index.json') }}">下载</a>
+                {% elif item.action_kind == 'index' and item.vendor %}
+                  <a class="btn ghost btn-xs" href="{{ url_for('index_page',vendor=item.vendor,library=item.library) }}">对照</a>
+                {% elif item.action_kind == 'library' and item.vendor %}
+                  <a class="btn ghost btn-xs" href="{{ url_for('library_page',vendor=item.vendor,library=item.library,revision=item.revision or '') }}">查看</a>
+                {% elif item.action_kind == 'config' %}
+                  <button type="button" class="ghost btn-xs" onclick="switchSyncTab('config')">配置</button>
+                {% elif item.action_kind == 'history' %}
+                  <button type="button" class="ghost btn-xs" onclick="switchSyncTab('history')">批次</button>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state">
+        <p class="empty-state-title">没有符合当前条件的 JSON 项</p>
+      </div>
+      {% endif %}
+      {{ json_controls.pagination(json_inventory, 'overview', 'sync-json-section') }}
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- 视图 2：同步批次记录明细 -->
+  <div id="sync-pane-history" class="sync-pane" role="tabpanel" aria-labelledby="sync-tab-history" hidden>
+    {% if refresh_info.recent_runs %}
+    <div class="table-wrap">
+      <table id="recent-sync-runs-table" aria-label="同步批次记录明细">
+        <thead>
+          <tr>
+            <th scope="col" class="w-155">时间 (UTC)</th>
+            <th scope="col" class="w-120">层级 / 范围</th>
+            <th scope="col" class="w-230">同步数据统计</th>
+            <th scope="col">涉及库与变更明细</th>
+            <th scope="col" class="w-200">结果与说明</th>
+          </tr>
+        </thead>
         <tbody>
           {% for r in refresh_info.recent_runs %}
           <tr>
-            <td class="mono">{{ r.at[:19].replace('T',' ') }}</td>
-            <td><span class="tag tag-accent">{{ r.layer }}</span></td>
-            <td>
-              {% if r.libraries_changed %}
-                {% for c in r.libraries_changed[:6] %}
-                  <a href="{{ url_for('library_page',vendor=c.vendor,library=c.library) }}">{{ c.vendor }}/{{ c.library }}</a>{% if c.new_deliveries %}<span class="muted"> +{{ c.new_deliveries|length }}交付</span>{% endif %}{% if c.events %}<span class="muted"> +{{ c.events|length }}版</span>{% endif %}{% if not loop.last %} · {% endif %}
-                {% endfor %}
-              {% else %}<span class="muted">无新增变化</span>{% endif %}
+            <td class="mono num text-xs nowrap" translate="no">
+              <div><strong>{{ r.at[:19].replace('T',' ') }}</strong></div>
+              <span class="sub-text">{{ r.actor|actor_label }}</span>
             </td>
-            <td>{% if r.warnings %}<span class="tag tag-partial">{{ r.warnings|length }} 条</span>{% else %}<span class="muted">0</span>{% endif %}</td>
+            <td class="nowrap">
+              <span class="chip" translate="no">{{ r.layer }}</span>
+              <span class="sub-text" translate="no">
+                {% if r.scope and r.scope.library %}{{ r.scope.vendor }}/{{ r.scope.library }}{% elif r.scope and r.scope.vendor %}{{ r.scope.vendor }}{% else %}全工作区{% endif %}
+              </span>
+            </td>
+            <td class="num text-xs">
+              {% if r.layer == 'L1' %}
+                <div>RAW +{{ r.delivery_created|default(0) }} / 沿用 {{ r.delivery_unchanged|default(0) }}</div>
+                <span class="sub-text">Formal +{{ r.formal_created|default(0) }} / 一致 {{ r.formal_unchanged|default(0) }}</span>
+              {% elif r.layer == 'L2' %}
+                <div>初始化 +{{ r.initialized|default(0) }} · 发布 +{{ r.effective_published|default(0) }}</div>
+                <span class="sub-text">无变化 {{ r.unchanged|default(0) }} 库{% if r.unadopted_new_files_total %} · 待评估 {{ r.unadopted_new_files_total }} 文件{% endif %}</span>
+              {% elif r.layer == 'L3' %}
+                <div>更新 +{{ r.indexes_updated|default(0) }} · 一致 {{ r.indexes_unchanged|default(0) }} 库</div>
+                <span class="sub-text">跳过重建 {{ r.indexes_skipped_rebuild|default(0) }} 库{% if r.indexes_failed %} · 失败 {{ r.indexes_failed }} 库{% endif %}</span>
+              {% else %}
+                <span>全层同步</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="sync-detail-list">
+                {% if r.libraries_changed %}
+                  <div class="sync-lib-pills">
+                    {% for c in r.libraries_changed[:6] %}
+                      <a class="chip" href="{{ url_for('library_page',vendor=c.vendor,library=c.library) }}" translate="no">
+                        {{ c.vendor }}/{{ c.library }}{% if c.new_deliveries %} +{{ c.new_deliveries|length }}交付{% endif %}{% if c.new_formals %} +{{ c.new_formals|length }}快照{% endif %}{% if c.events %} → {% for ev in c.events %}{{ ev.revision }}{% if not loop.last %},{% endif %}{% endfor %}{% endif %}
+                      </a>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <span class="muted text-xs">
+                    {% if r.layer == 'L1' %}全部已归档来源无新增
+                    {% elif r.layer == 'L2' %}各库有效版本无新增发布
+                    {% elif r.layer == 'L3' and r.indexes_failed %}索引刷新失败 {{ r.indexes_failed }} 库
+                    {% elif r.layer == 'L3' and r.indexes_unchanged %}本批次核验的 {{ r.indexes_unchanged }} 库索引一致
+                    {% elif r.layer == 'L3' %}本批次没有待核验的库
+                    {% else %}无新增变化{% endif %}
+                  </span>
+                {% endif %}
+                {% for failure in r.libraries_failed %}
+                  <div class="warn-inline"><span class="tag tag-failed tag-sm">刷新失败</span><span>{{ failure.vendor }}/{{ failure.library }} · {{ failure.reason }}</span></div>
+                {% endfor %}
+                {% if r.libraries_with_unadopted %}
+                  <div class="sync-lib-pills">
+                    <span class="muted text-xs">待评估新文件：</span>
+                    {% for u in r.libraries_with_unadopted[:4] %}
+                      <a class="chip" href="{{ url_for('index_page',vendor=u.vendor,library=u.library,revision=u.latest_revision,adoption='unadopted') }}" translate="no">{{ u.vendor }}/{{ u.library }} +{{ u.count }}</a>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              </div>
+            </td>
+            <td>
+              {% if r.warnings %}
+                <span class="tag tag-partial tag-sm num"><span class="dot" aria-hidden="true"></span>{{ r.warnings|length }} 条需关注</span>
+                {% for w in r.warnings[:1] %}
+                  <span class="sub-text" title="{{ w|clean_warning }}">{{ w|clean_warning }}</span>
+                {% endfor %}
+              {% else %}
+                <span class="tag tag-new tag-sm"><span class="dot" aria-hidden="true"></span>同步正常</span>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
-  </details>
-  {% endif %}
+    {% else %}
+    <div class="empty-state">
+      <p class="empty-state-title">暂无同步批次记录</p>
+      <p class="empty-state-desc">执行同步后，此处将按时间顺序记录每次同步的数据变化。</p>
+    </div>
+    {% endif %}
+  </div>
 
-  <details class="panel" style="border-top:1px solid var(--border)">
-    <summary><span>扫描来源目录与更新选项配置</span><span class="muted">展开 ▾</span></summary>
-    <form class="card-body" method="post" action="{{ url_for('update') }}" style="border-top:1px solid #f1f5f9">
+  <!-- 视图 3：来源目录与同步选项配置 -->
+  <div id="sync-pane-config" class="sync-pane" role="tabpanel" aria-labelledby="sync-tab-config" hidden>
+    <form class="card-body" method="post" action="{{ url_for('update') }}">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="save_settings" value="1">
       <div class="form-grid">
-        <div class="field"><label>RAW 总目录</label><input type="text" name="raw_root" value="{{ config.raw_root|default('') }}" placeholder="/path/to/3rd_IP"></div>
-        <div class="field"><label>Formal NL 总目录</label><input type="text" name="nl_root" value="{{ config.nl_root|default('') }}" placeholder="/path/to/lib_NL2.5_3"></div>
-        <div class="field"><label>NL 版本</label><input type="text" name="nl_version" value="{{ config.nl_version|default('') }}" placeholder="自动识别"></div>
+        <div class="field">
+          <label for="cfg-raw-root">RAW 根目录</label>
+          <input id="cfg-raw-root" type="text" name="raw_root" value="{{ config.raw_root|default('') }}" placeholder="/path/to/3rd_IP…" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="cfg-nl-root">Formal 根目录</label>
+          <input id="cfg-nl-root" type="text" name="nl_root" value="{{ config.nl_root|default('') }}" placeholder="/path/to/lib_NL2.5_3…" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="cfg-nl-version">Formal 阶段标识</label>
+          <input id="cfg-nl-version" type="text" name="nl_version" value="{{ config.nl_version|default('') }}" placeholder="自动识别…" autocomplete="off" spellcheck="false">
+        </div>
       </div>
-      <div class="toolbar-group" style="margin:12px 0">
-        <label class="check-inline"><input type="checkbox" name="raw" value="1" {% if config.get("update_raw",true) %}checked{% endif %}> 更新 RAW 交付</label>
-        <label class="check-inline"><input type="checkbox" name="formal" value="1" {% if config.get("update_formal",true) %}checked{% endif %}> 更新 Formal 快照</label>
+      <div class="toolbar-group mt-sm mb-md">
+        <label class="check-inline"><input type="checkbox" name="raw" value="1" {% if config.get("update_raw",true) %}checked{% endif %}> 同步 RAW 交付</label>
+        <label class="check-inline"><input type="checkbox" name="formal" value="1" {% if config.get("update_formal",true) %}checked{% endif %}> 同步 Formal 快照</label>
         <label class="check-inline"><input type="checkbox" name="index" value="1" {% if config.get("update_index",true) %}checked{% endif %}> 刷新文件索引</label>
-        <label class="check-inline"><input type="checkbox" name="auto_effective" value="1" {% if config.get("auto_effective",true) %}checked{% endif %}> 新交付自动发布有效版本</label>
+        <label class="check-inline"><input type="checkbox" name="auto_effective" value="1" {% if config.get("auto_effective",true) %}checked{% endif %}> 自动推进有效版本</label>
       </div>
-      <button type="submit" class="secondary btn-sm">保存配置并执行所选步骤</button>
+      <button type="submit" class="secondary btn-sm">保存配置并同步</button>
     </form>
-  </details>
+  </div>
 </section>
 {% endif %}
 
-<section class="card">
+<section id="libraries-section" class="card scroll-anchor" aria-label="来源库清单">
   <div class="card-head">
     <div>
       <h2>来源库清单</h2>
-      <p>按供应商、建版状态或关键字快速筛选，同时区分最新计算版本与人工采纳版本。</p>
+      <p>逐库展示来源归档（L1）、有效版本与采纳状态（L2）及索引同步状态（L3）。</p>
     </div>
-    <span class="muted num" id="lib-visible-count" style="font-size:12px">共 {{ libraries|length }} 个库</span>
+    <span class="muted num text-xs" id="lib-visible-count" aria-live="polite">共 {{ libraries|length }} 个库</span>
   </div>
 
   {% set vendor_groups = libraries|groupby('vendor') %}
   <div class="toolbar">
     <div class="toolbar-group">
-      <div class="seg" id="lib-status-seg">
-        <button type="button" class="active" onclick="setLibFilter('status','all',this)">全部</button>
-        <button type="button" onclick="setLibFilter('status','has_rev',this)">已建有效版</button>
-        <button type="button" onclick="setLibFilter('status','no_rev',this)">待建版</button>
-        <button type="button" onclick="setLibFilter('status','issue',this)">待处理</button>
+      <div class="seg" id="lib-status-seg" role="group" aria-label="按库状态筛选">
+        <button type="button" class="active" aria-pressed="true" onclick="setLibFilter('status','all',this)">全部</button>
+        <button type="button" aria-pressed="false" onclick="setLibFilter('status','has_rev',this)">已建有效版</button>
+        <button type="button" aria-pressed="false" onclick="setLibFilter('status','no_rev',this)">待建版</button>
+        <button type="button" aria-pressed="false" onclick="setLibFilter('status','issue',this)">待处理</button>
       </div>
-      <select id="lib-vendor-select" aria-label="按供应商筛选" style="height:30px;font-size:12.5px" onchange="setLibFilter('vendor',this.value)">
+      <select id="lib-vendor-select" class="ctrl-sm" aria-label="按供应商筛选" onchange="setLibFilter('vendor',this.value)">
         <option value="">全部供应商</option>
         {% for g in vendor_groups %}
         <option value="{{ g.grouper }}">{{ g.grouper }} ({{ g.list|length }})</option>
         {% endfor %}
       </select>
-      <label class="check-inline">
-        <input type="checkbox" id="hide-sim-cb" onchange="applyLibFilters()"> 隐藏模拟库
-      </label>
     </div>
-    <input type="search" id="lib-search-input" class="search-input" style="height:30px" placeholder="搜索库名或供应商..." oninput="applyLibFilters()">
+    <div class="search-wrap">
+      <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" id="lib-search-input" class="search-input ctrl-sm" aria-label="搜索库名或供应商" placeholder="搜索库名或供应商…" autocomplete="off" spellcheck="false" oninput="applyLibFilters()">
+    </div>
   </div>
 
   {% if libraries %}
@@ -205,12 +554,12 @@
     <table id="libraries-table">
       <thead>
         <tr>
-          <th style="width:110px">供应商</th>
-          <th>来源库</th>
-          <th style="width:80px">交付数</th>
-          <th style="width:140px">最新计算 / 采纳</th>
-          <th style="width:155px">索引状态</th>
-          <th style="width:160px;text-align:right">操作</th>
+          <th scope="col" class="w-110">供应商</th>
+          <th scope="col">来源库</th>
+          <th scope="col" class="w-155">来源归档 (L1)</th>
+          <th scope="col" class="w-240">有效版本与采纳 (L2)</th>
+          <th scope="col" class="w-200">索引状态 (L3)</th>
+          <th scope="col" class="w-140 align-right">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -218,38 +567,51 @@
         <tr data-vendor="{{ row.vendor }}"
             data-library="{{ row.library|lower }}"
             data-has-rev="{{ '1' if (row.revision_count or 0) > 0 else '0' }}"
-            data-issue="{{ '1' if row.error else '0' }}"
-            data-sim="{{ '1' if row.library.startswith('SIMULATION_') else '0' }}">
-          <td><span class="tag">{{ row.vendor }}</span></td>
-          <td><strong>{{ row.library }}</strong></td>
-          <td class="num">{{ row.delivery_count if row.delivery_count is not none else '—' }}</td>
+            data-issue="{{ '1' if row.error else '0' }}">
+          <td><span class="chip" translate="no">{{ row.vendor }}</span></td>
+          <td><strong translate="no">{{ row.library }}</strong></td>
+          <td class="num nowrap">
+            <div><strong>{{ row.delivery_count if row.delivery_count is not none else 0 }}</strong> 交付</div>
+            <span class="sub-text">{{ row.raw_verification_note }}</span>
+            <span class="sub-text">{{ row.formal_count|default(0) }} 快照</span>
+            {% for stage, note in row.formal_verification_notes.items() %}
+              <span class="sub-text">{{ stage }} · {{ note }}</span>
+            {% else %}
+              <span class="sub-text">暂无本库 Formal 核验记录</span>
+            {% endfor %}
+          </td>
           <td class="num">
             {% if (row.revision_count or 0) > 0 %}
-              <span class="tag tag-accent">{{ row.latest_revision or (row.revision_count ~ ' 版') }}</span>
-              {% if row.accepted_revision %}
-                <span class="sub-text"><span class="tag tag-new" style="padding:1px 6px;font-size:11px">已采纳 {{ row.accepted_revision }}</span></span>
-              {% else %}
-                <span class="sub-text"><span class="tag tag-partial" style="padding:1px 6px;font-size:11px">待人工采纳</span></span>
-              {% endif %}
+              <div class="toolbar-group">
+                <span class="chip" translate="no">{{ row.latest_revision or (row.revision_count ~ ' 版') }}</span>
+                {% if row.accepted_revision %}
+                  <span class="tag tag-new tag-sm">已采纳 <span translate="no">{{ row.accepted_revision }}</span></span>
+                {% else %}
+                  <span class="tag tag-partial tag-sm">待人工采纳</span>
+                {% endif %}
+              </div>
+              <span class="sub-text">共 {{ row.revision_count }} 版{% if row.unadopted_new_files_count %} · <a href="{{ url_for('index_page',vendor=row.vendor,library=row.library,revision=row.latest_revision,adoption='unadopted') }}">+{{ row.unadopted_new_files_count }} 个新文件</a>{% endif %}</span>
             {% else %}
-              <span class="tag tag-inherited">未建版</span>
+              <span class="tag tag-inherited">未建有效版</span>
             {% endif %}
           </td>
           <td>
             {% if row.error %}
-              <span class="tag tag-partial"><span class="dot"></span>需处理</span>
-              <span class="sub-text">{{ row.error }}</span>
+              <span class="tag tag-partial"><span class="dot" aria-hidden="true"></span>需处理</span>
+              <span class="sub-text">{{ row.error }}{% if row.index_refreshed_at %} · 上次 <span class="mono num" translate="no">{{ row.index_refreshed_at[5:16].replace('T',' ') }}</span>{% endif %}</span>
             {% elif row.index_status == 'FRESH' %}
-              <span class="tag tag-new"><span class="dot"></span>指纹已同步</span>
-            {% elif row.index_status == 'UNVERIFIED' %}
-              <span class="tag tag-inherited"><span class="dot"></span>可查询（旧版无清单）</span>
+              <span class="tag tag-new"><span class="dot" aria-hidden="true"></span>已同步</span>
+              {% if row.index_refreshed_at %}<span class="sub-text mono num nowrap" translate="no">{{ row.index_refreshed_at[:16].replace('T',' ') }} UTC</span>{% endif %}
             {% else %}
-              <span class="tag tag-inherited"><span class="dot"></span>可查询</span>
+              <span class="tag tag-inherited"><span class="dot" aria-hidden="true"></span>可查询</span>
+              {% if row.index_refreshed_at %}<span class="sub-text mono num nowrap" translate="no">{{ row.index_refreshed_at[:16].replace('T',' ') }} UTC</span>{% endif %}
             {% endif %}
           </td>
-          <td style="text-align:right;white-space:nowrap">
-            <a class="btn secondary btn-xs" href="{{ url_for('library_page',vendor=row.vendor,library=row.library) }}">库与版本</a>
-            <a class="btn ghost btn-xs" href="{{ url_for('index_page',vendor=row.vendor,library=row.library) }}">索引</a>
+          <td class="align-right nowrap">
+            <div class="row-link-group">
+              <a class="btn secondary btn-xs" href="{{ url_for('library_page',vendor=row.vendor,library=row.library) }}">库与版本</a>
+              <a class="btn ghost btn-xs" href="{{ url_for('index_page',vendor=row.vendor,library=row.library) }}">索引</a>
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -257,7 +619,14 @@
     </table>
   </div>
   {% else %}
-  <p class="empty">暂无库。请展开上方配置根目录并执行 L1 刷新。</p>
+  <div class="empty-state">
+    <svg class="ico ico-lg empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+    <p class="empty-state-title">暂无已归档来源库</p>
+    <p class="empty-state-desc">请前往上方“目录配置”设置 RAW 与 Formal 根目录，并执行 L1 刷新。</p>
+    <div class="empty-state-action">
+      <button type="button" class="secondary btn-sm" onclick="switchSyncTab('config')">配置来源目录</button>
+    </div>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

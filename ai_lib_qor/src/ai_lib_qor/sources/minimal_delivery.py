@@ -2,7 +2,7 @@
 import json
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
 
 
@@ -11,6 +11,37 @@ def version_date(version):
     if not match:return None
     try:return datetime.strptime(match.group(1),'%Y%m%d').date().isoformat()
     except ValueError:return None
+
+
+def order_deliveries(records, times):
+    """Order delivery records by explicit version_date, using registered timestamps only for undated or same-day ties."""
+    from .timestamps import instant
+    if not isinstance(times, dict):
+        raise ValueError('用户登记时间配置无效')
+    rows = []
+    for item in records:
+        version = item['version']
+        value = item['version_date']
+        if value:
+            try:
+                day = date.fromisoformat(value)
+                if day.isoformat() != value or version_date(version) != value:
+                    raise ValueError('版本顺序日期与版本名不一致')
+            except (TypeError, ValueError):
+                raise ValueError('版本顺序日期无效') from None
+            when = instant(times[version]) if version in times else None
+            rows.append((day, when, item))
+        elif version in times:
+            when = instant(times[version])
+            rows.append((when.date(), when, item))
+        else:
+            raise ValueError(f'版本顺序未确认，缺少用户登记时间: {version}')
+    for i, (day, when, _) in enumerate(rows):
+        for other_day, other_when, _ in rows[i + 1:]:
+            if day == other_day and (when is None or other_when is None or when == other_when):
+                raise ValueError('版本顺序未确认：同日记录无法比较')
+    rows.sort(key=lambda r: (r[0], r[1] if r[1] else None))
+    return [row[2] for row in rows]
 
 
 def directory_birthtime(path):

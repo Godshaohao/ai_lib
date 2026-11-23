@@ -318,7 +318,7 @@ def load_fact_object(work, vendor, library, *, name=None, check=None, ref=None):
         bundle = load_check_bundle(work, vendor, library, check)
         fact = bundle['facts'].get(ref) or bundle['facts'].get(Path(ref).name)
         if not fact:
-            raise ValueError('检查结果中不存在指定的 FileFacts 引用')
+            raise ValueError('指定的 FileFacts 证据不可用或不在本次检查记录中')
         return fact, Path(ref).name, None
     if name:
         if '/' in name or '\\' in name or name in ('', '.', '..'):
@@ -404,16 +404,9 @@ def build_check_view(work, vendor, library, check_filename):
                 'compare_new': Path(compare_refs[1]).name if can_compare else None,
             })
 
-    summary = report.get('summary', {})
-    failed_checks = summary.get('failed_checks', 0)
-    inconclusive = summary.get('inconclusive_checks', 0)
-    failed_files = summary.get('failed_files', 0)
-    if failed_checks > 0 or failed_files > 0:
-        q_code, q_cls, q_text = 'FAIL', 'tag-failed', '质检失败'
-    elif report.get('state') != 'SUCCEEDED' or inconclusive > 0:
-        q_code, q_cls, q_text = 'PARTIAL', 'tag-partial', '部分覆盖 / 无结论'
-    else:
-        q_code, q_cls, q_text = 'SCOPE_PASS', 'tag-new', '已覆盖范围通过'
+    from ai_lib_qor.checks.path_plugins import evaluate_check_verdict
+    verdict = evaluate_check_verdict(report)
+    q_code, q_cls, q_text = verdict['code'], verdict['cls'], verdict['text']
 
     checks_out = []
     for c in report.get('checks', []):
@@ -434,6 +427,7 @@ def build_check_view(work, vendor, library, check_filename):
         'excel_cached': excel_cached,
         'report': report,
         'quality': {'code': q_code, 'cls': q_cls, 'text': q_text},
+        'unavailable_facts': bundle['unavailable_facts'],
         'source_counts': dict(source_counts),
         'parse_counts': dict(parse_counts),
         'file_rows': file_rows,
@@ -546,72 +540,4 @@ def paginate_facts_diff(diff_data, *, q='', status='auto', pin_page=1, per_page=
     }
 
 
-def latest_check_for_scope(work, vendor, library, revision, baseline):
-    """Find the most recent saved CheckResult matching (revision, baseline) without triggering parsing."""
-    if not revision:
-        return None
-    folder = library_folder(work, vendor, library)
-    candidates = sorted(
-        [*folder.glob('check_run_*.json'), *(folder / 'log').glob('check_rev_*_run_*.json')],
-        key=lambda p: p.stat().st_mtime_ns,
-        reverse=True,
-    )
-    for path in candidates:
-        if path.is_symlink():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding='utf-8'))
-            if (
-                data.get('schema_version') == 'check_result.path.v1'
-                and data.get('revision') == revision
-                and data.get('baseline') == baseline
-            ):
-                comp_map = {(c['view'], c['path']): c for c in data.get('comparisons', [])}
-                pcomp_map = {(c['view'], c['path']): c for c in data.get('partial_comparisons', [])}
-                file_map = {}
-                for f in data.get('files', []):
-                    key = (f['view'], f['path'])
-                    comp = comp_map.get(key)
-                    pcomp = pcomp_map.get(key)
-                    if comp:
-                        c_status = comp['content_status']
-                        refs = comp.get('facts_refs') or []
-                    elif pcomp:
-                        c_status = 'PARTIAL_DIFF' if pcomp.get('differences') else 'PARTIAL_MATCH'
-                        refs = pcomp.get('facts_refs') or []
-                    else:
-                        c_status = 'NOT_COMPARED'
-                        refs = []
-                    file_map[key] = {
-                        'parse_status': f.get('status'),
-                        'fact_ref': Path(f['facts']).name if f.get('facts') else None,
-                        'content_status': c_status,
-                        'compare_old': Path(refs[0]).name if len(refs) == 2 else None,
-                        'compare_new': Path(refs[1]).name if len(refs) == 2 else None,
-                    }
-                summary = data.get('summary', {})
-                fc = summary.get('failed_checks', 0)
-                ic = summary.get('inconclusive_checks', 0)
-                ff = summary.get('failed_files', 0)
-                run_state = data.get('state', 'UNKNOWN')
-                if fc > 0 or ff > 0:
-                    q_code, q_cls, q_text = 'FAIL', 'tag-failed', '质检失败'
-                elif run_state != 'SUCCEEDED' or ic > 0:
-                    q_code, q_cls, q_text = 'PARTIAL', 'tag-partial', '部分覆盖 / 无结论'
-                else:
-                    q_code, q_cls, q_text = 'SCOPE_PASS', 'tag-new', '已覆盖范围通过'
-                return {
-                    'check_name': path.name,
-                    'run_at': data.get('run_at', ''),
-                    'state': run_state,
-                    'quality_code': q_code,
-                    'quality_cls': q_cls,
-                    'quality_text': q_text,
-                    'failed_checks': fc,
-                    'inconclusive_checks': ic,
-                    'failed_files': ff,
-                    'files': file_map,
-                }
-        except (OSError, ValueError, TypeError, KeyError):
-            continue
-    return None
+from ai_lib_qor.application.path_query import latest_check_for_scope  # noqa: F401 (re-exported for compatibility)

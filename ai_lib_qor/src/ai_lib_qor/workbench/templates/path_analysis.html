@@ -1,132 +1,168 @@
 {% extends "path_base.html" %}
-{% block title %}{% if mode=='check' %}QoR 检查分析 · {{ data.report.revision }}{% elif mode=='facts' %}FileFacts · {{ data.view }}{% else %}FileFacts 对比 · {{ data.view }}{% endif %}{% endblock %}
+{% block title %}{% if mode=='check' %}质量分析 · {{ data.report.revision }}{% elif mode=='facts' %}结构明细 · {{ data.view }}{% else %}双版本对比 · {{ data.view }}{% endif %}{% endblock %}
 {% block breadcrumbs %}
   <a href="{{ url_for('overview') }}">来源总览</a>
-  <span class="crumb-sep">/</span>
-  <a href="{{ url_for('library_page',vendor=vendor,library=library) }}">{{ vendor }} · {{ library }}</a>
+  <span class="crumb-sep" aria-hidden="true">/</span>
+  <a href="{{ url_for('library_page',vendor=vendor,library=library) }}" translate="no">{{ vendor }} · {{ library }}</a>
   {% if check_name and mode != 'check' %}
-  <span class="crumb-sep">/</span>
-  <a href="{{ url_for('check_view_page',vendor=vendor,library=library,name=check_name) }}">检查详情</a>
+  <span class="crumb-sep" aria-hidden="true">/</span>
+  <a href="{{ url_for('check_view_page',vendor=vendor,library=library,name=check_name) }}">质量分析</a>
   {% endif %}
-  <span class="crumb-sep">/</span>
-  <span class="crumb-curr">{% if mode=='check' %}{{ data.report.revision }} 检查分析{% elif mode=='facts' %}FileFacts 检视{% else %}FileFacts 双版本对比{% endif %}</span>
+  <span class="crumb-sep" aria-hidden="true">/</span>
+  <span class="crumb-curr">{% if mode=='check' %}<span translate="no">{{ data.report.revision }}</span> 质量分析{% elif mode=='facts' %}结构明细{% else %}双版本差异{% endif %}</span>
 {% endblock %}
 {% block topbar_right %}
-  <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library) }}">← 返回库工作台</a>
+  <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library) }}">
+    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+    返回库与版本
+  </a>
 {% endblock %}
 
 {% block content %}
 {% if mode == 'check' %}
   <div class="page-head">
     <div class="page-title-group">
-      <div class="vendor-kicker">{{ vendor }} · {{ library }} · Single-Revision QoR Analysis</div>
-      <h1>{{ data.report.revision }} {% if data.report.baseline %}<span class="muted" style="font-weight:400">vs {{ data.report.baseline }}</span>{% else %}<span class="muted" style="font-weight:400">(无基线)</span>{% endif %}</h1>
-      <p>运行时间 {{ data.report.run_at[:19].replace('T',' ') }} · Run ID <span class="mono">{{ data.report.run_id }}</span></p>
+      <div class="page-eyebrow">单版本质量分析 · <span translate="no">{{ vendor }} / {{ library }}</span></div>
+      <h1><span translate="no">{{ data.report.revision }}</span> {% if data.report.baseline %}<span class="muted" style="font-weight:400">vs <span translate="no">{{ data.report.baseline }}</span></span>{% else %}<span class="muted" style="font-weight:400">（无基线）</span>{% endif %}</h1>
+      <p>执行时间 <span class="num" translate="no">{{ data.report.run_at[:19].replace('T',' ') }} UTC</span> · 批次号 <span class="mono" translate="no">{{ data.report.run_id }}</span></p>
     </div>
     <div class="toolbar-group">
-      <span class="tag {{ data.quality.cls }}"><span class="dot"></span>{{ data.quality.text }}</span>
-      <span class="tag tag-inherited">运行 {{ data.report.state }}</span>
+      <span class="tag {{ data.quality.cls }}"><span class="dot" aria-hidden="true"></span>{{ data.quality.text }}</span>
+      <span class="chip">{{ data.report.state|run_state_label }}</span>
       {% if data.excel_name %}
-      <a class="btn secondary btn-sm" href="{{ url_for('artifact',vendor=vendor,library=library,name=data.excel_name) }}">{{ '下载 Excel' if data.excel_cached else '按需生成 Excel' }}</a>
+      <a class="btn secondary btn-sm" href="{{ url_for('artifact',vendor=vendor,library=library,name=data.excel_name) }}">{{ '下载 Excel' if data.excel_cached else '导出 Excel' }}</a>
       {% endif %}
-      <a class="btn secondary btn-sm" href="{{ url_for('artifact',vendor=vendor,library=library,name=data.check_name) }}">下载检查 JSON</a>
+      <a class="btn secondary btn-sm" href="{{ url_for('artifact',vendor=vendor,library=library,name=data.check_name) }}">导出 JSON</a>
     </div>
   </div>
 
-  <div class="kpi-row">
-    <div class="kpi">
-      <div class="kpi-label">来源变动（FileIndex）</div>
-      <div class="kpi-val">{{ (data.source_counts.get('NEW',0) + data.source_counts.get('UPDATED',0) + data.source_counts.get('REMOVED',0)) }}</div>
+  <div class="kpi-strip" aria-label="检查摘要指标">
+    <div class="kpi-cell">
+      <div class="kpi-head"><span class="kpi-label">来源变动</span></div>
+      <div class="kpi-val">{{ (data.source_counts.get('NEW',0) + data.source_counts.get('UPDATED',0) + data.source_counts.get('REMOVED',0)) }}<span class="kpi-denom">项</span></div>
       <div class="kpi-sub">新增 {{ data.source_counts.get('NEW',0) }} · 更新 {{ data.source_counts.get('UPDATED',0) }} · 移除 {{ data.source_counts.get('REMOVED',0) }} · 继承 {{ data.source_counts.get('INHERITED',0) }}</div>
     </div>
-    <div class="kpi">
-      <div class="kpi-label">文件解析覆盖</div>
-      <div class="kpi-val">{{ data.parse_counts.get('PARSED',0) }} / {{ data.file_rows|length }}</div>
+    <div class="kpi-cell {{ 'fail' if data.parse_counts.get('FAILED',0) > 0 else '' }}">
+      <div class="kpi-head"><span class="kpi-label">文件解析覆盖</span></div>
+      <div class="kpi-val">{{ data.parse_counts.get('PARSED',0) }}<span class="kpi-denom">/ {{ data.file_rows|length }}</span></div>
       <div class="kpi-sub">未检查 {{ data.parse_counts.get('NOT_CHECKED',0) }} · 失败 {{ data.parse_counts.get('FAILED',0) }}</div>
     </div>
-    <div class="kpi">
-      <div class="kpi-label">确认内容差异</div>
-      <div class="kpi-val">{{ data.report.summary.files_with_confirmed_content_change }}</div>
-      <div class="kpi-sub">对象变化明细 {{ data.changes|length }} 条 · 部分差异 {{ data.partial_comparisons|length }} 项</div>
+    <div class="kpi-cell">
+      <div class="kpi-head"><span class="kpi-label">确认内容差异</span></div>
+      <div class="kpi-val">{{ data.report.summary.files_with_confirmed_content_change }}<span class="kpi-denom">文件</span></div>
+      <div class="kpi-sub">对象变化 {{ data.changes|length }} 条 · 部分差异 {{ data.partial_comparisons|length }} 项</div>
     </div>
-    <div class="kpi">
-      <div class="kpi-label">规则检查结论</div>
-      <div class="kpi-val">失败 {{ data.report.summary.failed_checks }} / 无结论 {{ data.report.summary.inconclusive_checks }}</div>
-      <div class="kpi-sub">共执行 {{ data.checks|length }} 条规则检查</div>
+    <div class="kpi-cell {{ 'fail' if data.report.summary.failed_checks > 0 else ('warn' if data.report.summary.inconclusive_checks > 0 else ('ok' if data.quality.code == 'SCOPE_PASS' else '')) }}">
+      <div class="kpi-head"><span class="kpi-label">规则检查统计</span></div>
+      <div class="kpi-val">
+        {{ data.report.summary.failed_checks }}<span class="kpi-denom">失败</span>
+        <span class="kpi-denom">·</span>
+        {{ data.report.summary.inconclusive_checks }}<span class="kpi-denom">无结论</span>
+      </div>
+      <div class="kpi-sub">共记录 {{ data.checks|length }} 条规则结论</div>
     </div>
   </div>
 
-  <div class="note-bar"><strong>覆盖边界说明：</strong>{{ data.report.note }}</div>
+  {% if data.unavailable_facts %}
+  <div class="notice bad" role="alert">
+    <strong>部分结构证据不可用（共 <span class="num">{{ data.unavailable_facts|length }}</span> 项）</strong>
+    <span>检查结论本身保留完整，但以下证据文件缺失或损坏，暂无法展开明细：<span class="mono" translate="no">{{ data.unavailable_facts|join(', ') }}</span></span>
+  </div>
+  {% endif %}
 
-  <section class="card">
+  <section class="card" aria-label="覆盖范围与规则执行状态">
+    <div class="card-body">
+      <div class="text-sm"><strong>检查范围说明：</strong>{{ data.report.note }}</div>
+    </div>
+    {% set pcov = (data.report.tooling.plugin_coverage if data.report.tooling is defined and data.report.tooling and data.report.tooling.plugin_coverage is defined else None) %}
+    {% if pcov %}
+    <div class="plugin-cov-strip">
+      <span class="plugin-cov-label">规则执行覆盖</span>
+      {% for pname, pstate in pcov.items() %}
+        {% if pstate == 'EXECUTED' %}
+          <span class="tag tag-new tag-sm"><span class="dot" aria-hidden="true"></span><span translate="no">{{ pname }}</span> · 已执行</span>
+        {% elif pstate == 'NOT_EXECUTED' %}
+          <span class="tag tag-partial tag-sm"><span class="dot" aria-hidden="true"></span><span translate="no">{{ pname }}</span> · 未执行</span>
+        {% else %}
+          <span class="tag tag-inherited tag-sm"><span translate="no">{{ pname }}</span> · 不适用</span>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="card" aria-label="文件变更与内容比对总表">
     <div class="card-head">
       <div>
-        <h2>单版本文件变化与内容比对总表</h2>
-        <p>联合 FileIndex 来源变动与 CheckResult 解析/对比结果，点击可直达 FileFacts 证据页或双版本并排 Diff。</p>
+        <h2>文件变更与内容比对</h2>
+        <p>整合来源变更、解析状态与内容比对结果，可进一步查看结构明细与双版本差异。</p>
       </div>
     </div>
     <div class="toolbar">
       <div class="toolbar-group">
-        <div class="seg" id="cv-src-seg">
-          <button type="button" class="active" onclick="setCvFilter('src','all',this)">全部 ({{ data.file_rows|length }})</button>
-          <button type="button" onclick="setCvFilter('src','changed',this)">仅来源变动</button>
-          <button type="button" onclick="setCvFilter('src','diff',this)">仅内容有变</button>
+        <div class="seg" id="cv-src-seg" role="group" aria-label="按文件变动筛选">
+          <button type="button" class="active" aria-pressed="true" onclick="setCvFilter('src','all',this)">全部 ({{ data.file_rows|length }})</button>
+          <button type="button" aria-pressed="false" onclick="setCvFilter('src','changed',this)">仅来源变动</button>
+          <button type="button" aria-pressed="false" onclick="setCvFilter('src','diff',this)">仅内容有变</button>
         </div>
-        <select id="cv-view-sel" style="height:28px;font-size:12px" onchange="setCvFilter('view',this.value)">
+        <select id="cv-view-sel" class="ctrl-sm" aria-label="按 View 筛选" onchange="setCvFilter('view',this.value)">
           <option value="">全部 View</option>
           {% for v in data.views_present %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
         </select>
       </div>
-      <input type="search" id="cv-q" class="search-input" style="height:28px;font-size:12.5px" placeholder="搜索路径或版本..." oninput="applyCvFilters()">
+      <div class="search-wrap">
+        <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" id="cv-q" class="search-input ctrl-sm" aria-label="搜索路径或版本" placeholder="搜索路径或版本…" autocomplete="off" spellcheck="false" oninput="applyCvFilters()">
+      </div>
     </div>
     <div class="table-wrap scroll-box">
       <table id="cv-files-table">
         <thead>
           <tr>
-            <th style="width:82px">View</th>
-            <th>相对路径</th>
-            <th style="width:180px">来源变动 (FileIndex)</th>
-            <th style="width:160px">解析覆盖</th>
-            <th style="width:155px">内容比对</th>
-            <th style="width:185px;text-align:right">FileFacts 下钻</th>
+            <th scope="col" class="w-96">View</th>
+            <th scope="col">相对路径</th>
+            <th scope="col" class="w-180">来源变动</th>
+            <th scope="col" class="w-170">解析状态</th>
+            <th scope="col" class="w-155">内容比对</th>
+            <th scope="col" class="w-180 align-right">明细与对比</th>
           </tr>
         </thead>
         <tbody>
           {% for r in data.file_rows %}
           <tr data-view="{{ r.view }}" data-src="{{ r.source_status }}" data-content="{{ r.content_status }}" data-text="{{ (r.path + ' ' + r.target_version + ' ' + r.baseline_version)|lower }}">
-            <td><span class="tag">{{ r.view }}</span></td>
-            <td class="mono">{{ r.path }}</td>
+            <td><span class="chip" translate="no">{{ r.view }}</span></td>
+            <td class="mono" translate="no">{{ r.path }}</td>
             <td>
               {% if r.source_status=='NEW' %}<span class="tag tag-new">新增</span>
               {% elif r.source_status=='UPDATED' %}<span class="tag tag-updated">来源更新</span>
               {% elif r.source_status=='REMOVED' %}<span class="tag tag-failed">已移除</span>
               {% elif r.source_status=='INHERITED' %}<span class="tag tag-inherited">继承</span>
               {% else %}<span class="tag tag-inherited">当前成员</span>{% endif %}
-              <span class="sub mono">{% if r.baseline_version %}{{ r.baseline_version }} → {% endif %}{{ r.target_version or '移除' }}</span>
+              <span class="sub mono" translate="no">{% if r.baseline_version %}{{ r.baseline_version }} → {% endif %}{{ r.target_version or '移除' }}</span>
             </td>
             <td>
               {% if r.parse_status=='PARSED' %}<span class="tag tag-accent">已解析</span>
               {% elif r.parse_status=='FAILED' %}<span class="tag tag-failed">解析失败</span>
-              {% else %}<span class="tag tag-inherited">{{ r.parse_status }}</span>{% endif %}
+              {% else %}<span class="tag tag-inherited">{{ r.parse_status|parse_status_label }}</span>{% endif %}
               {% if r.parse_note %}<span class="sub">{{ r.parse_note }}</span>{% endif %}
             </td>
             <td>
-              {% if r.content_status=='CURRENT_CONTENT_DIFF' %}<span class="tag tag-partial"><span class="dot"></span>内容有变</span>
-              {% elif r.content_status=='CURRENT_CONTENT_MATCH' %}<span class="tag tag-new"><span class="dot"></span>内容一致</span>
-              {% elif r.content_status=='PARTIAL_DIFF' %}<span class="tag tag-partial"><span class="dot"></span>部分差异</span>
+              {% if r.content_status=='CURRENT_CONTENT_DIFF' %}<span class="tag tag-partial"><span class="dot" aria-hidden="true"></span>内容有变</span>
+              {% elif r.content_status=='CURRENT_CONTENT_MATCH' %}<span class="tag tag-new"><span class="dot" aria-hidden="true"></span>内容一致</span>
+              {% elif r.content_status=='PARTIAL_DIFF' %}<span class="tag tag-partial"><span class="dot" aria-hidden="true"></span>部分差异</span>
               {% elif r.content_status=='PARTIAL_MATCH' %}<span class="tag tag-inherited">部分一致</span>
               {% else %}<span class="muted">未比对</span>{% endif %}
             </td>
-            <td style="text-align:right;white-space:nowrap">
+            <td class="align-right nowrap">
               {% if r.fact_ref %}
-              <a class="btn secondary btn-xs" href="{{ url_for('facts_view_page',vendor=vendor,library=library,check=data.check_name,ref=r.fact_ref) }}">查看 Facts</a>
+              <a class="btn secondary btn-xs" href="{{ url_for('facts_view_page',vendor=vendor,library=library,check=data.check_name,ref=r.fact_ref) }}">结构明细</a>
               {% endif %}
               {% if r.compare_old and r.compare_new and r.compare_old != r.compare_new %}
-              <a class="btn btn-xs" style="margin-left:4px" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=data.check_name,old=r.compare_old,new=r.compare_new) }}">对比差异</a>
+              <a class="btn btn-xs ml-xs" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=data.check_name,old=r.compare_old,new=r.compare_new) }}">对比差异</a>
               {% elif r.compare_old and r.compare_new %}
-              <a class="btn ghost btn-xs" style="margin-left:4px" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=data.check_name,old=r.compare_old,new=r.compare_new) }}">同版对照</a>
+              <a class="btn ghost btn-xs ml-xs" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=data.check_name,old=r.compare_old,new=r.compare_new) }}">同版对照</a>
               {% elif r.source_status == 'NEW' %}
-              <span class="muted" style="font-size:11.5px;margin-left:6px">基线无对应</span>
+              <span class="muted text-xs ml-xs">基线无对应</span>
               {% endif %}
             </td>
           </tr>
@@ -136,29 +172,37 @@
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" aria-label="规则检查结论">
     <div class="card-head">
-      <div><h2>QoR 规则检查结论</h2><p>每条规则的结论、覆盖度与可追溯 FileFacts 证据。</p></div>
+      <div><h2>规则检查结论</h2><p>逐条记录每项检查规则的结论、覆盖度及可追溯证据。</p></div>
     </div>
     {% if data.checks %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>规则 ID</th><th>结论</th><th>覆盖度</th><th>范围文件</th><th>详细说明与证据</th></tr></thead>
+        <thead>
+          <tr>
+            <th scope="col">规则标识</th>
+            <th scope="col" class="w-140">结论</th>
+            <th scope="col" class="w-110">覆盖度</th>
+            <th scope="col">范围文件</th>
+            <th scope="col">说明与证据</th>
+          </tr>
+        </thead>
         <tbody>
           {% for c in data.checks %}
           <tr>
-            <td class="mono"><strong>{{ c.check_id }}</strong></td>
+            <td class="mono" translate="no"><strong>{{ c.check_id }}</strong></td>
             <td>
-              {% if c.result=='PASS' %}<span class="tag tag-new"><span class="dot"></span>PASS</span>
-              {% elif c.result=='FAIL' %}<span class="tag tag-failed"><span class="dot"></span>FAIL</span>
-              {% else %}<span class="tag tag-partial"><span class="dot"></span>INCONCLUSIVE</span>{% endif %}
+              {% if c.result=='PASS' %}<span class="tag tag-new" translate="no"><span class="dot" aria-hidden="true"></span>PASS</span>
+              {% elif c.result=='FAIL' %}<span class="tag tag-failed" translate="no"><span class="dot" aria-hidden="true"></span>FAIL</span>
+              {% else %}<span class="tag tag-partial" translate="no"><span class="dot" aria-hidden="true"></span>INCONCLUSIVE</span>{% endif %}
             </td>
-            <td><span class="tag">{{ c.coverage }}</span></td>
-            <td class="mono">{{ c.scope_file_keys|join(', ') or '—' }}</td>
+            <td><span class="chip" translate="no">{{ c.coverage }}</span></td>
+            <td class="mono" translate="no">{{ c.scope_file_keys|join(', ') or '—' }}</td>
             <td>
               <div>{{ c.detail }}</div>
               {% if c.resolved_refs %}
-              <div class="sub">证据：{% for ref in c.resolved_refs %}{% if ref.available %}<a href="{{ url_for('facts_view_page',vendor=vendor,library=library,check=data.check_name,ref=ref.name) }}">{{ ref.name }}</a>{% else %}<span class="mono">{{ ref.name }}</span>{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+              <div class="sub">证据：{% for ref in c.resolved_refs %}{% if ref.available %}<a href="{{ url_for('facts_view_page',vendor=vendor,library=library,check=data.check_name,ref=ref.name) }}" translate="no">{{ ref.name }}</a>{% else %}<span class="mono muted" translate="no">{{ ref.name }}</span> <span class="tag tag-partial tag-sm">证据不可用</span>{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</div>
               {% endif %}
             </td>
           </tr>
@@ -169,31 +213,40 @@
     {% else %}<p class="empty">本次运行未产生规则检查条目。</p>{% endif %}
   </section>
 
-  <section class="card">
+  <section class="card" aria-label="对象级内容变化明细">
     <div class="card-head">
-      <div><h2>对象级内容变化明细（Macro / Pin / 接口）</h2><p>精确记录基线值到当前值的属性变化。</p></div>
+      <div><h2>对象级内容变化明细</h2><p>精确记录 Macro、Pin 与接口属性从基线值到当前值的变化。</p></div>
     </div>
     {% if data.changes or data.partial_comparisons %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>View / 文件</th><th>对象类型与名称</th><th>属性</th><th>基线旧值</th><th>当前新值</th><th>单位</th></tr></thead>
+        <thead>
+          <tr>
+            <th scope="col">View / 文件</th>
+            <th scope="col">对象类型与名称</th>
+            <th scope="col" class="w-120">属性</th>
+            <th scope="col">基线旧值</th>
+            <th scope="col">当前新值</th>
+            <th scope="col" class="w-80">单位</th>
+          </tr>
+        </thead>
         <tbody>
           {% for ch in data.changes %}
           <tr>
-            <td><span class="tag">{{ ch.view }}</span> <span class="mono">{{ ch.path }}</span></td>
-            <td><strong>{{ ch.object_type }}</strong> · <span class="mono">{{ ch.object_name }}</span></td>
-            <td class="mono">{{ ch.attribute }}</td>
-            <td class="mono muted">{{ ch.old_value }}</td>
-            <td class="mono"><strong>{{ ch.new_value }}</strong></td>
-            <td class="muted">{{ ch.unit or '—' }}</td>
+            <td><span class="chip" translate="no">{{ ch.view }}</span> <span class="mono ml-xs" translate="no">{{ ch.path }}</span></td>
+            <td><strong translate="no">{{ ch.object_type }}</strong> · <span class="mono" translate="no">{{ ch.object_name }}</span></td>
+            <td class="mono" translate="no">{{ ch.attribute }}</td>
+            <td class="mono muted" translate="no">{{ ch.old_value }}</td>
+            <td class="mono" translate="no"><strong>{{ ch.new_value }}</strong></td>
+            <td class="muted" translate="no">{{ ch.unit or '—' }}</td>
           </tr>
           {% endfor %}
           {% for pc in data.partial_comparisons %}
           <tr>
-            <td><span class="tag tag-partial">{{ pc.view }} PARTIAL</span> <span class="mono">{{ pc.path }}</span></td>
-            <td>轻量接口观察</td>
-            <td>差异摘要</td>
-            <td colspan="3" class="mono">{{ pc.differences or '无接口变化（仅轻量解析）' }}</td>
+            <td><span class="tag tag-partial" translate="no">{{ pc.view }} PARTIAL</span> <span class="mono ml-xs" translate="no">{{ pc.path }}</span></td>
+            <td>接口摘要</td>
+            <td>差异内容</td>
+            <td colspan="3" class="mono" translate="no">{{ pc.differences or '无接口变化（部分解析）' }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -206,41 +259,41 @@
   {% set pg = data.pagination %}
   <div class="page-head">
     <div class="page-title-group">
-      <div class="vendor-kicker">{{ data.view }} · FileFacts Evidence Inspector</div>
-      <h1>{{ data.source.relative_path or data.label }}</h1>
-      <p>来源版本 <span class="mono">{{ data.source.version }}</span> · 解析器 {{ data.parser.name }} ({{ data.parser.version }}) · {{ data.parsed_at[:19].replace('T',' ') }}</p>
+      <div class="page-eyebrow">结构明细 · <span translate="no">{{ data.view }}</span></div>
+      <h1 translate="no">{{ data.source.relative_path or data.label }}</h1>
+      <p>来源版本 <span class="mono" translate="no">{{ data.source.version }}</span> · 解析器 <span translate="no">{{ data.parser.name }} ({{ data.parser.version }})</span> · <span class="num" translate="no">{{ data.parsed_at[:19].replace('T',' ') }} UTC</span></p>
     </div>
     <div class="toolbar-group">
-      <span class="tag {{ 'tag-new' if data.parse_status=='COMPLETE' else ('tag-partial' if data.parse_status=='PARTIAL' else 'tag-failed') }}"><span class="dot"></span>{{ data.parse_status }}</span>
+      <span class="tag {{ 'tag-new' if data.parse_status=='COMPLETE' else ('tag-partial' if data.parse_status=='PARTIAL' else 'tag-failed') }}"><span class="dot" aria-hidden="true"></span>{{ data.parse_status|parse_status_label }}</span>
       {% if check_name %}
-      <a class="btn secondary btn-sm" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=check_name) }}">← 返回检查分析</a>
+      <a class="btn secondary btn-sm" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=check_name) }}">返回质量分析</a>
       {% endif %}
-      <a class="btn secondary btn-sm" href="{{ url_for('facts_download',vendor=vendor,library=library,name=fact_name,check=check_name,ref=fact_ref) }}">下载原始 JSON</a>
+      <a class="btn secondary btn-sm" href="{{ url_for('facts_download',vendor=vendor,library=library,name=fact_name,check=check_name,ref=fact_ref) }}">导出 JSON</a>
     </div>
   </div>
 
-  <div class="kpi-row">
+  <div class="kpi-strip" aria-label="文件结构指标">
     {% for m in data.summary_metrics %}
-    <div class="kpi"><div class="kpi-label">{{ m.label }}</div><div class="kpi-val">{{ m.value }}</div></div>
+    <div class="kpi-cell"><div class="kpi-head"><span class="kpi-label">{{ m.label }}</span></div><div class="kpi-val">{{ m.value }}</div></div>
     {% endfor %}
   </div>
 
-  <section class="card">
-    <div class="card-head"><div><h2>解析元数据与覆盖边界</h2><p>{{ data.coverage_note }}</p></div></div>
+  <section class="card" aria-label="解析元数据与覆盖范围">
+    <div class="card-head"><div><h2>解析元数据与覆盖范围</h2><p>{{ data.coverage_note }}</p></div></div>
     <div class="card-body">
       <div class="meta-grid">
         <div class="meta-item">
-          <strong>来源物理路径 <button type="button" class="copy-btn" style="margin-left:6px" onclick="copyPath(this,'{{ data.source.absolute_path }}')">复制</button></strong>
-          <span class="mono path-wrap">{{ data.source.absolute_path }}</span>
+          <strong>物理路径 <button type="button" class="copy-icon-btn ml-xs" aria-label="复制物理路径" title="复制物理路径" onclick="copyPath(this,'{{ data.source.absolute_path }}')"><svg class="ico ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></strong>
+          <span class="mono path-wrap" translate="no">{{ data.source.absolute_path }}</span>
         </div>
-        <div class="meta-item"><strong>已覆盖区段 (covered_sections)</strong><div>{% for s in data.covered_sections %}<span class="tag tag-accent" style="margin:2px 4px 2px 0">{{ s }}</span>{% endfor %}</div></div>
-        <div class="meta-item"><strong>历史字节状态</strong><span class="tag tag-partial">{{ data.source.historical_content or 'UNVERIFIED' }}</span></div>
+        <div class="meta-item"><strong>解析覆盖范围</strong><div class="toolbar-group mt-xs">{% for s in data.covered_sections %}<span class="chip chip-accent" translate="no">{{ s }}</span>{% endfor %}</div></div>
+        <div class="meta-item"><strong>历史文件校验</strong><span class="tag tag-partial">{{ (data.source.historical_content or 'UNVERIFIED')|historical_content_label }}</span></div>
       </div>
     </div>
   </section>
 
-  <!-- 服务端统一筛选栏（大库不卡浏览器） -->
-  <section class="card">
+  <!-- 筛选栏 -->
+  <section class="card" aria-label="筛选条件">
     <form class="toolbar" method="get">
       <input type="hidden" name="vendor" value="{{ vendor }}">
       <input type="hidden" name="library" value="{{ library }}">
@@ -248,42 +301,45 @@
       {% if fact_ref %}<input type="hidden" name="ref" value="{{ fact_ref }}">{% endif %}
       {% if fact_name %}<input type="hidden" name="name" value="{{ fact_name }}">{% endif %}
       <div class="toolbar-group">
-        <input type="search" name="q" value="{{ pg.q }}" class="search-input" style="height:30px" placeholder="服务端搜索 Macro/Cell/Pin...">
+        <div class="search-wrap">
+          <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="search" name="q" value="{{ pg.q }}" class="search-input ctrl-sm" aria-label="搜索 Macro、Cell 或 Pin" placeholder="搜索 Macro / Cell / Pin…" autocomplete="off" spellcheck="false">
+        </div>
         {% if data.pin_directions %}
-        <select name="direction" style="height:30px;font-size:12.5px">
+        <select name="direction" class="ctrl-sm" aria-label="按 Pin 方向筛选">
           <option value="">全部方向</option>
           {% for d in data.pin_directions %}<option value="{{ d }}" {% if pg.direction==d %}selected{% endif %}>{{ d }}</option>{% endfor %}
         </select>
         {% endif %}
         {% if data.pin_uses|length > 1 %}
-        <select name="use" style="height:30px;font-size:12.5px">
+        <select name="use" class="ctrl-sm" aria-label="按 Pin 用途筛选">
           <option value="">全部用途</option>
           {% for u in data.pin_uses %}<option value="{{ u }}" {% if pg.use==u %}selected{% endif %}>{{ u }}</option>{% endfor %}
         </select>
         {% endif %}
-        <select name="per_page" style="height:30px;font-size:12.5px">
+        <select name="per_page" class="ctrl-sm" aria-label="每页显示行数">
           {% for n in (50, 100, 200) %}<option value="{{ n }}" {% if pg.per_page==n %}selected{% endif %}>每页 {{ n }} 行</option>{% endfor %}
         </select>
       </div>
       <div class="toolbar-group">
-        <button type="submit" class="btn-sm">服务端筛选</button>
+        <button type="submit" class="btn-sm">筛选</button>
         <a class="btn ghost btn-sm" href="{{ url_for('facts_view_page',vendor=vendor,library=library,check=check_name,ref=fact_ref,name=fact_name) }}">重置</a>
       </div>
     </form>
   </section>
 
-  <section class="card">
+  <section class="card" aria-label="{{ data.entities_title }}">
     <div class="card-head">
       <div><h2>{{ data.entities_title }}</h2></div>
-      <span class="tag num">匹配 {{ pg.entity_total }} / 总计 {{ pg.entity_unfiltered }} 项</span>
+      <span class="chip num">匹配 {{ pg.entity_total }} / 共 {{ pg.entity_unfiltered }} 项</span>
     </div>
     {% if data.entities %}
     <div class="table-wrap scroll-box">
       <table>
-        <thead><tr>{% for col in data.entities_columns %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+        <thead><tr>{% for col in data.entities_columns %}<th scope="col">{{ col }}</th>{% endfor %}</tr></thead>
         <tbody>
           {% for row in data.entities %}
-          <tr>{% for val in row %}<td class="{{ 'mono' if loop.first else 'num' }}">{{ val }}</td>{% endfor %}</tr>
+          <tr>{% for val in row %}<td class="{{ 'mono' if loop.first else 'num' }}" translate="no">{{ val }}</td>{% endfor %}</tr>
           {% endfor %}
         </tbody>
       </table>
@@ -299,22 +355,29 @@
   </section>
 
   {% if pg.pin_unfiltered > 0 %}
-  <section class="card">
+  <section class="card" aria-label="{{ data.pins_title }}">
     <div class="card-head">
-      <div><h2>{{ data.pins_title }}</h2><p>服务端分页加载，适配大工艺库数千级 Pin 明细。</p></div>
-      <span class="tag num">匹配 {{ pg.pin_total }} / 总计 {{ pg.pin_unfiltered }} 个</span>
+      <div><h2>{{ data.pins_title }}</h2><p>按页浏览全部 Pin 与端口明细。</p></div>
+      <span class="chip num">匹配 {{ pg.pin_total }} / 共 {{ pg.pin_unfiltered }} 个</span>
     </div>
     {% if data.pins %}
     <div class="table-wrap scroll-box">
       <table id="pins-table">
-        <thead><tr><th>所属对象</th><th>Pin / 端口名称</th><th>方向</th><th>用途</th></tr></thead>
+        <thead>
+          <tr>
+            <th scope="col">所属对象</th>
+            <th scope="col">Pin / 端口名称</th>
+            <th scope="col" class="w-120">方向</th>
+            <th scope="col" class="w-120">用途</th>
+          </tr>
+        </thead>
         <tbody>
           {% for p in data.pins %}
           <tr>
-            <td class="mono muted">{{ p.parent }}</td>
-            <td class="mono"><strong>{{ p.name }}</strong></td>
-            <td>{% if p.direction %}<span class="tag {{ 'tag-dir-in' if p.direction=='INPUT' else ('tag-dir-out' if p.direction=='OUTPUT' else 'tag-dir-inout') }}">{{ p.direction }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-            <td><span class="tag">{{ p.use }}</span></td>
+            <td class="mono muted" translate="no">{{ p.parent }}</td>
+            <td class="mono" translate="no"><strong>{{ p.name }}</strong></td>
+            <td>{% if p.direction %}<span class="tag {{ 'tag-dir-in' if p.direction=='INPUT' else ('tag-dir-out' if p.direction=='OUTPUT' else 'tag-dir-inout') }}" translate="no">{{ p.direction }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td><span class="chip" translate="no">{{ p.use }}</span></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -335,41 +398,48 @@
   {% set pg = data.pagination %}
   <div class="page-head">
     <div class="page-title-group">
-      <div class="vendor-kicker">{{ data.view }} · FileFacts Side-by-Side Diff</div>
-      <h1>{{ data.new_source.relative_path or data.new_label }}</h1>
-      <p>基线 <span class="mono">{{ data.old_source.version or data.old_label }}</span> → 当前 <span class="mono">{{ data.new_source.version or data.new_label }}</span></p>
+      <div class="page-eyebrow">双版本结构对比 · <span translate="no">{{ data.view }}</span></div>
+      <h1 translate="no">{{ data.new_source.relative_path or data.new_label }}</h1>
+      <p>基线 <span class="mono" translate="no">{{ data.old_source.version or data.old_label }}</span> → 当前 <span class="mono" translate="no">{{ data.new_source.version or data.new_label }}</span></p>
     </div>
     {% if check_name %}
     <div class="toolbar-group">
-      <a class="btn secondary btn-sm" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=check_name) }}">← 返回检查分析</a>
+      <a class="btn secondary btn-sm" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=check_name) }}">返回质量分析</a>
     </div>
     {% endif %}
   </div>
 
   {% if data.same_source %}
-  <div class="note-bar"><strong>同源继承提示：</strong>基线与当前版本指向同一交付文件（<span class="mono">{{ data.new_source.version }}</span>），来源与解析结构完全一致，以下展示全量成员供核验。</div>
+  <div class="note-bar"><strong>同源对照：</strong>当前与基线指向同一交付文件（<span class="mono" translate="no">{{ data.new_source.version }}</span>），结构完全一致，以下展示全量成员。</div>
   {% endif %}
 
-  <div class="kpi-row">
-    <div class="kpi"><div class="kpi-label">Pin 差异总数</div><div class="kpi-val">{{ data.counts.changed }} / {{ data.counts.total }}</div></div>
-    <div class="kpi"><div class="kpi-label">新增 Pin</div><div class="kpi-val">{{ data.counts.ADDED }}</div></div>
-    <div class="kpi"><div class="kpi-label">移除 Pin</div><div class="kpi-val">{{ data.counts.REMOVED }}</div></div>
-    <div class="kpi"><div class="kpi-label">方向 / 用途变化</div><div class="kpi-val">{{ data.counts.DIRECTION_CHANGED + data.counts.USE_CHANGED }}</div></div>
+  <div class="kpi-strip" aria-label="双版本差异统计">
+    <div class="kpi-cell {{ 'warn' if data.counts.changed > 0 else 'ok' }}"><div class="kpi-head"><span class="kpi-label">Pin 差异总数</span></div><div class="kpi-val">{{ data.counts.changed }}<span class="kpi-denom">/ {{ data.counts.total }}</span></div></div>
+    <div class="kpi-cell"><div class="kpi-head"><span class="kpi-label">新增 Pin</span></div><div class="kpi-val">{{ data.counts.ADDED }}</div></div>
+    <div class="kpi-cell {{ 'fail' if data.counts.REMOVED > 0 else '' }}"><div class="kpi-head"><span class="kpi-label">移除 Pin</span></div><div class="kpi-val">{{ data.counts.REMOVED }}</div></div>
+    <div class="kpi-cell {{ 'warn' if (data.counts.DIRECTION_CHANGED + data.counts.USE_CHANGED) > 0 else '' }}"><div class="kpi-head"><span class="kpi-label">方向 / 用途变化</span></div><div class="kpi-val">{{ data.counts.DIRECTION_CHANGED + data.counts.USE_CHANGED }}</div></div>
   </div>
 
   {% if data.size_diffs %}
-  <section class="card">
-    <div class="card-head"><div><h2>Macro 物理尺寸对比</h2><p>按 Macro 逐项比对宽度与高度 (um)。</p></div><span class="tag num">{{ data.size_diffs_total }} 项</span></div>
+  <section class="card" aria-label="Macro 物理尺寸对比">
+    <div class="card-head"><div><h2>Macro 物理尺寸对比</h2><p>按 Macro 逐项比对宽度与高度 (um)。</p></div><span class="chip num">{{ data.size_diffs_total }} 项</span></div>
     <div class="table-wrap scroll-box">
       <table>
-        <thead><tr><th>Macro 名称</th><th>变化状态</th><th>基线 SIZE (um)</th><th>当前 SIZE (um)</th></tr></thead>
+        <thead>
+          <tr>
+            <th scope="col">Macro 名称</th>
+            <th scope="col" class="w-120">变化状态</th>
+            <th scope="col">基线 SIZE (um)</th>
+            <th scope="col">当前 SIZE (um)</th>
+          </tr>
+        </thead>
         <tbody>
           {% for s in data.size_diffs %}
           <tr>
-            <td class="mono"><strong>{{ s.name }}</strong></td>
-            <td><span class="tag {{ 'tag-partial' if s.status=='CHANGED' else ('tag-new' if s.status=='ADDED' else ('tag-failed' if s.status=='REMOVED' else 'tag-inherited')) }}">{{ s.status }}</span></td>
-            <td class="mono muted">{{ s.old }}</td>
-            <td class="mono"><strong>{{ s.new }}</strong></td>
+            <td class="mono" translate="no"><strong>{{ s.name }}</strong></td>
+            <td><span class="tag {{ 'tag-partial' if s.status=='CHANGED' else ('tag-new' if s.status=='ADDED' else ('tag-failed' if s.status=='REMOVED' else 'tag-inherited')) }}" translate="no">{{ s.status }}</span></td>
+            <td class="mono muted num" translate="no">{{ s.old }}</td>
+            <td class="mono num" translate="no"><strong>{{ s.new }}</strong></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -378,10 +448,10 @@
   </section>
   {% endif %}
 
-  <section class="card">
+  <section class="card" aria-label="Pin 级差异对比">
     <div class="card-head">
-      <div><h2>Pin 级逐项差异对比（服务端分页）</h2><p>存在差异时默认优先展示变动项，可一键切换查看全量或指定变更类别。</p></div>
-      <span class="tag num">匹配 {{ pg.pin_total }} / 总计 {{ pg.pin_unfiltered }}</span>
+      <div><h2>Pin 级差异对比</h2><p>存在差异时优先展示变动项，可切换查看全量或指定变更类别。</p></div>
+      <span class="chip num">匹配 {{ pg.pin_total }} / 共 {{ pg.pin_unfiltered }}</span>
     </div>
     <form class="toolbar" method="get">
       <input type="hidden" name="vendor" value="{{ vendor }}">
@@ -391,7 +461,7 @@
       <input type="hidden" name="new" value="{{ new_ref }}">
       <input type="hidden" name="status" value="{{ pg.status }}">
       <div class="toolbar-group">
-        <div class="seg">
+        <div class="seg" role="group" aria-label="按 Pin 差异类别筛选">
           <a class="{{ 'active' if pg.status=='changed' else '' }}" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=check_name,old=old_ref,new=new_ref,q=pg.q,status='changed',per_page=pg.per_page) }}">仅差异 ({{ data.counts.changed }})</a>
           <a class="{{ 'active' if pg.status=='all' else '' }}" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=check_name,old=old_ref,new=new_ref,q=pg.q,status='all',per_page=pg.per_page) }}">全部 ({{ data.counts.total }})</a>
           {% if data.counts.ADDED %}<a class="{{ 'active' if pg.status=='ADDED' else '' }}" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=check_name,old=old_ref,new=new_ref,q=pg.q,status='ADDED',per_page=pg.per_page) }}">新增 ({{ data.counts.ADDED }})</a>{% endif %}
@@ -400,29 +470,40 @@
         </div>
       </div>
       <div class="toolbar-group">
-        <input type="search" name="q" value="{{ pg.q }}" class="search-input" style="height:28px;font-size:12.5px" placeholder="搜索对象或 Pin 名...">
+        <div class="search-wrap">
+          <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="search" name="q" value="{{ pg.q }}" class="search-input ctrl-sm" aria-label="搜索对象或 Pin 名" placeholder="搜索对象或 Pin 名…" autocomplete="off" spellcheck="false">
+        </div>
         <button type="submit" class="btn-sm">筛选</button>
       </div>
     </form>
     {% if data.pin_diffs %}
     <div class="table-wrap scroll-box">
       <table>
-        <thead><tr><th>所属对象</th><th>Pin 名称</th><th>状态</th><th>基线方向 / 用途</th><th>当前方向 / 用途</th></tr></thead>
+        <thead>
+          <tr>
+            <th scope="col">所属对象</th>
+            <th scope="col">Pin 名称</th>
+            <th scope="col" class="w-155">状态</th>
+            <th scope="col">基线方向 / 用途</th>
+            <th scope="col">当前方向 / 用途</th>
+          </tr>
+        </thead>
         <tbody>
           {% for p in data.pin_diffs %}
           <tr>
-            <td class="mono muted">{{ p.parent }}</td>
-            <td class="mono"><strong>{{ p.name }}</strong></td>
-            <td><span class="tag {{ 'tag-new' if p.status=='ADDED' else ('tag-failed' if p.status=='REMOVED' else ('tag-partial' if p.status!='UNCHANGED' else 'tag-inherited')) }}">{{ p.status }}</span></td>
-            <td class="mono muted">{{ p.old_direction or '—' }} / {{ p.old_use or '—' }}</td>
-            <td class="mono"><strong>{{ p.new_direction or '—' }} / {{ p.new_use or '—' }}</strong></td>
+            <td class="mono muted" translate="no">{{ p.parent }}</td>
+            <td class="mono" translate="no"><strong>{{ p.name }}</strong></td>
+            <td><span class="tag {{ 'tag-new' if p.status=='ADDED' else ('tag-failed' if p.status=='REMOVED' else ('tag-partial' if p.status!='UNCHANGED' else 'tag-inherited')) }}" translate="no">{{ p.status }}</span></td>
+            <td class="mono muted" translate="no">{{ p.old_direction or '—' }} / {{ p.old_use or '—' }}</td>
+            <td class="mono" translate="no"><strong>{{ p.new_direction or '—' }} / {{ p.new_use or '—' }}</strong></td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
     <div class="pager">
-      <span class="num">第 {{ pg.pin_page }} / {{ pg.pin_pages }} 页（每页 {{ pg.per_page }} 项）</span>
+      <span class="num">Pin 第 {{ pg.pin_page }} / {{ pg.pin_pages }} 页（每页 {{ pg.per_page }} 项）</span>
       <div class="toolbar-group">
         {% if pg.pin_page > 1 %}<a class="btn secondary btn-xs" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=check_name,old=old_ref,new=new_ref,q=pg.q,status=pg.status,per_page=pg.per_page,pin_page=pg.pin_page-1) }}">上一页</a>{% endif %}
         {% if pg.pin_page < pg.pin_pages %}<a class="btn secondary btn-xs" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=check_name,old=old_ref,new=new_ref,q=pg.q,status=pg.status,per_page=pg.per_page,pin_page=pg.pin_page+1) }}">下一页</a>{% endif %}
