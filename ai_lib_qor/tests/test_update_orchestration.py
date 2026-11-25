@@ -50,13 +50,15 @@ class UpdateOrchestrationTests(unittest.TestCase):
    self.assertFalse((folder/'effective/effective_lib_003.json').exists())
 
  def test_pending_same_day_retries_after_registration_and_never_regresses(self):
+  import os
   from ai_lib_qor.versions.store import write_atomic
   with tempfile.TemporaryDirectory() as t:
    root=Path(t);raw=root/'raw';nl=root/'NL1';nl.mkdir();work=root/'work'
-   old=raw/'v/lib/20260101_a/a.lef';old.parent.mkdir(parents=True);old.write_text('old');(nl/'a.lef').symlink_to(old)
+   same_ts=1767225600
+   old_dir=raw/'v/lib/20260101_a';old=old_dir/'a.lef';old.parent.mkdir(parents=True);old.write_text('old');os.utime(old_dir,(same_ts,same_ts));(nl/'a.lef').symlink_to(old)
    build_from_roots(raw,nl,work);folder=work/'libraries/v/lib'
    initialize_from_formal(work,'v','lib',next(folder.glob('formal/formal_NL1_*.json')))
-   newer=raw/'v/lib/20260101_b/a.lef';newer.parent.mkdir(parents=True);newer.write_text('new')
+   newer_dir=raw/'v/lib/20260101_b';newer=newer_dir/'a.lef';newer.parent.mkdir(parents=True);newer.write_text('new');os.utime(newer_dir,(same_ts,same_ts))
    r=build_from_roots(raw,nl,work)
    self.assertEqual(r['effective_published'],0);self.assertEqual(r['effective_pending'],1)
    write_atomic(work/'path_sources.json',{'libraries':{'v':{'lib':{'version_registration_times':{'20260101_a':'2026-02-01T10:00:00Z','20260101_b':'2026-02-01T11:00:00Z'}}}}})
@@ -80,15 +82,15 @@ class UpdateOrchestrationTests(unittest.TestCase):
     self.assertEqual({k:call.call_args.kwargs[k] for k in ('update_raw','update_formal','update_index','auto_effective')},
                      {'update_raw':False,'update_formal':False,'update_index':True,'auto_effective':False})
 
- def test_birthtime_change_is_not_misreported_as_content_change(self):
+ def test_mtime_change_is_not_misreported_as_content_change(self):
   with tempfile.TemporaryDirectory() as t:
    root=Path(t);raw=root/'raw';work=root/'work'
    p=raw/'v/lib/20260101_a/a.lef';p.parent.mkdir(parents=True);p.write_text('x')
-   with patch('ai_lib_qor.sources.root_inventory.directory_birthtime',return_value=None):
+   with patch('ai_lib_qor.sources.root_inventory.directory_mtime',return_value=None):
     build_from_roots(raw,None,work,update_formal=False)
-   with patch('ai_lib_qor.sources.root_inventory.directory_birthtime',return_value='2026-01-01T00:00:00Z'):
+   with patch('ai_lib_qor.sources.root_inventory.directory_mtime',return_value='2026-01-01T00:00:00Z'):
     result=build_from_roots(raw,None,work,update_formal=False)
-   self.assertTrue(any('目录创建时间' in x for x in result['warnings']))
+   self.assertTrue(any('目录修改时间(mtime)' in x for x in result['warnings']))
    self.assertFalse(any('内容发生变化' in x for x in result['warnings']))
 
  def test_retry_repairs_pointer_if_publish_was_interrupted(self):

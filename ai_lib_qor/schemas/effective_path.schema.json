@@ -5,6 +5,9 @@
   "properties": {
     "vendor": {"type":"string", "minLength":1},
     "library": {"type":"string", "minLength":1},
+    "business_ip": {"type":"string", "minLength":1},
+    "ip_type": {"type":["string", "null"]},
+    "track_id": {"type":"string", "minLength":1},
     "revision": {"type":"string", "pattern":"^rev_[0-9]{4,}$"},
     "created_at": {"type":"string", "minLength":1},
     "views": {"type":"object", "additionalProperties":{"type":"object", "additionalProperties":{"type":"array", "uniqueItems":true, "items":{"type":"string", "minLength":1}}}}

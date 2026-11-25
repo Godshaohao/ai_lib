@@ -1,231 +1,337 @@
 {% extends "path_base.html" %}
-{% block title %}{{ library }}{% endblock %}
+{% import "json_inventory_controls.html" as json_controls %}
+{% from "check_rules.html" import rule_results %}
+{% block title %}{{ library }}{% if business_ip %} · {{ business_ip }}{% endif %}{% endblock %}
 {% block breadcrumbs %}
   <a href="{{ url_for('overview') }}">来源总览</a>
-  <span class="crumb-sep">/</span>
-  <span class="crumb-curr">{{ vendor }} · {{ library }}</span>
+  <span class="crumb-sep" aria-hidden="true">/</span>
+  <span class="crumb-curr" translate="no">{{ vendor }} · {{ library }}{% if business_ip %} / {{ business_ip }}{% endif %}</span>
 {% endblock %}
 
 {% block content %}
 <div class="page-head">
   <div class="page-title-group">
-    <div class="vendor-kicker">{{ vendor }} · Source Library</div>
-    <h1>{{ library }}</h1>
-    <p>
+    <div class="page-eyebrow">来源库 · <span translate="no">{{ vendor }}</span>{% if track_info and track_info.ip_type %} · <span translate="no">{{ track_info.ip_type }}</span>{% endif %}</div>
+    <h1 translate="no">
+      {{ library }}
+      {% if business_ip %}<span class="muted" style="font-weight:400">/</span> <span class="chip chip-accent" style="vertical-align:middle;font-size:14px;padding:3px 10px">{{ business_ip }}</span>{% endif %}
+    </h1>
+    <p class="title-meta">
       {% if index %}
-        {{ index.deliveries|length }} 次交付 · {{ index.revisions|length }} 个有效版本 · {{ artifacts|length }} 份检查产物
-        {% if acceptance and acceptance.accepted_revision %} · <span class="tag tag-new">已人工采纳 {{ acceptance.accepted_revision }}</span>{% elif index.revisions %} · <span class="tag tag-partial">尚未人工采纳</span>{% endif %}
+        <span class="num">{{ index.deliveries|length }} 次交付 · {{ index.revisions|length }} 个有效版本 · {{ artifacts|length }} 份报告</span>
+        {% if acceptance and acceptance.accepted_revision %}<span class="tag tag-new tag-sm">已人工采纳 {{ acceptance.accepted_revision }}</span>{% elif index.revisions %}<span class="tag tag-partial tag-sm">尚未人工采纳</span>{% endif %}
       {% else %}
         库与版本工作台
       {% endif %}
     </p>
   </div>
-  <div class="toolbar-group">
-    {% if index and revision %}
-    <form method="post" action="{{ url_for('check') }}" data-async-url="{{ url_for('api_job_check') }}" style="margin:0;display:flex;align-items:center;gap:8px">
+  <div class="toolbar-group library-page-actions">
+    <button type="button" class="secondary" id="lib-config-open-btn"
+            onclick="openLibraryConfigDrawer('{{ vendor }}','{{ library }}')"
+            title="查看或编辑本库的 IP 类型、多轨列表、解析过滤与检查插件策略">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      单库配置
+    </button>
+    {% if track_info and track_info.is_multi_track %}
+    <form class="inline-form" method="post" action="{{ url_for('partition_action') }}">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="vendor" value="{{ vendor }}">
       <input type="hidden" name="library" value="{{ library }}">
-      <input type="hidden" name="revision" value="{{ revision }}">
-      <input type="hidden" name="baseline" value="{{ baseline_rev or '__none__' }}">
-      <label class="check-inline" title="仅保存检查结果 JSON 与内容寻址事实，下载 Excel 时按需渲染缓存"><input type="checkbox" name="lazy_excel" value="1" checked> 懒生成 Excel</label>
-      <button type="submit">检查 {{ revision }}</button>
+      {% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}
+      <button type="submit" class="secondary">重新分轨</button>
     </form>
     {% endif %}
-    <a class="btn secondary" href="{{ url_for('index_page',vendor=vendor,library=library,revision=revision) }}">文件索引 →</a>
+    <a class="btn secondary collapsed-only-bar" href="{{ url_for('index_page',vendor=vendor,library=library,ip=business_ip,revision=revision) }}">
+      文件索引
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+    </a>
   </div>
 </div>
 
+{% if track_info and track_info.is_multi_track %}
+<!-- 侧栏收起态展示的业务 IP 轨道条（侧栏展开时已收纳在左侧边栏，减少首屏堆叠） -->
+<nav class="track-switcher collapsed-only-bar" aria-label="业务 IP 轨道切换">
+  <div class="track-switcher-main">
+    <span class="track-switcher-label">业务 IP 轨道</span>
+    {% if track_info.ip_type %}<span class="chip" translate="no">{{ track_info.ip_type }}</span>{% endif %}
+    <div class="track-pills">
+      {% for t in available_tracks %}
+      <a class="track-pill {{ 'active' if t.is_active else '' }}"
+         {% if t.is_active %}aria-current="page"{% endif %}
+         href="{{ url_for('library_page',vendor=vendor,library=library,ip=t.business_ip) }}"
+         translate="no"
+         title="{{ t.business_ip }} · 已归类 {{ t.version_count }} 次交付 · {{ t.revision_count }} 个有效版本{% if t.accepted_revision %} · 已采纳 {{ t.accepted_revision }}{% endif %}">
+        {% if t.accepted_revision %}<span class="track-pill-dot" aria-hidden="true"></span>{% endif %}
+        <span>{{ t.business_ip }}</span>
+        <span class="track-pill-meta">{{ t.revision_count }}版</span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+</nav>
+
+{% set nr_conflicts = (track_info.needs_review.conflicts if track_info.needs_review else []) or [] %}
+{% set nr_unassigned = (track_info.needs_review.unassigned if track_info.needs_review else []) or [] %}
+{% set stage_labels = {'stage1_version_name': '版本名匹配', 'stage2_core_eda_files': '核心 EDA 文件匹配', 'stage2_core_files': '核心 EDA 文件匹配', 'stage2_all_files': '全文件名兜底匹配'} %}
+{% if nr_conflicts or nr_unassigned %}
+<details class="alert-strip-details alert-strip-warn" role="alert" aria-label="业务 IP 分轨待复核明细">
+  <summary class="alert-strip-summary">
+    <div class="alert-strip-main">
+      <svg class="ico notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <strong>分轨待复核（冲突 <span class="num">{{ nr_conflicts|length }}</span> · 未归类 <span class="num">{{ nr_unassigned|length }}</span>）</strong>
+      <span class="muted text-xs">点击展开明细，或直接进入「交付与编排」可视化纠错</span>
+    </div>
+    <div class="toolbar-group" onclick="event.stopPropagation()">
+      {% if not error %}
+      <button type="button" class="btn-xs" onclick="switchLibTab('deliveries')">可视化编排纠错</button>
+      {% endif %}
+      <form class="inline-form" method="post" action="{{ url_for('refresh_layer') }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="vendor" value="{{ vendor }}">
+        <input type="hidden" name="library" value="{{ library }}">
+        {% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}
+        <input type="hidden" name="layer" value="l2">
+        <button type="submit" class="secondary btn-xs">推进 L2</button>
+      </form>
+    </div>
+  </summary>
+  <div class="alert-strip-body">
+    <p class="text-xs muted mb-xs">手工编辑 <code translate="no">libraries/{{ vendor }}/{{ library }}/ip_partition.json</code> 或使用编排器（已确认项增量重跑不覆盖）：</p>
+    <ul>
+      {% for c in nr_conflicts[:5] %}
+      <li>多命中冲突：<span class="mono" translate="no">{{ c.version }}</span> → 候选 <span class="mono" translate="no">{{ c.candidates|join(' / ') }}</span>{% if c.stage %}（{{ stage_labels.get(c.stage, c.stage) }}）{% endif %}</li>
+      {% endfor %}
+      {% if nr_conflicts|length > 5 %}
+      <li class="muted">其余 {{ nr_conflicts|length - 5 }} 项冲突请见分轨 JSON 文件</li>
+      {% endif %}
+      {% if nr_unassigned %}
+      <li>未归类版本：<span class="mono" translate="no">{% for u in nr_unassigned[:8] %}{{ u.version if u is mapping else u }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% if nr_unassigned|length > 8 %} 等共 {{ nr_unassigned|length }} 项{% endif %}</li>
+      {% endif %}
+    </ul>
+  </div>
+</details>
+{% endif %}
+{% endif %}
+
 {% if error %}
-<div class="notice bad">
+<div class="notice bad" role="alert">
   <strong>索引不可用</strong>
   <span>{{ error }}</span>
-  <form method="post" action="{{ url_for('refresh_layer') }}" style="margin-top:8px">
+  <form class="inline-form mt-sm" method="post" action="{{ url_for('refresh_layer') }}">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="vendor" value="{{ vendor }}">
     <input type="hidden" name="library" value="{{ library }}">
     <input type="hidden" name="layer" value="l3">
-    <button type="submit" class="btn-sm">刷新本库 L3 索引</button>
+    <button type="submit" class="btn-sm">刷新本库索引</button>
   </form>
 </div>
+{% if organizer_state and organizer_state.order_error %}
+  {% include "sequence_organizer_panel.html" %}
+{% endif %}
 {% else %}
 
-<!-- 决策状态条：把「版本来源」「质检结论」「人工采纳」三件事并排说清 -->
+<!-- 统一三栏治理决策条（版本、质量与采纳一行概览；检查控制台收口至「检查与报告」页签，消除首屏叠罗汉） -->
 {% if index and index.revisions %}
-<div class="decision-ribbon">
+{% set cur_rm = (rev_meta or {}).get(revision) %}
+<div class="decision-strip decision-strip-slim" aria-label="版本、质量结论与采纳状态">
   <div class="decision-cell">
-    <div class="decision-label">1. 当前查看版本</div>
-    <div class="decision-main">
-      <strong>{{ revision }}</strong>
-      {% if baseline_rev %}<span class="tag tag-updated">相对 {{ baseline_rev }} 变动 {{ diff_counts.CHANGED }} 项</span>{% else %}<span class="tag">无对比基线</span>{% endif %}
+    <div class="decision-label">
+      <span title="有效版本（rev_XXXX）是按交付顺序增量合并后的完整可用快照，不同于单次零散补丁交付">有效版本与对比基线</span>
+      {% if baseline_rev %}<span class="tag tag-updated tag-sm num">对比变动 {{ diff_counts.CHANGED }} 项</span>{% else %}<span class="chip">单版全集</span>{% endif %}
     </div>
-    <div class="decision-sub">全集 {{ members|length }} 文件{% if removed %} · 移除 {{ removed|length }} 项{% endif %}</div>
-  </div>
-  <div class="decision-cell {{ 'ok-cell' if matched_check and matched_check.quality_code=='SCOPE_PASS' else ('warn-cell' if matched_check else '') }}">
-    <div class="decision-label">2. 对应范围质检结论（非运行状态）</div>
-    <div class="decision-main">
-      {% if matched_check %}
-        <span>
-          <span class="tag {{ matched_check.quality_cls }}"><span class="dot"></span>{{ matched_check.quality_text }}</span>
-          <span class="tag tag-inherited" style="margin-left:4px">运行 {{ matched_check.state }}</span>
-        </span>
-        <a class="btn secondary btn-xs" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=matched_check.check_name) }}">查看分析 →</a>
-      {% else %}
-        <span class="tag tag-inherited">此基线组合尚未检查</span>
-      {% endif %}
-    </div>
-    <div class="decision-sub">{% if matched_check %}失败 {{ matched_check.failed_checks }} · 无结论 {{ matched_check.inconclusive_checks }} · 文件失败 {{ matched_check.failed_files }}（{{ matched_check.run_at[:19].replace('T',' ') }} UTC）{% else %}点击右上角「检查 {{ revision }}」生成报告{% endif %}</div>
-  </div>
-  <div class="decision-cell {{ 'ok-cell' if acceptance and acceptance.accepted_revision == revision else 'warn-cell' }}">
-    <div class="decision-label">3. 人工采纳状态（独立指针）</div>
-    <div class="decision-main">
-      {% if acceptance and acceptance.accepted_revision == revision %}
-        <span class="tag tag-new"><span class="dot"></span>当前版本已采纳</span>
-      {% elif acceptance and acceptance.accepted_revision %}
-        <span class="tag tag-partial"><span class="dot"></span>已采纳 {{ acceptance.accepted_revision }}（非当前版）</span>
-        <button type="button" class="secondary btn-xs" onclick="var b=document.querySelector('.tabs-bar .tab-btn[data-tab=ops]');if(b)switchLibTab('ops',b)">审核采纳 →</button>
-      {% else %}
-        <span class="tag tag-partial"><span class="dot"></span>尚未人工采纳</span>
-        <button type="button" class="secondary btn-xs" onclick="var b=document.querySelector('.tabs-bar .tab-btn[data-tab=ops]');if(b)switchLibTab('ops',b)">去采纳审核 →</button>
-      {% endif %}
-    </div>
-    <div class="decision-sub">CheckResult PASS 不自动采纳，需显式审核留痕</div>
-  </div>
-</div>
-{% endif %}
-
-<!-- 对象分类 Tabs -->
-<div class="tabs-bar" role="tablist">
-  <button type="button" class="tab-btn active" data-tab="members" onclick="switchLibTab('members',this)">
-    有效版本成员 <span class="tab-count">{{ members|length }}{% if removed %}/-{{ removed|length }}{% endif %}</span>
-  </button>
-  <button type="button" class="tab-btn" data-tab="checks" onclick="switchLibTab('checks',this)">
-    检查与报告 <span class="tab-count">{{ artifacts|length }}</span>
-  </button>
-  <button type="button" class="tab-btn" data-tab="deliveries" onclick="switchLibTab('deliveries',this)">
-    交付历史 <span class="tab-count">{{ delivery_rows|length }}</span>
-  </button>
-  <button type="button" class="tab-btn" data-tab="ops" onclick="switchLibTab('ops',this)">
-    采纳与维护
-  </button>
-</div>
-
-<!-- TAB 1: 有效版本成员与对照 -->
-<div id="tab-members" class="tab-panel active">
-  <section class="card">
-    {% if index.revisions %}
-    <div class="toolbar">
+    <div class="decision-rev-row">
       <div class="toolbar-group">
-        <span class="muted" style="font-size:12px;font-weight:600">目标版本</span>
         {% if prev_rev %}
-        <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library,revision=prev_rev) }}" title="上一版本">‹</a>
-        {% else %}
-        <button type="button" class="secondary btn-sm" disabled>‹</button>
+        <a class="btn secondary btn-xs btn-icon" href="{{ url_for('library_page',vendor=vendor,library=library,ip=business_ip,revision=prev_rev) }}" aria-label="上一版本 {{ prev_rev }}" title="上一版本">‹</a>
         {% endif %}
-        <select aria-label="选择目标有效版本" style="height:28px;font-size:12.5px;font-weight:600" onchange="location.href=this.value">
+        <select id="lib-rev-select" class="ctrl-sm ctrl-bold" aria-label="选择目标有效版本" onchange="location.href=this.value">
           {% for rev in index.revisions|reverse %}
-          <option value="{{ url_for('library_page',vendor=vendor,library=library,revision=rev) }}" {% if rev==revision %}selected{% endif %}>
-            {{ rev }}{% if rev==index.revisions[-1] %} (最新){% endif %}{% if acceptance and rev==acceptance.accepted_revision %} ★已采纳{% endif %}{% if rev==index.revisions[0] %} (初始){% endif %}
+          {% set rm = (rev_meta or {}).get(rev) %}
+          <option value="{{ url_for('library_page',vendor=vendor,library=library,ip=business_ip,revision=rev) }}" {% if rev==revision %}selected{% endif %}>
+            {{ rm.label if rm else rev }}{% if rev==index.revisions[-1] %} [最新]{% elif rev==index.revisions[0] %} [初始]{% endif %}{% if acceptance and rev==acceptance.accepted_revision %} ✓{% endif %}
           </option>
           {% endfor %}
         </select>
         {% if next_rev %}
-        <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library,revision=next_rev) }}" title="下一版本">›</a>
-        {% else %}
-        <button type="button" class="secondary btn-sm" disabled>›</button>
+        <a class="btn secondary btn-xs btn-icon" href="{{ url_for('library_page',vendor=vendor,library=library,ip=business_ip,revision=next_rev) }}" aria-label="下一版本 {{ next_rev }}" title="下一版本">›</a>
         {% endif %}
-
-        <span class="muted" style="font-size:12px;font-weight:600;margin-left:8px">对比基线</span>
-        <select aria-label="选择对比基线" style="height:28px;font-size:12.5px" onchange="location.href=this.value">
-          <option value="{{ url_for('library_page',vendor=vendor,library=library,revision=revision,baseline='__none__') }}" {% if not baseline_rev %}selected{% endif %}>无基线（仅看全集）</option>
-          {% for rev in index.revisions %}
-          {% if loop.index0 < rev_idx %}
-          <option value="{{ url_for('library_page',vendor=vendor,library=library,revision=revision,baseline=rev) }}" {% if rev==baseline_rev %}selected{% endif %}>
-            {{ rev }}{% if rev==prev_rev %} (上一版){% endif %}
-          </option>
-          {% endif %}
-          {% endfor %}
-        </select>
       </div>
-      <span class="muted num" style="font-size:12px">
-        {{ revision }} 共 {{ members|length }} 项{% if baseline_rev %} · 相对 {{ baseline_rev }} 变动 {{ diff_counts.CHANGED }} 项{% endif %}
-      </span>
+      <select id="lib-base-select" class="ctrl-sm" aria-label="选择对比基线" onchange="location.href=this.value">
+        <option value="{{ url_for('library_page',vendor=vendor,library=library,ip=business_ip,revision=revision,baseline='__none__') }}" {% if not baseline_rev %}selected{% endif %}>不对比（单版）</option>
+        {% for rev in index.revisions %}
+        {% if loop.index0 < rev_idx %}
+        <option value="{{ url_for('library_page',vendor=vendor,library=library,ip=business_ip,revision=revision,baseline=rev) }}" {% if rev==baseline_rev %}selected{% endif %}>
+          对比 {{ rev }}{% if rev==prev_rev %} (上版){% endif %}
+        </option>
+        {% endif %}
+        {% endfor %}
+      </select>
     </div>
+    <div class="decision-sub">
+      有效成员 {{ members|length }} 个{% if removed %} · 移除 {{ removed|length }} 项{% endif %}{% if cur_rm and cur_rm.source_version %} · 最新来源 <span class="mono" translate="no">{{ cur_rm.source_version }}</span>{% endif %}
+    </div>
+  </div>
+  <div class="decision-cell">
+    <div class="decision-label">
+      <span>质量结论</span>
+      {% if matched_check and matched_check.tooling_status and matched_check.tooling_status.is_stale %}
+        <span class="tag tag-partial tag-sm" title="{{ matched_check.tooling_status.reasons|join(' · ') }}">检查配置或工具已更新</span>
+      {% elif matched_check %}
+        <span class="muted text-xs">{{ matched_check.state|run_state_label }}</span>
+      {% endif %}
+    </div>
+    <div class="decision-main">
+      {% if matched_check %}
+        <span class="tag {{ matched_check.quality_cls }}"><span class="dot" aria-hidden="true"></span>{{ matched_check.quality_text }}</span>
+        <span class="toolbar-group nowrap">
+          <button type="button" class="secondary btn-xs" onclick="switchLibTab('checks')">查看报告</button>
+          <a class="btn ghost btn-xs" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=matched_check.check_name) }}">独立页</a>
+        </span>
+      {% else %}
+        <span class="tag tag-inherited">当前组合未检查</span>
+        <button type="button" class="btn-xs" onclick="switchLibTab('checks')">去检查 / 对比</button>
+      {% endif %}
+    </div>
+    <div class="decision-sub">
+      {% if matched_check %}
+        失败 {{ matched_check.failed_checks }} · 无结论 {{ matched_check.inconclusive_checks }} · 文件失败 {{ matched_check.failed_files }}（<span translate="no">{{ matched_check.run_at[:19].replace('T',' ') }} UTC</span>）
+      {% else %}
+        点「去检查 / 对比」进入检查控制台，支持单版体检、跨版对比与 IP 整体核查
+      {% endif %}
+    </div>
+  </div>
+  <div class="decision-cell">
+    <div class="decision-label">
+      <span>采纳状态</span>
+      {% if acceptance and acceptance.accepted_revision == revision %}
+        <span class="chip" translate="no">{{ acceptance.accepted_revision }}</span>
+      {% elif acceptance and acceptance.accepted_revision %}
+        <span class="chip" translate="no">已采纳 {{ acceptance.accepted_revision }}</span>
+      {% endif %}
+    </div>
+    <div class="decision-main">
+      {% if acceptance and acceptance.accepted_revision == revision %}
+        <span class="tag tag-new"><span class="dot" aria-hidden="true"></span>当前版本已采纳</span>
+      {% elif acceptance and acceptance.accepted_revision %}
+        <span class="tag tag-partial"><span class="dot" aria-hidden="true"></span>非当前采纳版</span>
+        <button type="button" class="secondary btn-xs" onclick="switchLibTab('ops')">前往采纳</button>
+      {% else %}
+        <span class="tag tag-partial"><span class="dot" aria-hidden="true"></span>尚未人工采纳</span>
+        <button type="button" class="secondary btn-xs" onclick="switchLibTab('ops')">前往采纳</button>
+      {% endif %}
+    </div>
+    <div class="decision-sub">检查通过不自动采纳，需人工审核确认</div>
+  </div>
+</div>
 
+{% if unadopted_new_files and unadopted_new_files.count > 0 %}
+<div class="alert-strip alert-strip-info" role="status">
+  <div class="alert-strip-main">
+    <svg class="ico notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+    <strong>发现未纳入当前有效集的交付文件</strong>
+    <span class="text-xs">最新交付 <code translate="no">{{ unadopted_new_files.latest_delivery }}</code> 中有 <strong class="num">{{ unadopted_new_files.count }}</strong> 个文件未在 <span translate="no">{{ unadopted_new_files.latest_revision }}</span> 中{% if unadopted_new_files.ignored_count %}（另有 {{ unadopted_new_files.ignored_count }} 项已忽略）{% endif %}。</span>
+  </div>
+  <a class="btn secondary btn-xs" href="{{ url_for('index_page',vendor=vendor,library=library,ip=business_ip,revision=revision,adoption='unadopted') }}">查看未纳入文件</a>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- 对象分类 Tabs（桌面侧栏展开时隐藏，避免左右双导航套娃；侧栏收起时自动显示） -->
+<div class="tabs-bar collapsed-only-bar" role="tablist" aria-label="库工作台视图切换">
+  <button type="button" id="tab-btn-members" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-members" tabindex="0" data-tab="members" onclick="switchLibTab('members',this)">
+    有效版本成员 <span class="tab-count">{{ members|length }}{% if removed %}/-{{ removed|length }}{% endif %}</span>
+  </button>
+  <button type="button" id="tab-btn-checks" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-checks" tabindex="-1" data-tab="checks" onclick="switchLibTab('checks',this)">
+    检查与报告 <span class="tab-count">{{ artifacts|length }}</span>
+  </button>
+  <button type="button" id="tab-btn-deliveries" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-deliveries" tabindex="-1" data-tab="deliveries" onclick="switchLibTab('deliveries',this)">
+    {% set tab_nr_cnt = ((nr_conflicts|length + nr_unassigned|length) if (track_info and track_info.is_multi_track) else (organizer_state.needs_review|length if organizer_state and organizer_state.needs_review else 0)) %}
+    交付与编排 <span class="tab-count">{{ delivery_rows|length }}</span>{% if tab_nr_cnt %}<span class="tag tag-partial tag-sm ml-xs">待复核 {{ tab_nr_cnt }}</span>{% endif %}
+  </button>
+  <button type="button" id="tab-btn-ops" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-ops" tabindex="-1" data-tab="ops" onclick="switchLibTab('ops',this)">
+    采纳与维护
+  </button>
+</div>
+
+<!-- TAB 1: 有效版本成员与对照（单排筛选 + 单行紧凑路径） -->
+<div id="tab-members" class="tab-panel active" role="tabpanel" aria-labelledby="tab-btn-members">
+  <section class="card" aria-label="有效版本成员列表">
+    {% if index.revisions %}
     {% if members or removed %}
-    <div class="toolbar" style="background:var(--surface)">
+    <div class="toolbar">
       <div class="toolbar-group">
         {% if baseline_rev %}
-        <div class="seg" id="member-diff-seg">
-          <button type="button" class="active" onclick="setMemberFilter('diff','all',this)">全部 ({{ members|length + removed|length }})</button>
-          <button type="button" onclick="setMemberFilter('diff','changed',this)">仅变动 ({{ diff_counts.CHANGED }})</button>
-          <button type="button" onclick="setMemberFilter('diff','NEW',this)">新增 ({{ diff_counts.NEW }})</button>
-          <button type="button" onclick="setMemberFilter('diff','UPDATED',this)">更新 ({{ diff_counts.UPDATED }})</button>
-          <button type="button" onclick="setMemberFilter('diff','INHERITED',this)">继承 ({{ diff_counts.INHERITED }})</button>
-          <button type="button" onclick="setMemberFilter('diff','REMOVED',this)">已移除 ({{ diff_counts.REMOVED }})</button>
+        <div class="seg" id="member-diff-seg" role="group" aria-label="按成员变化筛选">
+          <button type="button" class="active" aria-pressed="true" onclick="setMemberFilter('diff','all',this)">全部 ({{ members|length + removed|length }})</button>
+          <button type="button" aria-pressed="false" onclick="setMemberFilter('diff','changed',this)">仅变动 ({{ diff_counts.CHANGED }})</button>
+          <button type="button" aria-pressed="false" onclick="setMemberFilter('diff','NEW',this)">新增 ({{ diff_counts.NEW }})</button>
+          <button type="button" aria-pressed="false" onclick="setMemberFilter('diff','UPDATED',this)">更新 ({{ diff_counts.UPDATED }})</button>
+          <button type="button" aria-pressed="false" onclick="setMemberFilter('diff','INHERITED',this)">继承 ({{ diff_counts.INHERITED }})</button>
+          <button type="button" aria-pressed="false" onclick="setMemberFilter('diff','REMOVED',this)">已移除 ({{ diff_counts.REMOVED }})</button>
         </div>
         {% endif %}
-        <select id="member-view-select" aria-label="按 View 筛选" style="height:28px;font-size:12px" onchange="setMemberFilter('view',this.value)">
+        <select id="member-view-select" class="ctrl-sm" aria-label="按 View 筛选" onchange="setMemberFilter('view',this.value)">
           <option value="">全部 View</option>
           {% for v in member_views %}
           <option value="{{ v }}">{{ v }}</option>
           {% endfor %}
         </select>
       </div>
-      <input type="search" id="member-search-input" class="search-input" style="height:28px;font-size:12.5px" placeholder="过滤相对路径或来源版本..." oninput="applyMemberFilters()">
+      <div class="search-wrap">
+        <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" id="member-search-input" class="search-input ctrl-sm" aria-label="过滤相对路径或来源版本" placeholder="搜索路径或来源版本…" autocomplete="off" spellcheck="false" oninput="applyMemberFilters()">
+      </div>
     </div>
 
     <div class="table-wrap scroll-box">
       <table id="members-table">
         <thead>
           <tr>
-            <th style="width:105px">来源状态</th>
-            <th style="width:86px">View</th>
-            <th>相对路径与物理位置</th>
-            <th style="width:150px">采用来源版本</th>
-            <th style="width:170px">内容检查与 FileFacts</th>
-            <th style="width:76px;text-align:right">操作</th>
+            <th scope="col" class="w-100">来源状态</th>
+            <th scope="col" class="w-96">View</th>
+            <th scope="col">相对路径（悬停查看完整物理路径）</th>
+            <th scope="col" class="w-170">来源版本</th>
+            <th scope="col" class="w-190">检查与结构明细</th>
+            <th scope="col" class="w-80 align-right">操作</th>
           </tr>
         </thead>
         <tbody>
           {% for m in members %}
           <tr data-view="{{ m.view }}" data-diff="{{ m.diff_status }}" data-text="{{ (m.relative_path + ' ' + m.version + ' ' + m.view)|lower }}">
-            <td>
+            <td class="nowrap">
               {% if m.diff_status == 'CURRENT' %}
-                <span class="tag tag-inherited"><span class="dot"></span>当前成员</span>
+                <span class="tag tag-inherited tag-sm"><span class="dot" aria-hidden="true"></span>当前成员</span>
               {% elif m.diff_status == 'NEW' %}
-                <span class="tag tag-new"><span class="dot"></span>新增</span>
+                <span class="tag tag-new tag-sm"><span class="dot" aria-hidden="true"></span>新增</span>
               {% elif m.diff_status == 'UPDATED' %}
-                <span class="tag tag-updated"><span class="dot"></span>更新</span>
+                <span class="tag tag-updated tag-sm"><span class="dot" aria-hidden="true"></span>更新</span>
               {% else %}
-                <span class="tag tag-inherited"><span class="dot"></span>继承</span>
+                <span class="tag tag-inherited tag-sm"><span class="dot" aria-hidden="true"></span>继承</span>
               {% endif %}
             </td>
-            <td><span class="tag">{{ m.view }}</span></td>
+            <td class="nowrap"><span class="chip" translate="no">{{ m.view }}</span></td>
             <td>
               <div class="path-cell">
-                <span class="mono path-main">{{ m.relative_path }}</span>
-                <button type="button" class="copy-btn" onclick="copyPath(this,'{{ m.relative_path }}')">复制</button>
-              </div>
-              <div class="path-cell" style="margin-top:2px">
-                <span class="mono path-trunc" title="{{ m.path }}">{{ m.path }}</span>
-                <button type="button" class="copy-btn" onclick="copyPath(this,'{{ m.path }}')">绝对路径</button>
+                <strong class="mono path-main" title="{{ m.path }}" translate="no">{{ m.relative_path }}</strong>
+                <button type="button" class="copy-icon-btn" aria-label="复制物理路径 {{ m.relative_path }}" title="复制物理路径：{{ m.path }}" onclick="copyPath(this,'{{ m.path }}')">
+                  <svg class="ico ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </button>
               </div>
             </td>
-            <td class="mono">{{ m.version }}</td>
+            <td class="mono" translate="no">{{ m.version }}</td>
             <td>
               {% if m.content_status == 'CURRENT_CONTENT_DIFF' %}
-                <span class="tag tag-partial"><span class="dot"></span>内容有变</span>
+                <span class="tag tag-partial"><span class="dot" aria-hidden="true"></span>内容有变</span>
               {% elif m.content_status == 'CURRENT_CONTENT_MATCH' %}
-                <span class="tag tag-new"><span class="dot"></span>内容一致</span>
+                <span class="tag tag-new"><span class="dot" aria-hidden="true"></span>内容一致</span>
               {% elif m.parse_status == 'PARSED' %}
                 <span class="tag tag-accent">已解析</span>
               {% else %}
-                <span class="muted" style="font-size:12px">未检查</span>
+                <span class="muted text-xs">未检查</span>
               {% endif %}
               {% if matched_check and m.fact_ref %}
               <span class="sub-text">
-                <a href="{{ url_for('facts_view_page',vendor=vendor,library=library,check=matched_check.check_name,ref=m.fact_ref) }}">查看 Facts</a>
+                <a href="{{ url_for('facts_view_page',vendor=vendor,library=library,check=matched_check.check_name,ref=m.fact_ref) }}">结构明细</a>
                 {% if m.compare_old and m.compare_new and m.compare_old != m.compare_new %}
                   · <a href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=matched_check.check_name,old=m.compare_old,new=m.compare_new) }}">对比差异</a>
                 {% elif m.diff_status == 'NEW' %}
@@ -236,74 +342,377 @@
               </span>
               {% endif %}
             </td>
-            <td style="text-align:right">
+            <td class="align-right">
               {% if revision == index.revisions[-1] %}
-              <form method="post" action="{{ url_for('effective_preview') }}" style="margin:0">
-                <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="action" value="remove"><input type="hidden" name="view" value="{{ m.view }}"><input type="hidden" name="path" value="{{ m.relative_path }}">
+              <form class="inline-form" method="post" action="{{ url_for('effective_preview') }}">
+                <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}">{% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}<input type="hidden" name="action" value="remove"><input type="hidden" name="view" value="{{ m.view }}"><input type="hidden" name="path" value="{{ m.relative_path }}">
                 <button type="submit" class="danger-ghost btn-xs">移除</button>
               </form>
               {% else %}
-              <span class="muted" style="font-size:11.5px">只读</span>
+              <span class="muted text-xs">只读</span>
               {% endif %}
             </td>
           </tr>
           {% endfor %}
           {% for r in removed %}
           <tr class="row-removed" data-view="{{ r.view }}" data-diff="REMOVED" data-text="{{ (r.relative_path + ' ' + r.version + ' ' + r.view)|lower }}">
-            <td><span class="tag tag-failed"><span class="dot"></span>已移除</span></td>
-            <td><span class="tag">{{ r.view }}</span></td>
+            <td><span class="tag tag-failed"><span class="dot" aria-hidden="true"></span>已移除</span></td>
+            <td><span class="chip" translate="no">{{ r.view }}</span></td>
             <td>
-              <div class="path-cell"><span class="mono path-main">{{ r.relative_path }}</span></div>
-              <span class="sub-text">基线 {{ baseline_rev }} 中存在，当前 {{ revision }} 已移除</span>
+              <div class="path-cell"><span class="mono path-main" translate="no">{{ r.relative_path }}</span></div>
+              <span class="sub-text">基线 <span translate="no">{{ baseline_rev }}</span> 中存在，当前 <span translate="no">{{ revision }}</span> 已移除</span>
             </td>
-            <td class="mono muted">{{ r.version }}</td>
-            <td><span class="muted" style="font-size:12px">—</span></td>
-            <td style="text-align:right"><span class="muted" style="font-size:11.5px">—</span></td>
+            <td class="mono muted" translate="no">{{ r.version }}</td>
+            <td><span class="muted text-xs">—</span></td>
+            <td class="align-right"><span class="muted text-xs">—</span></td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
     {% else %}
-    <p class="empty">当前有效版本暂无文件成员。</p>
+    <div class="empty-state">
+      <p class="empty-state-title">当前有效版本暂无文件成员</p>
+      <p class="empty-state-desc">可前往文件索引页面查看 RAW 交付记录并选择需要纳入的文件。</p>
+      <div class="empty-state-action">
+        <a class="btn secondary btn-sm" href="{{ url_for('index_page',vendor=vendor,library=library,ip=business_ip,revision=revision) }}">查看文件索引</a>
+      </div>
+    </div>
     {% endif %}
     {% else %}
-    <div class="empty">
-      <p style="margin:0 0 12px">本库尚未建立有效版本。若已归档 Formal 快照，可直接推进 L2 自动初始化。</p>
-      <form method="post" action="{{ url_for('refresh_layer') }}" style="margin:0">
-        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="layer" value="l2">
-        <button type="submit" class="btn-sm">自动推进 L2 初始化</button>
-      </form>
+    <div class="empty-state">
+      <p class="empty-state-title">{% if business_ip %}轨道 <span translate="no">{{ business_ip }}</span> 尚未建立有效版本{% else %}本库尚未建立有效版本{% endif %}</p>
+      <p class="empty-state-desc">{% if business_ip %}确认分轨配置已归类对应交付版本后，可直接推进 L2 初始化该轨道的有效版本。{% else %}若已归档 Formal 快照，可直接推进 L2 初始化首个有效版本。{% endif %}</p>
+      <div class="empty-state-action">
+        <form class="inline-form" method="post" action="{{ url_for('refresh_layer') }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}">{% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}<input type="hidden" name="layer" value="l2">
+          <button type="submit" class="btn-sm">推进 L2 初始化</button>
+        </form>
+      </div>
     </div>
     {% endif %}
   </section>
 </div>
 
-<!-- TAB 2: 检查与报告 -->
-<div id="tab-checks" class="tab-panel">
-  <section class="card">
+<!-- TAB 2: 检查与报告（顶部专属检查控制台 + 报告双/三子视图直显 + 历史产物与脚本） -->
+<div id="tab-checks" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-checks" hidden>
+  {% if liberty_preview %}{% include "check_scope.html" %}{% endif %}
+
+  <!-- 报告直显子页签：单版本/对比报告 | IP 整体核查报告 | (多轨库) 本库全部 IP 总览 -->
+  <div class="check-subtabs" role="tablist" aria-label="检查报告视角切换">
+    <button type="button" class="check-subtab active" id="check-subtab-single" role="tab" aria-selected="true" aria-controls="check-pane-single" data-check-subtab="single" onclick="switchCheckSubTab('single')">
+      单版本 / 对比报告
+      {% if active_check_view %}<span class="tag {{ active_check_view.quality.cls }} tag-sm ml-xs">{{ active_check_view.quality.text }}</span>{% endif %}
+    </button>
+    <button type="button" class="check-subtab" id="check-subtab-overall" role="tab" aria-selected="false" aria-controls="check-pane-overall" tabindex="-1" data-check-subtab="overall" onclick="switchCheckSubTab('overall')">
+      {{ 'IP 有效版本演进时间线' if business_ip else '本库有效版本演进时间线' }}
+      {% if timeline_model %}<span class="tab-count">{{ timeline_model.columns|length }} 列</span>{% elif active_overall_view %}<span class="tab-count">{{ active_overall_view.totals.revisions }}版</span>{% else %}<span class="tab-count">未生成</span>{% endif %}
+    </button>
+    {% if library_ip_overview %}
+    <button type="button" class="check-subtab" id="check-subtab-all-ips" role="tab" aria-selected="false" aria-controls="check-pane-all-ips" tabindex="-1" data-check-subtab="all-ips" onclick="switchCheckSubTab('all-ips')">
+      本库全部 IP 总览
+      <span class="tab-count">{{ library_ip_overview.counts.total }} IP</span>
+      {% if library_ip_overview.counts.fail %}<span class="tag tag-failed tag-sm ml-xs">失败 {{ library_ip_overview.counts.fail }}</span>{% endif %}
+    </button>
+    {% endif %}
+  </div>
+
+  <!-- 子视图 1：单版本 / 对比报告直显 -->
+  <div id="check-pane-single" class="check-subpane active" role="tabpanel" aria-labelledby="check-subtab-single">
+    {% if active_check_view %}
+    {% set ac = active_check_view %}
+    <section id="inline-check-dashboard" class="card inline-check-card" aria-label="当前版本检查结果直显看板">
+      <div class="card-head">
+        <div>
+          <h2>
+            {% if ac.report.baseline == '__prev_file__' %}有效版本体检报告（按文件上一时间版本）{% elif ac.report.baseline %}跨版对比检查报告{% else %}单版本检查报告{% endif %}
+            · <span class="mono" translate="no">{{ ac.report.revision }}</span>{% if ac.report.baseline and ac.report.baseline != '__prev_file__' %} <span class="muted" style="font-weight:400">vs <span translate="no">{{ ac.report.baseline|baseline_label }}</span></span>{% endif %}
+          </h2>
+          <p class="num">
+            已解析 <strong>{{ ac.parse_counts.get('PARSED',0) }} / {{ ac.file_rows|length }}</strong> 文件 · 内容有变 <strong>{{ ac.report.summary.files_with_confirmed_content_change }}</strong> 文件 · 规则失败 <strong>{{ ac.report.summary.failed_checks }}</strong> / 无结论 <strong>{{ ac.report.summary.inconclusive_checks }}</strong>
+          </p>
+          {% if (ac.report.baseline or '__none__') != check_baseline_param %}
+          <p>所选对比方式尚无报告。下方显示同版本的已有报告（{{ ac.report.baseline|baseline_label }}）。</p>
+          {% endif %}
+        </div>
+        <div class="toolbar-group">
+          <a class="btn btn-xs" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=ac.check_name) }}">完整分析页</a>
+          <a class="btn secondary btn-xs" href="{{ url_for('check_export_html',vendor=vendor,library=library,name=ac.check_name) }}">导出离线 HTML</a>
+          {% if ac.excel_name %}
+          <a class="btn secondary btn-xs" href="{{ url_for('artifact',vendor=vendor,library=library,name=ac.excel_name) }}">{{ '本版明细 Excel' if ac.excel_cached else '导出本版 Excel' }}</a>
+          {% endif %}
+          {% if timeline_excel_name %}
+          <a class="btn secondary btn-xs" href="{{ url_for('artifact',vendor=vendor,library=library,name=timeline_excel_name) }}">演进时间线 Excel</a>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card-body">
+        {% if ac.view_coverage %}
+        <div class="view-cov-grid mb-md" aria-label="各 View 解析覆盖进度">
+          {% for vc in ac.view_coverage %}
+          <div class="view-cov-card">
+            <div class="view-cov-head">
+              <strong class="mono" translate="no">{{ vc.view }}</strong>
+              <span class="num text-xs">{{ vc.parsed }}/{{ vc.total }} ({{ '%.0f'|format(vc.parsed_pct) }}%)</span>
+            </div>
+            <div class="cov-bar"><div class="cov-bar-fill {{ 'is-fail' if vc.failed else ('is-skip' if vc.is_skipped_policy else '') }}" style="width:{{ vc.parsed_pct }}%"></div></div>
+            <div class="muted text-xs num mt-2xs">
+              {% if vc.is_skipped_policy %}按策略跳过{% elif vc.failed %}失败 {{ vc.failed }}{% elif vc.parsed == vc.total %}全量已解析{% else %}未检查 {{ vc.not_checked }}{% endif %}{% if vc.diff_count %} · 内容有变 {{ vc.diff_count }}{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="inline-check-grid">
+          <div class="inline-check-panel">
+            <div class="inline-panel-head">
+              <strong>规则检查结论</strong>
+              <span class="muted text-xs num">共 {{ ac.checks|length }} 条</span>
+            </div>
+            {{ rule_results(ac.checks, vendor, library, ac.check_name) }}
+          </div>
+
+          <div class="inline-check-panel">
+            <div class="inline-panel-head">
+              <strong>变动与异常焦点文件</strong>
+              <span class="muted text-xs num">{{ ac.focus_files|length }} / {{ ac.file_rows|length }} 文件</span>
+            </div>
+            {% if ac.focus_files %}
+            <div class="table-wrap scroll-box-sm">
+              <table>
+                <thead><tr><th scope="col" class="w-80">View</th><th scope="col">路径与状态</th><th scope="col" class="w-140 align-right">钻取</th></tr></thead>
+                <tbody>
+                  {% for r in ac.focus_files[:20] %}
+                  <tr>
+                    <td class="nowrap"><span class="chip" translate="no">{{ r.view }}</span></td>
+                    <td>
+                      <div class="mono text-xs" translate="no"><strong>{{ r.path }}</strong></div>
+                      <span class="sub-text">
+                        {% if r.parse_status == 'FAILED' %}<span class="text-danger">解析失败</span>
+                        {% elif r.content_status == 'CURRENT_CONTENT_DIFF' %}内容有变
+                        {% elif r.content_status == 'PARTIAL_DIFF' %}部分差异
+                        {% else %}来源 {{ r.source_status }}{% endif %}
+                      </span>
+                    </td>
+                    <td class="align-right nowrap">
+                      {% if r.fact_ref %}<a class="btn ghost btn-xs" href="{{ url_for('facts_view_page',vendor=vendor,library=library,check=ac.check_name,ref=r.fact_ref) }}">明细</a>{% endif %}
+                      {% if r.compare_old and r.compare_new and r.compare_old != r.compare_new %}<a class="btn secondary btn-xs" href="{{ url_for('facts_compare_page',vendor=vendor,library=library,check=ac.check_name,old=r.compare_old,new=r.compare_new) }}">Pin 差异</a>{% endif %}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+            <p class="muted text-xs" style="padding:10px 12px;margin:0">本轮未发现内容差异或解析失败文件。</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </section>
+    {% else %}
+    <section class="card" aria-label="当前版本暂无单版报告">
+      <div class="empty-state">
+        <p class="empty-state-title"><span class="mono" translate="no">{{ revision or '—' }}</span> · {{ check_baseline_param|baseline_label }} · 尚未检查</p>
+        <p class="empty-state-desc">在上方「单版本检查」选择版本和对比方式后运行检查。</p>
+      </div>
+    </section>
+    {% endif %}
+  </div>
+
+  <!-- 子视图 2：当前 IP 有效版本演进时间线（横向每版一列，增量更新制） + 整体汇总 -->
+  <div id="check-pane-overall" class="check-subpane" role="tabpanel" aria-labelledby="check-subtab-overall" hidden>
+    {% if timeline_model and timeline_model.columns %}
+    <section id="inline-overall-dashboard" class="card" aria-label="有效版本横向演进时间线">
+      <div class="card-head">
+        <div>
+          <h2>{{ '业务 IP 有效版本演进时间线' if business_ip else '本库有效版本演进时间线' }}{% if business_ip %} · <span translate="no">{{ business_ip }}</span>{% endif %}</h2>
+          <p>每版一列，列内显示实际对比方式。同一版有多种报告时，时间线优先显示按文件上一交付对比的结果。</p>
+        </div>
+        <div class="toolbar-group">
+          {% if timeline_excel_name %}
+          <a class="btn btn-xs" href="{{ url_for('artifact',vendor=vendor,library=library,name=timeline_excel_name) }}">下载演进时间线 Excel</a>
+          {% endif %}
+          {% if active_overall_view %}
+          <a class="btn secondary btn-xs" href="{{ url_for('overall_view_page',vendor=vendor,library=library,name=active_overall_view.overall_name) }}">完整汇总页</a>
+          <a class="btn secondary btn-xs" href="{{ url_for('overall_export_html',vendor=vendor,library=library,name=active_overall_view.overall_name) }}">离线 HTML</a>
+          {% endif %}
+        </div>
+      </div>
+      <div class="table-wrap scroll-box">
+        <table id="timeline-matrix-table" aria-label="有效版本横向演进时间线总表">
+          <thead>
+            <tr>
+              <th scope="col" class="w-180">演进指标</th>
+              {% for col in timeline_model.columns %}
+              <th scope="col" class="w-180">
+                <div>
+                  <a href="{{ url_for('check_view_page',vendor=vendor,library=library,name=col.check_name) if col.check_name else url_for('library_page',vendor=vendor,library=library,ip=business_ip,revision=col.revision,_anchor='checks') }}" translate="no"><strong>{{ col.header }}</strong></a>
+                  {% if col.is_accepted %}<span class="tag tag-new tag-sm ml-xs">已采纳</span>{% endif %}
+                </div>
+                <span class="sub-text mono" translate="no">{{ col.source_version }}</span>
+              </th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for mrow in timeline_model.metric_rows %}
+            <tr>
+              <td><strong>{{ mrow.label }}</strong></td>
+              {% for col in timeline_model.columns %}
+              {% set val = col[mrow.key] %}
+              <td class="text-xs num">
+                {% if mrow.key == 'quality_text' %}
+                  <span class="tag {{ col.quality_cls }} tag-sm"><span class="dot" aria-hidden="true"></span>{{ val }}</span>
+                {% elif mrow.key == 'run_id' and col.check_name %}
+                  <a class="mono" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=col.check_name) }}" translate="no">查看明细</a>
+                {% else %}
+                  <span translate="no">{{ val }}</span>
+                {% endif %}
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% else %}
+    <section id="inline-overall-dashboard" class="card" aria-label="尚未建立有效版本">
+      <div class="empty-state">
+        <p class="empty-state-title">当前尚无有效版本时间线数据</p>
+        <p class="empty-state-desc">推进 L2 建立有效版本并执行检查后，将在此按版本自左向右自动生成横向时间线。</p>
+      </div>
+    </section>
+    {% endif %}
+  </div>
+
+  <!-- 子视图 3（多轨库专属）：本库全部业务 IP 有效版本横向总览与一键批量核查 -->
+  {% if library_ip_overview %}
+  <div id="check-pane-all-ips" class="check-subpane" role="tabpanel" aria-labelledby="check-subtab-all-ips" hidden>
+    <section id="inline-all-ips-dashboard" class="card" aria-label="本库全部业务 IP 有效版本核查总览">
+      <div class="card-head">
+        <div>
+          <h2>本库全部业务 IP 有效版本核查总览 · <span translate="no">{{ library }}</span></h2>
+          <p class="num">
+            共 <strong>{{ library_ip_overview.counts.total }}</strong> 个业务 IP · 通过 <strong class="stat-ok">{{ library_ip_overview.counts.pass }}</strong> · 失败 <strong class="stat-bad">{{ library_ip_overview.counts.fail }}</strong> · 部分/无结论 <strong>{{ library_ip_overview.counts.partial }}</strong> · 未检查 <strong>{{ library_ip_overview.counts.unchecked }}</strong>{% if library_ip_overview.counts.no_rev %} · 待建版 <strong>{{ library_ip_overview.counts.no_rev }}</strong>{% endif %}
+          </p>
+        </div>
+        <div class="toolbar-group">
+          <form class="inline-form" method="post" action="{{ url_for('api_job_check') }}" data-async-url="{{ url_for('api_job_check') }}"
+                data-confirm-title="增量核查全部待检 IP"
+                data-confirm="将自动跳过已检查且工具未变更的业务 IP，仅对本库未检查的业务 IP 最新有效版本执行检查。"
+                data-confirm-label="开始增量核查" data-confirm-tone="primary">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="vendor" value="{{ vendor }}">
+            <input type="hidden" name="library" value="{{ library }}">
+            <input type="hidden" name="kind" value="pending">
+            <input type="hidden" name="include_outdated" value="1">
+            <input type="hidden" name="lazy_excel" value="1">
+            <button type="submit" class="btn-sm">一键核查待检 IP 最新版</button>
+          </form>
+          <form class="inline-form" method="post" action="{{ url_for('api_job_check') }}" data-async-url="{{ url_for('api_job_check') }}"
+                data-confirm-title="全量重查本库全部 IP"
+                data-confirm="将重新检查本库全部 {{ library_ip_overview.counts.total }} 个业务 IP 的最新有效版本（默认对比各 IP 上一有效版本）。"
+                data-confirm-label="全部重查" data-confirm-tone="primary">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="vendor" value="{{ vendor }}">
+            <input type="hidden" name="library" value="{{ library }}">
+            <input type="hidden" name="kind" value="pending">
+            <input type="hidden" name="rerun" value="1">
+            <input type="hidden" name="lazy_excel" value="1">
+            <button type="submit" class="secondary btn-sm">重查全部 IP 最新版</button>
+          </form>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <div class="seg" id="all-ips-status-seg" role="group" aria-label="按业务 IP 核查状态筛选">
+            <button type="button" class="active" aria-pressed="true" data-ip-status="all">全部 ({{ library_ip_overview.counts.total }})</button>
+            <button type="button" aria-pressed="false" data-ip-status="FAIL">失败 ({{ library_ip_overview.counts.fail }})</button>
+            <button type="button" aria-pressed="false" data-ip-status="PARTIAL">部分/无结论 ({{ library_ip_overview.counts.partial }})</button>
+            <button type="button" aria-pressed="false" data-ip-status="UNCHECKED">未检查 ({{ library_ip_overview.counts.unchecked }})</button>
+            <button type="button" aria-pressed="false" data-ip-status="SCOPE_PASS">通过 ({{ library_ip_overview.counts.pass }})</button>
+          </div>
+        </div>
+        <div class="search-wrap">
+          <input type="search" id="all-ips-search" class="search-input ctrl-sm" aria-label="搜索业务 IP" placeholder="搜索业务 IP 名称…" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <div class="table-wrap scroll-box">
+        <table id="all-ips-matrix-table" aria-label="本库全部业务 IP 最新有效版本质检总表">
+          <thead>
+            <tr>
+              <th scope="col">业务 IP</th>
+              <th scope="col" class="w-150">有效版本 / 交付</th>
+              <th scope="col" class="w-130">人工采纳</th>
+              <th scope="col" class="w-210">最新有效版核查结论</th>
+              <th scope="col" class="w-170 align-right">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in library_ip_overview.rows %}
+            <tr data-ip-status="{{ r.status_code }}" data-search="{{ r.business_ip|lower }}">
+              <td>
+                <strong class="mono" translate="no">{{ r.business_ip }}</strong>
+                {% if r.business_ip == business_ip %}<span class="chip chip-accent ml-xs">当前</span>{% endif %}
+              </td>
+              <td class="num text-xs">
+                {% if r.latest_revision %}
+                  <strong class="mono" translate="no">{{ r.latest_revision }}</strong>
+                  <span class="sub-text">共 {{ r.revision_count }} 版 · {{ r.version_count }} 次交付</span>
+                {% else %}
+                  <span class="muted">尚未建版（{{ r.version_count }} 次交付）</span>
+                {% endif %}
+              </td>
+              <td class="text-xs">
+                {% if r.accepted_revision %}
+                  <span class="tag tag-new tag-sm mono" translate="no">{{ r.accepted_revision }}</span>
+                {% else %}
+                  <span class="muted">未采纳</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if r.latest_check %}
+                  <span class="tag {{ r.latest_check.quality_cls }} tag-sm"><span class="dot" aria-hidden="true"></span>{{ r.latest_check.quality_text }}</span>
+                  <span class="sub-text num">失败 {{ r.latest_check.failed_checks }} · 无结论 {{ r.latest_check.inconclusive_checks }}</span>
+                {% elif r.latest_revision %}
+                  <span class="tag tag-inherited tag-sm">最新版未检查</span>
+                {% else %}
+                  <span class="muted text-xs">—</span>
+                {% endif %}
+              </td>
+              <td class="align-right nowrap">
+                {% if r.latest_check and r.latest_check.check_name %}
+                  <a class="btn ghost btn-xs" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=r.latest_check.check_name) }}">报告</a>
+                {% endif %}
+                <a class="btn secondary btn-xs" href="{{ url_for('library_page',vendor=vendor,library=library,ip=r.business_ip) }}#checks">进入工作台</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+  {% endif %}
+
+  <section class="card" aria-label="检查执行与报告产物">
     <div class="card-head">
       <div>
-        <h2>检查执行与报告产物</h2>
-        <p>
-          运行状态不等于质量通过，质量通过也不等于人工采纳；Excel 支持按需懒生成与缓存。
-          {% if latest_check %}最近单版本检查：<strong>{{ latest_check.revision }}</strong> ({{ latest_check.run_at[:19].replace('T',' ') }}){% endif %}
-        </p>
+        <h2>历史检查与多版汇总{% if business_ip %} · <span translate="no">{{ business_ip }}</span>{% endif %}</h2>
+        <p>单版本与多版本汇总均支持在线 HTML 分析、离线单文件 HTML 导出与 Excel 导出。</p>
       </div>
       {% if revision %}
       <div class="toolbar-group">
-        <form method="post" action="{{ url_for('check') }}" data-async-url="{{ url_for('api_job_check') }}" style="margin:0">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="revision" value="{{ revision }}"><input type="hidden" name="baseline" value="{{ baseline_rev or '__none__' }}"><input type="hidden" name="lazy_excel" value="1">
-          <button type="submit" class="btn-sm">快速检查 {{ revision }} (懒 Excel)</button>
-        </form>
-        <form method="post" action="{{ url_for('check') }}" style="margin:0">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="revision" value="{{ revision }}"><input type="hidden" name="kind" value="all">
-          <button type="submit" class="secondary btn-sm">汇总已有报告</button>
-        </form>
-        <form method="post" action="{{ url_for('check') }}" data-async-url="{{ url_for('api_job_check') }}" style="margin:0">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="revision" value="{{ revision }}"><input type="hidden" name="kind" value="all"><input type="hidden" name="rerun" value="1"><input type="hidden" name="lazy_excel" value="1">
-          <button type="submit" class="secondary btn-sm">异步重跑全部版本</button>
-        </form>
+        <a class="btn ghost btn-sm"
+           href="{{ url_for('api_script_export', vendor=vendor, library=library, revision=revision, ip=business_ip, template='pt_check', download=1) }}"
+           title="按当前有效版本 .db/.lib 生成 PrimeTime 检查模板脚本">导出 PT (.csh)</a>
+        <a class="btn ghost btn-sm"
+           href="{{ url_for('api_script_export', vendor=vendor, library=library, revision=revision, ip=business_ip, template='innovus_check', download=1) }}"
+           title="按当前有效版本 .lef/.db 生成 Innovus 物理库检查模板脚本">导出 Innovus (.csh)</a>
       </div>
       {% endif %}
     </div>
@@ -311,12 +720,12 @@
     {% if artifacts %}
     <div class="toolbar">
       <div class="toolbar-group">
-        <div class="seg" id="art-kind-seg">
-          <button type="button" class="active" onclick="setArtFilter('kind','all',this)">全部 ({{ artifacts|length }})</button>
-          <button type="button" onclick="setArtFilter('kind','SINGLE',this)">单版本检查</button>
-          <button type="button" onclick="setArtFilter('kind','OVERALL',this)">整体汇总</button>
+        <div class="seg" id="art-kind-seg" role="group" aria-label="按报告类型筛选">
+          <button type="button" class="active" aria-pressed="true" onclick="setArtFilter('kind','all',this)">全部 ({{ artifacts|length }})</button>
+          <button type="button" aria-pressed="false" onclick="setArtFilter('kind','SINGLE',this)">单版本检查</button>
+          <button type="button" aria-pressed="false" onclick="setArtFilter('kind','OVERALL',this)">多版本汇总</button>
         </div>
-        <select id="art-quality-select" aria-label="按质检结论筛选" style="height:28px;font-size:12px" onchange="setArtFilter('quality',this.value)">
+        <select id="art-quality-select" class="ctrl-sm" aria-label="按质检结论筛选" onchange="setArtFilter('quality',this.value)">
           <option value="">全部结论</option>
           <option value="FAIL">质检失败</option>
           <option value="PARTIAL">部分覆盖 / 无结论</option>
@@ -324,7 +733,7 @@
         </select>
       </div>
       <label class="check-inline">
-        <input type="checkbox" id="filter-current-rev-only" onchange="applyArtFilters()"> 仅看当前版本 ({{ revision or '无' }})
+        <input type="checkbox" id="filter-current-rev-only" onchange="applyArtFilters()"> 仅看当前版本 (<span translate="no">{{ revision or '无' }}</span>)
       </label>
     </div>
 
@@ -332,10 +741,10 @@
       <table id="artifacts-table">
         <thead>
           <tr>
-            <th style="width:120px">目标版本</th>
-            <th style="width:240px">质量结论与运行状态</th>
-            <th>报告与中间产物</th>
-            <th style="width:230px;text-align:right">分析与导出</th>
+            <th scope="col" class="w-120">目标版本</th>
+            <th scope="col" class="w-240">质量结论与运行状态</th>
+            <th scope="col">执行时间与报告文件</th>
+            <th scope="col" class="w-230 align-right">分析与导出</th>
           </tr>
         </thead>
         <tbody>
@@ -344,17 +753,16 @@
           <tr data-kind="{{ a.kind }}" data-quality="{{ a.quality_code or '' }}" data-current="{{ '1' if is_current_rev else '0' }}">
             <td>
               {% if a.kind == 'SINGLE' %}
-                <strong>{{ a.revision }}</strong>
-                {% if is_current_rev %}<span class="tag tag-accent" style="margin-left:4px">当前</span>{% endif %}
-                {% if a.baseline %}<span class="sub-text">基线 {{ a.baseline }}</span>{% endif %}
+                <span class="chip {{ 'chip-accent' if is_current_rev else '' }}" translate="no">{{ a.revision }}</span>
+                {% if a.baseline %}<span class="sub-text">基线 <span translate="no">{{ a.baseline|baseline_label }}</span></span>{% endif %}
               {% else %}
-                <span class="tag">库整体汇总</span>
+                <span class="chip">多版本汇总</span>
               {% endif %}
             </td>
             <td>
               {% if a.quality_code %}
-                <span class="tag {{ a.quality_cls }}"><span class="dot"></span>{{ a.quality_text }}</span>
-                <span class="tag tag-inherited" style="margin-left:4px">运行 {{ a.run_state }}</span>
+                <span class="tag {{ a.quality_cls }}"><span class="dot" aria-hidden="true"></span>{{ a.quality_text }}</span>
+                <span class="muted text-xs ml-xs">{{ a.run_state|run_state_label }}</span>
                 <span class="sub-text num">失败 {{ a.failed_checks }} · 无结论 {{ a.inconclusive_checks }} · 文件失败 {{ a.failed_files }}</span>
               {% else %}
                 <span class="tag tag-inherited">多版本汇总表</span>
@@ -363,26 +771,30 @@
             <td>
               {% if a.kind == 'SINGLE' %}
                 <div>
-                  <strong>{{ a.run_at[:19].replace('T',' ') if a.run_at else a.name }}</strong>
-                  <span class="muted" style="font-size:11.5px">UTC · {{ a.facts_files|length }} 份 FileFacts</span>
-                  {% if a.excel_cached %}<span class="tag tag-new" style="margin-left:4px">Excel 已缓存</span>{% else %}<span class="tag tag-inherited" style="margin-left:4px">按需生成</span>{% endif %}
+                  <strong class="num" translate="no">{{ a.run_at[:19].replace('T',' ') if a.run_at else a.name }}</strong>
+                  <span class="muted text-xs num">UTC · {{ a.facts_files|length }} 份结构证据</span>
+                  {% if a.excel_cached %}<span class="tag tag-new tag-sm ml-xs">Excel 已缓存</span>{% else %}<span class="tag tag-inherited tag-sm ml-xs">按需导出</span>{% endif %}
                 </div>
-                <span class="sub-text mono">{{ a.check or a.name }}</span>
+                <span class="sub-text mono" translate="no">{{ a.check or a.name }}</span>
               {% else %}
-                <div><strong>多版本整体汇总表</strong></div>
-                <span class="sub-text mono">{{ a.name }}</span>
+                <div><strong>多版本汇总表</strong></div>
+                <span class="sub-text mono" translate="no">{{ a.name }}</span>
               {% endif %}
             </td>
-            <td style="text-align:right;white-space:nowrap">
+            <td class="align-right nowrap">
               {% if a.check %}
-                <a class="btn btn-xs" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=a.check) }}">查看分析</a>
+                <a class="btn btn-xs" href="{{ url_for('check_view_page',vendor=vendor,library=library,name=a.check) }}">HTML 分析</a>
+                <a class="btn secondary btn-xs" href="{{ url_for('check_export_html',vendor=vendor,library=library,name=a.check) }}">离线 HTML</a>
+              {% elif a.overall_json %}
+                <a class="btn btn-xs" href="{{ url_for('overall_view_page',vendor=vendor,library=library,name=a.overall_json) }}">HTML 汇总</a>
+                <a class="btn secondary btn-xs" href="{{ url_for('overall_export_html',vendor=vendor,library=library,name=a.overall_json) }}">离线 HTML</a>
               {% endif %}
               {% if a.available %}
-                <a class="btn secondary btn-xs" style="margin-left:4px" href="{{ url_for('artifact',vendor=vendor,library=library,name=a.name) }}">{{ 'Excel' if a.excel_cached or a.kind=='OVERALL' else '生成 Excel' }}</a>
-                {% if a.overall_json %}<a class="btn ghost btn-xs" href="{{ url_for('artifact',vendor=vendor,library=library,name=a.overall_json) }}">汇总 JSON</a>{% endif %}
+                <a class="btn ghost btn-xs" href="{{ url_for('artifact',vendor=vendor,library=library,name=a.name) }}">{{ 'Excel' if a.excel_cached or a.kind=='OVERALL' else '导出 Excel' }}</a>
+                {% if a.overall_json %}<a class="btn ghost btn-xs" href="{{ url_for('artifact',vendor=vendor,library=library,name=a.overall_json) }}">JSON</a>{% endif %}
                 {% if a.check %}<a class="btn ghost btn-xs" href="{{ url_for('artifact',vendor=vendor,library=library,name=a.check) }}">JSON</a>{% endif %}
               {% else %}
-                <span class="muted">未生成</span>
+                <span class="muted text-xs">未生成</span>
               {% endif %}
             </td>
           </tr>
@@ -391,84 +803,45 @@
       </table>
     </div>
     {% else %}
-    <p class="empty">尚无检查报告。请在右上角执行单版本检查。</p>
+    <div class="empty-state">
+      <p class="empty-state-title">尚无检查报告</p>
+      <p class="empty-state-desc">执行单版本检查后，系统将保存检查报告与可追溯的结构明细证据。</p>
+    </div>
     {% endif %}
   </section>
 </div>
 
-<!-- TAB 3: 交付历史 -->
-<div id="tab-deliveries" class="tab-panel">
-  <section class="card">
-    <div class="card-head">
-      <div>
-        <h2>供应商交付历史</h2>
-        <p>按已确认的业务顺序排列，共 {{ delivery_rows|length }} 次交付。</p>
-      </div>
-      <input type="search" id="deliv-search-input" class="search-input" style="height:28px;font-size:12.5px" placeholder="搜索交付版本或 View..." oninput="filterDeliveries(this.value)">
-    </div>
-    <div class="table-wrap scroll-box">
-      <table id="deliveries-table">
-        <thead>
-          <tr>
-            <th style="width:180px">供应商版本</th>
-            <th style="width:110px">版本日期</th>
-            <th>文件与 View 分布</th>
-            <th>物理目录</th>
-            <th style="width:120px;text-align:right">文件清单</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for d in delivery_rows %}
-          <tr data-text="{{ (d.version + ' ' + (d.version_date or '') + ' ' + d.view_counts.keys()|join(' '))|lower }}">
-            <td class="mono"><strong>{{ d.version }}</strong></td>
-            <td class="num muted">{{ d.version_date or '未提供' }}</td>
-            <td>
-              <span class="num">{{ d.file_count }} 文件</span>
-              <span class="sub-text">{% for view,count in d.view_counts.items() %}{{ view }} {{ count }}{% if not loop.last %} · {% endif %}{% endfor %}</span>
-            </td>
-            <td>
-              <div class="path-cell">
-                <span class="mono path-trunc" title="{{ d.root }}">{{ d.root }}</span>
-                <button type="button" class="copy-btn" onclick="copyPath(this,'{{ d.root }}')">复制</button>
-              </div>
-            </td>
-            <td style="text-align:right">
-              <a class="btn secondary btn-xs" href="{{ url_for('index_page',vendor=vendor,library=library,delivery=d.version,revision=revision) }}">查看文件 →</a>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </section>
+<!-- TAB 3: 交付与顺序/分轨编排 -->
+<div id="tab-deliveries" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-deliveries" hidden>
+  {% include "sequence_organizer_panel.html" %}
 </div>
 
 <!-- TAB 4: 采纳与维护 -->
-<div id="tab-ops" class="tab-panel">
+<div id="tab-ops" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-ops" hidden>
   {% if index.revisions %}
-  <section class="card">
+  <section class="card" aria-label="人工采纳管理">
     <div class="card-head">
       <div>
-        <h2>人工采纳指针管理（与最新计算版本严格分离）</h2>
-        <p>CheckResult PASS 不会自动修改采纳指针；采纳或回退均记录到不可变 <code>acceptance_events.jsonl</code>。</p>
+        <h2>人工采纳管理{% if business_ip %} · <span translate="no">{{ business_ip }}</span>{% endif %}</h2>
+        <p>检查通过不会自动变更采纳版本；所有采纳与回退记录均持久化留痕。</p>
       </div>
     </div>
     <div class="card-body">
-      <div class="meta-grid" style="margin-bottom:14px">
+      <div class="meta-grid mb-md">
         <div class="meta-item">
-          <strong>最新计算版本 (latest_effective)</strong>
-          <span class="tag tag-accent">{{ acceptance.latest_revision or '—' }}</span>
+          <strong>最新有效版本</strong>
+          <span class="chip chip-accent" translate="no">{{ acceptance.latest_revision or '—' }}</span>
         </div>
         <div class="meta-item">
-          <strong>当前人工采纳版本 (accepted_effective)</strong>
+          <strong>当前采纳版本</strong>
           {% if acceptance and acceptance.accepted_revision %}
-            <span class="tag tag-new">{{ acceptance.accepted_revision }}</span>
+            <span class="tag tag-new mono" translate="no">{{ acceptance.accepted_revision }}</span>
           {% else %}
             <span class="tag tag-partial">尚未人工采纳</span>
           {% endif %}
         </div>
         <div class="meta-item">
-          <strong>采纳一致性</strong>
+          <strong>采纳同步状态</strong>
           {% if acceptance and acceptance.is_latest_accepted %}
             <span class="tag tag-new">最新版本已采纳</span>
           {% else %}
@@ -477,44 +850,54 @@
         </div>
       </div>
 
-      <form method="post" action="{{ url_for('acceptance_action') }}" class="toolbar-group" style="gap:10px;align-items:flex-end">
+      <form method="post" action="{{ url_for('acceptance_action') }}" class="form-row-end" data-confirm-action="acceptance" data-confirm-title="确认回退采纳版本" data-confirm-label="确认回退">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <input type="hidden" name="vendor" value="{{ vendor }}">
         <input type="hidden" name="library" value="{{ library }}">
-        <div class="field" style="min-width:140px">
-          <label>操作类型</label>
-          <select name="action">
-            <option value="accept">显式人工采纳</option>
-            <option value="rollback">回退采纳指针</option>
+        {% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}
+        <div class="field min-w-140">
+          <label for="acc-action">操作类型</label>
+          <select id="acc-action" name="action">
+            <option value="accept">人工采纳</option>
+            <option value="rollback">回退采纳版本</option>
           </select>
         </div>
-        <div class="field" style="min-width:140px">
-          <label>目标有效版本</label>
-          <select name="revision">
+        <div class="field min-w-140">
+          <label for="acc-revision">目标有效版本</label>
+          <select id="acc-revision" name="revision">
             {% for rev in index.revisions|reverse %}
             <option value="{{ rev }}" {% if rev==revision %}selected{% endif %}>{{ rev }}</option>
             {% endfor %}
           </select>
         </div>
-        <div class="field" style="flex:1;min-width:220px">
-          <label>审核/回退原因（必填，写入审计）</label>
-          <input type="text" name="reason" required placeholder="例如：已复核 rev_0002 LEF/LIB 差异，确认纳入生产基线">
+        <div class="field flex-1">
+          <label for="acc-reason">审核 / 回退原因（必填，写入审计）</label>
+          <input id="acc-reason" type="text" name="reason" required autocomplete="off" placeholder="例如：已复核 rev_0002 LEF/LIB 差异，确认纳入生产基线…">
         </div>
-        <button type="submit" class="btn-sm">提交采纳变更</button>
+        <button type="submit" class="btn-sm">提交变更</button>
       </form>
 
       {% if acceptance and acceptance.history %}
-      <div class="table-wrap" style="margin-top:14px">
+      <div class="table-wrap mt-md">
         <table>
-          <thead><tr><th>时间 (UTC)</th><th>动作</th><th>目标版本</th><th>原采纳</th><th>操作者</th><th>原因</th></tr></thead>
+          <thead>
+            <tr>
+              <th scope="col" class="w-170">时间 (UTC)</th>
+              <th scope="col" class="w-96">动作</th>
+              <th scope="col" class="w-110">目标版本</th>
+              <th scope="col" class="w-110">原采纳</th>
+              <th scope="col" class="w-110">操作者</th>
+              <th scope="col">原因</th>
+            </tr>
+          </thead>
           <tbody>
             {% for ev in acceptance.history[:10] %}
             <tr>
-              <td class="mono">{{ ev.acted_at[:19].replace('T',' ') }}</td>
-              <td><span class="tag {{ 'tag-new' if ev.action=='ACCEPT' else 'tag-partial' }}">{{ ev.action }}</span></td>
-              <td class="mono"><strong>{{ ev.revision }}</strong></td>
-              <td class="mono muted">{{ ev.previous_accepted or '无' }}</td>
-              <td>{{ ev.actor }}</td>
+              <td class="mono num nowrap" translate="no">{{ ev.acted_at[:19].replace('T',' ') }}</td>
+              <td><span class="tag {{ 'tag-new' if ev.action=='ACCEPT' else 'tag-partial' }}">{{ ev.action|acceptance_action_label }}</span></td>
+              <td class="mono" translate="no"><strong>{{ ev.revision }}</strong></td>
+              <td class="mono muted" translate="no">{{ ev.previous_accepted or '无' }}</td>
+              <td>{{ ev.actor|actor_label }}</td>
               <td>{{ ev.reason }}</td>
             </tr>
             {% endfor %}
@@ -526,48 +909,62 @@
   </section>
   {% endif %}
 
-  <section class="card">
+  <section class="card" aria-label="本库维护与审计导出">
     <div class="card-head">
       <div>
-        <h2>本库分层刷新与例外维护</h2>
-        <p>常规数据演进请优先使用自动化刷新；历史恢复与审计归档保留在此。</p>
+        <h2>本库维护与审计导出</h2>
+        <p>常规数据演进建议通过自动同步推进；版本恢复与审计日志保留在此。</p>
       </div>
     </div>
-    <div class="card-body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">
+    <div class="card-body ops-grid">
       <div class="layer-box">
         <div>
-          <div class="layer-step">L2 · 自动推进</div>
+          <div class="layer-step"><span class="layer-num" translate="no">L2</span>有效版本</div>
           <div class="layer-title">推进本库有效版本</div>
-          <div class="layer-meta" style="margin-top:4px">基于本库已归档的 RAW/Formal 自动初始化或演化新版本。</div>
+          <div class="layer-meta">基于已归档的 RAW 与 Formal 来源初始化或演进新版本。</div>
         </div>
-        <form method="post" action="{{ url_for('refresh_layer') }}" style="margin:0">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="layer" value="l2">
-          <button type="submit" class="secondary btn-sm">执行 L2 推进</button>
+        <form class="inline-form" method="post" action="{{ url_for('refresh_layer') }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}">{% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}<input type="hidden" name="layer" value="l2">
+          <button type="submit" class="secondary btn-sm">推进 L2</button>
         </form>
       </div>
 
+      {% if track_info and track_info.is_multi_track %}
       <div class="layer-box">
         <div>
-          <div class="layer-step">L3 · 索引维护</div>
-          <div class="layer-title">刷新本库 FileIndex</div>
-          <div class="layer-meta" style="margin-top:4px">校验归档指纹，仅在有变化时更新索引文件。</div>
+          <div class="layer-step"><span class="layer-num">分轨</span>业务 IP 分轨</div>
+          <div class="layer-title">增量匹配未归类版本</div>
+          <div class="layer-meta">读取 <code translate="no">libraries/{{ vendor }}/{{ library }}/ip_partition.json</code>，保留人工确认轨道，仅匹配新版本。</div>
         </div>
-        <form method="post" action="{{ url_for('refresh_layer') }}" style="margin:0">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="layer" value="l3">
-          <button type="submit" class="secondary btn-sm">执行 L3 刷新</button>
+        <form class="inline-form" method="post" action="{{ url_for('partition_action') }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}">{% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}
+          <button type="submit" class="secondary btn-sm">重新分轨</button>
+        </form>
+      </div>
+      {% endif %}
+
+      <div class="layer-box">
+        <div>
+          <div class="layer-step"><span class="layer-num" translate="no">L3</span>文件索引</div>
+          <div class="layer-title">刷新本库文件索引</div>
+          <div class="layer-meta">校验索引一致性，仅在来源变更时重建。</div>
+        </div>
+        <form class="inline-form" method="post" action="{{ url_for('refresh_layer') }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}">{% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}<input type="hidden" name="layer" value="l3">
+          <button type="submit" class="secondary btn-sm">刷新 L3</button>
         </form>
       </div>
 
       {% if revision %}
       <div class="layer-box">
         <div>
-          <div class="layer-step">例外操作</div>
+          <div class="layer-step"><span class="layer-num">恢复</span>版本恢复</div>
           <div class="layer-title">恢复历史有效组合</div>
-          <div class="layer-meta" style="margin-top:4px">以最新有效版本为父版本，复制 {{ revision }} 成员发布新版本。</div>
+          <div class="layer-meta">以最新有效版本为父版本，复制 <span translate="no">{{ revision }}</span> 成员发布新版本。</div>
         </div>
-        <form method="post" action="{{ url_for('effective_preview') }}" style="margin:0">
-          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="action" value="restore"><input type="hidden" name="revision" value="{{ revision }}">
-          <button type="submit" class="secondary btn-sm">预览恢复 {{ revision }}</button>
+        <form class="inline-form" method="post" action="{{ url_for('effective_preview') }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}">{% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}<input type="hidden" name="action" value="restore"><input type="hidden" name="revision" value="{{ revision }}">
+          <button type="submit" class="secondary btn-sm">预览恢复 <span translate="no">{{ revision }}</span></button>
         </form>
       </div>
       {% endif %}
@@ -575,17 +972,114 @@
       {% if audit_available %}
       <div class="layer-box">
         <div>
-          <div class="layer-step">审计日志</div>
-          <div class="layer-title">有效版本操作审计</div>
-          <div class="layer-meta" style="margin-top:4px">导出本库所有自动与人工发布记录 (TSV)。</div>
+          <div class="layer-step"><span class="layer-num">审计</span>审计日志</div>
+          <div class="layer-title">有效版本操作记录</div>
+          <div class="layer-meta">导出本{% if business_ip %}轨道{% else %}库{% endif %}全部自动与人工发布记录 (TSV)。</div>
         </div>
         <div>
-          <a class="btn secondary btn-sm" href="{{ url_for('artifact',vendor=vendor,library=library,name='effective_operations.tsv') }}">下载操作审计 TSV</a>
+          <a class="btn secondary btn-sm" href="{{ url_for('artifact',vendor=vendor,library=library,name=audit_filename) }}">导出审计 TSV</a>
         </div>
       </div>
       {% endif %}
     </div>
   </section>
+
+  {% if library_json_inventory %}
+  {% set json_scope = dict(vendor=vendor, library=library, ip=business_ip or '', revision=revision or '', baseline=request.args.get('baseline', '')) %}
+  <section class="card" aria-label="本库数据文件与更新时间">
+    <div class="card-head">
+      <div>
+        <h2>本库数据文件（JSON）与更新时间</h2>
+        <p>只读展示本库已保存的 L1 来源归档、L2 有效版本与 L3 文件索引产物及最近更新时间。</p>
+      </div>
+      <div class="json-summary-pills">
+        <span>共 <strong>{{ library_json_inventory.counts.total }}</strong> 项</span>
+        <span class="stat-ok">本轮更新 <strong>{{ library_json_inventory.counts.updated }}</strong></span>
+        <span class="stat-warn">待刷新 / 未生成 <strong>{{ library_json_inventory.counts.issue }}</strong></span>
+      </div>
+    </div>
+    {{ json_controls.filters(library_json_inventory, 'library_page', 'ops', json_scope) }}
+    {% if library_json_inventory.rows %}
+    <div class="table-wrap scroll-box-md">
+      <table id="lib-json-table" aria-label="本库 JSON 数据产物明细">
+        <thead>
+          <tr>
+            <th scope="col" class="w-96">层级</th>
+            <th scope="col">JSON 数据文件与类别</th>
+            <th scope="col" class="w-200">同步状态</th>
+            <th scope="col" class="w-165">更新时间 (UTC)</th>
+            <th scope="col" class="w-130 align-right">大小与操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in library_json_inventory.rows %}
+          <tr class="{{ 'row-missing' if not item.exists else '' }}">
+            <td class="nowrap"><span class="chip {{ 'chip-accent' if item.layer == 'L3' else '' }}" translate="no">{{ item.layer_label }}</span></td>
+            <td>
+              <div class="json-file-cell">
+                <div class="json-file-head">
+                  <span class="json-file-cat">{{ item.category }}</span>
+                  {% if item.pointer_badge %}<span class="tag tag-accent tag-sm">{{ item.pointer_badge }}</span>{% endif %}
+                </div>
+                <div class="path-cell">
+                  <span class="mono json-file-path" title="{{ item.rel_path }}" translate="no">{{ item.filename }}</span>
+                  <button type="button" class="copy-icon-btn" aria-label="复制文件路径 {{ item.rel_path }}" title="复制相对路径" onclick="copyPath(this,'{{ item.rel_path }}')">
+                    <svg class="ico ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
+                </div>
+              </div>
+            </td>
+            <td>
+              <span class="tag {{ item.tag_cls }} tag-sm"><span class="dot" aria-hidden="true"></span>{{ item.status_label }}</span>
+              <span class="sub-text">{{ item.status_note }}</span>
+            </td>
+            <td class="mono num text-xs nowrap" translate="no">
+              {% if item.exists %}<strong>{{ item.updated_at }}</strong>{% else %}<span class="muted">尚未生成</span>{% endif %}
+            </td>
+            <td class="align-right nowrap">
+              <span class="muted num text-xs mr-xs" translate="no">{{ item.size_text }}</span>
+              {% if item.action_kind == 'download_index' and item.exists %}
+                <a class="btn ghost btn-xs" href="{{ url_for('artifact',vendor=vendor,library=library,name='file_index.json') }}">下载</a>
+              {% elif item.action_kind == 'index' %}
+                <a class="btn ghost btn-xs" href="{{ url_for('index_page',vendor=vendor,library=library) }}">对照</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state"><p class="empty-state-title">没有符合当前条件的 JSON 项</p></div>
+    {% endif %}
+    {{ json_controls.pagination(library_json_inventory, 'library_page', 'ops', json_scope) }}
+  </section>
+  {% endif %}
 </div>
 {% endif %}
+
+<!-- 单库配置只读 / 编辑滑出抽屉（纯 /api/v1/config 驱动） -->
+<dialog id="lib-config-drawer" class="org-drawer lib-cfg-drawer" aria-labelledby="lib-cfg-title"
+       data-vendor="{{ vendor }}" data-library="{{ library }}" data-csrf="{{ csrf }}">
+  <div class="org-drawer-head">
+    <div>
+      <div class="org-drawer-eyebrow">单库配置 · <span translate="no">{{ vendor }}/{{ library }}</span></div>
+      <h3 id="lib-cfg-title">只读概览</h3>
+    </div>
+    <div class="toolbar-group">
+      <button type="button" class="secondary btn-xs" id="lib-cfg-mode-btn" onclick="toggleLibraryConfigEdit()">编辑配置</button>
+      <button type="button" class="ghost btn-xs" onclick="closeLibraryConfigDrawer()" aria-label="关闭抽屉" autofocus>✕</button>
+    </div>
+  </div>
+  <div class="org-drawer-body" id="lib-cfg-body">
+    <p class="muted text-xs">正在加载单库配置…</p>
+  </div>
+  <div class="lib-cfg-footer" id="lib-cfg-footer" hidden>
+    <div id="lib-cfg-status" class="text-xs" aria-live="polite"></div>
+    <div class="toolbar-group">
+      <button type="button" class="secondary btn-sm" onclick="toggleLibraryConfigEdit(false)">取消</button>
+      <button type="button" class="btn-sm" id="lib-cfg-save-btn" onclick="saveLibraryConfigDrawer()">保存单库配置</button>
+    </div>
+  </div>
+</dialog>
 {% endblock %}

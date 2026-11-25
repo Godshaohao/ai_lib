@@ -1,5 +1,7 @@
-"""Pluggable QoR check plugin registry for path-based FileFacts."""
+"""Pluggable QoR check plugin registry with metadata for path-based FileFacts & manifests."""
 from .plugins import lef_liberty_pin_match, lef_macro_diff
+from .plugins.lib_db_pairing import run_lib_db_pairing
+from .plugins.liberty_corner_coverage import run_liberty_corner_coverage
 
 
 def run_lef_liberty_pin_match(ctx):
@@ -173,15 +175,171 @@ PATH_CHECK_PLUGINS = {
     'LEF_MACRO_DIFF': run_lef_macro_diff,
     'VERILOG_PARTIAL_DIFF': run_verilog_partial_diff,
     'NETLIST_PARTIAL_DIFF': run_netlist_partial_diff,
+    'LIB_DB_PAIRING': run_lib_db_pairing,
+    'LIBERTY_CORNER_COVERAGE': run_liberty_corner_coverage,
+}
+
+PATH_CHECK_PLUGIN_META = {
+    'LEF_LIBERTY_PIN_MATCH': {
+        'version': '1.0',
+        'description': 'LEF/Liberty 信号 Pin 一致性核验',
+        'required_views': ('LEF', 'LIBERTY'),
+        'requires_baseline': False,
+        'needs_facts': True,
+        'category': 'FACTS',
+    },
+    'LEF_MACRO_DIFF': {
+        'version': '1.0',
+        'description': 'LEF Macro SIZE 与 Pin 跨版本对比',
+        'required_views': ('LEF',),
+        'requires_baseline': True,
+        'needs_facts': True,
+        'category': 'DIFF',
+    },
+    'VERILOG_PARTIAL_DIFF': {
+        'version': '1.0',
+        'description': 'Verilog 轻量模块端口对比（PARTIAL）',
+        'required_views': ('VERILOG',),
+        'requires_baseline': True,
+        'needs_facts': True,
+        'category': 'DIFF',
+    },
+    'NETLIST_PARTIAL_DIFF': {
+        'version': '1.0',
+        'description': 'CDL/SPICE 轻量子电路引脚对比（PARTIAL）',
+        'required_views': ('CDL', 'SPICE'),
+        'requires_baseline': True,
+        'needs_facts': True,
+        'category': 'DIFF',
+    },
+    'LIB_DB_PAIRING': {
+        'version': '1.0',
+        'description': '有效版本 .lib 与 .db 命名/存在性双向对应核验（清单级）',
+        'required_views': ('LIBERTY', 'DB'),
+        'requires_baseline': False,
+        'needs_facts': False,
+        'category': 'MANIFEST',
+    },
+    'LIBERTY_CORNER_COVERAGE': {
+        'version': '1.0',
+        'description': 'Liberty Corner 完备性验收（按 IP → Group → Corner 关键词表核验）',
+        'required_views': ('LIBERTY',),
+        'requires_baseline': False,
+        'needs_facts': False,
+        'category': 'MANIFEST',
+    },
 }
 
 
-def register_path_plugin(name, handler, *, registry=PATH_CHECK_PLUGINS):
+def register_path_plugin(
+    name,
+    handler,
+    *,
+    version='1.0',
+    description='',
+    required_views=(),
+    requires_baseline=False,
+    needs_facts=True,
+    category='FACTS',
+    registry=PATH_CHECK_PLUGINS,
+):
     if not isinstance(name, str) or not name.strip():
         raise ValueError('检查插件名称无效')
     if not callable(handler):
         raise ValueError('检查插件必须可调用')
+    if not isinstance(version, str) or not version.strip():
+        raise ValueError('检查插件版本号无效')
     registry[name] = handler
+    if registry is PATH_CHECK_PLUGINS:
+        PATH_CHECK_PLUGIN_META[name] = {
+            'version': version.strip(),
+            'description': description or name,
+            'required_views': tuple(str(v).upper() for v in required_views),
+            'requires_baseline': bool(requires_baseline),
+            'needs_facts': bool(needs_facts),
+            'category': str(category or 'FACTS').upper(),
+        }
+
+
+def evaluate_check_verdict(report: dict) -> dict:
+    """Single canonical quality verdict for CheckResult across check list, detail page/API, and Excel."""
+    if not isinstance(report, dict):
+        return {
+            'code': 'PARTIAL',
+            'cls': 'tag-partial',
+            'text': '未执行有效检查 / 无结论',
+            'failed_checks': 0,
+            'inconclusive_checks': 0,
+            'failed_files': 0,
+        }
+    summary = report.get('summary') or {}
+    checks = report.get('checks') or []
+    comparisons = report.get('comparisons') or []
+    partial_comparisons = report.get('partial_comparisons') or []
+    comparison_count = int(report.get('comparison_count', 0) or 0)
+
+    fc = max(
+        int(summary.get('failed_checks', 0) or 0),
+        sum(1 for c in checks if isinstance(c, dict) and c.get('result') == 'FAIL'),
+    )
+    ic = max(
+        int(summary.get('inconclusive_checks', 0) or 0),
+        sum(1 for c in checks if isinstance(c, dict) and c.get('result') == 'INCONCLUSIVE'),
+    )
+    ff = int(summary.get('failed_files', 0) or 0)
+    run_state = report.get('state', 'UNKNOWN')
+
+    has_executed_rules = bool(checks or comparisons or partial_comparisons or comparison_count > 0)
+    tooling = report.get('tooling') or {}
+    plugin_cov = tooling.get('plugin_coverage') if isinstance(tooling, dict) else None
+    has_not_executed_plugin = isinstance(plugin_cov, dict) and any(v == 'NOT_EXECUTED' for v in plugin_cov.values())
+
+    if fc > 0 or ff > 0 or run_state == 'FAILED':
+        code, cls, text = 'FAIL', 'tag-failed', '质检失败'
+    elif not has_executed_rules:
+        code, cls, text = 'PARTIAL', 'tag-partial', '未执行有效检查 / 无结论'
+    elif run_state != 'SUCCEEDED' or ic > 0 or has_not_executed_plugin:
+        code, cls, text = 'PARTIAL', 'tag-partial', '部分覆盖 / 无结论'
+    else:
+        code, cls, text = 'SCOPE_PASS', 'tag-new', '已覆盖范围通过'
+
+    return {
+        'code': code,
+        'cls': cls,
+        'text': text,
+        'failed_checks': fc,
+        'inconclusive_checks': ic,
+        'failed_files': ff,
+    }
+
+
+def plugin_versions(names=None, *, registry=PATH_CHECK_PLUGINS):
+    """Return {plugin_name: version} for tooling freshness tracking."""
+    target = list(registry.keys()) if names is None else list(names)
+    out = {}
+    for name in target:
+        if name not in registry:
+            continue
+        meta = PATH_CHECK_PLUGIN_META.get(name, {}) if registry is PATH_CHECK_PLUGINS else {}
+        ver = meta.get('version') or getattr(registry[name], 'plugin_version', None) or '1.0'
+        out[name] = str(ver)
+    return out
+
+
+def list_path_plugins(*, registry=PATH_CHECK_PLUGINS):
+    out = []
+    for name in registry:
+        meta = PATH_CHECK_PLUGIN_META.get(name, {}) if registry is PATH_CHECK_PLUGINS else {}
+        out.append({
+            'name': name,
+            'version': meta.get('version') or '1.0',
+            'description': meta.get('description') or name,
+            'required_views': list(meta.get('required_views') or ()),
+            'requires_baseline': bool(meta.get('requires_baseline', False)),
+            'needs_facts': bool(meta.get('needs_facts', True)),
+            'category': meta.get('category') or 'FACTS',
+        })
+    return out
 
 
 def resolve_path_plugins(names=None, *, registry=PATH_CHECK_PLUGINS):
@@ -197,11 +355,60 @@ def resolve_path_plugins(names=None, *, registry=PATH_CHECK_PLUGINS):
     return [(n, registry[n]) for n in names]
 
 
+def describe_check_note(
+    plugin_names,
+    *,
+    parsed_views=(),
+    partial_views=(),
+    not_checked_views=(),
+    plugin_coverage=None,
+    registry=PATH_CHECK_PLUGINS,
+):
+    """Build a truthful coverage boundary note dynamically from active plugins, actual coverage, and parsed views."""
+    def _desc(name):
+        meta = PATH_CHECK_PLUGIN_META.get(name, {}) if registry is PATH_CHECK_PLUGINS else {}
+        return meta.get('description') or name
+
+    if isinstance(plugin_coverage, dict):
+        executed = [_desc(n) for n in plugin_names if plugin_coverage.get(n) == 'EXECUTED']
+        not_executed = [_desc(n) for n in plugin_names if plugin_coverage.get(n) == 'NOT_EXECUTED']
+    else:
+        executed = [_desc(n) for n in plugin_names]
+        not_executed = []
+
+    parts = [f"已执行检查插件：{'、'.join(executed) if executed else '无'}"]
+    if not_executed:
+        parts.append(f"未执行检查插件：{'、'.join(not_executed)}")
+    if partial_views:
+        parts.append(f"{'/'.join(sorted(partial_views))} 仅轻量部分解析（PARTIAL）")
+    if not_checked_views:
+        parts.append(f"{'/'.join(sorted(not_checked_views))} 等视图暂未检查（NOT_CHECKED）")
+    elif not parsed_views:
+        parts.append('本次未解析到受支持视图')
+    parts.append('当前来源对比不证明历史交付字节一致，检查通过不代表整库全量通过或人工采纳。')
+    return '；'.join(parts)
+
+
 def run_path_plugins(ctx, plugins=None, *, registry=PATH_CHECK_PLUGINS):
-    merged = {'checks': [], 'comparisons': [], 'partial_comparisons': [], 'changes': []}
-    for _, fn in resolve_path_plugins(plugins, registry=registry):
+    resolved = resolve_path_plugins(plugins, registry=registry)
+    executed_names = [name for name, _ in resolved]
+    merged = {
+        'checks': [],
+        'comparisons': [],
+        'partial_comparisons': [],
+        'changes': [],
+        'plugins_executed': executed_names,
+        'plugin_versions': plugin_versions(executed_names, registry=registry),
+        'plugin_produced': {},
+    }
+    for name, fn in resolved:
         out = fn(ctx) or {}
-        for key in merged:
-            if out.get(key):
-                merged[key].extend(out[key])
+        produced = False
+        for key in ('checks', 'comparisons', 'partial_comparisons', 'changes'):
+            items = out.get(key)
+            if items:
+                merged[key].extend(items)
+                if key in ('checks', 'comparisons', 'partial_comparisons'):
+                    produced = True
+        merged['plugin_produced'][name] = produced
     return merged

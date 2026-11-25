@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ai_lib_qor path_sources configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "liberty_parse_filter": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": ["boolean", "null"]},
+        "threshold": {"type": ["integer", "null"], "minimum": 0},
+        "keywords": {
+          "type": ["array", "null"],
+          "items": {"type": "string", "minLength": 1}
+        },
+        "exclude_keywords": {
+          "type": ["array", "null"],
+          "items": {"type": "string", "minLength": 1}
+        },
+        "max_selected": {"type": ["integer", "null"], "minimum": 0},
+        "fallback": {"type": ["string", "null"], "enum": ["first_n", "skip", null]}
+      }
+    },
+    "check_plugins_policy": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": ["array", "null"],
+          "items": {"type": "string", "minLength": 1}
+        },
+        "disabled": {
+          "type": ["array", "null"],
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "check_plugin_params_map": {
+      "type": ["object", "null"],
+      "additionalProperties": {
+        "type": ["object", "null"]
+      }
+    },
+    "library_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ip_type": {"type": ["string", "null"]},
+        "ip_list": {
+          "type": ["array", "null"],
+          "items": {"type": "string", "minLength": 1}
+        },
+        "version_registration_times": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "excluded_versions": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "ignored_unadopted_files": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 3},
+          "uniqueItems": true
+        },
+        "skip_parse_views": {
+          "type": ["array", "null"],
+          "items": {"type": "string", "minLength": 1}
+        },
+        "initial_delivery_tail": {"type": ["integer", "null"], "minimum": 0},
+        "liberty_parse_filter": {"$ref": "#/$defs/liberty_parse_filter"},
+        "check_plugins": {"$ref": "#/$defs/check_plugins_policy"},
+        "check_plugin_params": {"$ref": "#/$defs/check_plugin_params_map"}
+      }
+    }
+  },
+  "properties": {
+    "raw_root": {
+      "oneOf": [
+        {"type": ["string", "null"]},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "raw_roots": {
+      "type": ["array", "null"],
+      "items": {"type": "string"}
+    },
+    "raw_link_roots": {
+      "oneOf": [
+        {"type": ["string", "null"]},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "nl_root": {"type": ["string", "null"]},
+    "nl_version": {"type": ["string", "null"]},
+    "update_raw": {"type": "boolean"},
+    "update_formal": {"type": "boolean"},
+    "update_index": {"type": "boolean"},
+    "auto_effective": {"type": "boolean"},
+    "skip_parse_views": {
+      "type": ["array", "null"],
+      "items": {"type": "string", "minLength": 1}
+    },
+    "initial_delivery_tail": {"type": ["integer", "null"], "minimum": 0},
+    "liberty_parse_filter": {"$ref": "#/$defs/liberty_parse_filter"},
+    "plugin_modules": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "check_plugins": {"$ref": "#/$defs/check_plugins_policy"},
+    "check_plugins_by_ip_type": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/check_plugins_policy"}
+    },
+    "check_plugin_params": {"$ref": "#/$defs/check_plugin_params_map"},
+    "check_plugin_params_by_ip_type": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/check_plugin_params_map"}
+    },
+    "ignore_patterns": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "view_extensions": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"}
+    },
+    "workbench": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {"type": "string", "minLength": 1},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "allowed_clients": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "allowed_hosts": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "max_workers": {"type": "integer", "minimum": 1, "maximum": 32},
+        "index_page_size": {"type": "integer", "minimum": 10, "maximum": 500},
+        "json_inventory_page_size": {"type": "integer", "minimum": 10, "maximum": 500}
+      }
+    },
+    "libraries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {"$ref": "#/$defs/library_config"}
+      }
+    }
+  }
+}

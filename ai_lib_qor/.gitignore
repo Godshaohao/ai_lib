@@ -1,10 +1,14 @@
 __pycache__/
 *.py[cod]
 work/
+sandbox_multi_ip/
+.dide/
 workbench_runs/
 examples/open_pdk_seeds/
 examples/overall_demo/dataset/
 examples/scale_synthetic_v*/
 archive/20261119_历史测试输出/
+archive/20261122_旧版Excel报告归档/
 archive/20261122_历史测试脚本与旧输出归档/examples_legacy/
 archive/20261122_历史测试脚本与旧输出归档/outputs_legacy/
+archive/20261124_旧平铺Work产物归档/

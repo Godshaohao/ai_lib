@@ -1,0 +1,57 @@
+{% macro filters(inv, endpoint, anchor, scope={}, libraries=none) %}
+{% set _has_filter = (inv.query.json_layer or inv.query.json_status or inv.query.json_scope or inv.query.json_q or (inv.query.json_sort and inv.query.json_sort != 'priority')) %}
+<form class="toolbar toolbar-surface" method="get" action="{{ url_for(endpoint, _anchor=anchor) }}" data-auto-filter="1">
+  {% for key, value in scope.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+  <div class="toolbar-group">
+    <select name="json_layer" class="ctrl-sm" aria-label="按层级筛选 JSON">
+      <option value="">全部层级</option>
+      {% for value, label in [('L1', 'L1 来源'), ('L2', 'L2 版本'), ('L3', 'L3 索引'), ('WORKSPACE', '工作区')] if value != 'WORKSPACE' or libraries is not none %}
+        <option value="{{ value }}" {% if inv.query.json_layer == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <select name="json_status" class="ctrl-sm" aria-label="按同步状态筛选">
+      <option value="">全部状态</option>
+      {% for value, label in [('updated', '本轮新增 / 更新'), ('issue', '需处理'), ('unchanged', '已归档 / 一致')] %}
+        <option value="{{ value }}" {% if inv.query.json_status == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    {% if libraries is not none %}
+    <select name="json_scope" class="ctrl-sm" aria-label="按来源库筛选 JSON">
+      <option value="">全部来源库</option>
+      <option value="工作区全局" {% if inv.query.json_scope == '工作区全局' %}selected{% endif %}>工作区全局</option>
+      {% for row in libraries %}
+        {% set value = row.vendor ~ '/' ~ row.library %}
+        <option value="{{ value }}" {% if inv.query.json_scope == value %}selected{% endif %}>{{ row.vendor }} / {{ row.library }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <select name="json_sort" class="ctrl-sm" aria-label="排序方式">
+      {% for value, label in [('priority', '按状态优先'), ('newest', '按更新时间倒序'), ('layer', '按层级与库')] %}
+        <option value="{{ value }}" {% if inv.query.json_sort == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="toolbar-group">
+    <div class="search-wrap">
+      <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" name="json_q" value="{{ inv.query.json_q }}" class="search-input ctrl-sm" aria-label="搜索 JSON" placeholder="搜索文件名或库名…" autocomplete="off" spellcheck="false">
+    </div>
+    {% if _has_filter %}
+    <a class="btn ghost btn-sm" href="{{ url_for(endpoint, _anchor=anchor, **scope) }}">重置</a>
+    {% endif %}
+  </div>
+</form>
+{% endmacro %}
+
+{% macro pagination(inv, endpoint, anchor, scope={}) %}
+<nav class="toolbar toolbar-group" aria-label="JSON 清单分页">
+  <span class="muted num">匹配 {{ inv.matched }} / {{ inv.counts.total }} 项 · 第 {{ inv.page }} / {{ inv.pages }} 页</span>
+  {% set params = dict(scope, **inv.query) %}
+  {% if inv.page > 1 %}
+    <a class="btn secondary btn-sm" href="{{ url_for(endpoint, json_page=inv.page - 1, _anchor=anchor, **params) }}">上一页</a>
+  {% endif %}
+  {% if inv.page < inv.pages %}
+    <a class="btn secondary btn-sm" href="{{ url_for(endpoint, json_page=inv.page + 1, _anchor=anchor, **params) }}">下一页</a>
+  {% endif %}
+</nav>
+{% endmacro %}

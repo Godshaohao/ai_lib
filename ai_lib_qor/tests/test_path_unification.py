@@ -88,7 +88,7 @@ class PathUnificationTests(unittest.TestCase):
         self.assertEqual(len(result['changes']), 2)
         self.assertEqual(len(result['operations']['set']), 2)
         set_version_excluded(self.work, 'v', 'lib', self.versions[1], True)
-        self.assertTrue((self.folder/'delivery/delivery_lib_20260102_001.json').exists())
+        self.assertTrue((self.folder/'delivery/delivery_lib__20260102_b.json').exists())
         with self.assertRaisesRegex(ValueError, '排除'):
             preview_delivery(self.work, 'v', 'lib', self.versions[1])
         with self.assertRaisesRegex(ValueError, '排除'):

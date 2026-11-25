@@ -1,0 +1,18 @@
+{
+  "_note": [
+    "Corner 验收表（仅需 2 个符号，路径匹配忽略大小写）：",
+    "1. groups：每组列出必选 Corner。普通词如 'ss_125c'；'+' 表示同时包含（如 'ss+125c'）；'|' 表示任一匹配（如 'tt|typ+25c'）。",
+    "2. ip_groups：直接写 '业务IP（或单轨库名，支持 * 通配符）: 分组名（或分组数组）'。精确名优先于通配符；未配置的 IP 报无结论，不静默通过。"
+  ],
+  "groups": {
+    "SRAM_G1":    ["tt|typ+25c", "ss|slow+125c", "ff|fast+-40c"],
+    "STDCELL_G1": ["tt|typ+25c", "ss|slow+125c", "ff|fast+m40c"],
+    "PHY_G1":     ["ssg+125c", "tt+25c", "ffg+m40c"]
+  },
+  "ip_groups": {
+    "sram22_256x16m8w8":  "SRAM_G1",
+    "sram22_512x32m4w8":  "SRAM_G1",
+    "sram22_1024x32m8w8": "SRAM_G1",
+    "sg13g2_stdcell":     "STDCELL_G1"
+  }
+}

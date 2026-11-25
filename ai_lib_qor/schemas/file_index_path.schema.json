@@ -5,13 +5,13 @@
   "properties":{
     "vendor":{"type":"string","minLength":1}, "library":{"type":"string","minLength":1},
     "deliveries":{"type":"array","items":{"type":"object","required":["version","version_date","root"],"additionalProperties":false,"properties":{"version":{"type":"string"},"version_date":{"type":["string","null"]},"root":{"type":"string"}}}},
-    "nl_snapshots":{"type":"array","items":{"type":"object","required":["nl_version","observed_at","root"],"additionalProperties":false,"properties":{"nl_version":{"type":"string"},"observed_at":{"type":"string"},"root":{"type":"string"}}}},
+    "nl_snapshots":{"type":"array","items":{"type":"object","required":["nl_version","observed_at","root"],"additionalProperties":false,"properties":{"snapshot_id":{"type":"string","minLength":1},"nl_version":{"type":"string"},"observed_at":{"type":"string"},"root":{"type":"string"}}}},
     "revisions":{"type":"array","items":{"type":"string"},"uniqueItems":true},
     "views":{"type":"object","additionalProperties":{"type":"object","additionalProperties":{"type":"object","additionalProperties":false,"required":["raw","nl","effective"],"properties":{"raw":{"type":"array","items":{"$ref":"#/$defs/raw"}},"nl":{"type":"array","items":{"$ref":"#/$defs/nl"}},"effective":{"type":"array","items":{"$ref":"#/$defs/effective"}}}}}}
   },
   "$defs":{
     "raw":{"type":"object","additionalProperties":false,"required":["version","path"],"properties":{"version":{"type":"string","minLength":1},"path":{"type":"string","minLength":1}}},
     "effective":{"type":"object","additionalProperties":false,"required":["revision","version","path"],"properties":{"revision":{"type":"string","minLength":1},"version":{"type":"string","minLength":1},"path":{"type":"string","minLength":1}}},
-    "nl":{"type":"object","additionalProperties":false,"required":["version","observed_at","link_path","link_target","resolved_path","source_match"],"properties":{"version":{"type":"string","minLength":1},"observed_at":{"type":"string","minLength":1},"link_path":{"type":"string","minLength":1},"link_target":{"type":"string","minLength":1},"resolved_path":{"type":"string","minLength":1},"source_match":{"enum":["MATCHED_RAW","UNVERIFIED"]}}}
+    "nl":{"type":"object","additionalProperties":false,"required":["version","observed_at","link_path","link_target","resolved_path","source_match"],"properties":{"snapshot_id":{"type":"string","minLength":1},"version":{"type":"string","minLength":1},"observed_at":{"type":"string","minLength":1},"link_path":{"type":"string","minLength":1},"link_target":{"type":"string","minLength":1},"resolved_path":{"type":"string","minLength":1},"raw_path":{"type":"string","minLength":1},"source_match":{"enum":["MATCHED_RAW","UNVERIFIED"]}}}
   }
 }

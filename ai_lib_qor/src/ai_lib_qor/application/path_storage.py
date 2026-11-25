@@ -7,9 +7,11 @@ import re
 from ai_lib_qor.sources.layout import SAFE, library_folder
 from ai_lib_qor.versions.store import locked, validate
 
-_LAZY_EXCEL_RE = re.compile(r'^check_rev_[0-9]+_run_[a-f0-9]{32}\.xlsx\Z')
+_SEG = r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}'
+_RUN_TAG = r'(?:run_[a-f0-9]{32}|[0-9]{8}(?:_[0-9]+)?)'
+_LAZY_EXCEL_RE = re.compile(rf'^check(?:__{_SEG}__|_{_SEG}_|_)rev_[0-9]+_{_RUN_TAG}\.xlsx\Z')
 
-AUTHORITATIVE_BUCKETS = ('delivery', 'formal', 'effective', 'check_json', 'audit')
+AUTHORITATIVE_BUCKETS = ('delivery', 'formal', 'effective', 'check_json', 'audit', 'config')
 REBUILDABLE_BUCKETS = ('file_index', 'facts_pool', 'excel_cache')
 ALL_BUCKETS = (*AUTHORITATIVE_BUCKETS, *REBUILDABLE_BUCKETS, 'other')
 
@@ -17,13 +19,18 @@ ALL_BUCKETS = (*AUTHORITATIVE_BUCKETS, *REBUILDABLE_BUCKETS, 'other')
 def _classify_file(folder: Path, path: Path) -> str:
     name = path.name
     parent_name = path.parent.name
+    if name == 'ip_partition.json':
+        return 'config'
     if name.startswith('delivery_') and name.endswith('.json'):
         return 'delivery'
     if name.startswith('formal_') and name.endswith('.json'):
         return 'formal'
     if name.startswith('effective_') and name.endswith('.json'):
         return 'effective'
-    if name in ('file_index.json', '.file_index_manifest.json'):
+    if (
+        name in ('file_index.json', '.file_index_manifest.json', '.auto_effective_state.json', '.view_extensions_state.json')
+        or (name.startswith('.auto_effective_state__') and name.endswith('.json'))
+    ):
         return 'file_index'
     if parent_name == 'facts' or name.startswith('fact_ca_') or (name.startswith('facts_') and name.endswith('.json')):
         return 'facts_pool'
@@ -62,14 +69,28 @@ def _measure_folder(folder: Path):
     bytes_by_kind = {k: 0 for k in ALL_BUCKETS}
     files_by_kind = {k: 0 for k in ALL_BUCKETS}
     legacy_root_files = []
-    for p in folder.rglob('*'):
-        if p.is_symlink() or not p.is_file():
+    allowed_root = {'file_index.json', '.file_index_manifest.json', '.versions.lock', '.auto_effective_state.json', 'ip_partition.json'}
+    stack = [folder]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for entry in it:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    p = Path(entry.path)
+                    kind = _classify_file(folder, p)
+                    bytes_by_kind[kind] += entry.stat(follow_symlinks=False).st_size
+                    files_by_kind[kind] += 1
+                    if cur == folder and entry.name not in allowed_root:
+                        legacy_root_files.append(entry.name)
+        except OSError:
             continue
-        kind = _classify_file(folder, p)
-        bytes_by_kind[kind] += p.stat().st_size
-        files_by_kind[kind] += 1
-        if p.parent == folder and p.name not in ('file_index.json', '.file_index_manifest.json', '.versions.lock', '.auto_effective_state.json'):
-            legacy_root_files.append(p.name)
     auth_bytes = sum(bytes_by_kind[k] for k in AUTHORITATIVE_BUCKETS)
     cache_bytes = sum(bytes_by_kind[k] for k in REBUILDABLE_BUCKETS)
     return {
@@ -133,7 +154,8 @@ def clean_cache(work, *, clean_excel=True, clean_orphan_facts=False, dry_run=Tru
         with locked(folder):
             log_dir = folder / 'log'
             if clean_excel and log_dir.is_dir() and not log_dir.is_symlink():
-                for xlsx in sorted(log_dir.glob('check_rev_*_run_*.xlsx')):
+                excel_candidates = sorted(log_dir.glob('check_*.xlsx'))
+                for xlsx in excel_candidates:
                     if xlsx.is_symlink() or not xlsx.is_file() or not _LAZY_EXCEL_RE.fullmatch(xlsx.name):
                         continue
                     backing = xlsx.with_suffix('.json')
@@ -149,7 +171,8 @@ def clean_cache(work, *, clean_excel=True, clean_orphan_facts=False, dry_run=Tru
                     size = xlsx.stat().st_size
                     if not dry_run:
                         xlsx.unlink()
-                        latest_xlsx = folder / 'latest_check.xlsx'
+                        ptr_name = f"latest_check__{report['business_ip']}.xlsx" if report.get('business_ip') else 'latest_check.xlsx'
+                        latest_xlsx = folder / ptr_name
                         if latest_xlsx.is_symlink() and os.readlink(latest_xlsx) == f'log/{xlsx.name}':
                             latest_xlsx.unlink()
                     removed.append({'vendor': v, 'library': lib, 'kind': 'excel_cache', 'file': f'log/{xlsx.name}', 'bytes': size})
@@ -159,7 +182,11 @@ def clean_cache(work, *, clean_excel=True, clean_orphan_facts=False, dry_run=Tru
                 facts_dir = folder / 'facts'
                 if facts_dir.is_dir() and not facts_dir.is_symlink():
                     referenced = set()
-                    for cj in [*folder.glob('check_run_*.json'), *(log_dir.glob('check_rev_*_run_*.json') if log_dir.is_dir() else [])]:
+                    check_globs = [
+                        *folder.glob('check_run_*.json'),
+                        *(log_dir.glob('check_*.json') if log_dir.is_dir() else []),
+                    ]
+                    for cj in check_globs:
                         if cj.is_symlink() or not cj.is_file():
                             continue
                         try:

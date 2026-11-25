@@ -34,6 +34,20 @@
       "type": "string",
       "minLength": 1
     },
+    "business_ip": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ip_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "track_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "revision": {
       "type": "string",
       "pattern": "^rev_[0-9]+$"
@@ -140,6 +154,42 @@
           },
           "detail": {
             "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "ERROR",
+              "WARNING",
+              "INFO"
+            ]
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "view": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "object_type": {
+                  "type": "string"
+                },
+                "object_name": {
+                  "type": "string"
+                },
+                "diff_type": {
+                  "type": "string"
+                },
+                "old_value": {},
+                "new_value": {},
+                "detail": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false
@@ -302,11 +352,8 @@
         "type": "object",
         "properties": {
           "view": {
-            "enum": [
-              "VERILOG",
-              "CDL",
-              "SPICE"
-            ]
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,31}$"
           },
           "path": {
             "type": "string",
@@ -358,6 +405,152 @@
       "additionalProperties": {
         "type": "object"
       }
+    },
+    "tooling": {
+      "type": "object",
+      "properties": {
+        "parser_signatures": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "plugin_versions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "plugin_coverage": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "EXECUTED",
+              "NOT_EXECUTED",
+              "NOT_APPLICABLE"
+            ]
+          }
+        },
+        "liberty_filter": {
+          "type": "object",
+          "properties": {
+            "applied": {
+              "type": "boolean"
+            },
+            "total_liberty_files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "selected_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "skipped_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "threshold": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "keywords": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "exclude_keywords": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "max_selected": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "fallback": {
+              "enum": [
+                "first_n",
+                "skip"
+              ]
+            },
+            "fallback_used": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "applied",
+            "total_liberty_files",
+            "selected_count",
+            "skipped_count"
+          ],
+          "additionalProperties": false
+        },
+        "skipped_views": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "report_context": {
+      "type": "object",
+      "properties": {
+        "captured_at": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deliveries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "revisions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "nl_observed_cutoff": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "formal_snapshots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "deliveries",
+        "revisions",
+        "nl_observed_cutoff"
+      ],
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

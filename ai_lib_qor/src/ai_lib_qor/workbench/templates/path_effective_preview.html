@@ -1,7 +1,100 @@
-<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>确认有效版本变更 · AI LIB</title>
-<style>body{margin:0;background:#f4f8f9;color:#173044;font:15px/1.6 sans-serif}header{background:#14384a;color:white;padding:18px 7%}main{max-width:980px;margin:32px auto;padding:0 20px}section{background:white;border:1px solid #d6e3e8;border-radius:8px;padding:22px}table{border-collapse:collapse;width:100%}td,th{text-align:left;border-bottom:1px solid #d6e3e8;padding:10px}th{color:#536e7d}.path{overflow-wrap:anywhere}button{background:#086b71;color:white;border:0;border-radius:6px;padding:11px 18px;font:inherit;cursor:pointer}a{color:#086b71}.actions{display:flex;gap:20px;align-items:center;margin-top:24px}.warning{background:#fff7ec;padding:12px}.scroll{overflow-x:auto}:focus-visible{outline:3px solid #e6ad48;outline-offset:2px}</style></head>
-<body><header>AI LIB / 有效版本管理</header><main><p><a href="{{ url_for('library_page',vendor=vendor,library=library) }}">← 返回 {{ vendor }} / {{ library }}</a></p><h1>确认有效版本变更</h1><section><p>当前父版本：<strong>{{ draft.parent }}</strong>{% if draft.action=='restore' %}；恢复目标：<strong>{{ draft.revision }}</strong>{% endif %}</p><p>确认后生成新的完整版本，不修改旧版本。如果父版本已变化，需要重新预览。</p>
-{% if issues %}<div class="warning"><strong>请核对恢复来源</strong><ul>{% for issue in issues %}<li>{{ issue }}</li>{% endfor %}</ul></div>{% endif %}
-{% if changes %}<div class="scroll"><table><thead><tr><th>View</th><th>文件路径</th><th>当前来源</th><th>变更后来源</th></tr></thead><tbody>{% for row in changes %}<tr><td>{{ row.view }}</td><td class="path">{{ row.path }}</td><td>{{ row.before or '未纳入' }}</td><td>{{ row.after or '移除' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p>文件组合没有变化，不会生成新版本。</p>{% endif %}
-<div class="actions"><form method="post" action="{{ url_for('effective_apply') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><button type="submit">确认发布</button></form><a href="{{ url_for('library_page',vendor=vendor,library=library) }}">取消</a></div></section></main></body></html>
+{% extends "path_base.html" %}
+{% block title %}确认有效版本变更 · {{ library }}{% endblock %}
+{% block breadcrumbs %}
+  <a href="{{ url_for('overview') }}">来源总览</a>
+  <span class="crumb-sep" aria-hidden="true">/</span>
+  <a href="{{ url_for('library_page',vendor=vendor,library=library,ip=draft.business_ip) }}" translate="no">{{ vendor }} · {{ library }}{% if draft.business_ip %} / {{ draft.business_ip }}{% endif %}</a>
+  <span class="crumb-sep" aria-hidden="true">/</span>
+  <span class="crumb-curr">版本变更预览</span>
+{% endblock %}
+{% block topbar_right %}
+  <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library,ip=draft.business_ip) }}">返回库与版本</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-title-group">
+    <div class="page-eyebrow">有效版本变更预览{% if draft.business_ip %} · <span translate="no">{{ draft.business_ip }}</span>{% endif %}</div>
+    <h1>确认发布新有效版本</h1>
+    <p>确认后将基于父版本生成新的完整有效版本，历史版本保持只读不变；若期间父版本已变化，需重新预览。</p>
+  </div>
+  <div class="toolbar-group">
+    {% if draft.ip_type %}<span class="chip" translate="no">{{ draft.ip_type }}</span>{% endif %}
+    {% if draft.business_ip %}<span class="chip chip-accent">业务 IP <span translate="no">{{ draft.business_ip }}</span></span>{% endif %}
+    <span class="chip chip-accent">父版本 <span translate="no">{{ draft.parent }}</span></span>
+    {% if draft.action == 'restore' %}
+    <span class="tag tag-updated">恢复目标 <span class="mono" translate="no">{{ draft.revision }}</span></span>
+    {% endif %}
+  </div>
+</div>
+
+{% if issues %}
+<div class="notice bad" role="alert">
+  <strong>请核对恢复来源</strong>
+  <ul>
+    {% for issue in issues %}
+    <li>{{ issue }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<section class="card" aria-label="有效版本变更明细">
+  <div class="card-head">
+    <div>
+      <h2>待发布成员差异</h2>
+      <p>以下列出相对父版本 <span class="mono" translate="no">{{ draft.parent }}</span> 发生变动的成员文件，其余成员保持继承。</p>
+    </div>
+    <span class="chip num">{{ changes|length }} 项变动</span>
+  </div>
+
+  {% if changes %}
+  <div class="table-wrap scroll-box">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col" class="w-96">View</th>
+          <th scope="col">文件路径</th>
+          <th scope="col" class="w-180">当前来源</th>
+          <th scope="col" class="w-180">变更后来源</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in changes %}
+        <tr class="{{ 'row-removed' if not row.after else '' }}">
+          <td><span class="chip" translate="no">{{ row.view }}</span></td>
+          <td class="mono path-wrap path-main" translate="no">{{ row.path }}</td>
+          <td class="mono muted" translate="no">{{ row.before or '未纳入' }}</td>
+          <td>
+            {% if row.after %}
+              <span class="tag tag-updated mono" translate="no">{{ row.after }}</span>
+            {% else %}
+              <span class="tag tag-failed">移除</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p class="empty-state-title">文件组合无变化</p>
+    <p class="empty-state-desc">当前预览结果与父版本 <span class="mono" translate="no">{{ draft.parent }}</span> 完全一致，不会生成新版本。</p>
+  </div>
+  {% endif %}
+
+  <div class="card-body panel-divider">
+    <div class="action-bar" style="margin-top:0">
+      <form class="inline-form" method="post" action="{{ url_for('effective_apply') }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="vendor" value="{{ vendor }}">
+        <input type="hidden" name="library" value="{{ library }}">
+        {% if draft.business_ip %}<input type="hidden" name="ip" value="{{ draft.business_ip }}">{% endif %}
+        <button type="submit">确认发布</button>
+      </form>
+      <a class="btn secondary" href="{{ url_for('library_page',vendor=vendor,library=library,ip=draft.business_ip) }}">取消</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

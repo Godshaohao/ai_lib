@@ -43,7 +43,7 @@ class PathWorkbenchTests(unittest.TestCase):
  def test_check_and_fact_artifacts_available(self):
   response=self.client.post('/path/check',data={'csrf':self.csrf,'vendor':'v','library':'lib','revision':'rev_0001'},follow_redirects=True)
   self.assertEqual(response.status_code,200);self.assertIn('检查部分完成',response.get_data(as_text=True))
-  folder=self.work/'libraries/v/lib';report=next((folder/'log').glob('check_rev_*_run_*.xlsx'))
+  folder=self.work/'libraries/v/lib';report=next((folder/'log').glob('check_lib_rev_*.xlsx'))
   download=self.client.get('/path/artifact',query_string={'vendor':'v','library':'lib','name':report.name})
   self.assertEqual(download.status_code,200);download.close()
   response=self.client.post('/path/facts',data={'csrf':self.csrf,'vendor':'v','library':'lib','view':'LEF','path':'LEF/a.lef','version':'20261001_abcdef12'},follow_redirects=True)
@@ -72,7 +72,7 @@ class PathWorkbenchTests(unittest.TestCase):
  def test_file_add_from_index_and_stale_preview_is_rejected(self):
   folder=self.work/'libraries/v/lib'
   p=self.raw/'v/lib/20261002_abcdef12/LEF/b.lef';p.parent.mkdir(parents=True);p.write_text('MACRO B\n END B\n')
-  build_from_roots(self.raw,self.nl,self.work)
+  build_from_roots(self.raw,self.nl,self.work,auto_effective=False)
   data={'csrf':self.csrf,'vendor':'v','library':'lib','action':'set','view':'LEF','path':'LEF/b.lef','version':'20261002_abcdef12'}
   response=self.client.post('/path/effective/preview',data=data)
   self.assertEqual(response.status_code,200);self.assertIn('确认发布',response.get_data(as_text=True))
@@ -94,7 +94,7 @@ class PathWorkbenchTests(unittest.TestCase):
  def test_batch_edit_preview_apply_and_audit(self):
   import csv
   p=self.raw/'v/lib/20261002_abcdef12/LEF/b.lef';p.parent.mkdir(parents=True);p.write_text('MACRO B\nEND B\n')
-  build_from_roots(self.raw,self.nl,self.work)
+  build_from_roots(self.raw,self.nl,self.work,auto_effective=False)
   selections=[json.dumps({'action':'remove','view':'LEF','path':'LEF/a.lef'}),json.dumps({'action':'set','view':'LEF','path':'LEF/b.lef','version':'20261002_abcdef12'})]
   response=self.client.post('/path/effective/preview',data={'csrf':self.csrf,'vendor':'v','library':'lib','action':'batch','selection':selections})
   self.assertEqual(response.status_code,200);body=response.get_data(as_text=True)
@@ -151,9 +151,9 @@ class PathWorkbenchTests(unittest.TestCase):
   update_effective(self.work,'v','lib',{'set':[],'remove':[{'view':'LEF','path':'LEF/a.lef'}]})
   html=self.client.get('/path/library',query_string={'vendor':'v','library':'lib','revision':'rev_0002','baseline':'rev_0001'}).get_data(as_text=True)
   self.assertIn('已移除',html);self.assertIn('LEF/a.lef',html)
-  self.assertIn('name="baseline" value="rev_0001"',html)
+  self.assertIn('<option value="rev_0001" selected>',html)
   self.client.post('/path/check',data={'csrf':self.csrf,'vendor':'v','library':'lib','revision':'rev_0002','baseline':'__none__'})
-  folder=self.work/'libraries/v/lib';check=json.loads(next((folder/'log').glob('check_rev_*_run_*.json')).read_text())
+  folder=self.work/'libraries/v/lib';check=json.loads(next((folder/'log').glob('check_lib_rev_*.json')).read_text())
   self.assertIsNone(check['baseline'])
 
  def test_formal_latest_snapshot_is_not_old_file_observation(self):

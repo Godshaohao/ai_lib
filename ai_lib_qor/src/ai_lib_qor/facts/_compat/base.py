@@ -1,4 +1,4 @@
-﻿"""
+"""
 Base parser utilities.
 
 This is the only shared helper module under parsers/. There is no text.py.

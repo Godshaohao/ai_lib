@@ -311,14 +311,15 @@ def build_facts_diff(old_fact, new_fact, *, old_label=None, new_label=None):
     }
 
 
-def load_fact_object(work, vendor, library, *, name=None, check=None, ref=None):
+def load_fact_object(work, vendor, library, *, name=None, check=None, ref=None, bundle=None):
     """Safely load a FileFacts JSON either from standalone disk file or embedded CheckResult evidence."""
     folder = library_folder(work, vendor, library)
     if check and ref:
-        bundle = load_check_bundle(work, vendor, library, check)
+        if bundle is None:
+            bundle = load_check_bundle(work, vendor, library, check)
         fact = bundle['facts'].get(ref) or bundle['facts'].get(Path(ref).name)
         if not fact:
-            raise ValueError('检查结果中不存在指定的 FileFacts 引用')
+            raise ValueError('指定的 FileFacts 证据不可用或不在本次检查记录中')
         return fact, Path(ref).name, None
     if name:
         if '/' in name or '\\' in name or name in ('', '.', '..'):
@@ -355,11 +356,22 @@ def build_check_view(work, vendor, library, check_filename):
     for view, group in index['views'].items():
         for path, hist in group.items():
             curr = next((x for x in hist['effective'] if x['revision'] == revision), None)
-            prev = next((x for x in hist['effective'] if x['revision'] == baseline), None) if baseline else None
+            if baseline == '__prev_file__':
+                comp_hit = comp_by_key.get((view, path)) or partial_by_key.get((view, path))
+                if comp_hit and comp_hit.get('baseline_version'):
+                    prev = {'version': comp_hit['baseline_version']}
+                elif curr is not None:
+                    raw_hist = hist.get('raw') or []
+                    pos = next((i for i, r in enumerate(raw_hist) if r.get('version') == curr['version']), -1)
+                    prev = {'version': raw_hist[pos - 1]['version']} if pos > 0 else None
+                else:
+                    prev = None
+            else:
+                prev = next((x for x in hist['effective'] if x['revision'] == baseline), None) if baseline else None
             if not curr and not prev:
                 continue
             if curr and not prev:
-                src_status = 'NEW' if baseline else 'CURRENT'
+                src_status = 'CURRENT' if (not baseline or baseline == '__prev_file__') else 'NEW'
             elif prev and not curr:
                 src_status = 'REMOVED'
             elif curr['version'] == prev['version']:
@@ -404,43 +416,248 @@ def build_check_view(work, vendor, library, check_filename):
                 'compare_new': Path(compare_refs[1]).name if can_compare else None,
             })
 
-    summary = report.get('summary', {})
-    failed_checks = summary.get('failed_checks', 0)
-    inconclusive = summary.get('inconclusive_checks', 0)
-    failed_files = summary.get('failed_files', 0)
-    if failed_checks > 0 or failed_files > 0:
-        q_code, q_cls, q_text = 'FAIL', 'tag-failed', '质检失败'
-    elif report.get('state') != 'SUCCEEDED' or inconclusive > 0:
-        q_code, q_cls, q_text = 'PARTIAL', 'tag-partial', '部分覆盖 / 无结论'
-    else:
-        q_code, q_cls, q_text = 'SCOPE_PASS', 'tag-new', '已覆盖范围通过'
+    from ai_lib_qor.checks.path_plugins import PATH_CHECK_PLUGIN_META, evaluate_check_verdict
+    verdict = evaluate_check_verdict(report)
+    q_code, q_cls, q_text = verdict['code'], verdict['cls'], verdict['text']
 
+    facts_ev = report.get('facts_evidence') if isinstance(report.get('facts_evidence'), dict) else {}
     checks_out = []
     for c in report.get('checks', []):
-        refs = [
-            {'name': Path(r).name, 'available': (r in facts_map or Path(r).name in facts_map)}
-            for r in (c.get('facts_refs') or [])
-        ]
-        checks_out.append({**c, 'resolved_refs': refs})
+        refs = []
+        for r in (c.get('facts_refs') or []):
+            rname = Path(r).name
+            fobj = facts_map.get(r) or facts_map.get(rname)
+            ev_meta = facts_ev.get(r) or facts_ev.get(rname) or {}
+            src_info = (fobj.get('source') if isinstance(fobj, dict) else None) or (ev_meta.get('source') if isinstance(ev_meta, dict) else None) or {}
+            src_rel = src_info.get('relative_path') or ''
+            src_view = (fobj.get('view') if isinstance(fobj, dict) else None) or (ev_meta.get('view') if isinstance(ev_meta, dict) else None) or ''
+            src_ver = src_info.get('version') or ''
+            if src_rel:
+                base_name = Path(src_rel).name
+                label = f'{base_name} ({src_view})' if src_view else base_name
+                if src_ver:
+                    label = f'{label} · {src_ver}'
+            else:
+                label = rname
+            refs.append({
+                'name': rname,
+                'label': label,
+                'available': (r in facts_map or rname in facts_map),
+            })
+        meta = PATH_CHECK_PLUGIN_META.get(c['check_id'], {})
+        description = meta.get('description')
+        category = meta.get('category') or ('MANIFEST' if c.get('coverage') == 'MANIFEST' else 'FACTS')
+        checks_out.append({**c, 'description': description, 'category': category, 'resolved_refs': refs})
 
     excel_path = bundle['check_path'].with_suffix('.xlsx') if bundle['check_path'].parent.name == 'log' else bundle['folder'] / ('report_' + report['run_id'] + '.xlsx')
     excel_cached = excel_path.is_file()
 
+    # Build per-View parse & content-diff coverage bars for HTML visualization
+    tooling = report.get('tooling') if isinstance(report.get('tooling'), dict) else {}
+    skipped_set = {str(v).upper() for v in (tooling.get('skipped_views') or [])}
+    vc_map: dict[str, dict] = {}
+    for row in file_rows:
+        vk = row['view']
+        b = vc_map.setdefault(vk, {
+            'view': vk,
+            'total': 0,
+            'parsed': 0,
+            'failed': 0,
+            'not_checked': 0,
+            'diff_count': 0,
+            'is_skipped_policy': vk.upper() in skipped_set,
+        })
+        b['total'] += 1
+        ps = row['parse_status']
+        if ps == 'PARSED':
+            b['parsed'] += 1
+        elif ps == 'FAILED':
+            b['failed'] += 1
+        else:
+            b['not_checked'] += 1
+        if row['content_status'] in ('CURRENT_CONTENT_DIFF', 'PARTIAL_DIFF'):
+            b['diff_count'] += 1
+    view_coverage = []
+    for vk in sorted(vc_map):
+        b = vc_map[vk]
+        tot = b['total'] or 1
+        b['parsed_pct'] = round(b['parsed'] * 100.0 / tot, 1)
+        b['failed_pct'] = round(b['failed'] * 100.0 / tot, 1)
+        view_coverage.append(b)
+
+    focus_files = [
+        r for r in file_rows
+        if r['parse_status'] == 'FAILED'
+        or r['content_status'] in ('CURRENT_CONTENT_DIFF', 'PARTIAL_DIFF')
+        or r['source_status'] in ('NEW', 'UPDATED', 'REMOVED')
+    ]
+
     return {
         'vendor': vendor,
         'library': library,
+        'business_ip': report.get('business_ip'),
+        'ip_type': report.get('ip_type'),
+        'track_id': report.get('track_id'),
         'check_name': bundle['check_path'].name,
         'excel_name': excel_path.name if (excel_cached or bundle['check_path'].parent.name == 'log') else None,
         'excel_cached': excel_cached,
         'report': report,
         'quality': {'code': q_code, 'cls': q_cls, 'text': q_text},
+        'unavailable_facts': bundle['unavailable_facts'],
         'source_counts': dict(source_counts),
         'parse_counts': dict(parse_counts),
+        'view_coverage': view_coverage,
+        'focus_files': focus_files,
         'file_rows': file_rows,
         'checks': checks_out,
         'changes': report.get('changes', []),
         'partial_comparisons': report.get('partial_comparisons', []),
         'views_present': sorted({r['view'] for r in file_rows}),
+    }
+
+
+def build_overall_view(work, vendor: str, library: str, name: str) -> dict:
+    """Build a shared read-only HTML/export view model from a saved `overall_*.json` (zero re-running)."""
+    from ai_lib_qor.application.path_acceptance import acceptance_status
+    from ai_lib_qor.checks.path_plugins import evaluate_check_verdict
+
+    if not isinstance(name, str) or not name.endswith('.json') or '/' in name or '\\' in name or name in ('.', '..'):
+        raise ValueError('整体报告文件名无效')
+    folder = library_folder(work, vendor, library)
+    cand = folder / 'log' / name
+    if not cand.is_file() or cand.is_symlink():
+        cand = folder / name
+    if not cand.is_file() or cand.is_symlink():
+        raise ValueError(f'整体报告不存在: {name}')
+
+    raw = json.loads(cand.read_text(encoding='utf-8'))
+    if not isinstance(raw, dict) or not isinstance(raw.get('versions'), list):
+        raise ValueError('整体报告 JSON 格式无效')
+    if (raw.get('vendor'), raw.get('library')) != (vendor, library):
+        raise ValueError('整体报告不属于当前库')
+
+    ip = raw.get('business_ip')
+    ip_type = raw.get('ip_type')
+    try:
+        acc = acceptance_status(work, vendor, library, limit=1, business_ip=ip)
+        accepted_rev = acc.get('accepted_revision')
+    except (OSError, ValueError):
+        accepted_rev = None
+
+    excel_path = cand.with_suffix('.xlsx')
+    excel_name = excel_path.name if excel_path.is_file() and not excel_path.is_symlink() else None
+
+    version_rows = []
+    totals = {
+        'revisions': 0,
+        'pass_count': 0,
+        'fail_count': 0,
+        'partial_count': 0,
+        'failed_checks_total': 0,
+        'content_diff_files_total': 0,
+    }
+    for entry in raw.get('versions') or []:
+        if not isinstance(entry, dict):
+            continue
+        rev = str(entry.get('revision') or '')
+        chk_rel = str(entry.get('check') or '')
+        chk_path = (folder / 'log' / Path(chk_rel).name) if chk_rel else None
+        if chk_path and (not chk_path.is_file() or chk_path.is_symlink()):
+            alt = folder / chk_rel
+            chk_path = alt if (alt.is_file() and not alt.is_symlink()) else None
+
+        chk_doc = None
+        if chk_path is not None:
+            try:
+                chk_doc = json.loads(chk_path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                chk_doc = None
+
+        if isinstance(chk_doc, dict):
+            verdict = evaluate_check_verdict(chk_doc)
+            summ = chk_doc.get('summary') or {}
+            files = chk_doc.get('files') or []
+            parsed_cnt = sum(1 for f in files if isinstance(f, dict) and f.get('status') == 'PARSED')
+            failed_files = int(summ.get('failed_files') or 0)
+            failed_checks = int(summ.get('failed_checks') or 0)
+            inconclusive_checks = int(summ.get('inconclusive_checks') or 0)
+            diff_files = int(summ.get('files_with_confirmed_content_change') or 0)
+            checks_list = chk_doc.get('checks') or []
+            tooling = chk_doc.get('tooling') or {}
+            row = {
+                'revision': rev,
+                'baseline': chk_doc.get('baseline'),
+                'run_id': entry.get('run_id') or chk_doc.get('run_id') or '',
+                'run_at': chk_doc.get('run_at') or '',
+                'state': entry.get('state') or chk_doc.get('state') or 'UNKNOWN',
+                'check_name': chk_path.name if chk_path else None,
+                'excel_name': chk_path.with_suffix('.xlsx').name if (chk_path and chk_path.with_suffix('.xlsx').is_file()) else None,
+                'quality': {'code': verdict['code'], 'cls': verdict['cls'], 'text': verdict['text']},
+                'is_accepted': bool(accepted_rev and rev == accepted_rev),
+                'total_files': len(files),
+                'parsed_files': parsed_cnt,
+                'parsed_pct': round(parsed_cnt * 100.0 / len(files), 1) if files else 0.0,
+                'failed_files': failed_files,
+                'failed_checks': failed_checks,
+                'inconclusive_checks': inconclusive_checks,
+                'diff_files': diff_files,
+                'changes_count': len(chk_doc.get('changes') or []),
+                'checks': checks_list,
+                'skipped_views': list(tooling.get('skipped_views') or []),
+                'note': chk_doc.get('note') or '',
+            }
+        else:
+            is_not_checked = (entry.get('state') == 'NOT_CHECKED' or not chk_rel)
+            row = {
+                'revision': rev,
+                'baseline': None,
+                'run_id': entry.get('run_id') or '',
+                'run_at': '',
+                'state': entry.get('state') or 'NOT_CHECKED',
+                'check_name': None,
+                'excel_name': None,
+                'quality': {
+                    'code': 'PARTIAL',
+                    'cls': 'tag-inherited',
+                    'text': '未检查' if is_not_checked else '明细文件缺失',
+                },
+                'is_accepted': bool(accepted_rev and rev == accepted_rev),
+                'total_files': 0,
+                'parsed_files': 0,
+                'parsed_pct': 0.0,
+                'failed_files': 0,
+                'failed_checks': 0,
+                'inconclusive_checks': 0,
+                'diff_files': 0,
+                'changes_count': 0,
+                'checks': [],
+                'skipped_views': [],
+                'note': '该版本尚未执行单版本检查' if is_not_checked else '未找到关联的单版本检查 JSON 文件',
+            }
+
+        totals['revisions'] += 1
+        qcode = row['quality']['code']
+        if qcode == 'FAIL':
+            totals['fail_count'] += 1
+        elif qcode == 'SCOPE_PASS':
+            totals['pass_count'] += 1
+        else:
+            totals['partial_count'] += 1
+        totals['failed_checks_total'] += row['failed_checks']
+        totals['content_diff_files_total'] += row['diff_files']
+        version_rows.append(row)
+
+    return {
+        'vendor': vendor,
+        'library': library,
+        'business_ip': ip,
+        'ip_type': ip_type,
+        'track_id': raw.get('track_id'),
+        'overall_name': cand.name,
+        'excel_name': excel_name,
+        'accepted_revision': accepted_rev,
+        'totals': totals,
+        'versions': version_rows,
     }
 
 
@@ -546,72 +763,4 @@ def paginate_facts_diff(diff_data, *, q='', status='auto', pin_page=1, per_page=
     }
 
 
-def latest_check_for_scope(work, vendor, library, revision, baseline):
-    """Find the most recent saved CheckResult matching (revision, baseline) without triggering parsing."""
-    if not revision:
-        return None
-    folder = library_folder(work, vendor, library)
-    candidates = sorted(
-        [*folder.glob('check_run_*.json'), *(folder / 'log').glob('check_rev_*_run_*.json')],
-        key=lambda p: p.stat().st_mtime_ns,
-        reverse=True,
-    )
-    for path in candidates:
-        if path.is_symlink():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding='utf-8'))
-            if (
-                data.get('schema_version') == 'check_result.path.v1'
-                and data.get('revision') == revision
-                and data.get('baseline') == baseline
-            ):
-                comp_map = {(c['view'], c['path']): c for c in data.get('comparisons', [])}
-                pcomp_map = {(c['view'], c['path']): c for c in data.get('partial_comparisons', [])}
-                file_map = {}
-                for f in data.get('files', []):
-                    key = (f['view'], f['path'])
-                    comp = comp_map.get(key)
-                    pcomp = pcomp_map.get(key)
-                    if comp:
-                        c_status = comp['content_status']
-                        refs = comp.get('facts_refs') or []
-                    elif pcomp:
-                        c_status = 'PARTIAL_DIFF' if pcomp.get('differences') else 'PARTIAL_MATCH'
-                        refs = pcomp.get('facts_refs') or []
-                    else:
-                        c_status = 'NOT_COMPARED'
-                        refs = []
-                    file_map[key] = {
-                        'parse_status': f.get('status'),
-                        'fact_ref': Path(f['facts']).name if f.get('facts') else None,
-                        'content_status': c_status,
-                        'compare_old': Path(refs[0]).name if len(refs) == 2 else None,
-                        'compare_new': Path(refs[1]).name if len(refs) == 2 else None,
-                    }
-                summary = data.get('summary', {})
-                fc = summary.get('failed_checks', 0)
-                ic = summary.get('inconclusive_checks', 0)
-                ff = summary.get('failed_files', 0)
-                run_state = data.get('state', 'UNKNOWN')
-                if fc > 0 or ff > 0:
-                    q_code, q_cls, q_text = 'FAIL', 'tag-failed', '质检失败'
-                elif run_state != 'SUCCEEDED' or ic > 0:
-                    q_code, q_cls, q_text = 'PARTIAL', 'tag-partial', '部分覆盖 / 无结论'
-                else:
-                    q_code, q_cls, q_text = 'SCOPE_PASS', 'tag-new', '已覆盖范围通过'
-                return {
-                    'check_name': path.name,
-                    'run_at': data.get('run_at', ''),
-                    'state': run_state,
-                    'quality_code': q_code,
-                    'quality_cls': q_cls,
-                    'quality_text': q_text,
-                    'failed_checks': fc,
-                    'inconclusive_checks': ic,
-                    'failed_files': ff,
-                    'files': file_map,
-                }
-        except (OSError, ValueError, TypeError, KeyError):
-            continue
-    return None
+from ai_lib_qor.application.path_query import latest_check_for_scope  # noqa: F401 (re-exported for compatibility)

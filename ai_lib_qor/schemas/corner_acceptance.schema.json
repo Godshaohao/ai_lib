@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ai_lib_qor Liberty corner acceptance table (Business IP -> Group -> Corner keywords)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["groups"],
+  "anyOf": [
+    {"required": ["ip_groups"]},
+    {"required": ["ip_rules"]}
+  ],
+  "$defs": {
+    "corner_item": {
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id"],
+          "properties": {
+            "id": {"type": "string", "minLength": 1},
+            "label": {"type": "string"},
+            "keywords": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "any_keywords": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "exclude_keywords": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "match_mode": {"type": "string", "enum": ["all", "any"]},
+            "min_count": {"type": "integer", "minimum": 1},
+            "optional": {"type": "boolean"}
+          }
+        }
+      ]
+    },
+    "group_value": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {"$ref": "#/$defs/corner_item"}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["corners"],
+          "properties": {
+            "description": {"type": "string"},
+            "corners": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/corner_item"}
+            }
+          }
+        }
+      ]
+    },
+    "group_ref": {
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}
+      ]
+    },
+    "ip_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["groups"],
+      "properties": {
+        "match_vendor": {"type": ["string", "null"]},
+        "match_library": {"type": ["string", "null"]},
+        "match_ip": {"type": ["string", "null"]},
+        "groups": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1
+        },
+        "note": {"type": "string"}
+      }
+    }
+  },
+  "properties": {
+    "_note": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "schema_version": {"type": "string", "minLength": 1},
+    "description": {"type": "string"},
+    "groups": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/group_value"}
+    },
+    "ip_groups": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/group_ref"}
+    },
+    "ip_rules": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/ip_rule"}
+    },
+    "default_groups": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}
