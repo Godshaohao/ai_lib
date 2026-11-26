@@ -3,16 +3,24 @@ import json
 from pathlib import Path
 
 
-def load_work_config(work) -> dict:
+from ai_lib_qor.versions.store import read_json_readonly
+
+
+def load_work_config(work, *, strict: bool = False) -> dict:
     path = Path(work) / 'path_sources.json'
     if path.is_symlink():
         raise ValueError('来源配置不能为软链接')
     if not path.exists():
         return {}
-    config = json.loads(path.read_text(encoding='utf-8'))
+    config = read_json_readonly(path, 'path_sources' if strict else None)
     if not isinstance(config, dict) or not isinstance(config.get('libraries', {}), dict):
         raise ValueError('来源配置格式无效')
     return config
+
+
+def raw_root_values(config):
+    """Prefer the ordered multi-root setting, with the singular setting as fallback."""
+    return config.get('raw_roots', config.get('raw_root'))
 
 
 def read_registration_times(work, vendor: str, library: str) -> dict:

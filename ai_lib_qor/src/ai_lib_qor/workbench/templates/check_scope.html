@@ -1,0 +1,174 @@
+{% macro scope_base_fields() %}
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="vendor" value="{{ vendor }}">
+  <input type="hidden" name="library" value="{{ library }}">
+  {% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}
+  <input type="hidden" name="update_timeline" value="1">
+{% endmacro %}
+{% set latest_rev = index.revisions[-1] if index and index.revisions else revision %}
+<section class="card check-console-card" id="check-scope" aria-labelledby="check-scope-title"
+         data-library-check-key="check:{{ vendor }}/{{ library }}"
+         data-revisions='{{ index.revisions|tojson }}'>
+  <div class="card-head">
+    <div>
+      <h2 id="check-scope-title">检查控制台{% if business_ip %} · <span translate="no">{{ business_ip }}</span>{% endif %}</h2>
+      <p>
+        当前对象：{% if business_ip %}业务 IP <strong translate="no">{{ business_ip }}</strong>{% else %}来源库 <strong translate="no">{{ library }}</strong>{% endif %} · 共 <strong class="num">{{ index.revisions|length }}</strong> 个有效版本
+      </p>
+    </div>
+    <div class="toolbar-group">
+      <span class="chip">Liberty {{ '已跳过解析' if liberty_preview.skipped_by_view_policy else ('已抽样' if liberty_preview.applied else '全量选择') }}</span>
+      {% if liberty_preview.skipped_views %}
+        <span class="chip" title="跳过正文解析的视图">跳过：{{ liberty_preview.skipped_views|join('/') }}</span>
+      {% endif %}
+      <button type="button" class="secondary btn-xs" onclick="openLibraryConfigDrawer({{ vendor|tojson|forceescape }},{{ library|tojson|forceescape }},'liberty')">调整 Liberty 选择</button>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="check-console-grid">
+      <!-- 操作区 1：一键检查最新有效版 + 指定版本一键跑 -->
+      <div class="check-console-pane">
+        <div class="check-console-pane-head">
+          <strong>1. 单版本检查</strong>
+          <form class="inline-form" method="post" action="{{ url_for('check') }}" data-async-url="{{ url_for('api_job_check') }}">
+            {{ scope_base_fields() }}
+            <input type="hidden" name="revision" value="{{ latest_rev }}">
+            <input type="hidden" name="baseline" value="__prev_file__">
+            <input type="hidden" name="lazy_excel" value="0">
+            <button type="submit" class="ghost btn-xs" id="check-latest-quick-btn" title="按文件上一交付对比">查最新版 {{ latest_rev }}</button>
+          </form>
+        </div>
+        <form id="single-diff-check-form" class="check-console-form" method="post" action="{{ url_for('check') }}" data-async-url="{{ url_for('api_job_check') }}">
+          {{ scope_base_fields() }}
+          <input type="hidden" name="lazy_excel" value="0">
+          <div class="check-console-fields">
+            <label class="field-inline">
+              <span class="text-xs muted">指定有效版本</span>
+              <select id="check-target-rev" name="revision" class="ctrl-sm" aria-label="检查目标有效版本">
+                {% for rev in index.revisions|reverse %}
+                {% set rm = (rev_meta or {}).get(rev) %}
+                <option value="{{ rev }}" {% if rev == revision %}selected{% endif %}>
+                  {{ rm.label if rm else rev }}{% if rev == latest_rev %} [最新]{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="field-inline">
+              <span class="text-xs muted">对比方式</span>
+              <select id="check-baseline-rev" name="baseline" class="ctrl-sm" aria-label="检查对比方式">
+                <option value="__prev_file__" {% if check_baseline_param == '__prev_file__' %}selected{% endif %}>按文件上一时间版本（推荐）</option>
+                <option value="__none__" {% if check_baseline_param == '__none__' %}selected{% endif %}>不做对比（仅静态核验）</option>
+                {% for rev in index.revisions %}
+                {% if loop.index0 < rev_idx %}
+                {% set rm = (rev_meta or {}).get(rev) %}
+                <option value="{{ rev }}" {% if check_baseline_param == rev %}selected{% endif %}>
+                  里程碑对比 {{ rm.short if rm else rev }}{% if rev == prev_rev %}（上一版）{% endif %}
+                </option>
+                {% endif %}
+                {% endfor %}
+              </select>
+            </label>
+            <button type="submit" id="check-single-submit-btn" class="btn-sm">检查当前版本</button>
+          </div>
+          <p id="check-mode-hint" class="text-xs muted mt-xs">
+            {% if check_baseline_param == '__prev_file__' %}
+              在当前{{ ' IP 轨道' if business_ip else '库' }}内逐文件对比各自的上一交付。首个有效版也可使用折叠的早期交付作对照。
+            {% elif check_baseline_param == '__none__' %}
+              核验当前版本的文件清单与结构，无跨版本对比。
+            {% else %}
+              将当前版本与有效版本 <strong class="mono" translate="no">{{ check_baseline_param }}</strong> 对比，并执行当前版静态核验。
+            {% endif %}
+          </p>
+        </form>
+      </div>
+
+      <!-- 操作区 2：两份 Excel 下载 & 当前 IP 演进时间线 / 全部版本核查 -->
+      <div class="check-console-pane">
+        <div class="check-console-pane-head">
+          <strong>2. {{ '当前 IP 整体检查' if business_ip else '本库整体检查' }}</strong>
+          {% if timeline_model %}
+            <span class="tag tag-new tag-sm">时间线 {{ timeline_model.columns|length }} 列</span>
+          {% endif %}
+        </div>
+        <div class="toolbar-group mt-xs">
+          <form class="inline-form" method="post" action="{{ url_for('check') }}" data-async-url="{{ url_for('api_job_check') }}"
+                data-confirm-title="检查全部有效版本"
+                data-confirm="将按顺序重跑当前{{ '业务 IP' if business_ip else '库' }}的 {{ index.revisions|length }} 个有效版本。首版仅静态核验，其余以上一有效版本为基线。"
+                data-confirm-label="开始核查全部版本" data-confirm-tone="primary">
+            {{ scope_base_fields() }}
+            <input type="hidden" name="revision" value="{{ revision }}">
+            <input type="hidden" name="kind" value="all">
+            <input type="hidden" name="rerun" value="1">
+            <input type="hidden" name="lazy_excel" value="1">
+            <button type="submit" class="secondary btn-sm">{{ '检查此 IP 的全部版本' if business_ip else '检查此库的全部版本' }}</button>
+          </form>
+          <button type="button" class="secondary btn-sm" onclick="switchCheckSubTab('overall', true, true)">查看时间线</button>
+          <details class="action-menu">
+            <summary class="btn ghost btn-sm">导出与更多 ▾</summary>
+            <div class="action-menu-pop">
+              {% if active_check_view and active_check_view.excel_name %}
+              <a class="action-menu-item" href="{{ url_for('artifact',vendor=vendor,library=library,name=active_check_view.excel_name) }}">下载本版明细 Excel</a>
+              {% endif %}
+              {% if timeline_excel_name %}
+              <a class="action-menu-item" href="{{ url_for('artifact',vendor=vendor,library=library,name=timeline_excel_name) }}">下载演进时间线 Excel</a>
+              {% endif %}
+              {% if revision %}
+              <a class="action-menu-item" href="{{ url_for('api_script_export', vendor=vendor, library=library, revision=revision, ip=business_ip, template='pt_check', download=1) }}">导出 PT (.csh)</a>
+              <a class="action-menu-item" href="{{ url_for('api_script_export', vendor=vendor, library=library, revision=revision, ip=business_ip, template='innovus_check', download=1) }}">导出 Innovus (.csh)</a>
+              {% endif %}
+              <form method="post" action="{{ url_for('check') }}">
+                {{ scope_base_fields() }}
+                <input type="hidden" name="revision" value="{{ revision }}">
+                <input type="hidden" name="kind" value="all">
+                <input type="hidden" name="lazy_excel" value="1">
+                <button type="submit" class="action-menu-item">仅汇总已有检查结果</button>
+              </form>
+            </div>
+          </details>
+        </div>
+        <p class="text-xs muted mt-xs">全部重跑时首版静态核验，其余以上一有效版为基线；可在「导出与更多」下载 Excel 明细与 PT / Innovus 检查脚本。</p>
+      </div>
+    </div>
+
+    <!-- 底部紧凑策略条：候选 .lib 预览（搜索 + 前 20 条折叠） -->
+    <div class="liberty-check-scope">
+      <details id="liberty-check-preview" data-liberty-preview-widget>
+        <summary>
+          <strong>LEF / Liberty 候选文件预览</strong> · <span class="mono" translate="no">{{ revision }}</span> · {% if liberty_preview.skipped_by_view_policy %}Liberty 解析已关闭{% elif liberty_preview.lef_skipped_by_view_policy %}LEF 解析已关闭 · {% endif %}
+          {% if not liberty_preview.skipped_by_view_policy %}<span class="num">{{ liberty_preview.selected_count }} / {{ liberty_preview.member_count }}</span> 个候选 .lib{% endif %}
+        </summary>
+        <div class="liberty-check-files">
+          {% if liberty_preview.skipped_by_view_policy or liberty_preview.lef_skipped_by_view_policy %}
+          <p>「跳过解析视图」已关闭其中一个输入，LEF / Liberty 引脚规则无法对照。</p>
+          {% endif %}
+          {% if not liberty_preview.member_count %}
+          <p>当前有效版本没有 Liberty 成员。</p>
+          {% elif not liberty_preview.skipped_by_view_policy %}
+          <p>{{ '按抽样策略选择' if liberty_preview.applied else '当前版本全量选择' }}{% if liberty_preview.keywords and liberty_preview.applied %} · 关键词 {{ liberty_preview.keywords|join('、') }}{% endif %}{% if liberty_preview.fallback_used %} · 关键词未命中，按回退策略选取{% endif %}。</p>
+          {% if liberty_preview.selected %}
+          <div class="liberty-preview-toolbar">
+            <input type="search" class="ctrl-sm liberty-preview-search" data-lib-preview-search
+                   aria-label="筛选候选 .lib 文件"
+                   placeholder="筛选 {{ liberty_preview.selected|length }} 个候选 .lib 路径或 Corner…"
+                   autocomplete="off" spellcheck="false">
+            <span class="muted text-xs num" data-lib-preview-count aria-live="polite">{% if liberty_preview.selected|length > 20 %}显示前 20 / {{ liberty_preview.selected|length }} 个{% else %}共 {{ liberty_preview.selected|length }} 个{% endif %}</span>
+          </div>
+          <ul data-lib-preview-list data-page-limit="20">
+            {% for path in liberty_preview.selected %}<li class="mono" translate="no" data-search="{{ path|lower }}"{% if loop.index0 >= 20 %} data-overflow="1" hidden{% endif %}>{{ path }}</li>{% endfor %}
+          </ul>
+          {% if liberty_preview.selected|length > 20 %}
+          <div class="liberty-preview-more" data-lib-preview-more>
+            <button type="button" class="secondary btn-xs" data-lib-preview-toggle data-expanded="0">展开其余 {{ liberty_preview.selected|length - 20 }} 个 .lib</button>
+          </div>
+          {% endif %}
+          <p class="muted text-xs" data-lib-preview-empty hidden>没有匹配的候选 .lib。</p>
+          {% else %}
+          <ul><li>策略未选出候选文件。</li></ul>
+          {% endif %}
+          {% endif %}
+          <p class="muted">检查时按 LEF 的 Macro 与候选 .lib 的 Cell 名自动配对；此策略由本库各业务 IP 共用，每个版本分别选取候选文件。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+</section>

@@ -5,7 +5,7 @@ from pathlib import Path
 import uuid
 import xlsxwriter
 
-from ai_lib_qor.application.path_query import latest_check_for_revision as _latest_check_for_revision
+from ai_lib_qor.application.path_query import PathDataQuery, latest_check_for_revision as _latest_check_for_revision
 from ai_lib_qor.application.path_refresh import refresh_status
 from ai_lib_qor.application.path_storage import storage_stats
 from ai_lib_qor.sources.timestamps import utc_text
@@ -32,7 +32,7 @@ def _index_label(status):
     return {'FRESH': '已同步', 'STALE': '待刷新', 'MISSING': '缺失', 'UNVERIFIED': '待核验'}.get(status, status)
 
 
-def render_work_overview_excel(work, output, *, overwrite=False):
+def render_work_overview_excel(work, output, *, overwrite=False, storage_cache=None):
     """Render a read-only cross-library overview Excel workbook from saved work/ data."""
     work_path = Path(work).resolve(strict=True)
     out_path = Path(output)
@@ -43,25 +43,44 @@ def render_work_overview_excel(work, output, *, overwrite=False):
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     status = refresh_status(work_path, limit=5)
-    st = storage_stats(work_path)
+    st = storage_stats(work_path, cache=storage_cache)
     bytes_by_lib = {(x['vendor'], x['library']): x['total_bytes'] for x in st.get('libraries', [])}
+    query = PathDataQuery(work_path)
+    libs = status.get('libraries', [])
+    has_ip_dimensions = any(lib.get('ip_type') or lib.get('is_multi_track') for lib in libs)
 
     overview_rows = []
     todo_items = []
     verdict_counts = {'pass': 0, 'fail': 0, 'partial': 0, 'pending': 0}
     sum_deliv = sum_revs = sum_fc = sum_ic = sum_ff = 0
+    accepted_tracks = 0
+    effective_tracks = 0
+    ip_type_rollup = {}
 
-    for lib in status.get('libraries', []):
-        v = lib['vendor']
-        name = lib['library']
-        d_cnt = int(lib.get('delivery_count', 0))
-        r_cnt = int(lib.get('revision_count', 0))
+    def _rollup_bucket(ip_type_key):
+        return ip_type_rollup.setdefault(
+            ip_type_key,
+            {
+                'libraries': set(),
+                'tracks': 0,
+                'with_effective': 0,
+                'accepted': 0,
+                'pass': 0,
+                'fail': 0,
+                'partial': 0,
+                'pending': 0,
+                'needs_review': 0,
+            },
+        )
+
+    def _append_row(v, name, ip_type, business_ip, d_cnt, r_cnt, latest_rev, acc_rev, idx_st, idx_lbl, size_txt):
+        nonlocal sum_deliv, sum_revs, sum_fc, sum_ic, sum_ff, accepted_tracks, effective_tracks
         sum_deliv += d_cnt
         sum_revs += r_cnt
-        latest_rev = lib.get('latest_revision')
-        acc_rev = lib.get('accepted_revision')
-        idx_st = lib.get('index_status', 'MISSING')
-        idx_lbl = _index_label(idx_st)
+        if r_cnt > 0:
+            effective_tracks += 1
+        if acc_rev:
+            accepted_tracks += 1
 
         if not latest_rev:
             acc_lbl = '待建有效版'
@@ -72,7 +91,15 @@ def render_work_overview_excel(work, output, *, overwrite=False):
         else:
             acc_lbl = '尚未人工采纳'
 
-        chk = _latest_check_for_revision(work_path, v, name, latest_rev)
+        chk = _latest_check_for_revision(work_path, v, name, latest_rev, business_ip=business_ip)
+        bucket = _rollup_bucket(ip_type or '未分类')
+        bucket['libraries'].add((v, name))
+        bucket['tracks'] += 1
+        if r_cnt > 0:
+            bucket['with_effective'] += 1
+        if acc_rev:
+            bucket['accepted'] += 1
+
         if not latest_rev:
             verdict = '未建有效版'
             base_lbl = '—'
@@ -82,6 +109,7 @@ def render_work_overview_excel(work, output, *, overwrite=False):
         elif chk is None:
             verdict = '待检查'
             verdict_counts['pending'] += 1
+            bucket['pending'] += 1
             base_lbl = '—'
             fc = ic = ff = '—'
             run_at = '—'
@@ -90,10 +118,13 @@ def render_work_overview_excel(work, output, *, overwrite=False):
             verdict = chk['verdict']
             if verdict == '质检失败':
                 verdict_counts['fail'] += 1
+                bucket['fail'] += 1
             elif verdict == '已覆盖范围通过':
                 verdict_counts['pass'] += 1
+                bucket['pass'] += 1
             else:
                 verdict_counts['partial'] += 1
+                bucket['partial'] += 1
             base_lbl = chk['baseline'] or '无基线'
             fc = chk['failed_checks']
             ic = chk['inconclusive_checks']
@@ -104,29 +135,75 @@ def render_work_overview_excel(work, output, *, overwrite=False):
             run_at = chk['run_at'] or '—'
             rep_name = chk['report_name']
 
-        size_txt = _fmt_bytes(bytes_by_lib.get((v, name), 0))
         overview_rows.append([
             v, name, d_cnt, r_cnt,
             latest_rev or '无', acc_rev or '未采纳', acc_lbl, idx_lbl,
             verdict, base_lbl, fc, ic, ff, run_at, rep_name, size_txt,
+            ip_type or '—', business_ip or '单轨',
         ])
 
+        todo_lib = f'{name} :: {business_ip}' if business_ip else name
+        ip_flag = f' --ip {business_ip}' if business_ip else ''
         if verdict == '质检失败':
-            todo_items.append((1, 'P1 · 高危', '质检失败', v, name, verdict, latest_rev, acc_rev or '未采纳', f'失败检查 {fc} / 失败文件 {ff}；请打开单版本报告核查差异并修复后再采纳'))
-        if idx_st in ('MISSING', 'STALE', 'UNVERIFIED'):
-            idx_todo_kind = {'MISSING': '索引缺失', 'STALE': '索引待刷新', 'UNVERIFIED': '索引待核验'}[idx_st]
-            todo_items.append((2, 'P2 · 索引', idx_todo_kind, v, name, idx_lbl, latest_rev or '无', acc_rev or '未采纳', '执行 refresh-index 同步或补建归档指纹索引'))
+            todo_items.append((1, 'P1 · 高危', '质检失败', v, todo_lib, verdict, latest_rev, acc_rev or '未采纳', f'失败检查 {fc} / 失败文件 {ff}；请打开单版本报告核查差异并修复后再采纳'))
         if latest_rev and chk is None:
-            todo_items.append((3, 'P2 · 待检', '最新版未检查', v, name, '待检查', latest_rev, acc_rev or '未采纳', '执行 check-pending 或单版本检查'))
+            todo_items.append((3, 'P2 · 待检', '最新版未检查', v, todo_lib, '待检查', latest_rev, acc_rev or '未采纳', f'执行 check-pending 或 minimal-check-revision{ip_flag}'))
         elif chk is not None and chk.get('quality_code') == 'PARTIAL':
-            todo_items.append((4, 'P3 · 复核', '部分覆盖/无结论', v, name, verdict, latest_rev, acc_rev or '未采纳', f'不确定检查 {ic} 或含未解析视图（如 GDS/DB）；需人工确认覆盖边界'))
+            todo_items.append((4, 'P3 · 复核', '部分覆盖/无结论', v, todo_lib, verdict, latest_rev, acc_rev or '未采纳', f'不确定检查 {ic} 或含未解析视图（如 GDS/DB）；需人工确认覆盖边界'))
         if chk is not None and (chk.get('tooling_status') or {}).get('is_stale'):
             reasons = '; '.join((chk.get('tooling_status') or {}).get('reasons') or [])
-            todo_items.append((4, 'P3 · 升级', '解析器已升级', v, name, 'STALE_TOOLING', latest_rev, acc_rev or '未采纳', f'现有检查基于旧版解析器（{reasons}）；可执行 check-pending --include-outdated 重检'))
+            todo_items.append((4, 'P3 · 升级', '解析器已升级', v, todo_lib, 'STALE_TOOLING', latest_rev, acc_rev or '未采纳', f'现有检查基于旧版解析器（{reasons}）；可执行 check-pending --include-outdated 重检'))
         if not latest_rev:
-            todo_items.append((5, 'P3 · 建版', '待建有效版本', v, name, '未建有效版', '无', '未采纳', '检查 Formal NL 快照或手工初始化首版有效版本'))
+            todo_items.append((5, 'P3 · 建版', '待建有效版本', v, todo_lib, '未建有效版', '无', '未采纳', '检查 Formal NL 快照、分轨配置或初始化首版有效版本'))
         elif chk is not None and verdict != '质检失败' and acc_rev != latest_rev:
-            todo_items.append((6, 'P4 · 采纳', '新版待人工采纳', v, name, acc_lbl, latest_rev, acc_rev or '未采纳', '确认质检报告无阻塞问题后执行 accept-revision 显式采纳'))
+            todo_items.append((6, 'P4 · 采纳', '新版待人工采纳', v, todo_lib, acc_lbl, latest_rev, acc_rev or '未采纳', f'确认质检报告无阻塞问题后执行 accept-revision{ip_flag} 显式采纳'))
+
+    for lib in libs:
+        v = lib['vendor']
+        name = lib['library']
+        ip_type = lib.get('ip_type')
+        idx_st = lib.get('index_status', 'MISSING')
+        idx_lbl = _index_label(idx_st)
+        size_txt = _fmt_bytes(bytes_by_lib.get((v, name), 0))
+
+        if idx_st in ('MISSING', 'STALE', 'UNVERIFIED'):
+            idx_todo_kind = {'MISSING': '索引缺失', 'STALE': '索引待刷新', 'UNVERIFIED': '索引待核验'}[idx_st]
+            todo_items.append((2, 'P2 · 索引', idx_todo_kind, v, name, idx_lbl, lib.get('latest_revision') or '无', lib.get('accepted_revision') or '未采纳', '执行 refresh-index 同步或补建归档指纹索引'))
+
+        if lib.get('is_multi_track'):
+            needs_review_cnt = int(lib.get('needs_review_count', 0))
+            if needs_review_cnt > 0:
+                _rollup_bucket(ip_type or '未分类')['needs_review'] += needs_review_cnt
+                todo_items.append((
+                    2, 'P2 · 分轨', '分轨待复核', v, name, f'待复核 {needs_review_cnt} 项',
+                    '—', '—', f'请检查 libraries/{v}/{name}/ip_partition.json 中的 conflicts / unassigned 项，手工修订 tracks 后重跑 partition-ips 与 refresh-effective',
+                ))
+            track_entries = query.list_tracks(vendor=v, library=name)['tracks']
+            if track_entries:
+                for tr in track_entries:
+                    _append_row(
+                        v, name, ip_type, tr['business_ip'],
+                        len(tr.get('versions') or []),
+                        len(tr.get('revisions') or []),
+                        tr.get('latest_revision'),
+                        tr.get('accepted_revision'),
+                        idx_st, idx_lbl, size_txt,
+                    )
+            else:
+                _append_row(
+                    v, name, ip_type, '(待分轨)',
+                    int(lib.get('delivery_count', 0)), 0, None, None,
+                    idx_st, idx_lbl, size_txt,
+                )
+        else:
+            _append_row(
+                v, name, ip_type, None,
+                int(lib.get('delivery_count', 0)),
+                int(lib.get('revision_count', 0)),
+                lib.get('latest_revision'),
+                lib.get('accepted_revision'),
+                idx_st, idx_lbl, size_txt,
+            )
 
     todo_items.sort(key=lambda x: (x[0], x[3], x[4]))
     todo_rows = [list(x[1:]) for x in todo_items]
@@ -150,6 +227,7 @@ def render_work_overview_excel(work, output, *, overwrite=False):
             '人工采纳版本', '采纳状态', '索引状态', '最新版质检结论',
             '对比基线', '失败检查', '不确定检查', '失败文件',
             '最近检查时间', '最近检查报告', '占用空间',
+            'IP 类型', '业务 IP 轨道',
         ]
         specs = [
             {'kind': 'text', 'min_w': 14, 'max_w': 20},
@@ -168,6 +246,8 @@ def render_work_overview_excel(work, output, *, overwrite=False):
             {'kind': 'center', 'min_w': 20, 'max_w': 22},
             {'kind': 'text', 'min_w': 30, 'max_w': 46},
             {'kind': 'center', 'min_w': 12, 'max_w': 14},
+            {'kind': 'center', 'min_w': 12, 'max_w': 18},
+            {'kind': 'text', 'min_w': 16, 'max_w': 28},
         ]
         ncols = len(headers)
         has_sub = bool(overview_rows)
@@ -176,10 +256,10 @@ def render_work_overview_excel(work, output, *, overwrite=False):
         write_banner(sh0, pal, 'ai_lib_qor · 全工作区来源库状态总览', subtitle, ncols)
 
         # Row 3: KPI summary strip + jump link to Todo sheet
-        accepted_libs = sum(1 for x in status.get('libraries', []) if x.get('accepted_revision'))
+        track_kpi = f"  ·  业务轨道 {len(overview_rows)}" if has_ip_dimensions else ""
         kpi_text = (
-            f"供应商 {totals.get('vendors', 0)}  ·  来源库 {totals.get('libraries', 0)}  ·  "
-            f"已建有效版 {totals.get('libraries_with_effective', 0)}  ·  已人工采纳 {accepted_libs}  ·  "
+            f"供应商 {totals.get('vendors', 0)}  ·  来源库 {totals.get('libraries', 0)}{track_kpi}  ·  "
+            f"已建有效版 {effective_tracks}  ·  已人工采纳 {accepted_tracks}  ·  "
             f"最新版质检: 通过 {verdict_counts['pass']} / 失败 {verdict_counts['fail']} / 部分 {verdict_counts['partial']} / 待检 {verdict_counts['pending']}  ·  "
             f"总存储 {_fmt_bytes(st.get('total_bytes', 0))} (权威 {_fmt_bytes(st.get('authoritative_bytes', 0))} · 缓存 {_fmt_bytes(st.get('rebuildable_cache_bytes', 0))})"
         )
@@ -235,6 +315,44 @@ def render_work_overview_excel(work, output, *, overwrite=False):
             empty_message='所有已归档库索引同步、最新版均已检查通过且已完成人工采纳。',
             autofilter=True, set_widths=True,
         )
+
+        # Sheet 02 (only when ip_type or multi-track libraries exist): IP-Type Rollup
+        if has_ip_dimensions:
+            sh2 = book.add_worksheet('02-IP类型汇总')
+            ip_headers = [
+                'IP 类型 (ip_type)', '物理来源库数', '业务轨道数', '已建有效版轨道',
+                '已人工采纳轨道', '质检通过', '质检失败', '部分覆盖', '待检查', '分轨待复核数',
+            ]
+            ip_specs = [
+                {'kind': 'center', 'min_w': 18, 'max_w': 24},
+                {'kind': 'int', 'min_w': 13, 'max_w': 15},
+                {'kind': 'int', 'min_w': 12, 'max_w': 14},
+                {'kind': 'int', 'min_w': 14, 'max_w': 16},
+                {'kind': 'int', 'min_w': 14, 'max_w': 16},
+                {'kind': 'int', 'min_w': 11, 'max_w': 13},
+                {'kind': 'int', 'min_w': 11, 'max_w': 13},
+                {'kind': 'int', 'min_w': 11, 'max_w': 13},
+                {'kind': 'int', 'min_w': 11, 'max_w': 13},
+                {'kind': 'int', 'min_w': 13, 'max_w': 15},
+            ]
+            ip_rows = [
+                [
+                    k, len(b['libraries']), b['tracks'], b['with_effective'],
+                    b['accepted'], b['pass'], b['fail'], b['partial'], b['pending'], b['needs_review'],
+                ]
+                for k, b in sorted(ip_type_rollup.items())
+            ]
+            configure_sheet_print(sh2, header_row=3, freeze_row=4, tab_color='#0F766E')
+            write_banner(
+                sh2, pal, '02 · 按 IP 类型 (ip_type) 汇总',
+                subtitle, len(ip_headers), back_sheet='00-全库总览',
+            )
+            write_data_table(
+                sh2, pal, 3, ip_headers, ip_rows,
+                col_specs=ip_specs,
+                empty_message='当前工作区未配置 ip_type。',
+                autofilter=True, set_widths=True,
+            )
     finally:
         book.close()
 
@@ -246,7 +364,8 @@ def render_work_overview_excel(work, output, *, overwrite=False):
         'state': 'SUCCEEDED',
         'work': str(work_path),
         'excel': str(out_path),
-        'library_count': len(overview_rows),
+        'library_count': len(libs),
+        'track_row_count': len(overview_rows),
         'todo_count': len(todo_rows),
         'verdict_counts': verdict_counts,
     }

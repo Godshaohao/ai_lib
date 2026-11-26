@@ -1,5 +1,6 @@
 """Adapt trusted parsers to the path FileFacts contract via the pluggable registry."""
 import hashlib
+import inspect
 from pathlib import Path
 
 from .registry import (
@@ -26,7 +27,9 @@ def _file_digest(path):
     return h.hexdigest()
 
 
-def parse_file_payload(path, view, *, allow_pg=False, registry=PARSER_REGISTRY):
-    """Parse supported objects via the pluggable view parser registry."""
+def parse_file_payload(path, view, *, allow_pg=False, registry=PARSER_REGISTRY, digest_out=None):
+    """Parse supported objects via the pluggable view parser registry (single-pass hashing when supported)."""
     handler = get_parser(view, registry=registry)
+    if digest_out is not None and 'digest_out' in inspect.signature(handler).parameters:
+        return handler(Path(path), allow_pg=allow_pg, digest_out=digest_out)
     return handler(Path(path), allow_pg=allow_pg)

@@ -18,14 +18,14 @@ class RootInventoryTests(unittest.TestCase):
    result=build_from_roots(raw,nl,out,nl_version='NL2.5.3')
    self.assertEqual(result['delivery_created'],2);self.assertEqual(result['formal_created'],2)
    folder=out/'libraries/VENDOR_A/LIB_A'
-   delivery=json.loads((folder/'delivery/delivery_LIB_A_20261024_001.json').read_text())
-   self.assertEqual(set(delivery),{'vendor','library','version','version_date','directory_created_at','root','views'})
+   delivery=json.loads((folder/'delivery/delivery_LIB_A__20261024_abcdef12.json').read_text())
+   self.assertEqual(set(delivery),{'vendor','library','version','version_date','directory_mtime','root','views'})
    self.assertEqual(delivery['version_date'],'2026-10-24')
+   self.assertRegex(delivery['directory_mtime'],r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
    formal_path=next(folder.glob('formal/formal_NL2.5.3_*.json'))
    self.assertRegex(formal_path.name,r'^formal_NL2\.5\.3_\d{8}T\d{6}Z_\d{3}\.json$')
    formal=json.loads(formal_path.read_text())
    self.assertRegex(formal['observed_at'],r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
-   if delivery['directory_created_at'] is not None:self.assertRegex(delivery['directory_created_at'],r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
    self.assertEqual(set(formal),{'version','vendor','library','root','observed_at','views'})
    link=formal['views']['LEF']['20261024_abcdef12'][0]
    self.assertEqual(link,{'path':'IP/LEF/a.lef','target':os.readlink(nl/'IP/LEF/a.lef'),'resolved':str(a)})
@@ -35,7 +35,8 @@ class RootInventoryTests(unittest.TestCase):
    self.assertTrue(any('broken.lef' in e for e in repeat['warnings']))
    self.assertEqual(repeat['delivery_created'],0);self.assertEqual(repeat['formal_created'],0)
    self.assertEqual(len(list(folder.glob('delivery/delivery_*.json'))),1)
-   self.assertEqual((folder/'latest_delivery.json').readlink().name,'delivery_LIB_A_20261024_001.json')
+   self.assertEqual((folder/'latest_delivery.json').readlink().name,'delivery_LIB_A__20261024_abcdef12.json')
+   self.assertTrue((out/'libraries/VENDOR_B/LIB_B/delivery/delivery_LIB_B__V02.json').is_file())
    from ai_lib_qor.application.minimal_effective import initialize_from_formal,update_effective
    result=initialize_from_formal(out,'VENDOR_A','LIB_A',formal_path)
    self.assertEqual(result['revision'],'rev_0001')
@@ -89,11 +90,118 @@ class RootInventoryTests(unittest.TestCase):
   from ai_lib_qor.sources.root_inventory import build_from_roots
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp);raw=root/'raw';nl=root/'NL1';nl.mkdir()
-   for version in ('V01','V02'):
-    f=raw/'v/lib'/version/'a.lef';f.parent.mkdir(parents=True);f.write_text('LEF')
+   same_ts=1767225600
+   for version in ('20260101_a','20260101_b'):
+    vdir=raw/'v/lib'/version;f=vdir/'a.lef';f.parent.mkdir(parents=True);f.write_text('LEF')
+    os.utime(vdir,(same_ts,same_ts))
    result=build_from_roots(raw,nl,root/'work')
    self.assertTrue(any('次序未确认' in x for x in result['warnings']))
    self.assertFalse((root/'work/libraries/v/lib/latest_delivery.json').exists())
+
+ def test_undated_and_same_day_versions_order_by_mtime_while_directory_date_takes_priority(self):
+  from ai_lib_qor.sources.root_inventory import build_from_roots
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);raw=root/'raw';nl=root/'NL1';nl.mkdir();work=root/'work'
+   # 1) Undated versions with distinct directory mtime: ordered by mtime without version_registration_times
+   v1=raw/'v/undated_lib/V01';(v1/'a.lef').parent.mkdir(parents=True);(v1/'a.lef').write_text('v1')
+   v2=raw/'v/undated_lib/V02';(v2/'a.lef').parent.mkdir(parents=True);(v2/'a.lef').write_text('v2')
+   os.utime(v1,(1767268800,1767268800))  # 2026-01-01T12:00:00Z
+   os.utime(v2,(1767355200,1767355200))  # 2026-01-02T12:00:00Z
+   # 2) Dated versions where older date has NEWER mtime: directory version_date MUST win over mtime
+   d_old=raw/'v/dated_lib/20260101_old';(d_old/'a.lef').parent.mkdir(parents=True);(d_old/'a.lef').write_text('old')
+   d_new=raw/'v/dated_lib/20260105_new';(d_new/'a.lef').parent.mkdir(parents=True);(d_new/'a.lef').write_text('new')
+   os.utime(d_old,(1767960000,1767960000))  # 2026-01-09T12:00:00Z (copied later!)
+   os.utime(d_new,(1767614400,1767614400))  # 2026-01-05T12:00:00Z
+   # 3) Same-day dated versions with distinct mtime: tie broken by mtime without registration config
+   s1=raw/'v/sameday_lib/20260201_b';(s1/'a.lef').parent.mkdir(parents=True);(s1/'a.lef').write_text('s1')
+   s2=raw/'v/sameday_lib/20260201_a';(s2/'a.lef').parent.mkdir(parents=True);(s2/'a.lef').write_text('s2')
+   os.utime(s1,(1769932800,1769932800))  # 2026-02-01T08:00:00Z
+   os.utime(s2,(1769936400,1769936400))  # 2026-02-01T09:00:00Z
+
+   build_from_roots(raw,nl,work)
+
+   u_folder=work/'libraries/v/undated_lib'
+   self.assertTrue((u_folder/'delivery/delivery_undated_lib__V01.json').is_file())
+   self.assertTrue((u_folder/'delivery/delivery_undated_lib__V02.json').is_file())
+   self.assertEqual((u_folder/'latest_delivery.json').readlink().name,'delivery_undated_lib__V02.json')
+   u_idx=json.loads((u_folder/'file_index.json').read_text())
+   self.assertEqual([d['version'] for d in u_idx['deliveries']],['V01','V02'])
+
+   d_folder=work/'libraries/v/dated_lib'
+   self.assertEqual((d_folder/'latest_delivery.json').readlink().name,'delivery_dated_lib__20260105_new.json')
+   d_idx=json.loads((d_folder/'file_index.json').read_text())
+   self.assertEqual([d['version'] for d in d_idx['deliveries']],['20260101_old','20260105_new'])
+
+   s_folder=work/'libraries/v/sameday_lib'
+   self.assertEqual((s_folder/'latest_delivery.json').readlink().name,'delivery_sameday_lib__20260201_a.json')
+   s_idx=json.loads((s_folder/'file_index.json').read_text())
+   self.assertEqual([d['version'] for d in s_idx['deliveries']],['20260201_b','20260201_a'])
+
+ def test_legacy_seven_field_delivery_coexists_with_new_mtime_delivery(self):
+  import ai_lib_qor.sources.minimal_delivery as md
+  from ai_lib_qor.sources.root_inventory import build_from_roots
+  from ai_lib_qor.versions.store import validate, write_atomic
+  self.assertFalse(hasattr(md, 'directory_birthtime'))
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);raw=root/'raw';nl=root/'NL1';nl.mkdir();work=root/'work'
+   v1=raw/'v/lib/20260101_r1';(v1/'a.lef').parent.mkdir(parents=True);(v1/'a.lef').write_text('v1')
+   folder=work/'libraries/v/lib'
+   (folder/'delivery').mkdir(parents=True)
+   # Seed legacy 7-field delivery (old filename & legacy directory_created_at)
+   legacy={
+    'vendor':'v','library':'lib','version':'20260101_r1','version_date':'2026-01-01',
+    'directory_created_at':None,'root':str(v1),'views':{'LEF':['a.lef']},
+   }
+   write_atomic(folder/'delivery/delivery_lib_20260101_001.json',legacy)
+   # Invalid mixed delivery with both directory_created_at and directory_mtime must be rejected
+   with self.assertRaisesRegex(ValueError,'Schema'):
+    validate({**legacy,'directory_mtime':'2026-01-01T00:00:00Z'},'delivery_minimal')
+   # Add new second version on disk
+   v2=raw/'v/lib/20260102_r2';(v2/'a.lef').parent.mkdir(parents=True);(v2/'a.lef').write_text('v2')
+   res=build_from_roots(raw,nl,work)
+   self.assertEqual(res['delivery_created'],1)
+   self.assertEqual(res['delivery_unchanged'],1)
+   self.assertEqual(res['warnings'],[])
+   new_file=folder/'delivery/delivery_lib__20260102_r2.json'
+   self.assertTrue(new_file.is_file())
+   new_doc=json.loads(new_file.read_text())
+   self.assertEqual(set(new_doc),{'vendor','library','version','version_date','directory_mtime','root','views'})
+   self.assertEqual((folder/'latest_delivery.json').readlink().name,'delivery_lib__20260102_r2.json')
+   idx=json.loads((folder/'file_index.json').read_text())
+   self.assertEqual([d['version'] for d in idx['deliveries']],['20260101_r1','20260102_r2'])
+
+ def test_mtime_ordering_mixed_and_registration_override_and_mtime_drift_warning(self):
+  from ai_lib_qor.sources.minimal_delivery import order_deliveries
+  from ai_lib_qor.sources.root_inventory import build_from_roots
+  # Mixed dated + undated: version_date day compared against undated mtime day
+  rows=[
+   {'version':'20260105_dated','version_date':'2026-01-05','directory_mtime':'2026-01-20T00:00:00Z'},
+   {'version':'V01','version_date':None,'directory_mtime':'2026-01-02T08:00:00Z'},
+   {'version':'V02','version_date':None,'directory_mtime':'2026-01-10T08:00:00Z'},
+  ]
+  self.assertEqual([r['version'] for r in order_deliveries(rows,{})],['V01','20260105_dated','V02'])
+  # Explicit version_registration_times overrides directory_mtime
+  undated=[
+   {'version':'V01','version_date':None,'directory_mtime':'2026-01-10T08:00:00Z'},
+   {'version':'V02','version_date':None,'directory_mtime':'2026-01-02T08:00:00Z'},
+  ]
+  self.assertEqual([r['version'] for r in order_deliveries(undated,{})],['V02','V01'])
+  self.assertEqual(
+   [r['version'] for r in order_deliveries(undated,{'V01':'2026-01-01T00:00:00Z','V02':'2026-01-03T00:00:00Z'})],
+   ['V01','V02'],
+  )
+  # Directory mtime change on disk warns without overwriting archived immutable delivery
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);raw=root/'raw';work=root/'work'
+   vdir=raw/'v/lib/V01';(vdir/'a.lef').parent.mkdir(parents=True);(vdir/'a.lef').write_text('x')
+   os.utime(vdir,(1767268800,1767268800))
+   build_from_roots(raw,None,work,update_formal=False)
+   dfile=work/'libraries/v/lib/delivery/delivery_lib__V01.json'
+   before=dfile.read_bytes()
+   os.utime(vdir,(1767355200,1767355200))
+   res=build_from_roots(raw,None,work,update_formal=False)
+   self.assertTrue(any('目录修改时间(mtime)' in w for w in res['warnings']))
+   self.assertEqual(dfile.read_bytes(),before)
 
  def test_same_second_snapshot_changes_are_numbered_and_latest_is_correct(self):
   from unittest.mock import patch

@@ -68,20 +68,24 @@ class MinimalFileIndexTests(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'历史'):refresh_index(self.work,'v','lib')
   self.assertEqual(index.read_bytes(),before)
 
- def test_undated_versions_require_registered_times(self):
+ def test_undated_versions_can_use_name_order_before_registration(self):
+  import os
   from ai_lib_qor.application.minimal_file_index import refresh_index
   root=self.root/'other';raw=root/'raw';nl=root/'NL1';nl.mkdir(parents=True)
+  same_ts=1767225600
   for version in ('V01','V02'):
-   p=raw/'v/lib'/version/'a.lef';p.parent.mkdir(parents=True);p.write_text('x')
+   vdir=raw/'v/lib'/version;p=vdir/'a.lef';p.parent.mkdir(parents=True);p.write_text('x')
+   os.utime(vdir,(same_ts,same_ts))
   work=root/'work';build_from_roots(raw,nl,work)
-  self.assertFalse((work/'libraries/v/lib/file_index.json').exists())
+  data=json.loads((work/'libraries/v/lib/file_index.json').read_text())
+  self.assertEqual([x['version'] for x in data['deliveries']],['V01','V02'])
   config={'sources':[{'vendor_id':'v','source_library_id':'lib','version_registration_times':{'V01':'2026-01-01T12:00:00Z','V02':'2026-01-02T12:00:00Z'}}]}
   (work/'scan_sources.json').write_text(json.dumps(config))
-  self.assertEqual(refresh_index(work,'v','lib')['state'],'UPDATED')
+  self.assertEqual(refresh_index(work,'v','lib')['state'],'UNCHANGED')
   data=json.loads((work/'libraries/v/lib/file_index.json').read_text())
   self.assertEqual([x['version'] for x in data['deliveries']],['V01','V02'])
   build_from_roots(raw,nl,work)
-  self.assertEqual((work/'libraries/v/lib/latest_delivery.json').readlink().name,'delivery_lib_undated_002.json')
+  self.assertEqual((work/'libraries/v/lib/latest_delivery.json').readlink().name,'delivery_lib__V02.json')
 
  def test_query_as_of_delivery_inherits_last_observation(self):
   from ai_lib_qor.application.minimal_file_index import query_path

@@ -105,6 +105,7 @@ _STATUS_EXACT = {
     'NOT_CHECKED': 'muted',
     '未检查': 'muted',
     '暂不支持(NOT_CHECKED)': 'muted',
+    '按配置跳过(NOT_CHECKED)': 'muted',
     '未纳入当前有效集': 'muted',
     '未纳入有效集': 'muted',
     '未对比': 'muted',

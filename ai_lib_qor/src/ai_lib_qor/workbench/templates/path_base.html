@@ -7,6 +7,14 @@
 <meta name="csrf-token" content="{{ csrf }}">
 <title>{% block title %}AI LIB{% endblock %} · AI LIB 库质量工作台</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='path_workbench.css') }}">
+<script>
+(function(){
+  try{
+    var s=localStorage.getItem('ai_lib_sidebar_collapsed');
+    if(s==='1'||(s===null&&window.innerWidth<1080)){document.documentElement.setAttribute('data-sidebar','collapsed');}
+  }catch(e){}
+})();
+</script>
 </head>
 <body>
 <a class="skip-link" href="#main-content">跳至正文内容</a>
@@ -14,6 +22,9 @@
 <header class="topbar">
   <div class="topbar-inner">
     <div class="topbar-left">
+      <button type="button" id="sidebar-toggle-btn" class="sidebar-toggle-btn" aria-controls="app-sidebar" aria-expanded="true" aria-label="收起或展开左侧导航栏" title="收起或展开左侧导航栏 ([)" onclick="toggleSidebar()">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+      </button>
       <a class="brand" href="{{ url_for('overview') }}">
         <span class="brand-mark" aria-hidden="true">
           <svg class="ico ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7M17.5 14v7"/></svg>
@@ -23,14 +34,15 @@
       </a>
       <nav class="crumb" aria-label="当前位置">
         <span class="crumb-sep" aria-hidden="true">/</span>
-        {% block breadcrumbs %}<span class="crumb-curr">来源总览</span>{% endblock %}
+        {% block breadcrumbs %}<span id="topbar-crumb-curr" class="crumb-curr">来源总览</span>{% endblock %}
       </nav>
     </div>
     <div class="topbar-right">
       {% block topbar_right %}
+      {% set _libs_total = all_libraries_total if all_libraries_total is defined else (all_libraries|length if all_libraries else 0) %}
       {% if all_libraries %}
-      <select id="global-lib-select" class="switcher" aria-label="快速切换来源库" onchange="switchGlobalLibrary(this.value)">
-        <option value="">切换来源库（共 {{ all_libraries|length }} 个）</option>
+      <select id="global-lib-select" class="switcher topbar-lib-switcher" aria-label="快速切换来源库" onchange="switchGlobalLibrary(this.value)">
+        <option value="">切换来源库（共 {{ _libs_total }} 个）</option>
         {% for item in all_libraries %}
         <option value="{{ item.vendor }}|{{ item.library }}" {% if vendor is defined and library is defined and item.vendor==vendor and item.library==library %}selected{% endif %}>{{ item.vendor }} / {{ item.library }}</option>
         {% endfor %}
@@ -41,7 +53,160 @@
   </div>
 </header>
 
-<main id="main-content" class="shell" tabindex="-1">
+{% set _is_overview_page = (request.endpoint == 'overview') %}
+{% set _is_lib_page = (request.endpoint == 'library_page') %}
+{% set _is_index_page = (request.endpoint == 'index_page') %}
+{% set _is_check_subpage = (request.endpoint in ('check_view_page', 'overall_view_page', 'facts_view_page', 'facts_compare_page')) %}
+{% set _has_lib_ctx = (vendor is defined and library is defined and vendor and library) %}
+{% set _cur_domain = active_domain if active_domain is defined else ('activity' if _is_overview_page else '') %}
+<div class="app-layout">
+  <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="toggleSidebar(false)" aria-hidden="true"></div>
+  <aside id="app-sidebar" class="app-sidebar" aria-label="工作区侧边导航">
+    <nav class="sidebar-scroll" aria-label="主导航">
+      {% if _has_lib_ctx %}
+      {% set _ctx_ip = business_ip if business_ip is defined else '' %}
+      {% set _ctx_rev = revision if revision is defined else '' %}
+      {% set _nr_cnt = (organizer_state.needs_review|length) if (organizer_state is defined and organizer_state and organizer_state.needs_review) else 0 %}
+      <div class="sidebar-group sidebar-ctx-group">
+        <a class="sidebar-back-link" href="{{ url_for('overview', view='libraries') }}">
+          <svg class="ico ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+          <span>返回来源库资产</span>
+        </a>
+        <div class="sidebar-ctx-title" title="{{ vendor }} / {{ library }}">
+          <span class="sidebar-ctx-vendor" translate="no">{{ vendor }}</span>
+          <strong class="sidebar-ctx-lib" translate="no">{{ library }}</strong>
+        </div>
+        {% set _lib_nav = [
+          ('members',    '有效版本成员', 'M4 6h16M4 12h16M4 18h10', none),
+          ('checks',     '检查与报告',   'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', none),
+          ('deliveries', '交付与编排',   'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', _nr_cnt if _nr_cnt > 0 else none),
+          ('ops',        '采纳与维护',   'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z', none)
+        ] %}
+        {% for tab_id, tab_label, tab_ico, tab_badge in _lib_nav %}
+          {% if _is_lib_page and not (error is defined and error) %}
+          <button type="button"
+                  class="sidebar-item {{ 'active' if tab_id == 'members' else '' }}"
+                  data-lib-nav="{{ tab_id }}"
+                  onclick="switchLibTab('{{ tab_id }}')">
+            <svg class="ico ico-sm sidebar-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{ tab_ico }}"/></svg>
+            <span class="sidebar-label">{{ tab_label }}</span>
+            {% if tab_badge is not none %}<span class="sidebar-badge sidebar-badge-warn num">{{ tab_badge }}</span>{% endif %}
+          </button>
+          {% else %}
+          {% set _sub_active = (_is_check_subpage and tab_id == 'checks') %}
+          <a class="sidebar-item {{ 'active' if _sub_active else '' }}" {% if _sub_active %}aria-current="page"{% endif %} href="{{ url_for('library_page', vendor=vendor, library=library, ip=_ctx_ip, revision=_ctx_rev, baseline=return_baseline|default(none), _anchor=(return_tab if _sub_active and return_tab is defined and return_tab else tab_id)) }}">
+            <svg class="ico ico-sm sidebar-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{ tab_ico }}"/></svg>
+            <span class="sidebar-label">{{ tab_label }}</span>
+            {% if tab_badge is not none %}<span class="sidebar-badge sidebar-badge-warn num">{{ tab_badge }}</span>{% endif %}
+          </a>
+          {% endif %}
+        {% endfor %}
+        <a class="sidebar-item {{ 'active' if _is_index_page else '' }}"
+           {% if _is_index_page %}aria-current="page"{% endif %}
+           href="{{ url_for('index_page', vendor=vendor, library=library, ip=_ctx_ip, revision=_ctx_rev) }}">
+          <svg class="ico ico-sm sidebar-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8"/></svg>
+          <span class="sidebar-label">文件索引</span>
+        </a>
+
+        {% if available_tracks is defined and available_tracks %}
+        <div class="sidebar-subblock">
+          <div class="sidebar-group-label">业务 IP 轨道 ({{ available_tracks|length }})</div>
+          {% for t in available_tracks %}
+          <a class="sidebar-lib-item {{ 'active' if t.is_active else '' }}"
+             {% if t.is_active %}aria-current="page"{% endif %}
+             href="{{ url_for('index_page' if _is_index_page else 'library_page', vendor=vendor, library=library, ip=t.business_ip) }}"
+             title="{{ t.business_ip }} · {{ t.version_count }} 次交付 · {{ t.revision_count }} 版{% if t.accepted_revision %} · 已采纳 {{ t.accepted_revision }}{% endif %}">
+            <span class="sidebar-track-name" translate="no">
+              {% if t.accepted_revision %}<span class="track-pill-dot" aria-hidden="true"></span>{% endif %}
+              <span class="sidebar-lib-name">{{ t.business_ip }}</span>
+            </span>
+            <span class="sidebar-lib-vendor num">{{ t.revision_count }}版</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% set _libs_total = all_libraries_total if all_libraries_total is defined else (all_libraries|length if all_libraries else 0) %}
+      {% if _has_lib_ctx %}
+      <details class="sidebar-more-details">
+        <summary class="sidebar-more-summary">
+          <span>工作区与其他库 ({{ _libs_total }})</span>
+          <svg class="ico ico-sm sidebar-more-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+      {% endif %}
+
+      <div class="sidebar-group {{ 'sidebar-libs-group' if _has_lib_ctx else '' }}">
+        <div class="sidebar-group-label">工作区</div>
+        {% set _nav_items = [
+          ('activity',  '总览与动态',   'M3 12h4l3-9 4 18 3-9h4', none),
+          ('libraries', '来源库资产',   'M4 6h16M4 12h16M4 18h16', _libs_total),
+          ('catalog',   '跨库检索',     'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35', none),
+          ('pipeline',  '同步与数据链', 'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5', json_inventory.counts.total if json_inventory is defined and json_inventory else none),
+          ('config',    '工作区设置',   'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z', none)
+        ] %}
+        {% for vid, vlabel, vpath, vcount in _nav_items %}
+          {% set _is_active = (_is_overview_page and _cur_domain == vid) %}
+          {% if _is_overview_page %}
+          <button type="button"
+                  class="sidebar-item {{ 'active' if _is_active else '' }}"
+                  data-overview-nav="{{ vid }}"
+                  aria-current="{{ 'page' if _is_active else 'false' }}"
+                  onclick="switchOverviewView('{{ vid }}', this)">
+            <svg class="ico ico-sm sidebar-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{ vpath }}"/></svg>
+            <span class="sidebar-label">{{ vlabel }}</span>
+            {% if vcount is not none %}<span class="sidebar-badge num">{{ vcount }}</span>{% endif %}
+          </button>
+          {% else %}
+          <a class="sidebar-item" href="{{ url_for('overview', view=vid) }}">
+            <svg class="ico ico-sm sidebar-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{ vpath }}"/></svg>
+            <span class="sidebar-label">{{ vlabel }}</span>
+            {% if vcount is not none %}<span class="sidebar-badge num">{{ vcount }}</span>{% endif %}
+          </a>
+          {% endif %}
+        {% endfor %}
+      </div>
+
+      {% if all_libraries %}
+      <div class="sidebar-group sidebar-libs-group">
+        <div class="sidebar-group-head">
+          <span class="sidebar-group-label">{{ '切换其他库' if _has_lib_ctx else '来源库' }} ({{ _libs_total }})</span>
+        </div>
+        {% if _libs_total > 4 %}
+        <div class="sidebar-search-wrap">
+          <input type="search" id="sidebar-lib-filter" class="sidebar-search" aria-label="筛选侧边栏来源库" placeholder="快速查找库…" autocomplete="off" spellcheck="false" {% if sidebar_compact %}data-remote-search="1"{% endif %} oninput="filterSidebarLibraries(this.value)">
+        </div>
+        {% endif %}
+        <ul id="sidebar-lib-list" class="sidebar-lib-list">
+          {% for item in all_libraries %}
+          {% set _lib_active = (vendor is defined and library is defined and item.vendor == vendor and item.library == library) %}
+          <li data-search="{{ (item.vendor ~ ' ' ~ item.library)|lower }}">
+            <a class="sidebar-lib-item {{ 'active' if _lib_active else '' }}"
+               {% if _lib_active %}aria-current="page"{% endif %}
+               href="{{ url_for('library_page', vendor=item.vendor, library=item.library) }}"
+               title="{{ item.vendor }} / {{ item.library }}">
+              <span class="sidebar-lib-name" translate="no">{{ item.library }}</span>
+              <span class="sidebar-lib-vendor" translate="no">{{ item.vendor }}</span>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% if sidebar_compact %}
+        <div class="mt-xs">
+          <a class="sidebar-item text-xs" href="{{ url_for('overview', view='libraries') }}">查看全部 {{ _libs_total }} 个库 →</a>
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if _has_lib_ctx %}
+      </details>
+      {% endif %}
+    </nav>
+  </aside>
+
+  <main id="main-content" class="shell" tabindex="-1">
   <!-- 后台任务进度面板 -->
   <section id="async-job-panel" class="job-panel" hidden role="status" aria-live="polite" aria-label="后台任务监控">
     <div class="job-panel-head">
@@ -103,6 +268,7 @@
     <span><span translate="no">AI LIB</span> · 只读浏览 · 变更均留痕审计 · <a href="{{ url_for('api_overview') }}" target="_blank" rel="noopener noreferrer">JSON 接口</a></span>
   </footer>
 </main>
+</div>
 
 <dialog id="confirm-dialog" class="confirm-modal" aria-labelledby="confirm-title" aria-describedby="confirm-message">
   <div class="confirm-head"><h3 id="confirm-title">确认操作</h3></div>

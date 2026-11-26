@@ -2,20 +2,27 @@
 import json
 import os
 from pathlib import Path
+import time
 import uuid
 
 from ai_lib_qor.application.facts_pool import load_check_bundle, resolve_check_file
 from ai_lib_qor.application.path_acceptance import acceptance_status
-from ai_lib_qor.application.path_query import PathDataQuery
+from ai_lib_qor.application.path_query import PathDataQuery, build_track_index_view
 from ai_lib_qor.sources.layout import library_folder
 from ai_lib_qor.versions.store import validate
 from .excel import render_excel
 from .overall_excel import render_overall_excel
+from .timeline_excel import (
+    baseline_display_label,
+    build_timeline_model,
+    render_timeline_excel_for_scope,
+    timeline_excel_filename,
+)
 
 
-def _safe_acceptance(work, vendor, library):
+def _safe_acceptance(work, vendor, library, business_ip=None):
     try:
-        return acceptance_status(work, vendor, library, limit=5)
+        return acceptance_status(work, vendor, library, business_ip=business_ip, limit=5)
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
@@ -56,28 +63,38 @@ def render_excel_from_check(work, vendor, library, check_filename, excel_path=No
         raise ValueError('Excel 输出路径不能为软链接')
     excel_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = excel_path.parent / f'.{excel_path.stem}.{uuid.uuid4().hex}.tmp.xlsx'
-    acceptance = _safe_acceptance(work, vendor, library)
+    rendered_at = time.time_ns()
+    acceptance = _safe_acceptance(work, vendor, library, business_ip=report.get('business_ip'))
     try:
         render_excel(
             {**report, '_path_context': {'index': bundle['index'], 'facts': bundle['facts'], 'acceptance': acceptance, 'unavailable_facts': bundle['unavailable_facts']}},
             tmp,
         )
+        # Anchor cache freshness before reading acceptance, including changes during rendering.
+        os.utime(tmp, ns=(rendered_at, rendered_at))
         os.replace(tmp, excel_path)
     finally:
         tmp.unlink(missing_ok=True)
     return str(excel_path)
 
 
-def render_overall_excel_rows(work, vendor, library, rows, excel_path):
-    """Render library-level multi-revision overall Excel atomically."""
+def render_overall_excel_rows(work, vendor, library, rows, excel_path, *, business_ip=None, ip_type=None):
+    """Render library-level or business-IP-track multi-revision overall Excel atomically."""
     excel_path = Path(excel_path)
     if excel_path.is_symlink():
         raise ValueError('Excel 输出路径不能为软链接')
     excel_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = excel_path.parent / f'.{excel_path.stem}.{uuid.uuid4().hex}.tmp.xlsx'
-    acceptance = _safe_acceptance(work, vendor, library)
+    rendered_at = time.time_ns()
+    acceptance = _safe_acceptance(work, vendor, library, business_ip=business_ip)
+    owner = {'vendor': vendor, 'library': library}
+    if business_ip:
+        owner['ip'] = business_ip
+    if ip_type:
+        owner['ip_type'] = ip_type
     try:
-        render_overall_excel({'vendor': vendor, 'library': library}, rows, tmp, acceptance=acceptance)
+        render_overall_excel(owner, rows, tmp, acceptance=acceptance)
+        os.utime(tmp, ns=(rendered_at, rendered_at))
         os.replace(tmp, excel_path)
     finally:
         tmp.unlink(missing_ok=True)
@@ -92,6 +109,12 @@ def render_overall_excel_from_saved(work, vendor, library, overall_filename, exc
     saved = json.loads(overall_path.read_text(encoding='utf-8'))
     if (saved.get('vendor'), saved.get('library')) != (vendor, library) or not isinstance(saved.get('versions'), list):
         raise ValueError('整体运行记录与当前库归属不一致或格式无效')
+    business_ip = saved.get('business_ip')
+    ip_type = saved.get('ip_type')
+    if business_ip:
+        index, eff_ip_type, _ = build_track_index_view(folder, vendor, library, index, business_ip)
+        if ip_type is None:
+            ip_type = eff_ip_type
     available = index.get('revisions') or []
     rows = []
     for entry in saved['versions']:
@@ -150,4 +173,12 @@ def render_overall_excel_from_saved(work, vendor, library, overall_filename, exc
             'comparison_count': len(check['comparisons']),
         })
     target = overall_path.with_suffix('.xlsx') if excel_path is None else Path(excel_path)
-    return render_overall_excel_rows(work, vendor, library, rows, target)
+    return render_overall_excel_rows(
+        work,
+        vendor,
+        library,
+        rows,
+        target,
+        business_ip=business_ip,
+        ip_type=ip_type,
+    )

@@ -1,5 +1,6 @@
 {% macro filters(inv, endpoint, anchor, scope={}, libraries=none) %}
-<form class="toolbar toolbar-surface" method="get" action="{{ url_for(endpoint, _anchor=anchor) }}">
+{% set _has_filter = (inv.query.json_layer or inv.query.json_status or inv.query.json_scope or inv.query.json_q or (inv.query.json_sort and inv.query.json_sort != 'priority')) %}
+<form class="toolbar toolbar-surface" method="get" action="{{ url_for(endpoint, _anchor=anchor) }}" data-auto-filter="1">
   {% for key, value in scope.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
   <div class="toolbar-group">
     <select name="json_layer" class="ctrl-sm" aria-label="按层级筛选 JSON">
@@ -31,9 +32,13 @@
     </select>
   </div>
   <div class="toolbar-group">
-    <input type="search" name="json_q" value="{{ inv.query.json_q }}" class="ctrl-sm" aria-label="搜索 JSON" placeholder="搜索文件名或库名">
-    <button type="submit" class="secondary btn-sm">筛选</button>
-    <a class="btn ghost btn-sm" href="{{ url_for(endpoint, _anchor=anchor, **scope) }}">清除筛选</a>
+    <div class="search-wrap">
+      <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" name="json_q" value="{{ inv.query.json_q }}" class="search-input ctrl-sm" aria-label="搜索 JSON" placeholder="搜索文件名或库名…" autocomplete="off" spellcheck="false">
+    </div>
+    {% if _has_filter %}
+    <a class="btn ghost btn-sm" href="{{ url_for(endpoint, _anchor=anchor, **scope) }}">重置</a>
+    {% endif %}
   </div>
 </form>
 {% endmacro %}

@@ -472,12 +472,21 @@ def parse_lef_data_file(
     path: str | Path,
     *,
     full_geometry_max_bytes: int = LEF_FULL_GEOMETRY_MAX_BYTES,
+    errors: str = "ignore",
+    stream_override=None,
 ) -> dict[str, Any]:
     source = Path(path)
     source_size_bytes = source.stat().st_size
     geometry_detail = "full" if source_size_bytes <= full_geometry_max_bytes else "counts_only"
+    if stream_override is not None:
+        return _parse_lef_lines(
+            stream_override,
+            source=str(source),
+            geometry_detail=geometry_detail,
+            source_size_bytes=source_size_bytes,
+        )
     opener = gzip.open if source.name.lower().endswith(".gz") else open
-    with opener(source, "rt", encoding="utf-8", errors="ignore") as handle:
+    with opener(source, "rt", encoding="utf-8", errors=errors) as handle:
         return _parse_lef_lines(
             handle,
             source=str(source),

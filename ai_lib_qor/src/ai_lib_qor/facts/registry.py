@@ -1,5 +1,8 @@
 """Pluggable View -> Parser registry for FileFacts extraction."""
+from contextlib import contextmanager
 import gzip
+import hashlib
+import io
 from pathlib import Path
 
 from ._compat.cdl import CDL_PARSER_VERSION, parse_cdl_data_file
@@ -8,6 +11,82 @@ from ._compat.liberty import LIBERTY_PARSER_VERSION, parse_liberty_interface_dat
 from ._compat.verilog import VERILOG_PARSER_VERSION, parse_verilog_data_file
 
 ADAPTER_VERSION = '1.0'
+
+
+class _HashingBinaryReader(io.BufferedIOBase):
+    """Transparent buffered binary proxy computing raw-file SHA-256 in a single streaming read pass."""
+
+    def __init__(self, raw):
+        self._raw = raw
+        self._hash = hashlib.sha256()
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._raw.read(size)
+        if chunk:
+            self._hash.update(chunk)
+        return chunk
+
+    def read1(self, size: int = -1) -> bytes:
+        fn = getattr(self._raw, 'read1', self._raw.read)
+        chunk = fn(size)
+        if chunk:
+            self._hash.update(chunk)
+        return chunk
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def writable(self) -> bool:
+        return False
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        # Underlying `raw` is closed by the outer `with path.open('rb')` context after hexdigest() drains it.
+        self._closed = True
+
+    def hexdigest(self) -> str:
+        # Drain any trailing unread bytes (e.g. gzip trailer) so SHA-256 always covers the entire file.
+        while True:
+            tail = self._raw.read(1024 * 1024)
+            if not tail:
+                break
+            self._hash.update(tail)
+        return self._hash.hexdigest()
+
+
+@contextmanager
+def _open_strict_text_single_pass(path: Path, *, digest_out: dict | None = None, newline=None):
+    """Open plain or .gz file once with strict UTF-8 decoding, optionally hashing raw bytes in the same pass."""
+    is_gz = path.name.lower().endswith('.gz')
+    if digest_out is None:
+        opener = gzip.open if is_gz else open
+        kwargs = {'encoding': 'utf-8', 'errors': 'strict'}
+        if newline is not None:
+            kwargs['newline'] = newline
+        with opener(path, 'rt', **kwargs) as stream:
+            yield stream
+        return
+
+    with path.open('rb') as raw:
+        hashing = _HashingBinaryReader(raw)
+        if is_gz:
+            with gzip.GzipFile(fileobj=hashing, mode='rb') as gz_bin:
+                with io.TextIOWrapper(gz_bin, encoding='utf-8', errors='strict', newline=newline) as txt:
+                    yield txt
+        else:
+            with io.TextIOWrapper(hashing, encoding='utf-8', errors='strict', newline=newline) as txt:
+                yield txt
+        digest_out['sha256'] = hashing.hexdigest()
 
 
 def _unique(items, label):
@@ -24,10 +103,10 @@ def _strict_encoding(path):
             pass
 
 
-def parse_lef(path, *, allow_pg=False):
+def parse_lef(path, *, allow_pg=False, digest_out=None):
     path = Path(path)
-    _strict_encoding(path)
-    parsed = parse_lef_data_file(path)
+    with _open_strict_text_single_pass(path, digest_out=digest_out) as stream:
+        parsed = parse_lef_data_file(path, errors='strict', stream_override=stream)
     coverage = parsed['semantic_coverage']
     if coverage['macro_set'] != 'PRESENT' or coverage['port_set'] != 'PRESENT':
         raise ValueError('LEF 结构不完整或解析覆盖不足')
@@ -63,10 +142,10 @@ def parse_lef(path, *, allow_pg=False):
     }
 
 
-def parse_liberty(path, *, allow_pg=False):
+def parse_liberty(path, *, allow_pg=False, digest_out=None):
     path = Path(path)
-    _strict_encoding(path)
-    parsed = parse_liberty_interface_data_file(path)
+    with _open_strict_text_single_pass(path, digest_out=digest_out, newline='') as stream:
+        parsed = parse_liberty_interface_data_file(path, errors='strict', stream_override=stream)
     if parsed['semantic_coverage']['port_set'] != 'PRESENT':
         raise ValueError('Liberty 结构不完整或接口覆盖不足')
     cells = []

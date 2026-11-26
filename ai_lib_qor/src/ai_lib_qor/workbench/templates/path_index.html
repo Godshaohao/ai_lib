@@ -3,7 +3,7 @@
 {% block breadcrumbs %}
   <a href="{{ url_for('overview') }}">来源总览</a>
   <span class="crumb-sep" aria-hidden="true">/</span>
-  <a href="{{ url_for('library_page',vendor=vendor,library=library,revision=revision) }}" translate="no">{{ vendor }} · {{ library }}</a>
+  <a href="{{ url_for('library_page',vendor=vendor,library=library,ip=business_ip,revision=revision) }}" translate="no">{{ vendor }} · {{ library }}{% if business_ip %} / {{ business_ip }}{% endif %}</a>
   <span class="crumb-sep" aria-hidden="true">/</span>
   <span class="crumb-curr">文件索引</span>
 {% endblock %}
@@ -11,12 +11,12 @@
 {% block content %}
 <div class="page-head">
   <div class="page-title-group">
-    <div class="page-eyebrow">文件索引 · <span translate="no">{{ vendor }} / {{ library }}</span></div>
+    <div class="page-eyebrow">文件索引 · <span translate="no">{{ vendor }} / {{ library }}{% if business_ip %} :: {{ business_ip }}{% endif %}</span></div>
     <h1>文件历史与来源对照</h1>
     <p>按文件路径对照 RAW 交付、Formal 快照与有效版本采用记录。</p>
   </div>
   <div class="toolbar-group">
-    <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library,revision=revision) }}">
+    <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library,ip=business_ip,revision=revision) }}">
       <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
       返回库与版本
     </a>
@@ -26,20 +26,43 @@
   </div>
 </div>
 
+{% if track_info and track_info.is_multi_track %}
+<nav class="track-switcher" aria-label="业务 IP 轨道切换">
+  <div class="track-switcher-main">
+    <span class="track-switcher-label">业务 IP 轨道</span>
+    {% if track_info.ip_type %}<span class="chip" translate="no">{{ track_info.ip_type }}</span>{% endif %}
+    <div class="track-pills">
+      {% for t in available_tracks %}
+      <a class="track-pill {{ 'active' if t.is_active else '' }}"
+         {% if t.is_active %}aria-current="page"{% endif %}
+         href="{{ url_for('index_page',vendor=vendor,library=library,ip=t.business_ip,view=view,q=q,delivery=delivery,nl_version=nl_version,adoption=adoption,nl_rel=nl_rel) }}"
+         translate="no">
+        {% if t.accepted_revision %}<span class="track-pill-dot" aria-hidden="true" title="已采纳 {{ t.accepted_revision }}"></span>{% endif %}
+        <span>{{ t.business_ip }}</span>
+        <span class="track-pill-meta">{{ t.revision_count }}版</span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  <span class="muted text-xs">物理文件索引共享，有效版本归属按所选业务 IP 轨道投影</span>
+</nav>
+{% endif %}
+
 {% if error %}
 <div class="notice bad" role="alert"><strong>索引不可用</strong><span>{{ error }}。请返回库页面刷新索引。</span></div>
 {% else %}
 <section class="card" aria-label="文件索引筛选与清单">
-  <form method="get">
+  <form method="get" data-auto-filter="1">
     <input type="hidden" name="vendor" value="{{ vendor }}">
     <input type="hidden" name="library" value="{{ library }}">
+    {% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}
     <!-- 对照基准上下文 -->
     <div class="context-strip">
       <div class="toolbar-group">
         <span class="context-strip-label">对照基准</span>
         {% if index.revisions %}
         <label for="idx-rev-select" class="context-field-label">有效版本</label>
-        <select id="idx-rev-select" name="revision" class="ctrl-sm ctrl-bold" aria-label="目标有效版本" onchange="this.form.submit()">
+        <select id="idx-rev-select" name="revision" class="ctrl-sm ctrl-bold" aria-label="目标有效版本">
           {% for r in index.revisions|reverse %}
           <option value="{{ r }}" {% if r==revision %}selected{% endif %}>{{ r }}</option>
           {% endfor %}
@@ -47,12 +70,12 @@
         {% endif %}
         {% if nl_versions %}
         <label for="idx-nl-select" class="context-field-label ml-xs">Formal 阶段</label>
-        <select id="idx-nl-select" name="nl_version" class="ctrl-sm" aria-label="按 Formal 阶段筛选" onchange="this.form.submit()">
+        <select id="idx-nl-select" name="nl_version" class="ctrl-sm" aria-label="按 Formal 阶段筛选">
           {% for nv in nl_versions %}<option value="{{ nv }}" {% if nl_version==nv %}selected{% endif %}>{{ nv }}</option>{% endfor %}
         </select>
         {% endif %}
       </div>
-      <span class="muted num text-xs">匹配 {{ total }} 个文件路径</span>
+      <span class="muted num text-xs">匹配 {{ total }} 个文件路径 · 切换条件自动生效</span>
     </div>
     <!-- 行筛选条 -->
     <div class="toolbar">
@@ -82,8 +105,9 @@
           <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input type="search" name="q" value="{{ q }}" class="search-input ctrl-sm" aria-label="搜索路径或版本" placeholder="搜索路径或版本…" autocomplete="off" spellcheck="false">
         </div>
-        <button type="submit" class="btn-sm">筛选</button>
-        <a class="btn ghost btn-sm" href="{{ url_for('index_page',vendor=vendor,library=library,revision=revision) }}">重置</a>
+        {% if view or delivery or adoption or nl_rel or q %}
+        <a class="btn ghost btn-sm" href="{{ url_for('index_page',vendor=vendor,library=library,ip=business_ip,revision=revision) }}">重置</a>
+        {% endif %}
       </div>
     </div>
   </form>
@@ -151,7 +175,7 @@
                       <strong class="mono" translate="no">{{ x.version }}</strong>
                       {% if index.revisions %}
                       <form class="inline-form" method="post" action="{{ url_for('effective_preview') }}">
-                        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="action" value="set"><input type="hidden" name="view" value="{{ row.view }}"><input type="hidden" name="path" value="{{ row.path }}"><input type="hidden" name="version" value="{{ x.version }}">
+                        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}">{% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}<input type="hidden" name="action" value="set"><input type="hidden" name="view" value="{{ row.view }}"><input type="hidden" name="path" value="{{ row.path }}"><input type="hidden" name="version" value="{{ x.version }}">
                         <button type="submit" class="ghost btn-xs">预览选用</button>
                       </form>
                       {% endif %}
@@ -168,7 +192,7 @@
                   <div class="tl-item">
                     <div class="tl-item-head">
                       <span><span class="chip">{{ x.source_match|source_match_label }}</span> <strong class="ml-xs" translate="no">{{ x.version }}</strong></span>
-                      <span class="muted num text-xs" translate="no">{{ x.observed_at[:19].replace('T',' ') }}</span>
+                      <span class="muted num text-xs js-local-ts" data-utc-iso="{{ x.observed_at }}" data-fmt="datetime-sec" title="UTC: {{ x.observed_at }}" translate="no">{{ x.observed_at[:19].replace('T',' ') }}</span>
                     </div>
                     <div class="tl-kv">
                       <div class="tl-kv-row"><span class="tl-kv-key">链接</span><span class="mono tl-kv-val" translate="no">{{ x.link_path }}</span></div>
@@ -202,7 +226,7 @@
         <tr>
           <td colspan="6" class="empty">
             当前筛选条件下没有匹配的文件。
-            <a class="ml-xs" href="{{ url_for('index_page',vendor=vendor,library=library,revision=revision) }}">重置筛选条件</a>
+            <a class="ml-xs" href="{{ url_for('index_page',vendor=vendor,library=library,ip=business_ip,revision=revision) }}">重置筛选条件</a>
           </td>
         </tr>
         {% endfor %}
@@ -212,8 +236,8 @@
   <div class="pager">
     <span class="num">第 {{ page }} / {{ pages }} 页（共 {{ total }} 项）</span>
     <div class="toolbar-group">
-      {% if page>1 %}<a class="btn secondary btn-xs" href="{{ url_for('index_page',vendor=vendor,library=library,view=view,q=q,delivery=delivery,nl_version=nl_version,adoption=adoption,nl_rel=nl_rel,page=page-1,revision=revision) }}">上一页</a>{% endif %}
-      {% if page<pages %}<a class="btn secondary btn-xs" href="{{ url_for('index_page',vendor=vendor,library=library,view=view,q=q,delivery=delivery,nl_version=nl_version,adoption=adoption,nl_rel=nl_rel,page=page+1,revision=revision) }}">下一页</a>{% endif %}
+      {% if page>1 %}<a class="btn secondary btn-xs" href="{{ url_for('index_page',vendor=vendor,library=library,ip=business_ip,view=view,q=q,delivery=delivery,nl_version=nl_version,adoption=adoption,nl_rel=nl_rel,page=page-1,revision=revision) }}">上一页</a>{% endif %}
+      {% if page<pages %}<a class="btn secondary btn-xs" href="{{ url_for('index_page',vendor=vendor,library=library,ip=business_ip,view=view,q=q,delivery=delivery,nl_version=nl_version,adoption=adoption,nl_rel=nl_rel,page=page+1,revision=revision) }}">下一页</a>{% endif %}
     </div>
   </div>
 </section>
@@ -228,8 +252,8 @@
     </span>
   </summary>
   <form class="card-body panel-divider" method="post" action="{{ url_for('effective_preview') }}">
-    <p class="muted text-sm mb-md" style="margin-top:0">以最新有效版本 <strong class="mono" translate="no">{{ index.revisions[-1] }}</strong> 为父版本生成新版本；历史版本只读不可改写，常规更新建议通过自动同步推进。</p>
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}"><input type="hidden" name="action" value="batch">
+    <p class="muted text-sm mb-md" style="margin-top:0">以最新有效版本 <strong class="mono" translate="no">{{ index.revisions[-1] }}</strong>{% if business_ip %}（轨道 <span translate="no">{{ business_ip }}</span>）{% endif %} 为父版本生成新版本；历史版本只读不可改写，常规更新建议通过自动同步推进。</p>
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ vendor }}"><input type="hidden" name="library" value="{{ library }}">{% if business_ip %}<input type="hidden" name="ip" value="{{ business_ip }}">{% endif %}<input type="hidden" name="action" value="batch">
     {% for row in rows %}
     {% set row_number=loop.index0 %}
     <fieldset class="batch-fieldset">

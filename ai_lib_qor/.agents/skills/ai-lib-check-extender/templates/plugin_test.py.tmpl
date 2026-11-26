@@ -1,0 +1,47 @@
+"""Minimal regression test template for a new ai_lib_qor check plugin."""
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from ai_lib_qor.application.minimal_checks import run_revision
+from ai_lib_qor.application.path_config import save_path_config
+from ai_lib_qor.application.path_refresh import refresh_all
+
+_LEF = 'MACRO M1\n SIZE 2 BY 3 ;\n PIN A\n  DIRECTION INPUT ;\n END A\nEND M1\n'
+_LIB = 'library(demo) {\n cell(M1) {\n  pin(A) { direction : input; }\n }\n}\n'
+
+
+class NewPluginTests(unittest.TestCase):
+    def test_plugin_pass_and_fail(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw, nl, work = root / 'raw', root / 'NL1', root / 'work'
+            nl.mkdir()
+            work.mkdir()
+            v1 = raw / 'V1' / 'DEMO' / '20261001_v1'
+            (v1 / 'LEF').mkdir(parents=True)
+            (v1 / 'LIB').mkdir(parents=True)
+            (v1 / 'LEF' / 'm1.lef').write_text(_LEF, encoding='utf-8')
+            (v1 / 'LIB' / 'm1.lib').write_text(_LIB, encoding='utf-8')
+            (nl / 'm1.lef').symlink_to(v1 / 'LEF' / 'm1.lef')
+            (nl / 'm1.lib').symlink_to(v1 / 'LIB' / 'm1.lib')
+
+            save_path_config(work, {
+                'raw_roots': [str(raw)],
+                'nl_root': str(nl),
+                'nl_version': 'NL1',
+                'libraries': {'V1': {'DEMO': {'ip_type': 'STDCELL'}}},
+            })
+            refresh_all(work)
+
+            # run_revision validates CheckResult strictly against schemas/check_result_path.schema.json
+            res = run_revision(work, 'V1', 'DEMO', 'rev_0001', plugins=['<PLUGIN_ID>'], render=False)
+            report = json.loads(Path(res['check']).read_text(encoding='utf-8'))
+            hits = [c for c in report['checks'] if c['check_id'] == '<PLUGIN_ID>']
+            self.assertGreaterEqual(len(hits), 1)
+            self.assertIn(hits[0]['result'], ('PASS', 'FAIL', 'INCONCLUSIVE'))
+
+
+if __name__ == '__main__':
+    unittest.main()

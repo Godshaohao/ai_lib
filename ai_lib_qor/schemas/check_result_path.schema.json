@@ -34,6 +34,20 @@
       "type": "string",
       "minLength": 1
     },
+    "business_ip": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ip_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "track_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "revision": {
       "type": "string",
       "pattern": "^rev_[0-9]+$"
@@ -424,6 +438,73 @@
               "NOT_EXECUTED",
               "NOT_APPLICABLE"
             ]
+          }
+        },
+        "liberty_filter": {
+          "type": "object",
+          "properties": {
+            "applied": {
+              "type": "boolean"
+            },
+            "total_liberty_files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "selected_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "skipped_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "threshold": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "keywords": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "exclude_keywords": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "max_selected": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "fallback": {
+              "enum": [
+                "first_n",
+                "skip"
+              ]
+            },
+            "fallback_used": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "applied",
+            "total_liberty_files",
+            "selected_count",
+            "skipped_count"
+          ],
+          "additionalProperties": false
+        },
+        "skipped_views": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
           }
         }
       },

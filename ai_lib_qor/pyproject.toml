@@ -30,6 +30,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "ai_lib_qor.workbench" = ["templates/*.html", "static/*"]
+"ai_lib_qor.reporting" = ["script_templates/*"]
 
 [tool.setuptools.data-files]
 "share/ai_lib_qor/schemas" = ["schemas/*.schema.json"]

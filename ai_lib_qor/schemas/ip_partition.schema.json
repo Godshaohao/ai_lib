@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ai_lib_qor business IP partition configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "minLength": 1},
+    "vendor": {"type": ["string", "null"], "minLength": 1},
+    "library": {"type": ["string", "null"], "minLength": 1},
+    "ip_type": {"type": ["string", "null"]},
+    "ip_list": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "tracks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1}
+      }
+    },
+    "needs_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {"type": "string", "minLength": 1},
+              {
+                "type": "object",
+                "required": ["version"],
+                "properties": {
+                  "version": {"type": "string", "minLength": 1},
+                  "stage": {"type": "string"},
+                  "candidates": {"type": "array", "items": {"type": "string"}},
+                  "evidence": {},
+                  "reason": {"type": "string"}
+                },
+                "additionalProperties": true
+              }
+            ]
+          }
+        },
+        "unassigned": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {"type": "string", "minLength": 1},
+              {
+                "type": "object",
+                "required": ["version"],
+                "properties": {
+                  "version": {"type": "string", "minLength": 1},
+                  "reason": {"type": "string"}
+                },
+                "additionalProperties": true
+              }
+            ]
+          }
+        }
+      }
+    },
+    "auto_trace": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "ip": {"type": "string", "minLength": 1},
+          "stage": {"type": "string"},
+          "matched_by": {"type": "array", "items": {"type": "string"}},
+          "matched_at": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "updated_at": {"type": ["string", "null"]}
+  }
+}

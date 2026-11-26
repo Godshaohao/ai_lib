@@ -86,6 +86,7 @@ class MinimalCheckFlowTests(unittest.TestCase):
 
  def test_partial_netlist_differences_are_observations_not_pass(self):
   from ai_lib_qor.application.minimal_checks import run_revision
+  (self.work/'path_sources.json').write_text(json.dumps({'skip_parse_views':[]}))
   version='20261003_abcdef12';files={'VERILOG/a.v':'module A(output IN); endmodule\n',
                                       'CDL/a.cdl':'.SUBCKT A VDD IN\nR1 IN VDD 10\n.ENDS A\n',
                                       'SPICE/a.spice':'.SUBCKT A VDD IN\nR1 IN VDD 10\n.ENDS A\n'}

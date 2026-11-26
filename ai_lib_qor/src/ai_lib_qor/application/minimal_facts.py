@@ -1,11 +1,11 @@
 """Build path-based FileFacts from the validated minimal file index (single-hash stability verification)."""
-import csv
 import json
 from pathlib import Path
 import time
 
 from ai_lib_qor.facts import parsers
-from ai_lib_qor.sources.layout import library_folder, log_file, next_filename, storage_dir
+from ai_lib_qor.sources.layout import library_folder, next_filename, storage_dir
+from ai_lib_qor.sources.raw_paths import observed_raw_file, read_raw_observations
 from ai_lib_qor.sources.timestamps import instant, utc_text
 from ai_lib_qor.versions.store import locked, validate, write_atomic
 from .minimal_file_index import _RACY_WINDOW_NS, _relative, query_path
@@ -74,43 +74,20 @@ def build_facts(
     deliveries = [d for d in data['deliveries'] if d['version'] == source_version]
     if len(deliveries) != 1:
         raise ValueError('来源版本不唯一')
-    root = Path(deliveries[0]['root']).resolve(strict=True)
-    real = absolute.resolve(strict=True)
-    if not real.is_relative_to(root) or not real.is_file() or real != absolute:
-        raise ValueError('RAW 文件不存在、越界或包含符号链接')
-
-    if _raw_obs is not None:
-        rec = _raw_obs.get((source_version, relative_path))
-        if rec is not None:
-            stat = real.stat()
-            if (stat.st_size, stat.st_mtime_ns) != rec:
-                raise ValueError('RAW 文件相对首次观察已变化，不能当作历史文件解析')
-    else:
-        observation = log_file(folder, 'raw_observations.tsv')
-        if observation.is_symlink():
-            raise ValueError('RAW 观察记录不能为软链接')
-        if observation.is_file():
-            with observation.open(encoding='utf-8', newline='') as stream:
-                for recorded in csv.reader(stream, delimiter='\t'):
-                    if len(recorded) != 5:
-                        raise ValueError('RAW 观察记录格式无效')
-                    if recorded[:2] == [source_version, relative_path]:
-                        stat = real.stat()
-                        if (stat.st_size, stat.st_mtime_ns) != (int(recorded[2]), int(recorded[3])):
-                            raise ValueError('RAW 文件相对首次观察已变化，不能当作历史文件解析')
-                        break
+    observations = _raw_obs if _raw_obs is not None else read_raw_observations(folder)
+    record = observations.get((source_version, relative_path))
+    real = observed_raw_file(deliveries[0]['root'], relative_path, absolute, record)
 
     if _precomputed_stamp is not None:
         before, digest = _precomputed_stamp
         if _stat_key(real) != before:
             raise ValueError('读取 RAW 文件时发生变化')
+        payload = parsers.parse_file_payload(real, view, allow_pg=True)
     else:
         before = _stat_key(real)
-        digest = parsers._file_digest(real)
-        if _stat_key(real) != before:
-            raise ValueError('读取 RAW 文件时发生变化')
-
-    payload = parsers.parse_file_payload(real, view, allow_pg=True)
+        digest_box = {}
+        payload = parsers.parse_file_payload(real, view, allow_pg=True, digest_out=digest_box)
+        digest = digest_box.get('sha256') or parsers._file_digest(real)
     if _stat_key(real) != before:
         raise ValueError('解析期间 RAW 文件发生变化')
     # Only re-hash after parsing if the file was created within the 50ms racy clock window;
@@ -141,7 +118,7 @@ def build_facts(
         # Caller (check orchestrator) already verified the library archive at check start and will
         # re-verify under locked(folder) before publishing any pool blobs or CheckResult.
         # Keep per-file RAW identity stability check without repeating full-library archive enumeration.
-        if _stat_key(real) != before:
+        if observed_raw_file(deliveries[0]['root'], relative_path, absolute, record) != real or _stat_key(real) != before:
             raise ValueError('保存前 RAW 文件发生变化')
     else:
         with locked(folder):
@@ -151,7 +128,7 @@ def build_facts(
             entries = latest.get('effective' if revision else 'raw', [])
             if sum(x.get('version') == source_version and x.get('path') == str(absolute) and (not revision or x.get('revision') == revision) for x in entries) != 1:
                 raise ValueError('解析期间文件来源发生变化')
-            if _stat_key(real) != before:
+            if observed_raw_file(deliveries[0]['root'], relative_path, absolute, record) != real or _stat_key(real) != before:
                 raise ValueError('保存前 RAW 文件发生变化')
             stamp = instant(at).strftime('%Y%m%dT%H%M%SZ')
             if not _in_memory:

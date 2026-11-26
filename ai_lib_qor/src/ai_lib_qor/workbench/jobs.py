@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import socket
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -90,13 +92,15 @@ def _json_safe(obj):
 class JobManager:
     """Thread-safe & local-multi-process-safe background executor with disk persistence, progress, and cancellation."""
 
-    def __init__(self, *, max_workers: int = 2, max_history: int = 100, work_root=None):
+    def __init__(self, *, max_workers: int = 2, max_history: int = 100, work_root=None, subprocess_jobs: bool = False):
         self._max_workers = max_workers
         self._executor = None
         self._lock = threading.Lock()
         self._jobs = {}
         self._order = []
         self._max_history = max_history
+        self.subprocess_enabled = bool(subprocess_jobs)
+        self._active_procs: set = set()
         self._work_root = Path(work_root).resolve() if work_root is not None else None
         self._jobs_root = None
         self._jobs_dir = None
@@ -337,8 +341,96 @@ class JobManager:
         with self._lock:
             ex = self._executor
             self._executor = None
+            procs = list(self._active_procs)
+        for proc in procs:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except OSError:
+                pass
         if ex is not None:
             ex.shutdown(wait=wait)
+
+    def submit_subprocess(self, kind: str, label: str, spec: dict, *, scope_key: str | None = None) -> dict:
+        """Submit a heavy task to run in an isolated OS subprocess (no Web GIL contention, immediate RSS release)."""
+        def _run_in_subprocess(report_progress, cancel_event):
+            payload = dict(spec)
+            if getattr(cancel_event, '_cancel_path', None) is not None:
+                payload['cancel_path'] = str(cancel_event._cancel_path)
+            env = dict(os.environ)
+            src_root = str(Path(__file__).resolve().parents[2])
+            existing_pp = env.get('PYTHONPATH', '')
+            if src_root not in existing_pp.split(os.pathsep):
+                env['PYTHONPATH'] = src_root + (os.pathsep + existing_pp if existing_pp else '')
+            proc = subprocess.Popen(
+                [sys.executable, '-m', 'ai_lib_qor.workbench.job_worker'],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding='utf-8',
+                env=env,
+            )
+            with self._lock:
+                self._active_procs.add(proc)
+            try:
+                assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+                proc.stdin.write(json.dumps(payload, ensure_ascii=False, default=str))
+                proc.stdin.close()
+                result_data = None
+                err_msg = None
+                cancelled_msg = None
+                for raw_line in proc.stdout:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+                    except ValueError:
+                        continue
+                    ev_type = msg.get('event')
+                    if ev_type == 'progress':
+                        report_progress(
+                            msg.get('stage', 'RUNNING'),
+                            msg.get('message', ''),
+                            completed=msg.get('completed'),
+                            total=msg.get('total'),
+                        )
+                    elif ev_type == 'result':
+                        result_data = msg.get('data')
+                    elif ev_type == 'cancelled':
+                        cancelled_msg = msg.get('error') or '任务已终止'
+                    elif ev_type == 'error':
+                        err_msg = msg.get('error') or '子进程执行失败'
+                stderr_txt = proc.stderr.read().strip()
+                rc = proc.wait()
+                if cancelled_msg is not None or cancel_event.is_set():
+                    raise JobCancelledError(cancelled_msg or '任务已由用户终止')
+                if err_msg is not None:
+                    raise RuntimeError(err_msg)
+                if rc != 0:
+                    raise RuntimeError(stderr_txt or f'子进程异常退出 (exit={rc})')
+                return result_data
+            finally:
+                with self._lock:
+                    self._active_procs.discard(proc)
+                for pipe in (proc.stdin, proc.stdout, proc.stderr):
+                    if pipe is not None:
+                        try:
+                            pipe.close()
+                        except OSError:
+                            pass
+                if proc.poll() is None:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=3)
+                    except (OSError, subprocess.TimeoutExpired):
+                        try:
+                            proc.kill()
+                        except OSError:
+                            pass
+
+        return self.submit(kind, label, _run_in_subprocess, scope_key=scope_key)
 
     def submit(self, kind: str, label: str, fn, *, scope_key: str | None = None) -> dict:
         """Submit a callable `fn(report_progress, cancel_event)` to run in background."""
@@ -449,7 +541,12 @@ class JobManager:
                         record['status'] = refresh_status if refresh_status in ('PARTIAL', 'FAILED') else 'SUCCEEDED'
                         record['stage'] = 'DONE'
                         if record['status'] in ('PARTIAL', 'FAILED'):
-                            record['message'] = f"{label}：{res['indexes_failed']} 个库索引刷新失败"
+                            details = []
+                            if res.get('effective_failed'):
+                                details.append(f"有效版本推进失败 {res['effective_failed']} 个库")
+                            if res.get('indexes_failed'):
+                                details.append(f"索引刷新失败 {res['indexes_failed']} 个库")
+                            record['message'] = f"{label} · {' · '.join(details)}"
                         elif refresh_status == 'SKIPPED':
                             record['message'] = '同步选项均已关闭'
                         else:

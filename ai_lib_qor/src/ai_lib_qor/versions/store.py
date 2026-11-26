@@ -13,7 +13,9 @@ Note on Multi-Host / NFS Deployments:
     (no timeout-based lock stealing that could violate mutual exclusion against live holders).
     Cross-host NFS/HPC deployments require dedicated environment-verified distributed locking.
 """
+from collections import OrderedDict
 import contextlib
+import copy
 import fcntl
 import functools
 from importlib import resources as importlib_resources
@@ -29,6 +31,11 @@ from jsonschema import Draft202012Validator
 
 SCHEMAS = Path(__file__).resolve().parents[3] / 'schemas'
 _LOCK_STACK = threading.local()
+_READ_CACHE_LOCK = threading.Lock()
+_READ_CACHE: OrderedDict = OrderedDict()
+_READ_CACHE_MAX = 8192
+_INDEX_READ_CACHE: OrderedDict = OrderedDict()
+_INDEX_READ_CACHE_MAX = 64
 
 
 def now():
@@ -53,6 +60,19 @@ def _resolve_schema_path(name: str) -> Path:
     return direct
 
 
+class _CachedValidationError:
+    __slots__ = ('message',)
+
+    def __init__(self, message: str):
+        self.message = message
+
+
+def _schema_stamp(name: str) -> tuple[str, int, int]:
+    path = _resolve_schema_path(name)
+    st = path.stat()
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
 @functools.lru_cache(maxsize=64)
 def _compiled_validator(schema_path_str: str, mtime_ns: int, size: int) -> Draft202012Validator:
     schema = json.loads(Path(schema_path_str).read_text(encoding='utf-8'))
@@ -60,18 +80,57 @@ def _compiled_validator(schema_path_str: str, mtime_ns: int, size: int) -> Draft
 
 
 def validate(data, name):
-    path = _resolve_schema_path(name)
-    st = path.stat()
-    validator = _compiled_validator(str(path), st.st_mtime_ns, st.st_size)
+    schema_path_str, mtime_ns, size = _schema_stamp(name)
+    validator = _compiled_validator(schema_path_str, mtime_ns, size)
     errors = sorted(validator.iter_errors(data), key=lambda e: str(list(e.absolute_path)))
     if errors:
-        raise ValueError(f'{name} Schema 校验失败: {errors[0].message}')
+        path_txt = '.'.join(str(p) for p in errors[0].absolute_path)
+        loc = f' ({path_txt})' if path_txt else ''
+        raise ValueError(f'{name} Schema 校验失败{loc}: {errors[0].message}')
+
+
+def _read_json_cached(path, schema=None):
+    """Thread-safe stat+schema-verified JSON read cache (isolates large file_index_path from metadata churn)."""
+    p = Path(path)
+    st = p.stat()
+    schema_key = _schema_stamp(schema) if schema is not None else None
+    key = (str(p.resolve()), st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino, schema, schema_key)
+    bucket = _INDEX_READ_CACHE if schema == 'file_index_path' else _READ_CACHE
+    limit = _INDEX_READ_CACHE_MAX if schema == 'file_index_path' else _READ_CACHE_MAX
+    with _READ_CACHE_LOCK:
+        hit = bucket.get(key)
+        if hit is not None:
+            bucket.move_to_end(key)
+            if isinstance(hit, _CachedValidationError):
+                raise ValueError(hit.message)
+            return hit
+    try:
+        data = json.loads(p.read_text(encoding='utf-8'))
+        if schema is not None:
+            validate(data, schema)
+    except ValueError as exc:
+        err = _CachedValidationError(str(exc))
+        with _READ_CACHE_LOCK:
+            bucket[key] = err
+            bucket.move_to_end(key)
+            while len(bucket) > limit:
+                bucket.popitem(last=False)
+        raise
+    with _READ_CACHE_LOCK:
+        bucket[key] = data
+        bucket.move_to_end(key)
+        while len(bucket) > limit:
+            bucket.popitem(last=False)
+    return data
+
+
+def read_json_readonly(path, schema=None):
+    """Return stat-verified cached JSON object for strictly read-only callers (callers must NOT mutate)."""
+    return _read_json_cached(path, schema)
 
 
 def read_json(path, schema):
-    data = json.loads(Path(path).read_text(encoding='utf-8'))
-    validate(data, schema)
-    return data
+    return copy.deepcopy(_read_json_cached(path, schema))
 
 
 def _held_locks() -> list[Path]:

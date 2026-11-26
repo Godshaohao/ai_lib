@@ -1,0 +1,62 @@
+"""Manifest-level check plugin boilerplate (needs_facts=False, zero binary disk reads)."""
+from pathlib import Path
+
+PLUGIN_ID = '<PLUGIN_ID>'
+
+
+def run_<plugin_func>(ctx: dict) -> dict:
+    """Check effective revision manifest entries without reading raw binary file contents."""
+    target = ctx.get('target') or {}
+    params = (ctx.get('plugin_params') or {}).get(PLUGIN_ID) or {}
+    explicit = bool(ctx.get('explicit_plugins'))
+
+    # 1. Collect target files by View from ctx['target'] (already scoped to vendor/library/business_ip/revision)
+    matched_paths = sorted(path for (view, path) in target if view in ('LIBERTY', 'DB'))
+    if not matched_paths and not explicit:
+        return {'checks': []}
+
+    # 2. Evaluate rules purely from paths + params
+    findings = []
+    # Example finding:
+    # findings.append({
+    #     'view': 'DB',
+    #     'path': rel_path,
+    #     'object_type': 'MANIFEST_RULE',
+    #     'object_name': Path(rel_path).name,
+    #     'diff_type': 'VIOLATION',
+    #     'detail': '具体缺失或违规原因',
+    # })
+
+    result = 'FAIL' if findings else 'PASS'
+    severity = 'ERROR' if findings else 'INFO'
+    detail = (
+        f'发现 {len(findings)} 处不合规项（仅基于有效版本文件清单核验）'
+        if findings
+        else f'已核验 {len(matched_paths)} 个文件，全部符合清单规则（仅基于有效版本文件清单，不代表内容等价）'
+    )
+    return {
+        'checks': [{
+            'check_id': PLUGIN_ID,
+            'scope_file_keys': matched_paths,
+            'result': result,
+            'severity': severity,
+            'coverage': 'MANIFEST',
+            'facts_refs': [],
+            'detail': detail,
+            'findings': findings,
+        }],
+    }
+
+
+# External plugin_modules usage (omit if registering centrally in checks/path_plugins.py):
+# from ai_lib_qor.checks.path_plugins import register_path_plugin
+# register_path_plugin(
+#     PLUGIN_ID,
+#     run_<plugin_func>,
+#     version='1.0',
+#     description='<简明中文规则描述>',
+#     required_views=('LIBERTY', 'DB'),
+#     requires_baseline=False,
+#     needs_facts=False,
+#     category='MANIFEST',
+# )

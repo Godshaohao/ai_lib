@@ -57,6 +57,8 @@ def build_path_workbook_spec(report):
     owner = report['library']
     revision = report['revision']
     baseline = report.get('baseline')
+    is_prev_file_mode = (baseline == '__prev_file__')
+    baseline_display = '按文件上一时间版本' if is_prev_file_mode else (baseline or '无基线')
     files = report.get('files') or []
     checks = report.get('checks') or []
     changes = report.get('changes') or []
@@ -84,7 +86,17 @@ def build_path_workbook_spec(report):
             raw = row.get('raw') or []
             total_raw_occ += len(raw)
             current = next((x for x in row.get('effective', []) if x['revision'] == revision), None)
-            before = next((x for x in row.get('effective', []) if x['revision'] == baseline), None) if baseline else None
+            if is_prev_file_mode:
+                comp_hit = comp_by_key.get((view, path)) or partial_by_key.get((view, path))
+                if comp_hit and comp_hit.get('baseline_version'):
+                    before = {'version': comp_hit['baseline_version']}
+                elif current is not None:
+                    pos = next((i for i, r in enumerate(raw) if r.get('version') == current['version']), -1)
+                    before = {'version': raw[pos - 1]['version']} if pos > 0 else None
+                else:
+                    before = None
+            else:
+                before = next((x for x in row.get('effective', []) if x['revision'] == baseline), None) if baseline else None
             item = parsed_by_key.get((view, path))
 
             in_curr = current is not None
@@ -97,7 +109,7 @@ def build_path_workbook_spec(report):
             if in_curr and in_base:
                 src_rel = '来源相同' if before['version'] == current['version'] else '来源变化'
             elif in_curr and not in_base:
-                src_rel = '首版纳入' if baseline is None else '新增'
+                src_rel = '首版纳入' if (baseline is None or is_prev_file_mode) else '新增'
             elif not in_curr and in_base:
                 src_rel = '移除'
             else:
@@ -108,7 +120,11 @@ def build_path_workbook_spec(report):
             if not in_curr:
                 parse_lbl = '已移除' if in_base else '未纳入有效集'
             elif not item or item.get('status') == 'NOT_CHECKED':
-                parse_lbl = '暂不支持(NOT_CHECKED)'
+                parse_lbl = (
+                    '按配置跳过(NOT_CHECKED)'
+                    if (item and ('liberty_parse_filter' in str(item.get('note', '')) or 'skip_parse_views' in str(item.get('note', ''))))
+                    else '暂不支持(NOT_CHECKED)'
+                )
                 parse_counts['NOT_CHECKED'] += 1
             elif item.get('status') == 'FAILED':
                 parse_lbl = '解析失败'
@@ -450,6 +466,9 @@ def build_path_workbook_spec(report):
     verdict_zh, verdict_code = _quality_verdict(report)
     run_state_zh = _RUN_STATE_ZH.get(report.get('state', ''), report.get('state', ''))
     latest_rev = index['revisions'][-1] if index.get('revisions') else '无'
+    business_ip = report.get('business_ip')
+    ip_type = report.get('ip_type')
+    acc_pointer_name = f'accepted_effective__{business_ip}.json' if business_ip else 'accepted_effective.json'
     if isinstance(acceptance, dict):
         acc_rev = acceptance.get('accepted_revision')
         if acc_rev is None:
@@ -460,14 +479,18 @@ def build_path_workbook_spec(report):
             acc_status = f'已采纳 {acc_rev}（非本次检查版本）'
     else:
         acc_rev = None
-        acc_status = '未读取（请核对 accepted_effective.json）'
+        acc_status = f'未读取（请核对 {acc_pointer_name}）'
 
     pass_checks = sum(1 for q in checks if q.get('result') == 'PASS')
     fail_checks = summary.get('failed_checks', 0)
     inc_checks = summary.get('inconclusive_checks', 0)
     fail_files = summary.get('failed_files', 0)
     curr_total = sum(len(v) for v in current_views.values())
-    scope_line = f"供应商: {vendor or '未指定'}  |  库: {owner}  |  目标版本: {revision}  |  基线: {baseline or '无基线'}  |  执行时间: {report.get('run_at', '')}"
+    track_scope = (
+        f"  |  业务 IP: {business_ip}" + (f" ({ip_type})" if ip_type else "")
+        if business_ip else ""
+    )
+    scope_line = f"供应商: {vendor or '未指定'}  |  库: {owner}{track_scope}  |  目标版本: {revision}  |  基线: {baseline_display}  |  执行时间: {report.get('run_at', '')}"
 
     # Action recommendation banner tailored to exact decision state
     if verdict_code == 'FAIL':
@@ -484,14 +507,15 @@ def build_path_workbook_spec(report):
     elif verdict_code == 'SCOPE_PASS' and acc_rev == revision:
         action_callout = (
             'ok',
-            f"【已采纳放行】{revision} 已通过全部已覆盖范围检查，且与当前人工采纳指针 (accepted_effective) 一致。"
+            f"【已采纳放行】{revision} 已通过全部已覆盖范围检查，且与当前人工采纳指针 ({acc_pointer_name}) 一致。"
             f"若需检查未覆盖视图（GDS/DB/PVT/时序），请结合专项工具核验。",
         )
     elif verdict_code == 'SCOPE_PASS':
+        accept_cmd = f"accept-revision --revision {revision}" + (f" --ip {business_ip}" if business_ip else "")
         action_callout = (
             'info',
             f"【可推进人工复核】已覆盖范围检查全部通过（通过 {pass_checks} / 失败 0）；"
-            f"请确认「02-文件版本矩阵」中的覆盖范围与 Formal NL 状态无异议后，执行 accept-revision --revision {revision} 完成人工采纳。",
+            f"请确认「02-文件版本矩阵」中的覆盖范围与 Formal NL 状态无异议后，执行 {accept_cmd} 完成人工采纳。",
         )
     else:
         action_callout = (
@@ -563,20 +587,26 @@ def build_path_workbook_spec(report):
          'Formal NL 正式库软链对照与内容寻址 FileFacts 磁盘溯源清单'],
     ]
 
+    title_owner = f'{owner} / {business_ip}' if business_ip else owner
+    identity_cards = [
+        ('供应商 (Vendor)', vendor or '未指定', '来源库 (Library)', owner),
+    ]
+    if business_ip:
+        identity_cards.append(('业务 IP 轨道', business_ip, 'IP 类型 (ip_type)', ip_type or '未分类'))
+    identity_cards.extend([
+        ('目标有效版本', revision, '对比基线版本', baseline_display),
+        ('质检结论', verdict_zh, '运行状态', run_state_zh),
+        ('人工采纳状态', acc_status, '最新计算版本', latest_rev),
+        ('Run ID', report['run_id'], '执行时间 (UTC)', report.get('run_at', '')),
+    ])
     overview_spec = {
         'name': '00-决策概览',
         'kind': 'overview',
         'tab_color': '#1B365D',
-        'title': f'IP 库质量检查决策报告 · {vendor + " / " if vendor else ""}{owner} ({revision})',
+        'title': f'IP 库质量检查决策报告 · {vendor + " / " if vendor else ""}{title_owner} ({revision})',
         'subtitle': f"Run ID: {report['run_id']}  |  执行时间: {report.get('run_at', '')}  |  本报告仅反映已保存 CheckResult 与归档记录，未检查项不视为通过。",
         'action_callout': action_callout,
-        'identity_cards': [
-            ('供应商 (Vendor)', vendor or '未指定', '来源库 (Library)', owner),
-            ('目标有效版本', revision, '对比基线版本', baseline or '无基线'),
-            ('质检结论', verdict_zh, '运行状态', run_state_zh),
-            ('人工采纳状态', acc_status, '最新计算版本', latest_rev),
-            ('Run ID', report['run_id'], '执行时间 (UTC)', report.get('run_at', '')),
-        ],
+        'identity_cards': identity_cards,
         'kpi_cards': [
             ('有效集成员总数', curr_total, '已解析 / 部分解析', f"{parse_counts['PARSED']} / {parse_counts['PARTIAL']}"),
             ('暂不支持 (NOT_CHECKED)', parse_counts['NOT_CHECKED'], '解析失败文件', fail_files),
@@ -673,7 +703,7 @@ def build_path_workbook_spec(report):
             'tab_color': '#334155',
             'back_sheet': '00-决策概览',
             'subtotal': matrix_subtotal,
-            'title': f'02 · 文件版本与状态矩阵 — {owner} ({revision} vs {baseline or "无基线"})',
+            'title': f'02 · 文件版本与状态矩阵 — {owner} ({revision} vs {baseline_display})',
             'subtitle': scope_line + '  |  当前有效集成员置顶；明确区分「未纳入当前有效集」与「暂不支持(NOT_CHECKED)」。',
             'headers': ['有效集归属', 'View', '相对路径', '来源关系', '基线来源版本', '目标来源版本', '解析状态', '内容对比结论', 'Formal NL 现状', 'RAW 版本数', 'RAW 最新版本', '目标 RAW 绝对路径'],
             'rows': matrix_table,
@@ -698,7 +728,7 @@ def build_path_workbook_spec(report):
             'kind': 'table',
             'tab_color': diff_tab,
             'back_sheet': '00-决策概览',
-            'title': f'03 · 对象变化与接口差异明细 — {owner} ({revision} vs {baseline or "无基线"})',
+            'title': f'03 · 对象变化与接口差异明细 — {owner} ({revision} vs {baseline_display})',
             'subtitle': scope_line + diff_sub_extra,
             'headers': ['差异来源', 'View', '相对路径', '对象类型', '对象名称', '差异类型', '旧值 / LEF参考', '新值 / Liberty实测', '说明与变化量', '证据文件'],
             'rows': diff_rows,

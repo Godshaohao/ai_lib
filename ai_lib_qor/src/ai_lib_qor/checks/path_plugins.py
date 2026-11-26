@@ -1,5 +1,7 @@
-"""Pluggable QoR check plugin registry with metadata for path-based FileFacts."""
+"""Pluggable QoR check plugin registry with metadata for path-based FileFacts & manifests."""
 from .plugins import lef_liberty_pin_match, lef_macro_diff
+from .plugins.lib_db_pairing import run_lib_db_pairing
+from .plugins.liberty_corner_coverage import run_liberty_corner_coverage
 
 
 def run_lef_liberty_pin_match(ctx):
@@ -173,6 +175,8 @@ PATH_CHECK_PLUGINS = {
     'LEF_MACRO_DIFF': run_lef_macro_diff,
     'VERILOG_PARTIAL_DIFF': run_verilog_partial_diff,
     'NETLIST_PARTIAL_DIFF': run_netlist_partial_diff,
+    'LIB_DB_PAIRING': run_lib_db_pairing,
+    'LIBERTY_CORNER_COVERAGE': run_liberty_corner_coverage,
 }
 
 PATH_CHECK_PLUGIN_META = {
@@ -181,24 +185,48 @@ PATH_CHECK_PLUGIN_META = {
         'description': 'LEF/Liberty 信号 Pin 一致性核验',
         'required_views': ('LEF', 'LIBERTY'),
         'requires_baseline': False,
+        'needs_facts': True,
+        'category': 'FACTS',
     },
     'LEF_MACRO_DIFF': {
         'version': '1.0',
         'description': 'LEF Macro SIZE 与 Pin 跨版本对比',
         'required_views': ('LEF',),
         'requires_baseline': True,
+        'needs_facts': True,
+        'category': 'DIFF',
     },
     'VERILOG_PARTIAL_DIFF': {
         'version': '1.0',
         'description': 'Verilog 轻量模块端口对比（PARTIAL）',
         'required_views': ('VERILOG',),
         'requires_baseline': True,
+        'needs_facts': True,
+        'category': 'DIFF',
     },
     'NETLIST_PARTIAL_DIFF': {
         'version': '1.0',
-        'description': 'CDL/SPICE 轻量字电路引脚对比（PARTIAL）',
+        'description': 'CDL/SPICE 轻量子电路引脚对比（PARTIAL）',
         'required_views': ('CDL', 'SPICE'),
         'requires_baseline': True,
+        'needs_facts': True,
+        'category': 'DIFF',
+    },
+    'LIB_DB_PAIRING': {
+        'version': '1.0',
+        'description': '有效版本 .lib 与 .db 命名/存在性双向对应核验（清单级）',
+        'required_views': ('LIBERTY', 'DB'),
+        'requires_baseline': False,
+        'needs_facts': False,
+        'category': 'MANIFEST',
+    },
+    'LIBERTY_CORNER_COVERAGE': {
+        'version': '1.0',
+        'description': 'Liberty Corner 完备性验收（按 IP → Group → Corner 关键词表核验）',
+        'required_views': ('LIBERTY',),
+        'requires_baseline': False,
+        'needs_facts': False,
+        'category': 'MANIFEST',
     },
 }
 
@@ -211,6 +239,8 @@ def register_path_plugin(
     description='',
     required_views=(),
     requires_baseline=False,
+    needs_facts=True,
+    category='FACTS',
     registry=PATH_CHECK_PLUGINS,
 ):
     if not isinstance(name, str) or not name.strip():
@@ -226,6 +256,8 @@ def register_path_plugin(
             'description': description or name,
             'required_views': tuple(str(v).upper() for v in required_views),
             'requires_baseline': bool(requires_baseline),
+            'needs_facts': bool(needs_facts),
+            'category': str(category or 'FACTS').upper(),
         }
 
 
@@ -304,6 +336,8 @@ def list_path_plugins(*, registry=PATH_CHECK_PLUGINS):
             'description': meta.get('description') or name,
             'required_views': list(meta.get('required_views') or ()),
             'requires_baseline': bool(meta.get('requires_baseline', False)),
+            'needs_facts': bool(meta.get('needs_facts', True)),
+            'category': meta.get('category') or 'FACTS',
         })
     return out
 

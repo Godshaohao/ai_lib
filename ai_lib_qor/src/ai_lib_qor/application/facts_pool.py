@@ -1,5 +1,4 @@
 """Content-addressed FileFacts pool storage & read-only check bundle hydration."""
-import csv
 import gzip
 import json
 import os
@@ -7,29 +6,52 @@ from pathlib import Path
 import uuid
 import zlib
 
-from ai_lib_qor.sources.layout import library_folder, log_file
-from ai_lib_qor.versions.store import validate
+from ai_lib_qor.sources.layout import library_folder
+from ai_lib_qor.versions.store import read_json, validate
 
 
-def write_pool_atomic(path, payload):
-    """Write an immutable content-addressed gzipped JSON fact object atomically."""
+def stage_pool_blob(path: Path, payload: dict) -> Path | None:
+    """Compress and stage a pool blob to a hidden temp file on disk immediately to avoid holding all dicts in RAM."""
     if path.is_symlink():
         raise ValueError('事实共享池文件不能为软链接')
     if path.is_file():
-        return
+        return None
     blob = gzip.compress(
         json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8'),
         compresslevel=6,
     )
-    tmp = path.parent / f'.{path.name}.{uuid.uuid4().hex}.tmp'
+    tmp = path.parent / f'.{path.name}.{uuid.uuid4().hex}.staging.tmp'
     try:
         with tmp.open('wb') as stream:
             stream.write(blob)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(tmp, path)
-    finally:
+        return tmp
+    except Exception:
         tmp.unlink(missing_ok=True)
+        raise
+
+
+def commit_staged_pool_blob(staged_path: Path | None, final_path: Path) -> None:
+    """Atomically publish a disk-staged pool blob under locked(folder), or discard if already present."""
+    if final_path.is_symlink():
+        raise ValueError('事实共享池文件不能为软链接')
+    if staged_path is None:
+        return
+    try:
+        if final_path.is_file():
+            staged_path.unlink(missing_ok=True)
+            return
+        if staged_path.is_file():
+            os.replace(staged_path, final_path)
+    finally:
+        staged_path.unlink(missing_ok=True)
+
+
+def write_pool_atomic(path, payload):
+    """Write an immutable content-addressed gzipped JSON fact object atomically."""
+    staged = stage_pool_blob(path, payload)
+    commit_staged_pool_blob(staged, path)
 
 
 def read_pool(folder, pool_rel):
@@ -69,20 +91,6 @@ def hydrate_fact(folder, fact_obj, pool_cache):
         'units': pool_data['units'],
         'objects': pool_data['objects'],
     }
-
-
-def load_raw_observations(folder):
-    observation = log_file(folder, 'raw_observations.tsv')
-    if observation.is_symlink():
-        raise ValueError('RAW 观察记录不能为软链接')
-    records = {}
-    if observation.is_file():
-        with observation.open(encoding='utf-8', newline='') as stream:
-            for row in csv.reader(stream, delimiter='\t'):
-                if len(row) != 5:
-                    raise ValueError('RAW 观察记录格式无效')
-                records.setdefault((row[0], row[1]), (int(row[2]), int(row[3])))
-    return records
 
 
 def resolve_check_file(folder, check_filename):
@@ -151,7 +159,7 @@ def slice_index_for_report(index: dict, report: dict) -> dict:
         if new_group:
             sliced_views[view] = new_group
 
-    return {
+    out = {
         'vendor': index.get('vendor'),
         'library': index.get('library'),
         'deliveries': sliced_deliveries,
@@ -159,18 +167,24 @@ def slice_index_for_report(index: dict, report: dict) -> dict:
         'revisions': sliced_revisions,
         'views': sliced_views,
     }
+    for key in ('business_ip', 'ip_type', 'track_id'):
+        if index.get(key) is not None:
+            out[key] = index[key]
+    return out
 
 
-def load_check_bundle(work, vendor, library, check_filename):
+def load_check_bundle(work, vendor, library, check_filename, *, live_index=None):
     """Read-only loader: reconstruct complete report + facts + point-in-time index bundle solely from saved JSON."""
-    from .path_query import PathDataQuery
+    from .path_query import PathDataQuery, build_track_index_view
     folder = library_folder(work, vendor, library)
-    live_index = PathDataQuery(work).index(vendor, library)
+    if live_index is None:
+        live_index = PathDataQuery(work).index(vendor, library)
     check_path = resolve_check_file(folder, check_filename)
-    report = json.loads(check_path.read_text(encoding='utf-8'))
-    validate(report, 'check_result_path')
+    report = read_json(check_path, 'check_result_path')
     if (report['vendor'], report['library']) != (vendor, library):
         raise ValueError('检查结果与当前库归属不一致')
+    if report.get('business_ip') and live_index.get('business_ip') != report['business_ip']:
+        live_index, _, _ = build_track_index_view(folder, vendor, library, live_index, report['business_ip'])
     index = slice_index_for_report(live_index, report)
 
     facts_map = {}

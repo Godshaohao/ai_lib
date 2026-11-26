@@ -58,7 +58,22 @@
 7. **收敛重复 RAW 哈希、逐文件整库枚举与双份索引摘要**：`minimal_checks.py` 与 `minimal_facts.py` 共享预计算 `(stat_key, sha256)` 证据（成熟文件冷检查降至 1 次 SHA-256/文件）；检查编排内的内存解析保留逐文件身份与稳定校验，将整库归档枚举收口到检查开始与发布前（6 文件冷检查从 9 次降至 2 次；独立单文件导出仍保留完整独立校验）；`minimal_file_index.py` 将 `fast_stat`/`strict_stat` 合并为单次枚举的一份 5 元组 `fast_stat`（向下兼容旧 3 元组清单）。
 8. **正式确认库下五子目录约定**：保留并正式确认库目录 5 个受控子目录（`delivery/`、`formal/`、`effective/`、`log/`、`facts/`），其中前 4 个承载不可变权威业务历史与检查/审计记录，`facts/` 专职存放内容寻址可重建共享池缓存（与已有 `work/` 不可变 `check_*.json` 引用路径一致）。
 
-## 5. 保持不变的红线
+## 5. 四期 L2 业务规则修订（2026-11-24）
+
+根据实际业务对“最新有效版本应包含高版本 RAW 新增文件（如新 Corner `.lib`、新增文档等）”的明确诉求，对第 2.3 节中“不自动纳入高版本新增文件路径”的规则作出修订：
+1. **高版本 RAW 新增文件路径自动合并**：在 `application/path_refresh.py:_build_auto_evolution_ops`（同时覆盖单轨 `_evolve_library_l2_locked` 与多轨 `_evolve_track_l2_locked`）及 `minimal_effective.py:preview_delivery(include_new=True)` 中，当候选交付 `ver` 的业务顺序**严格高于当前基线高水位**（`ranks[ver] > max(members 源版本与已处理版本 rank)`）时，除升级已有成员外，自动合并该交付中的全部全新文件路径（尊重 `ignored_unadopted_files` 显式忽略名单）。
+2. **保留安全边界不回拉**：
+   - 未出现于高版本交付中的既有文件依然原样继承（交付缺文件 ≠ 已删除）；
+   - 历史旧版本（`ranks[ver] <= baseline_rank`）或 Formal 初始化基线版本中未链入的旧文件绝不被追溯拉入；
+   - 人工移除后已处理版本不会在后续 L2 重跑时重复加回；`unadopted_new_files` 与 `ignored_unadopted_files` 继续保留用于基线未链入/手工移除/待推进 L2 场景。
+3. **L1 交付文件名带原始版本名与 `directory_mtime` 排序兜底**：
+   - 新交付归档文件名采用 `delivery/delivery_<lib>__<version>.json`（去除默认 `_001`，仅字符清洗或超长截断碰撞时追加 `_002` 等序号），所有下游均按 `delivery_*.json` 通配加载并读取内容 `version` 字段，100% 兼容历史 `delivery_<lib>_<stamp>_001.json`。
+   - `delivery_minimal.schema.json` 将新写入交付的目录时间字段由 `directory_created_at`（birth time）切换为 `directory_mtime`（UTC 秒精度 `st_mtime`，保持 7 字段、移除 `directory_birthtime`），并通过 `oneOf` 无损兼容已归档的旧 `directory_created_at` 不可变历史文件。
+   - `order_deliveries()` 排序优先级：**目录名日期 `version_date` 优先**；无日期或同日冲突时，优先采用人工显式配置的 `version_registration_times`，否则自动按 `directory_mtime` 比较；若同秒仍无法区分，继续拒绝猜测并提示待确认。
+4. **无 Formal 快照库的 A+ 历史折叠初始化（`initial_delivery_tail`）**：
+   - 当单轨库或多轨业务 IP 轨道尚无有效版本且无对应 Formal 快照覆盖时，采用 `initialize_from_deliveries()` 取代“直接用 latest 建单版”的做法：按 `initial_delivery_tail`（默认 `3`，支持全局与单库配置；`0`/`null` 表示不折叠全历史展开）将早期 `max(1, N - k)` 个交付按序在内存中叠加合并为完整无缺失的 `rev_0001`（全部折叠版本写入不可变审计水位 `watermark`），再由标准 L2 演化引擎将最近 `k` 个尾部版本逐版推进为 `rev_0002 .. rev_{k+1}`，兼顾增量补丁完整性、跨版本 LEF Diff 与多版本控制成本。
+
+## 6. 保持不变的红线
 
 - 不引入 SQLite 或外部数据库；权威历史文件不可变。
-- 不因为打开页面或只读查询触发 RAW 扫描、索引重建或解析；不自动将新交付文件加入 Effective；`CheckResult PASS` 不自动改写 `accepted_effective.json`。
+- 不因为打开页面或只读查询触发 RAW 扫描、索引重建或解析；`CheckResult PASS` 不自动改写 `accepted_effective.json`。

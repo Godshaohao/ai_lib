@@ -57,13 +57,8 @@ class ArchitectureP0P2Tests(unittest.TestCase):
             'reporting': 5,
             'workbench': 6,
         }
-        # Explicit frozen backward-compatibility allowlist (no new upward edges may ever be added).
-        compat_allowlist = {
-            ('sources/root_inventory.py', 'build_from_roots', 'application'),
-            ('application/minimal_checks.py', 'render_excel_from_check', 'reporting'),
-            ('application/minimal_checks.py', 'render_overall_excel_from_saved', 'reporting'),
-            ('application/minimal_checks.py', '_default_overall_renderer', 'reporting'),
-        }
+        # Zero upward edges across all 7 architectural layers (strict unidirectional DAG).
+        compat_allowlist = set()
 
         def check_scope_imports(rel_path, src_layer, scope_name, node):
             for child in ast.iter_child_nodes(node):
@@ -342,20 +337,38 @@ class ArchitectureP0P2Tests(unittest.TestCase):
             self.assertEqual(p_run['checked_count'], 1)
             self.assertEqual(p_run['checked'][0]['rerun_reason'], 'STALE_TOOLING')
 
-    def test_p1_unadopted_new_files_surfaced_without_auto_adding(self):
+    def test_p1_higher_version_new_files_auto_merged_with_safety_boundaries(self):
+        from ai_lib_qor.application.minimal_effective import apply_update, preview_delivery
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             raw, nl, work = root / 'raw', root / 'NL1', root / 'work'
             nl.mkdir()
             work.mkdir()
+            # v1 has LEF/a.lef + GDS/keep.gds (both in Formal) + DOC/v1_unlinked.txt (NOT in Formal)
             p1 = raw / 'v/lib/20261001_v1/LEF/a.lef'
-            p1.parent.mkdir(parents=True)
-            p1.write_text(_LEF_V1, encoding='utf-8')
+            g1 = raw / 'v/lib/20261001_v1/GDS/keep.gds'
+            u1 = raw / 'v/lib/20261001_v1/DOC/v1_unlinked.txt'
+            for p, txt in ((p1, _LEF_V1), (g1, 'gds-v1'), (u1, 'not-in-formal')):
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(txt, encoding='utf-8')
             (nl / 'a.lef').symlink_to(p1)
+            (nl / 'keep.gds').symlink_to(g1)
             (work / 'path_sources.json').write_text(json.dumps({'raw_root': str(raw), 'nl_root': str(nl), 'nl_version': 'NL1'}))
             refresh_all(work)
 
-            # v2 updates a.lef AND adds brand-new LIB/extra.lib
+            # Baseline v1 unlinked file is NOT retroactively merged; surfaced via unadopted_new_files
+            ctx1 = PathDataQuery(work).get_check_context('v', 'lib', 'rev_0001')
+            self.assertEqual([(m['view'], m['path']) for m in ctx1['members']], [('GDS', 'GDS/keep.gds'), ('LEF', 'LEF/a.lef')])
+            self.assertEqual(unadopted_new_files(work, 'v', 'lib')['count'], 1)
+
+            # Older historical delivery v0 (< v1) arrives with an unlinked file -> MUST NOT be pulled into Effective!
+            p0 = raw / 'v/lib/20260901_v0/DOC/ancient.txt'
+            p0.parent.mkdir(parents=True, exist_ok=True)
+            p0.write_text('old-junk', encoding='utf-8')
+            r_old = refresh_all(work, formal=False)
+            self.assertEqual(r_old['l2']['effective_published'], 0)
+
+            # Higher version v2 updates a.lef AND adds brand-new LIB/extra.lib (does NOT resend GDS/keep.gds)
             p2 = raw / 'v/lib/20261002_v2/LEF/a.lef'
             extra = raw / 'v/lib/20261002_v2/LIB/extra.lib'
             p2.parent.mkdir(parents=True)
@@ -365,24 +378,49 @@ class ArchitectureP0P2Tests(unittest.TestCase):
 
             full = refresh_all(work, formal=False)
             self.assertEqual(full['l2']['effective_published'], 1)
-            self.assertEqual(full['l2']['unadopted_new_files_total'], 1)
+            self.assertEqual(full['l2']['unadopted_new_files_total'], 0)
 
-            # Conservative non-inference: LIB/extra.lib is NOT auto-added to rev_0002
-            ctx = PathDataQuery(work).get_check_context('v', 'lib', 'rev_0002')
-            self.assertEqual([(m['view'], m['path']) for m in ctx['members']], [('LEF', 'LEF/a.lef')])
+            # rev_0002 upgrades LEF/a.lef -> v2, inherits GDS/keep.gds -> v1, AND auto-merges LIB/extra.lib -> v2!
+            ctx2 = PathDataQuery(work).get_check_context('v', 'lib', 'rev_0002')
+            members2 = {(m['view'], m['path']): m['version'] for m in ctx2['members']}
+            self.assertEqual(members2, {
+                ('GDS', 'GDS/keep.gds'): '20261001_v1',
+                ('LEF', 'LEF/a.lef'): '20261002_v2',
+                ('LIBERTY', 'LIB/extra.lib'): '20261002_v2',
+            })
+            self.assertEqual(unadopted_new_files(work, 'v', 'lib')['count'], 0)
+            self.assertEqual(refresh_status(work)['totals']['unadopted_new_files'], 0)
 
-            # Surfaced cleanly in query, refresh_status, Web HTML, and JSON API
+            # Higher version v3 ONLY adds brand-new DOC/release.txt (and an ignored file DOC/skip.txt)
+            set_unadopted_ignored(work, 'v', 'lib', 'DOC', 'DOC/skip.txt', ignored=True)
+            for name in ('DOC/release.txt', 'DOC/skip.txt'):
+                fp = raw / 'v/lib/20261003_v3' / name
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                fp.write_text('v3', encoding='utf-8')
+            full3 = refresh_all(work, formal=False)
+            self.assertEqual(full3['l2']['effective_published'], 1)
+            ctx3 = PathDataQuery(work).get_check_context('v', 'lib', 'rev_0003')
+            members3 = {(m['view'], m['path']): m['version'] for m in ctx3['members']}
+            self.assertEqual(members3[('DOC', 'DOC/release.txt')], '20261003_v3')
+            self.assertNotIn(('DOC', 'DOC/skip.txt'), members3)
+
+            # Manual removal of DOC/release.txt -> rev_0004; re-running L2 MUST NOT re-add it,
+            # while unadopted_new_files + Web notice + API cleanly surface the manually removed latest-delivery file!
+            apply_update(work, 'v', 'lib', {'set': [], 'remove': [{'view': 'DOC', 'path': 'DOC/release.txt'}]}, expected_parent='rev_0003')
+            self.assertEqual(refresh_l2(work)['effective_published'], 0)
             u = unadopted_new_files(work, 'v', 'lib')
             self.assertEqual(u['count'], 1)
-            self.assertEqual(u['sample'][0], {'view': 'LIBERTY', 'path': 'LIB/extra.lib'})
-            rs = refresh_status(work)
-            self.assertEqual(rs['totals']['unadopted_new_files'], 1)
+            self.assertEqual(u['sample'][0], {'view': 'DOC', 'path': 'DOC/release.txt'})
             app = create_path_app(work)
             client = app.test_client()
             html = client.get('/path/library', query_string={'vendor': 'v', 'library': 'lib'}).get_data(as_text=True)
-            self.assertIn('未纳入有效集的新增交付文件', html)
+            self.assertIn('发现未纳入当前有效集的交付文件', html)
             api_lib = client.get('/api/v1/library', query_string={'vendor': 'v', 'library': 'lib'}).get_json()
             self.assertEqual(api_lib['unadopted_new_files']['count'], 1)
+
+            # preview_delivery(include_new=True) also previews merging new paths (skipping ignored)
+            prev = preview_delivery(work, 'v', 'lib', '20261003_v3')
+            self.assertEqual([op['path'] for op in prev['operations']['set']], ['DOC/release.txt'])
 
     def test_p2_custom_view_extension_parser_and_plugin_findings_end_to_end(self):
         orig_ext = dict(VIEW_EXTENSIONS)

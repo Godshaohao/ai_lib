@@ -109,6 +109,7 @@ class ExcelReportsTests(unittest.TestCase):
         )
 
         build_from_roots(self.raw, self.nl, self.work, auto_effective=False)
+        (self.work / 'path_sources.json').write_text(json.dumps({'skip_parse_views': []}), encoding='utf-8')
         self.folder = self.work / 'libraries/ACME/sram_macro'
         initialize_from_formal(self.work, 'ACME', 'sram_macro', next((self.folder / 'formal').glob('formal_*.json')))
         update_effective(self.work, 'ACME', 'sram_macro', {

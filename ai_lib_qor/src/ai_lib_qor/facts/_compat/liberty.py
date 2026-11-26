@@ -33,7 +33,13 @@ def _clean_attr_value(value: str):
     return cleaned
 
 
-def parse_liberty_interface_data_file(path: str | Path, *, chunk_size: int = 1024 * 1024) -> dict:
+def parse_liberty_interface_data_file(
+    path: str | Path,
+    *,
+    chunk_size: int = 1024 * 1024,
+    errors: str = 'replace',
+    stream_override=None,
+) -> dict:
     """Standalone streaming extraction of scalar cell, pin, PG pin and PVT facts."""
     source = Path(path)
     opener = gzip.open if source.name.lower().endswith('.gz') else open
@@ -181,111 +187,118 @@ def parse_liberty_interface_data_file(path: str | Path, *, chunk_size: int = 102
     def should_capture() -> bool:
         return not stack or stack[-1][0] in {'library', 'type', 'cell', 'pin', 'pg_pin', 'bus', 'bundle', 'operating_conditions'}
 
-    try:
-        with opener(source, 'rt', encoding='utf-8', errors='replace', newline='') as stream:
-            while True:
-                chunk = stream.read(chunk_size)
-                if not chunk:
-                    break
-                position = 0
-                for marker in _STREAM_MARKER.finditer(chunk):
-                    segment = chunk[position:marker.start()]
-                    char = marker.group()
-                    if line_comment:
-                        line_no += segment.count('\n')
-                        if char == '\n':
-                            line_comment = False
-                            line_no += 1
-                            if should_capture():
-                                statement.append('\n')
-                        position = marker.end()
-                        continue
-                    if block_comment:
-                        line_no += segment.count('\n')
-                        if should_capture() and segment.count('\n'):
-                            statement.append('\n' * segment.count('\n'))
-                        if segment:
-                            pending_star = False
-                        if pending_star and char == '/':
-                            block_comment = pending_star = False
-                            position = marker.end()
-                            continue
-                        pending_star = char == '*'
-                        line_no += char.count('\n')
-                        position = marker.end()
-                        continue
-                    if quote:
-                        line_no += segment.count('\n') + char.count('\n')
-                        if should_capture():
-                            statement.extend((segment, char))
-                        if segment:
-                            escape_next = False
-                        if char == '\\':
-                            escape_next = not escape_next
-                        elif char == '"':
-                            if not escape_next:
-                                quote = False
-                            escape_next = False
-                        position = marker.end()
-                        continue
-                    if pending_slash:
-                        if segment:
-                            if should_capture():
-                                statement.extend(('/', segment))
-                            pending_slash = False
-                        elif char == '/':
-                            line_comment = True
-                            pending_slash = False
-                            position = marker.end()
-                            continue
-                        elif char == '*':
-                            block_comment = True
-                            pending_slash = False
-                            if should_capture():
-                                statement.append(' ')
-                            position = marker.end()
-                            continue
-                        else:
-                            if should_capture():
-                                statement.append('/')
-                            pending_slash = False
-                    elif segment and should_capture():
-                        statement.append(segment)
+    def _consume_stream(stream) -> None:
+        nonlocal line_no, quote, escape, line_comment, block_comment, pending_slash, pending_star, escape_next, complete
+        while True:
+            chunk = stream.read(chunk_size)
+            if not chunk:
+                break
+            position = 0
+            for marker in _STREAM_MARKER.finditer(chunk):
+                segment = chunk[position:marker.start()]
+                char = marker.group()
+                if line_comment:
                     line_no += segment.count('\n')
-                    if char == '/':
-                        pending_slash = True
-                    elif char == '"':
-                        quote = True
-                        escape_next = False
-                        if should_capture():
-                            statement.append(char)
-                    elif char in '{};':
-                        accept_statement(char)
-                    elif char == '*' and should_capture():
-                        statement.append(char)
                     if char == '\n':
-                        if should_capture():
-                            statement.append(char)
+                        line_comment = False
                         line_no += 1
+                        if should_capture():
+                            statement.append('\n')
                     position = marker.end()
-                tail = chunk[position:]
-                if line_comment or block_comment:
-                    line_no += tail.count('\n')
-                elif quote:
-                    line_no += tail.count('\n')
+                    continue
+                if block_comment:
+                    line_no += segment.count('\n')
+                    if should_capture() and segment.count('\n'):
+                        statement.append('\n' * segment.count('\n'))
+                    if segment:
+                        pending_star = False
+                    if pending_star and char == '/':
+                        block_comment = pending_star = False
+                        position = marker.end()
+                        continue
+                    pending_star = char == '*'
+                    line_no += char.count('\n')
+                    position = marker.end()
+                    continue
+                if quote:
+                    line_no += segment.count('\n') + char.count('\n')
                     if should_capture():
-                        statement.append(tail)
-                elif pending_slash:
+                        statement.extend((segment, char))
+                    if segment:
+                        escape_next = False
+                    if char == '\\':
+                        escape_next = not escape_next
+                    elif char == '"':
+                        if not escape_next:
+                            quote = False
+                        escape_next = False
+                    position = marker.end()
+                    continue
+                if pending_slash:
+                    if segment:
+                        if should_capture():
+                            statement.extend(('/', segment))
+                        pending_slash = False
+                    elif char == '/':
+                        line_comment = True
+                        pending_slash = False
+                        position = marker.end()
+                        continue
+                    elif char == '*':
+                        block_comment = True
+                        pending_slash = False
+                        if should_capture():
+                            statement.append(' ')
+                        position = marker.end()
+                        continue
+                    else:
+                        if should_capture():
+                            statement.append('/')
+                        pending_slash = False
+                elif segment and should_capture():
+                    statement.append(segment)
+                line_no += segment.count('\n')
+                if char == '/':
+                    pending_slash = True
+                elif char == '"':
+                    quote = True
+                    escape_next = False
                     if should_capture():
-                        statement.extend(('/', tail))
-                    pending_slash = False
-                elif should_capture():
+                        statement.append(char)
+                elif char in '{};':
+                    accept_statement(char)
+                elif char == '*' and should_capture():
+                    statement.append(char)
+                if char == '\n':
+                    if should_capture():
+                        statement.append(char)
+                    line_no += 1
+                position = marker.end()
+            tail = chunk[position:]
+            if line_comment or block_comment:
+                line_no += tail.count('\n')
+            elif quote:
+                line_no += tail.count('\n')
+                if should_capture():
                     statement.append(tail)
-            if pending_slash:
-                statement.append('/')
-            if quote or block_comment or stack or ''.join(statement).strip():
-                complete = False
-                note('truncated_or_unbalanced_input', ''.join(statement))
+            elif pending_slash:
+                if should_capture():
+                    statement.extend(('/', tail))
+                pending_slash = False
+            elif should_capture():
+                statement.append(tail)
+        if pending_slash:
+            statement.append('/')
+        if quote or block_comment or stack or ''.join(statement).strip():
+            complete = False
+            note('truncated_or_unbalanced_input', ''.join(statement))
+
+    try:
+        if stream_override is not None:
+            _consume_stream(stream_override)
+        else:
+            with opener(source, 'rt', encoding='utf-8', errors=errors, newline='') as stream:
+                _consume_stream(stream)
     except (OSError, EOFError) as exc:
         raise ValueError(f'无法读取 Liberty 文件 {source}: {exc}') from exc
 

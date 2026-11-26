@@ -1,8 +1,8 @@
 # Delivery 七字段结构
 
-新扫描和显式登记在 `work/libraries/<vendor>/<library>/delivery_NNN.json` 写入七个字段：`vendor`、`library`、`version`、`version_date`、`directory_created_at`、`root`、`views`。`views` 的值是按类型分类的版本根目录相对路径数组。`.sp` 和 `.spice` 在新清单中归为 `SPICE`；其他类型沿用已识别 View，未知文件仍保留。
+新扫描和显式登记在 `work/libraries/<vendor>/<library>/delivery/delivery_<library>__<version>.json` 写入七个字段：`vendor`、`library`、`version`、`version_date`、`directory_mtime`、`root`、`views`。`views` 的值是按类型分类的版本根目录相对路径数组。`.sp` 和 `.spice` 在新清单中归为 `SPICE`；其他类型沿用已识别 View，未知文件仍保留。
 
-`version_date` 只从版本名称开头可解析的 `YYYYMMDD` 提取，无法提取为 null；它是查询字段而不是第二个版本身份。新扫描仅在系统提供文件系统 Birth Time 时记录带时区的 `directory_created_at`，否则为 null；不使用 ctime、mtime 或登记时间代替。旧记录迁移时没有记录实际创建时间，因此保持 null。版本排序仍遵循已有配置：优先版本日期，缺失时使用用户登记的交付时间，不使用目录创建时间冒充交付顺序。
+`version_date` 只从版本名称开头可解析的 `YYYYMMDD` 提取，无法提取为 null；它是查询字段而不是第二个版本身份。新扫描使用 `directory_mtime` 记录目录修改时间。已有 `directory_created_at` 记录仍可读取。排序先按版本日期，无日期时依次按登记时间、目录修改时间和自然版本顺序。
 
 ## 历史引用与迁移
 

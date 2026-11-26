@@ -6,7 +6,7 @@
 
 在主版本号保持 `*.v1` 不变的前提下，仅允许以下**向后兼容的增量演进**：
 1. **新增可选属性**：所有新字段必须是非必填（不加入 `required`），历史已归档的旧版本 JSON 必须继续通过新版 Schema 校验。
-   - 示例：`check_result.path.v1` 新增可选 `tooling`（含 `parser_signatures`、`plugins`、`plugin_versions`）与 `checks[].severity`、`checks[].findings[]`；`file_facts.path.v1` 在 `LIBERTY.objects` 下预留可选 `operating_conditions` 与 `pg_pins`。
+   - 示例：`delivery_minimal` 新写入的 7 字段改以 `directory_mtime`（RAW 版本目录 `st_mtime` 的 UTC 秒精度时间，不再采集 birth time）替代 `directory_created_at`，Schema 通过 `oneOf` 严格允许新 7 字段（`directory_mtime`）并只读兼容历史不可变 7 字段归档（`directory_created_at`）；`check_result.path.v1` 新增可选 `tooling`（含 `parser_signatures`、`plugins`、`plugin_versions`）与 `checks[].severity`、`checks[].findings[]`；`file_facts.path.v1` 在 `LIBERTY.objects` 下预留可选 `operating_conditions` 与 `pg_pins`。
 2. **放宽值域但保留内置强约束**：例如 `file_facts_path.schema.json` 将顶层 `view` 放宽为大写标识正则 `^[A-Z][A-Z0-9_]{1,31}$` 以支持新 View 扩展，同时通过 `allOf` 保留 5 类内置 View（`LEF`/`LIBERTY`/`VERILOG`/`CDL`/`SPICE`）的严格结构校验。
 3. **禁止破坏性修改**：同主版本内不得删除必填字段、重命名字段、改变既有字段类型或收紧已有值域。
 

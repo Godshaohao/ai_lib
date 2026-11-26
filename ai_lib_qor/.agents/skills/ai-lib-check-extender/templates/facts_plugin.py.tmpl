@@ -1,0 +1,34 @@
+"""FileFacts-level check plugin boilerplate (needs_facts=True, consumes parsed ctx['facts'])."""
+
+PLUGIN_ID = '<PLUGIN_ID>'
+
+
+def run_<plugin_func>(ctx: dict) -> dict:
+    """Inspect parsed FileFacts in ctx['facts'] (and optional ctx['baseline'] via ctx['obtain'])."""
+    facts = ctx.get('facts') or {}
+    params = (ctx.get('plugin_params') or {}).get(PLUGIN_ID) or {}
+
+    target_facts = [(key, path_obj, fact) for key, (path_obj, fact) in facts.items() if key[0] == 'LEF']
+    if not target_facts:
+        return {'checks': []}
+
+    checks = []
+    for (view, rel_path), fact_path, fact in target_facts:
+        parse_status = fact.get('parse_status', 'PARTIAL')
+        coverage = 'COMPLETE' if parse_status == 'COMPLETE' else 'PARTIAL'
+        findings = []
+
+        # TODO: inspect fact['objects'] using params
+        result = 'FAIL' if findings else 'PASS'
+        checks.append({
+            'check_id': PLUGIN_ID,
+            'scope_file_keys': [rel_path],
+            'result': result,
+            'severity': 'ERROR' if findings else 'INFO',
+            'coverage': coverage,
+            'facts_refs': [fact_path.name],
+            'detail': f'{rel_path} 结构核验{"失败" if findings else "通过"}（coverage={coverage}）',
+            'findings': findings,
+        })
+
+    return {'checks': checks}

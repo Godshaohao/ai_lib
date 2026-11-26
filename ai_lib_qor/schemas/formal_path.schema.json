@@ -8,6 +8,6 @@
     "library":{"type":"string", "minLength":1},
     "root":{"type":"string", "minLength":1},
     "observed_at":{"type":"string", "minLength":1},
-    "views":{"type":"object", "additionalProperties":{"type":"object", "additionalProperties":{"type":"array", "items":{"type":"object", "additionalProperties":false, "required":["path", "target", "resolved"], "properties":{"path":{"type":"string", "minLength":1}, "target":{"type":"string", "minLength":1}, "resolved":{"type":"string", "minLength":1}}}}}}
+    "views":{"type":"object", "additionalProperties":{"type":"object", "additionalProperties":{"type":"array", "items":{"type":"object", "additionalProperties":false, "required":["path", "target", "resolved"], "properties":{"path":{"type":"string", "minLength":1}, "target":{"type":"string", "minLength":1}, "resolved":{"type":"string", "minLength":1},"raw_path":{"type":"string","minLength":1}}}}}}
   }
 }

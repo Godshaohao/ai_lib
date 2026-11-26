@@ -1,0 +1,136 @@
+<section id="catalog-section" class="card scroll-anchor" aria-label="跨库 SQL 检索面板"
+         data-api-summary="{{ url_for('api_catalog_summary') }}"
+         data-api-check-items="{{ url_for('api_catalog_check_items') }}"
+         data-api-changes="{{ url_for('api_catalog_changes') }}"
+         data-api-objects="{{ url_for('api_catalog_objects') }}"
+         data-api-corners="{{ url_for('api_catalog_corners') }}"
+         data-api-rebuild="{{ url_for('api_catalog_rebuild') }}"
+         data-library-url="{{ url_for('library_page') }}"
+         data-check-view-url="{{ url_for('check_view_page') }}"
+         data-csrf="{{ csrf }}"
+         {% if cur_domain != 'catalog' %}hidden{% endif %}>
+  <div class="card-head catalog-card-head catalog-top-bar">
+    <div class="catalog-card-title">
+      <p id="catalog-meta-line" class="catalog-meta-line">只读查询已保存的规则风险、对象变更 Delta、去重 Cell/Macro 与 Corner 清单；不扫 RAW。</p>
+    </div>
+    <div class="toolbar-group catalog-card-actions">
+      <span id="catalog-timing-badge" class="chip mono num" title="最近一次查询耗时" aria-live="polite">就绪</span>
+      <button type="button" id="catalog-rebuild-btn" class="secondary btn-xs" onclick="rebuildCatalogProjection(this)">
+        <svg class="ico ico-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        重建投影
+      </button>
+    </div>
+  </div>
+
+  <!-- 4 个中粒度表快捷统计与切换 -->
+  <div class="catalog-kpi-bar" role="tablist" aria-label="跨库检索维度切换">
+    <button type="button" class="catalog-kpi-btn active" data-cat-tab="check-items" role="tab" aria-selected="true" onclick="switchCatalogTab('check-items', this)">
+      <span class="catalog-kpi-label">规则风险检查项</span>
+      <strong class="catalog-kpi-num num" id="cat-count-check-items">—</strong>
+      <span class="catalog-kpi-sub" id="cat-sub-check-items">按 check_id 聚合最新结果</span>
+    </button>
+    <button type="button" class="catalog-kpi-btn" data-cat-tab="changes" role="tab" aria-selected="false" tabindex="-1" onclick="switchCatalogTab('changes', this)">
+      <span class="catalog-kpi-label">对象变更 Delta</span>
+      <strong class="catalog-kpi-num num" id="cat-count-changes">—</strong>
+      <span class="catalog-kpi-sub">跨版本尺寸 / Pin / 模块变化</span>
+    </button>
+    <button type="button" class="catalog-kpi-btn" data-cat-tab="objects" role="tab" aria-selected="false" tabindex="-1" onclick="switchCatalogTab('objects', this)">
+      <span class="catalog-kpi-label">Cell / Macro 目录</span>
+      <strong class="catalog-kpi-num num" id="cat-count-objects">—</strong>
+      <span class="catalog-kpi-sub">最新/已采纳版去重对象</span>
+    </button>
+    <button type="button" class="catalog-kpi-btn" data-cat-tab="corners" role="tab" aria-selected="false" tabindex="-1" onclick="switchCatalogTab('corners', this)">
+      <span class="catalog-kpi-label">Corner / View 清单</span>
+      <strong class="catalog-kpi-num num" id="cat-count-corners">—</strong>
+      <span class="catalog-kpi-sub">支持 slow+125c 组合词</span>
+    </button>
+  </div>
+
+  <!-- 禁用/状态提示条 -->
+  <div id="catalog-notice" class="alert-strip alert-strip-warn" role="status" hidden></div>
+
+  <!-- 维度动态摘要卡片 / 快捷筛选芯片 -->
+  <div id="catalog-summary-strip" class="catalog-summary-strip" aria-label="当前维度聚合摘要"></div>
+
+  <!-- 统一筛选工具条 -->
+  <div class="toolbar catalog-filter-bar">
+    <div class="toolbar-group catalog-filter-inputs">
+      <div class="search-wrap">
+        <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" id="cat-q" class="search-input" placeholder="输入关键词搜索…" autocomplete="off" spellcheck="false" oninput="scheduleCatalogQuery()">
+      </div>
+
+      <!-- 规则风险专属过滤 -->
+      <select id="cat-result" class="ctrl-sm" data-cat-filter="check-items" aria-label="按规则结论筛选" onchange="runCatalogQuery(0)">
+        <option value="">全部结论</option>
+        <option value="FAIL">FAIL（失败）</option>
+        <option value="INCONCLUSIVE">INCONCLUSIVE（无结论）</option>
+        <option value="PASS">PASS（通过）</option>
+      </select>
+      <select id="cat-check-id" class="ctrl-sm" data-cat-filter="check-items" aria-label="按规则 ID 筛选" onchange="runCatalogQuery(0)">
+        <option value="">全部规则 ID</option>
+      </select>
+
+      <!-- 对象变更 / 对象目录 / Corner 共用 View 过滤 -->
+      <select id="cat-view" class="ctrl-sm" data-cat-filter="changes,objects,corners" aria-label="按 View 筛选" onchange="runCatalogQuery(0)" hidden>
+        <option value="">全部 View</option>
+        <option value="LIBERTY">LIBERTY</option>
+        <option value="LEF">LEF</option>
+        <option value="DB">DB</option>
+        <option value="VERILOG">VERILOG</option>
+        <option value="CDL">CDL</option>
+        <option value="SPICE">SPICE</option>
+        <option value="GDS">GDS</option>
+      </select>
+
+      <!-- 对象目录专属对象类型 -->
+      <select id="cat-object-type" class="ctrl-sm" data-cat-filter="objects" aria-label="按对象类型筛选" onchange="runCatalogQuery(0)" hidden>
+        <option value="">全部类型</option>
+        <option value="MACRO">MACRO (LEF)</option>
+        <option value="CELL">CELL (Liberty)</option>
+        <option value="MODULE">MODULE (Verilog)</option>
+        <option value="SUBCKT">SUBCKT (CDL/SPICE)</option>
+      </select>
+
+      <!-- 变更专属类型 -->
+      <input type="text" id="cat-change-kind" class="ctrl-sm catalog-kind-input" data-cat-filter="changes" placeholder="变更类型（如 SIZE / REMOVED）" aria-label="按变更类型筛选" oninput="scheduleCatalogQuery()" hidden>
+
+      <!-- 通用供应商/库筛选 -->
+      <select id="cat-vendor" class="ctrl-sm" aria-label="按供应商筛选" onchange="runCatalogQuery(0)">
+        <option value="">全部供应商</option>
+        {% for vname, vcnt in vendor_summary %}
+        <option value="{{ vname }}">{{ vname }} ({{ vcnt }})</option>
+        {% endfor %}
+      </select>
+
+      <label class="catalog-latest-toggle">
+        <input type="checkbox" id="cat-latest-only" checked onchange="runCatalogQuery(0)">
+        <span>仅最新有效版</span>
+      </label>
+
+      <button type="button" id="cat-reset-btn" class="ghost btn-xs" onclick="resetCatalogFilters()">重置</button>
+    </div>
+    <div class="toolbar-group">
+      <span id="catalog-match-count" class="muted text-xs num" aria-live="polite">等待加载…</span>
+    </div>
+  </div>
+
+  <!-- 结果表格 -->
+  <div class="table-wrap catalog-table-wrap">
+    <table class="data-table catalog-table" id="catalog-result-table">
+      <thead id="catalog-thead"></thead>
+      <tbody id="catalog-tbody">
+        <tr><td class="muted">正在加载跨库 SQL 投影数据…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 分页条 -->
+  <div class="toolbar catalog-pager-bar" id="catalog-pager" hidden>
+    <span id="catalog-page-info" class="muted text-xs num"></span>
+    <div class="toolbar-group">
+      <button type="button" id="cat-prev-btn" class="ghost btn-xs" onclick="stepCatalogPage(-1)">← 上一页</button>
+      <button type="button" id="cat-next-btn" class="secondary btn-xs" onclick="stepCatalogPage(1)">下一页 →</button>
+    </div>
+  </div>
+</section>

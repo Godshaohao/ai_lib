@@ -10,11 +10,12 @@ import re
 import uuid
 
 from ai_lib_qor.versions.runtime import check_cancel, emit_progress
-from ai_lib_qor.versions.store import locked, write_atomic
-from .config_reader import read_registration_times
+from ai_lib_qor.versions.store import locked, read_json_readonly, write_atomic
+from .config_reader import load_work_config, raw_root_values, read_registration_times
 from .layout import SAFE, archive_files, library_folder, log_file, next_filename, storage_dir
-from .minimal_delivery import directory_birthtime, order_deliveries, version_date
-from .source_discovery import _DEFAULT_VERSION, natural_version_key
+from .minimal_delivery import directory_mtime, is_delivery_minimal, order_deliveries, version_date
+from .raw_paths import read_raw_observations, resolve_source, source_directories
+from .source_discovery import natural_version_key
 from .timestamps import instant, utc_text
 
 _VIEW_TOKEN_RE = re.compile(r'^[A-Z][A-Z0-9_]{1,31}\Z')
@@ -68,9 +69,9 @@ def infer_nl_version(root):
 
 
 def _version_directory(name):
-    if re.match(r'^\d{8}(?:$|[_-])', name):
-        return version_date(name) is not None
-    return bool(_DEFAULT_VERSION.fullmatch(name))
+    return bool(SAFE.fullmatch(name)) and (
+        not re.match(r'^\d{8}(?:$|[_-])', name) or version_date(name) is not None
+    )
 
 
 def _matches_ignore(name: str, rel: str, patterns) -> bool:
@@ -152,174 +153,216 @@ def _check_view_extension_drift(out: Path, extra_extensions, warnings: list):
             })
 
 
+def _safe_version_token(version: str, max_len: int) -> str:
+    cleaned = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(version)).strip('._-') or 'v'
+    if len(cleaned) <= max_len:
+        return cleaned
+    digest = hashlib.sha1(str(version).encode('utf-8')).hexdigest()[:8]
+    keep = max(1, max_len - len(digest) - 1)
+    return f'{cleaned[:keep].rstrip("._-") or "v"}_{digest}'
+
+
+def _delivery_filename(delivery_dir: Path, lib: str, version: str) -> str:
+    """Build immutable delivery filename `delivery_<lib>__<version>.json` without `_001` unless colliding."""
+    prefix = f'delivery_{lib}__'
+    token = _safe_version_token(version, max(16, 180 - len(prefix)))
+    base = f'{prefix}{token}'
+    candidate = f'{base}.json'
+    if not (delivery_dir / candidate).exists():
+        return candidate
+    number = 2
+    while True:
+        candidate = f'{base}_{number:03d}.json'
+        if not (delivery_dir / candidate).exists():
+            return candidate
+        number += 1
+
+
 def _load_archived_deliveries(out: Path, vendor=None, library=None):
-    """Load already-archived immutable deliveries (plus observed version set) to enable fast incremental L1 skips."""
+    """Load immutable deliveries and identify versions that can skip a subsequent scan."""
     archived = {}
+    reusable = set()
     libs_root = out / 'libraries'
     if not libs_root.is_dir() or libs_root.is_symlink():
-        return archived
+        return archived, reusable
     folders = (libs_root / vendor / library,) if vendor else libs_root.glob('*/*')
     for folder in folders:
         if folder.is_symlink() or not folder.is_dir() or folder.parent.is_symlink():
             continue
-        obs_path = log_file(folder, 'raw_observations.tsv')
-        observed_versions = set()
-        if obs_path.is_file() and not obs_path.is_symlink():
-            try:
-                with obs_path.open(encoding='utf-8', newline='') as stream:
-                    for row in csv.reader(stream, delimiter='\t'):
-                        if len(row) == 5:
-                            observed_versions.add(row[0])
-            except OSError:
-                continue
+        try:
+            observed = read_raw_observations(folder)
+        except (OSError, ValueError):
+            continue
+        observed_versions = {version for version, _ in observed}
+        linked_versions = {version for (version, _), stat in observed.items() if stat[2]}
         for p in archive_files(folder, 'delivery', 'delivery_*.json'):
             if p.is_symlink():
                 continue
             try:
-                val = json.loads(p.read_text(encoding='utf-8'))
-                if set(val) == {'vendor', 'library', 'version', 'version_date', 'directory_created_at', 'root', 'views'}:
+                val = read_json_readonly(p)
+                if is_delivery_minimal(val):
                     key = (val['vendor'], val['library'], val['version'])
-                    if val['version'] in observed_versions:
-                        archived[key] = val
+                    archived[key] = val
+                    if val['version'] in observed_versions and val['version'] not in linked_versions:
+                        reusable.add(key)
             except (OSError, ValueError, TypeError):
                 continue
-    return archived
+    return archived, reusable
+
+
+def _raw_directories(names, roots, warnings, ignored=None):
+    for child in names:
+        if not SAFE.fullmatch(child.name) or _matches_ignore(child.name, child.name, ignored):
+            continue
+        if child.is_symlink():
+            try:
+                resolve_source(child, roots)
+            except (OSError, ValueError) as exc:
+                warnings.append(str(exc))
+                continue
+        if child.is_dir():
+            yield child
+
+
+def _walk_raw_version(version, roots, ignored, errors, cancel_event):
+    ancestors = {version: {resolve_source(version, roots)}}
+    for current, dirs, names in os.walk(version, followlinks=True, onerror=lambda exc: errors.append(str(exc))):
+        check_cancel(cancel_event, 'L1 RAW 盘点已由用户终止')
+        here = Path(current)
+        available = []
+        for name in sorted(dirs):
+            child = here / name
+            rel = child.relative_to(version).as_posix()
+            if _matches_ignore(name, rel, ignored):
+                continue
+            try:
+                real = resolve_source(child, roots) if child.is_symlink() else None
+                if real is not None and real in ancestors[here]:
+                    raise ValueError(f'RAW 目录链接循环: {child}')
+            except (OSError, ValueError) as exc:
+                errors.append(str(exc))
+                continue
+            ancestors[child] = ancestors[here] | {real if real is not None else child.resolve()}
+            available.append(name)
+        dirs[:] = available
+        for name in sorted(names):
+            path = here / name
+            rel = path.relative_to(version).as_posix()
+            if _matches_ignore(name, rel, ignored):
+                continue
+            try:
+                real = resolve_source(path, roots)
+                if not real.is_file():
+                    raise ValueError(f'非普通文件未扫描: {path}')
+                stat = real.stat()
+                yield rel, stat.st_size, stat.st_mtime_ns, str(real) if real != path else None
+            except (OSError, ValueError) as exc:
+                errors.append(str(exc))
 
 
 def _inventory_raw(
-    raw,
-    warnings,
-    observations=None,
-    *,
-    scope_vendor=None,
-    scope_library=None,
-    archived=None,
-    ignore_patterns=None,
-    extra_extensions=None,
-    stats=None,
-    progress_cb=None,
-    cancel_event=None,
+    raw_roots, warnings, observations, *, output, link_roots=(), scope_vendor=None, scope_library=None,
+    archived, reusable, update_raw=True, ignore_patterns=None, extra_extensions=None,
+    stats=None, progress_cb=None, cancel_event=None,
 ):
     records = []
-    lookup = {}
-    walked = 0
-    skipped = 0
-    if scope_vendor and scope_library:
-        v_dir = raw / scope_vendor
-        l_dir = v_dir / scope_library
-        targets = (
-            [(v_dir, l_dir)]
-            if (not v_dir.is_symlink() and v_dir.is_dir() and not l_dir.is_symlink() and l_dir.is_dir())
-            else []
-        )
-    else:
-        targets = []
-        for vendor in sorted(raw.iterdir()):
-            if vendor.is_symlink() or not vendor.is_dir() or not SAFE.fullmatch(vendor.name):
-                continue
-            for library in sorted(vendor.iterdir()):
-                if library.is_symlink() or not library.is_dir() or not SAFE.fullmatch(library.name):
-                    continue
-                targets.append((vendor, library))
+    lookup = defaultdict(set)
+    targets = defaultdict(list)
+    allowed = (*raw_roots, *link_roots)
+    for raw in raw_roots:
+        vendors = [raw / scope_vendor] if scope_vendor else sorted(p for p in raw.iterdir() if p.name != 'reports')
+        for vendor in _raw_directories(vendors, allowed, warnings, ignore_patterns):
+            libraries = [vendor / scope_library] if scope_library else sorted(vendor.iterdir())
+            for library in _raw_directories(libraries, allowed, warnings, ignore_patterns):
+                targets[(vendor.name, library.name)].append(library)
     total_libs = len(targets)
-    for idx, (vendor, library) in enumerate(targets, 1):
+    walked = skipped = 0
+    for idx, ((vendor, lib), paths) in enumerate(targets.items(), 1):
         check_cancel(cancel_event, 'L1 RAW 盘点已由用户终止')
-        emit_progress(progress_cb, 'L1', f'L1 盘点 RAW {vendor.name}/{library.name} ({idx}/{total_libs})', completed=idx - 1, total=total_libs)
-        children = [x for x in library.iterdir() if not x.is_symlink() and x.is_dir()]
-        versions = [x for x in children if SAFE.fullmatch(x.name) and _version_directory(x.name)]
-        if versions:
-            for item in children:
-                if item not in versions and not _matches_ignore(item.name, item.name, ignore_patterns):
-                    warnings.append(f'未识别为版本目录，已跳过: {item}')
+        emit_progress(progress_cb, 'L1', f'L1 盘点 RAW {vendor}/{lib} ({idx}/{total_libs})', completed=idx - 1, total=total_libs)
+        versions = defaultdict(list)
+        for library in paths:
+            for path in _raw_directories(sorted(library.iterdir()), allowed, warnings, ignore_patterns):
+                if not _version_directory(path.name):
+                    warnings.append(f'无效日期版本目录，已跳过: {path}')
+                    continue
+                versions[path.name].append(path)
         walked_before, skipped_before = walked, skipped
         incomplete = 0
-        for version in sorted(versions, key=lambda p: natural_version_key(p.name)):
+        first_observed = None
+        for name in sorted(versions, key=natural_version_key):
             check_cancel(cancel_event, 'L1 RAW 盘点已由用户终止')
-            key = (vendor.name, library.name, version.name)
-            cached = archived.get(key) if archived else None
-            if cached and cached.get('root') == str(version):
-                records.append(cached)
-                for kind, paths in cached['views'].items():
+            candidates = versions[name]
+            if len({path.resolve() for path in candidates}) > 1:
+                warnings.append(f'{vendor}/{lib}/{name}: 多个 RAW 根存在同名版本，未登记: ' + ', '.join(map(str, candidates)))
+                incomplete += 1
+                continue
+            key = (vendor, lib, name)
+            previous = archived.get(key)
+            version = next((path for path in candidates if previous and str(path) == previous['root']), candidates[0])
+            if key in reusable and previous['root'] == str(version) and version.resolve() == version:
+                records.append(previous)
+                for kind, paths in previous['views'].items():
                     for rel in paths:
-                        lookup.setdefault(str(version / rel), []).append((vendor.name, library.name, version.name, kind))
+                        raw_path = str(version / rel)
+                        lookup[raw_path].add((*key, kind, raw_path, raw_path))
                 skipped += 1
                 continue
             walked += 1
-            files = []
             errors = []
-            metadata = {}
-            for current, dirs, names in os.walk(version, followlinks=False, onerror=lambda e: errors.append(str(e))):
-                check_cancel(cancel_event, 'L1 RAW 盘点已由用户终止')
-                dirs.sort()
-                names.sort()
-                for name in list(dirs):
-                    dpath = Path(current) / name
-                    drel = dpath.relative_to(version).as_posix()
-                    if _matches_ignore(name, drel, ignore_patterns):
-                        dirs.remove(name)
-                        continue
-                    if dpath.is_symlink():
-                        errors.append('目录链接未扫描: ' + str(dpath))
-                        dirs.remove(name)
-                for name in names:
-                    p = Path(current) / name
-                    rel = p.relative_to(version).as_posix()
-                    if _matches_ignore(name, rel, ignore_patterns):
-                        continue
-                    if p.is_symlink() or not p.is_file():
-                        errors.append('非普通文件未扫描: ' + str(p))
-                        continue
-                    try:
-                        info = p.stat()
-                    except OSError as exc:
-                        errors.append(str(exc))
-                        continue
-                    files.append(rel)
-                    metadata[rel] = (info.st_size, info.st_mtime_ns)
+            try:
+                scanned = list(_walk_raw_version(version, allowed, ignore_patterns, errors, cancel_event))
+            except (OSError, ValueError) as exc:
+                errors.append(str(exc))
+                scanned = []
             if errors:
                 incomplete += 1
                 warnings.extend(errors)
                 warnings.append(f'{version}: 盘点不完整，不发布')
                 continue
-            if not files:
+            if not scanned:
                 continue
+            if first_observed is None:
+                first_observed = read_raw_observations(library_folder(output, vendor, lib)) if output.is_dir() else {}
             views = defaultdict(list)
-            for path in files:
-                views[_view(path, extra_extensions=extra_extensions)].append(path)
-            row = {
-                'vendor': vendor.name,
-                'library': library.name,
-                'version': version.name,
-                'version_date': version_date(version.name),
-                'directory_created_at': directory_birthtime(version),
-                'root': str(version),
-                'views': dict(sorted(views.items())),
-            }
-            records.append(row)
-            if observations is not None:
-                observations[key] = metadata
-            for path in files:
-                lookup.setdefault(str(version / path), []).append((vendor.name, library.name, version.name, _view(path, extra_extensions=extra_extensions)))
-        if stats is not None and versions:
+            archived_members = {
+                rel: kind for kind, paths in previous['views'].items() for rel in paths
+            } if previous else {}
+            for rel, size, mtime, target in scanned:
+                kind = _view(rel, extra_extensions=extra_extensions)
+                views[kind].append(rel)
+                if previous:
+                    if previous['root'] != str(version) or rel not in archived_members:
+                        continue
+                    kind = archived_members[rel]
+                elif not update_raw:
+                    continue
+                raw_path = str(version / rel)
+                recorded = first_observed.get((name, rel))
+                expected = recorded[2] if recorded is not None else target
+                record = (*key, kind, raw_path, expected or raw_path)
+                lookup[raw_path].add(record)
+                if expected and expected == target:
+                    lookup[expected].add(record)
+            records.append({
+                'vendor': vendor, 'library': lib, 'version': name,
+                'version_date': version_date(name), 'directory_mtime': directory_mtime(version),
+                'root': str(version), 'views': {kind: sorted(paths) for kind, paths in sorted(views.items())},
+            })
+            observations[key] = {rel: (size, mtime, target) for rel, size, mtime, target in scanned}
+        if versions:
             stats.setdefault('source_verifications', []).append({
-                'vendor': vendor.name,
-                'library': library.name,
-                'source': 'RAW',
-                'at': utc_text(),
-                'versions_walked': walked - walked_before,
-                'versions_reused': skipped - skipped_before,
+                'vendor': vendor, 'library': lib, 'source': 'RAW', 'at': utc_text(),
+                'versions_walked': walked - walked_before, 'versions_reused': skipped - skipped_before,
                 'versions_incomplete': incomplete,
             })
-    if stats is not None:
-        stats['raw_versions_walked'] = walked
-        stats['raw_versions_skipped'] = skipped
+    stats.update(raw_versions_walked=walked, raw_versions_skipped=skipped)
     return records, lookup
 
 
-def _inventory_formal(root, lookup, nl_version, warnings, unresolved, *, raw_root=None, scope_vendor=None, scope_library=None):
+def _inventory_formal(root, lookup, nl_version, warnings, unresolved, independent, *, raw_roots=(), scope_vendor=None, scope_library=None):
     groups = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    scoped = bool(scope_vendor and scope_library and raw_root is not None)
-    scope_dir = (Path(raw_root) / scope_vendor / scope_library).resolve() if scoped else None
+    scope_dirs = [(raw / scope_vendor / scope_library).resolve() for raw in raw_roots] if scope_library else []
 
     def onerror(exc):
         warnings.append('NL 目录不可读取: ' + str(exc))
@@ -332,14 +375,23 @@ def _inventory_formal(root, lookup, nl_version, warnings, unresolved, *, raw_roo
             p = Path(current) / name
             if p.is_symlink():
                 rel = p.relative_to(root).as_posix()
-                warnings.append('NL 目录链接未展开: ' + rel)
-                unresolved.append({'path': rel, 'target': os.readlink(p), 'resolved': None, 'reason': 'DIRECTORY_SYMLINK'})
                 dirs.remove(name)
+                target = os.readlink(p)
+                try:
+                    resolved = p.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    resolved = None
+                if resolved is not None and not any(resolved.is_relative_to(raw) for raw in raw_roots):
+                    independent.append((rel, target, str(resolved), 'NL_ONLY:DIRECTORY_LINK'))
+                else:
+                    warnings.append('NL 目录链接未展开: ' + rel)
+                    unresolved.append({'path': rel, 'target': target, 'resolved': str(resolved) if resolved else None, 'reason': 'DIRECTORY_SYMLINK'})
         for name in names:
             path = Path(current) / name
             rel = path.relative_to(root).as_posix()
             if not path.is_symlink():
-                warnings.append('NL 普通文件未归属: ' + rel)
+                if path.is_file():
+                    independent.append((rel, '', str(path), 'NL_ONLY:FILE'))
                 continue
             try:
                 target = os.readlink(path)
@@ -355,16 +407,31 @@ def _inventory_formal(root, lookup, nl_version, warnings, unresolved, *, raw_roo
                 warnings.append(f'NL 链接失效: {rel}: {exc}')
                 unresolved.append({'path': rel, 'target': target, 'resolved': None, 'reason': 'UNRESOLVED'})
                 continue
-            if scoped and resolved.is_relative_to(raw_root) and not resolved.is_relative_to(scope_dir):
-                # Belongs to a sibling library outside the requested single-library scope; do not misclassify as UNMATCHED.
+            textual = Path(os.path.normpath(path.parent / target))
+            # Direct references identify the RAW path even when multiple aliases share its target.
+            direct = {item for item in lookup.get(str(textual), ()) if item[-2] == str(textual)}
+            matches = {item for item in direct if item[-1] == str(resolved)} if direct else lookup.get(str(resolved), ())
+            if direct and not matches:
+                warnings.append(f'NL 链接指向已变化的 RAW 链接: {rel} → {resolved}')
+                unresolved.append({'path': rel, 'target': target, 'resolved': str(resolved), 'reason': 'RAW_TARGET_CHANGED'})
                 continue
-            matches = lookup.get(str(resolved), [])
+            if not direct and scope_dirs and any(textual.is_relative_to(raw) for raw in raw_roots) and not any(
+                textual.is_relative_to(raw / scope_vendor / scope_library) or textual.is_relative_to(scope)
+                for raw, scope in zip(raw_roots, scope_dirs)
+            ):
+                continue
+            if not matches and not any(resolved.is_relative_to(raw) or textual.is_relative_to(raw) for raw in raw_roots):
+                independent.append((rel, target, str(resolved), 'NL_ONLY:LINK'))
+                continue
             if len(matches) != 1:
                 warnings.append(f'NL 来源无法唯一归属: {rel} → {resolved}')
                 unresolved.append({'path': rel, 'target': target, 'resolved': str(resolved), 'reason': 'UNMATCHED' if not matches else 'AMBIGUOUS'})
                 continue
-            vendor, library, version, view = matches[0]
-            groups[(vendor, library)][view][version].append({'path': rel, 'target': target, 'resolved': str(resolved)})
+            (vendor, library, version, view, raw_path, _), = matches
+            link = {'path': rel, 'target': target, 'resolved': str(resolved)}
+            if raw_path != str(resolved):
+                link['raw_path'] = raw_path
+            groups[(vendor, library)][view][version].append(link)
     at = utc_text()
     return [
         {
@@ -405,13 +472,16 @@ def update_pointer(folder, name, target):
         tmp.unlink(missing_ok=True)
 
 
-def _latest_delivery(folder, warnings, work, vendor, library, *, registration_times_fn=None):
-    items = []
-    for path in archive_files(folder, 'delivery', 'delivery_*.json'):
-        if path.is_symlink():
-            raise ValueError('交付文件不能是链接')
-        value = json.loads(path.read_text(encoding='utf-8'))
-        items.append((path, value))
+def _latest_delivery(folder, warnings, work, vendor, library, *, registration_times_fn=None, existing_items=None):
+    if existing_items is not None:
+        items = list(existing_items)
+    else:
+        items = []
+        for path in archive_files(folder, 'delivery', 'delivery_*.json'):
+            if path.is_symlink():
+                raise ValueError('交付文件不能是链接')
+            value = read_json_readonly(path)
+            items.append((path, value))
     if not items:
         return
     if len(items) == 1:
@@ -452,14 +522,16 @@ def inventory_sources(
         raise ValueError('L1 盘点至少需要启用 RAW 或 Formal 之一')
     if bool(vendor) != bool(library) or any(x and (not SAFE.fullmatch(x) or x in ('.', '..')) for x in (vendor, library)):
         raise ValueError('供应商和库必须同时指定且名称安全')
-    raw = Path(raw_root).resolve(strict=True) if (update_raw or update_formal) and raw_root else None
+    config = load_work_config(output)
+    raw_roots = source_directories(raw_root if raw_root is not None else raw_root_values(config))
+    link_roots = source_directories(config.get('raw_link_roots')) if raw_roots else ()
     nl = Path(nl_root).resolve(strict=True) if update_formal and nl_root else None
     out = Path(output).resolve()
-    if (update_raw or update_formal) and (raw is None or not raw.is_dir()):
+    if update_raw and not raw_roots:
         raise ValueError('需要 RAW 总目录')
     if update_formal and (nl is None or not nl.is_dir()):
         raise ValueError('需要 NL 总目录')
-    if any(out.is_relative_to(p) or p.is_relative_to(out) for p in (raw, nl) if p is not None):
+    if any(out.is_relative_to(p) or p.is_relative_to(out) for p in (*raw_roots, *link_roots, nl) if p is not None):
         raise ValueError('输出目录不得与 RAW 或 NL 目录重叠')
     version = (nl_version or infer_nl_version(nl)) if update_formal else None
     if version and (not SAFE.fullmatch(version) or version in ('.', '..')):
@@ -470,30 +542,35 @@ def inventory_sources(
         ignore_patterns = cfg_ignore
     merged_ext = {**cfg_ext, **(extra_extensions or {})} if (cfg_ext or extra_extensions) else None
 
-    archived = _load_archived_deliveries(out, vendor, library) if (raw and not verify_raw) else None
+    archived, reusable = _load_archived_deliveries(out, vendor, library) if raw_roots else ({}, set())
     observations = {}
     raw_stats = {}
     warnings = []
     # Single-library scope is honored even when update_formal=True (sibling symlinks are skipped cleanly).
     deliveries, lookup = (
         _inventory_raw(
-            raw,
+            raw_roots,
             warnings,
             observations,
+            output=out,
+            link_roots=link_roots,
             scope_vendor=vendor,
             scope_library=library,
             archived=archived,
+            reusable=set() if verify_raw else reusable,
+            update_raw=update_raw,
             ignore_patterns=ignore_patterns,
             extra_extensions=merged_ext,
             stats=raw_stats,
             progress_cb=progress_cb,
             cancel_event=cancel_event,
         )
-        if raw
+        if raw_roots
         else ([], {})
     )
     check_cancel(cancel_event, 'L1 扫描已由用户终止')
     unresolved = []
+    independent = []
     if update_formal:
         emit_progress(progress_cb, 'L1', f'L1 盘点 Formal NL ({version})…')
     formals = (
@@ -503,7 +580,8 @@ def inventory_sources(
             version,
             warnings,
             unresolved,
-            raw_root=raw,
+            independent,
+            raw_roots=raw_roots,
             scope_vendor=vendor,
             scope_library=library,
         )
@@ -521,13 +599,15 @@ def inventory_sources(
         'raw_versions_walked': raw_stats.get('raw_versions_walked', 0),
         'raw_versions_skipped': raw_stats.get('raw_versions_skipped', 0),
         'new_deliveries_by_lib': {},
+        'new_formals_by_lib': {},
         'touched_libraries': [],
         'source_verifications': raw_stats.get('source_verifications', []) if update_raw else [],
         'warnings': warnings,
     }
     if update_formal:
         status = 'PARTIAL' if unresolved else 'COMPLETE'
-        result.update(formal_observation_status=status, formal_unresolved=unresolved)
+        result.update(formal_observation_status=status, formal_unresolved=unresolved,
+                      formal_independent_count=len(independent), formal_independent=independent)
         result['source_verifications'].extend({
             'vendor': row['vendor'],
             'library': row['library'],
@@ -554,8 +634,9 @@ def inventory_sources(
                 for source_version, links in versions.items():
                     for link in links:
                         matched_rows.append((link['path'], link['target'], link['resolved'], f"MATCHED:{formal['vendor']}/{formal['library']}/{source_version}/{kind}"))
+        observed_rows = [*matched_rows, *independent]
         obs_digest = hashlib.sha256(
-            json.dumps({'nl_root': str(nl), 'nl_version': version, 'matched': matched_rows}, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+            json.dumps({'nl_root': str(nl), 'nl_version': version, 'matched': observed_rows}, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
         ).hexdigest()
         with locked(out):
             if log.is_symlink():
@@ -580,7 +661,7 @@ def inventory_sources(
                     writer.writerow([stamp, str(nl), version, 'UNCHANGED', '', '', '', f'SAME_AS_PREVIOUS:{len(matched_rows)}', run])
                 else:
                     writer.writerow([stamp, str(nl), version, status, '', '', '', f'SCOPE:{vendor}/{library}' if scoped_formal else '', run])
-                    for m_path, m_target, m_resolved, m_tag in matched_rows:
+                    for m_path, m_target, m_resolved, m_tag in observed_rows:
                         writer.writerow([stamp, str(nl), version, status, m_path, m_target, m_resolved, m_tag, run])
                     for item in unresolved:
                         writer.writerow([stamp, str(nl), version, status, item['path'], item['target'] or '', item['resolved'] or '', item['reason'], run])
@@ -610,14 +691,9 @@ def inventory_sources(
             observation_path = log_file(folder, 'raw_observations.tsv')
             if observation_path.is_symlink():
                 raise ValueError('RAW 观察记录不能为软链接')
-            baseline = {}
-            if observation_path.exists():
-                with observation_path.open(encoding='utf-8', newline='') as stream:
-                    for record in csv.reader(stream, delimiter='\t'):
-                        if len(record) != 5:
-                            raise ValueError('RAW 观察记录格式无效')
-                        old_version, old_path, size, mtime, _ = record
-                        baseline.setdefault(old_version, {})[old_path] = (int(size), int(mtime))
+            baseline = defaultdict(dict)
+            for (old_version, old_path), stat in read_raw_observations(folder).items():
+                baseline[old_version][old_path] = stat
             new_observations = []
             for delivery in rows['deliveries']:
                 version_name = delivery['version']
@@ -630,70 +706,97 @@ def inventory_sources(
                         warnings.append(f'{v}/{lib}/{version_name}: {len(changed)} 个文件大小或修改时间变化，疑似原地修改；不证明内容相同或历史可还原')
                 else:
                     stamp = utc_text()
-                    new_observations.extend([version_name, path, size, mtime, stamp] for path, (size, mtime) in sorted(current.items()))
+                    for path, (size, mtime, target) in sorted(current.items()):
+                        row = [version_name, path, size, mtime, stamp]
+                        new_observations.append([*row, target] if target else row)
             if new_observations:
                 with observation_path.open('a', encoding='utf-8', newline='') as stream:
                     csv.writer(stream, delimiter='\t', lineterminator='\n').writerows(new_observations)
                     stream.flush()
                     os.fsync(stream.fileno())
 
-            for delivery in rows['deliveries']:
-                prior = []
+            existing_items = []
+            existing_by_version = defaultdict(list)
+            if rows['deliveries'] or update_raw:
                 for p in archive_files(folder, 'delivery', 'delivery_*.json'):
                     if p.is_symlink():
                         raise ValueError('交付文件不能是链接')
-                    value = json.loads(p.read_text(encoding='utf-8'))
-                    if set(value) != {'vendor', 'library', 'version', 'version_date', 'directory_created_at', 'root', 'views'}:
-                        raise ValueError('输出目录含非七字段交付，需使用独立目录')
-                    if value['version'] == delivery['version']:
-                        prior.append(value)
+                    value = read_json_readonly(p)
+                    if not is_delivery_minimal(value):
+                        raise ValueError('输出目录含非规范交付，需使用独立目录')
+                    existing_items.append((p, value))
+                    existing_by_version[value['version']].append(value)
+
+            for delivery in rows['deliveries']:
+                prior = existing_by_version.get(delivery['version'], [])
                 if len(prior) > 1:
                     raise ValueError('输出含重复版本交付')
                 if prior:
                     former = dict(prior[0])
                     current_d = dict(delivery)
+                    if ('directory_mtime' in former) != ('directory_mtime' in current_d):
+                        # Birth time and modification time describe different events.
+                        for value in (former, current_d):
+                            value.pop('directory_created_at', None)
+                            value.pop('directory_mtime', None)
                     for value in (former, current_d):
-                        if value.get('directory_created_at'):
-                            value['directory_created_at'] = utc_text(value['directory_created_at'])
+                        if value.get('directory_mtime'):
+                            value['directory_mtime'] = utc_text(value['directory_mtime'])
                     if former != current_d:
-                        changed = [key for key in former if former.get(key) != current_d.get(key)]
-                        names = {'directory_created_at': '目录创建时间', 'views': '文件清单', 'root': '来源目录'}
+                        changed = [key for key in sorted(set(former) | set(current_d)) if former.get(key) != current_d.get(key)]
+                        names = {
+                            'directory_mtime': '目录修改时间(mtime)',
+                            'views': '文件清单',
+                            'root': '来源目录',
+                        }
                         warnings.append(f'{v}/{lib}/{delivery["version"]}: ' + '、'.join(names.get(key, key) for key in changed) + '与已登记交付不同；保留历史，未比较文件内容')
                     else:
                         result['delivery_unchanged'] += 1
                     continue
-                stamp = delivery['version_date'].replace('-', '') if delivery['version_date'] else 'undated'
-                prefix = f'delivery_{lib}_{stamp}'
                 delivery_dir = storage_dir(folder, 'delivery')
-                write_atomic(delivery_dir / next_filename(delivery_dir, prefix), delivery, immutable=True)
+                target_delivery = delivery_dir / _delivery_filename(delivery_dir, lib, delivery['version'])
+                write_atomic(target_delivery, delivery, immutable=True)
+                existing_items.append((target_delivery, delivery))
+                existing_by_version[delivery['version']].append(delivery)
                 result['delivery_created'] += 1
                 result['new_deliveries_by_lib'].setdefault((v, lib), []).append(delivery['version'])
 
             if update_raw:
-                _latest_delivery(folder, warnings, out, v, lib, registration_times_fn=registration_times_fn)
+                _latest_delivery(
+                    folder,
+                    warnings,
+                    out,
+                    v,
+                    lib,
+                    registration_times_fn=registration_times_fn,
+                    existing_items=existing_items,
+                )
 
-            for formal in rows['formals']:
+            if rows['formals']:
                 previous = []
                 for p in archive_files(folder, 'formal', 'formal_' + version + '_*.json'):
                     if p.is_symlink():
                         raise ValueError('正式快照文件不能是链接')
-                    value = json.loads(p.read_text(encoding='utf-8'))
+                    value = read_json_readonly(p)
                     previous.append((instant(value['observed_at']), p, value))
                 previous.sort(key=lambda x: (utc_text(x[0]), x[1].name))
-                if unresolved:
-                    warnings.append(f'{v}/{lib}: 正式来源观察不完整，暂不发布快照')
-                    continue
-                compare = lambda x: {k: v for k, v in x.items() if k != 'observed_at'}
-                if previous and compare(previous[-1][2]) == compare(formal):
-                    result['formal_unchanged'] += 1
-                    update_pointer(folder, 'latest_formal_' + version + '.json', str(previous[-1][1].relative_to(folder)))
-                    continue
-                stamp = instant(formal['observed_at']).strftime('%Y%m%dT%H%M%SZ')
-                formal_dir = storage_dir(folder, 'formal')
-                target = formal_dir / next_filename(formal_dir, 'formal_' + version + '_' + stamp)
-                write_atomic(target, formal, immutable=True)
-                result['formal_created'] += 1
-                update_pointer(folder, 'latest_formal_' + version + '.json', str(target.relative_to(folder)))
+                for formal in rows['formals']:
+                    if unresolved:
+                        warnings.append(f'{v}/{lib}: 正式来源观察不完整，暂不发布快照')
+                        continue
+                    compare = lambda x: {k: v for k, v in x.items() if k != 'observed_at'}
+                    if previous and compare(previous[-1][2]) == compare(formal):
+                        result['formal_unchanged'] += 1
+                        update_pointer(folder, 'latest_formal_' + version + '.json', str(previous[-1][1].relative_to(folder)))
+                        continue
+                    stamp = instant(formal['observed_at']).strftime('%Y%m%dT%H%M%SZ')
+                    formal_dir = storage_dir(folder, 'formal')
+                    target = formal_dir / next_filename(formal_dir, 'formal_' + version + '_' + stamp)
+                    write_atomic(target, formal, immutable=True)
+                    previous.append((instant(formal['observed_at']), target, formal))
+                    result['formal_created'] += 1
+                    result['new_formals_by_lib'].setdefault((v, lib), []).append(target.name)
+                    update_pointer(folder, 'latest_formal_' + version + '.json', str(target.relative_to(folder)))
     return result
 
 
@@ -713,8 +816,9 @@ def build_from_roots(
     ignore_patterns=None,
     progress_cb=None,
     cancel_event=None,
+    post_inventory_hook=None,
 ):
-    """Backward-compatible facade combining L1 inventory with optional L2/L3 delegation to application.path_refresh."""
+    """Backward-compatible facade combining L1 inventory with injectable L2/L3 post-inventory hook."""
     if not any((update_raw, update_formal, update_index)):
         raise ValueError('至少选择一项更新')
     if bool(vendor) != bool(library) or any(x and (not SAFE.fullmatch(x) or x in ('.', '..')) for x in (vendor, library)):
@@ -758,17 +862,18 @@ def build_from_roots(
         'effective_published': 0,
         'effective_pending': 0,
     }
-    # Legacy compatibility delegation: L2/L3 state & orchestration live solely in application.path_refresh.
-    from ai_lib_qor.application.path_refresh import _complete_legacy_build
-    _complete_legacy_build(
-        out,
-        result,
-        new_deliveries_by_lib=inv['new_deliveries_by_lib'],
-        touched_libraries=inv['touched_libraries'],
-        update_raw=update_raw,
-        update_index=update_index,
-        auto_effective=auto_effective,
-        vendor=vendor,
-        library=library,
-    )
+    from ai_lib_qor.versions.runtime import get_hook
+    hook = post_inventory_hook if post_inventory_hook is not None else get_hook('sources.post_inventory')
+    if hook is not None:
+        hook(
+            out,
+            result,
+            new_deliveries_by_lib=inv['new_deliveries_by_lib'],
+            touched_libraries=inv['touched_libraries'],
+            update_raw=update_raw,
+            update_index=update_index,
+            auto_effective=auto_effective,
+            vendor=vendor,
+            library=library,
+        )
     return result

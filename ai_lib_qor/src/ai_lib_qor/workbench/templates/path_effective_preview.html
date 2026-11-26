@@ -3,22 +3,24 @@
 {% block breadcrumbs %}
   <a href="{{ url_for('overview') }}">来源总览</a>
   <span class="crumb-sep" aria-hidden="true">/</span>
-  <a href="{{ url_for('library_page',vendor=vendor,library=library) }}" translate="no">{{ vendor }} · {{ library }}</a>
+  <a href="{{ url_for('library_page',vendor=vendor,library=library,ip=draft.business_ip) }}" translate="no">{{ vendor }} · {{ library }}{% if draft.business_ip %} / {{ draft.business_ip }}{% endif %}</a>
   <span class="crumb-sep" aria-hidden="true">/</span>
   <span class="crumb-curr">版本变更预览</span>
 {% endblock %}
 {% block topbar_right %}
-  <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library) }}">返回库与版本</a>
+  <a class="btn secondary btn-sm" href="{{ url_for('library_page',vendor=vendor,library=library,ip=draft.business_ip) }}">返回库与版本</a>
 {% endblock %}
 
 {% block content %}
 <div class="page-head">
   <div class="page-title-group">
-    <div class="page-eyebrow">有效版本变更预览</div>
+    <div class="page-eyebrow">有效版本变更预览{% if draft.business_ip %} · <span translate="no">{{ draft.business_ip }}</span>{% endif %}</div>
     <h1>确认发布新有效版本</h1>
     <p>确认后将基于父版本生成新的完整有效版本，历史版本保持只读不变；若期间父版本已变化，需重新预览。</p>
   </div>
   <div class="toolbar-group">
+    {% if draft.ip_type %}<span class="chip" translate="no">{{ draft.ip_type }}</span>{% endif %}
+    {% if draft.business_ip %}<span class="chip chip-accent">业务 IP <span translate="no">{{ draft.business_ip }}</span></span>{% endif %}
     <span class="chip chip-accent">父版本 <span translate="no">{{ draft.parent }}</span></span>
     {% if draft.action == 'restore' %}
     <span class="tag tag-updated">恢复目标 <span class="mono" translate="no">{{ draft.revision }}</span></span>
@@ -88,9 +90,10 @@
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <input type="hidden" name="vendor" value="{{ vendor }}">
         <input type="hidden" name="library" value="{{ library }}">
+        {% if draft.business_ip %}<input type="hidden" name="ip" value="{{ draft.business_ip }}">{% endif %}
         <button type="submit">确认发布</button>
       </form>
-      <a class="btn secondary" href="{{ url_for('library_page',vendor=vendor,library=library) }}">取消</a>
+      <a class="btn secondary" href="{{ url_for('library_page',vendor=vendor,library=library,ip=draft.business_ip) }}">取消</a>
     </div>
   </div>
 </section>

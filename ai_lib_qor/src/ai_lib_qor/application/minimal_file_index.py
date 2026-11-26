@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from ai_lib_qor.sources.layout import library_folder,archive_files
 from ai_lib_qor.sources.minimal_delivery import order_deliveries
 from ai_lib_qor.sources.timestamps import instant,utc_text
-from ai_lib_qor.versions.store import locked,write_atomic,validate
+from ai_lib_qor.versions.store import locked, read_json_readonly, validate, write_atomic
 from .minimal_effective import _deliveries,_history
 
 
@@ -53,8 +53,7 @@ def build_index(work,vendor,library):
     snapshots=[]
     for p in archive_files(folder,'formal','formal_*.json'):
         if p.is_symlink():raise ValueError('正式快照不能为软链接')
-        f=json.loads(p.read_text(encoding='utf-8'))
-        validate(f,'formal_path')
+        f=read_json_readonly(p,'formal_path')
         if set(f)!={'version','vendor','library','root','observed_at','views'} or (f['vendor'],f['library'])!=(vendor,library):raise ValueError('正式快照范围或格式不正确')
         snapshots.append((instant(f['observed_at']),p.name,f))
     snapshots.sort(key=lambda x:(x[0],x[1]))
@@ -69,15 +68,19 @@ def build_index(work,vendor,library):
                 raw_root=_root(d['root'])
                 for link in links:
                     link_rel=_relative(link['path']);resolved=_root(link['resolved'])
-                    if not Path(resolved).is_relative_to(raw_root):raise ValueError('正式来源不在记录的版本目录')
-                    rel=_relative(Path(resolved).relative_to(raw_root).as_posix())
-                    if known.get((view,version,rel))!=resolved:raise ValueError('正式来源不在交付清单中')
+                    raw_path = _root(link.get('raw_path', resolved))
+                    if not Path(raw_path).is_relative_to(raw_root):raise ValueError('正式来源不在记录的版本目录')
+                    rel=_relative(Path(raw_path).relative_to(raw_root).as_posix())
+                    if known.get((view,version,rel))!=raw_path:raise ValueError('正式来源不在交付清单中')
                     if not isinstance(link['target'],str):raise ValueError('正式链接目标无效')
                     link_path=os.path.join(root,link_rel)
                     textual=os.path.normpath(link['target'] if os.path.isabs(link['target']) else os.path.join(os.path.dirname(link_path),link['target']))
-                    node(view,rel)['nl'].append({'snapshot_id':snapshot_id,'version':f['version'],'observed_at':f['observed_at'],
-                      'link_path':link_path,'link_target':link['target'],'resolved_path':resolved,
-                      'source_match':'MATCHED_RAW' if textual==resolved else 'UNVERIFIED'})
+                    row = {'snapshot_id':snapshot_id,'version':f['version'],'observed_at':f['observed_at'],
+                           'link_path':link_path,'link_target':link['target'],'resolved_path':resolved,
+                           'source_match':'MATCHED_RAW' if textual==resolved or 'raw_path' in link else 'UNVERIFIED'}
+                    if 'raw_path' in link:
+                        row['raw_path'] = raw_path
+                    node(view,rel)['nl'].append(row)
     for _,_,effective in _history(folder,library):
         if (effective.get('vendor'),effective.get('library'))!=(vendor,library):raise ValueError('有效版本范围不一致')
         revision=effective['revision'];index['revisions'].append(revision);seen=set()
@@ -270,7 +273,7 @@ def read_manifest(work, vendor, library):
     if mpath.is_symlink() or not mpath.is_file():
         return None
     try:
-        data = json.loads(mpath.read_text(encoding='utf-8'))
+        data = read_json_readonly(mpath)
         if isinstance(data, dict) and data.get('schema') == 'file_index_manifest.v1' and (data.get('vendor'), data.get('library')) == (vendor, library):
             return data
     except (OSError, ValueError, TypeError):

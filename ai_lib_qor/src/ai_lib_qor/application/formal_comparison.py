@@ -11,7 +11,7 @@ def formal_link_relation(link, effective):
         return '无法确认'
     if effective is None:
         return '无法对照'
-    return '来源相同' if link['resolved_path'] == effective['path'] else '来源不同'
+    return '来源相同' if link.get('raw_path', link['resolved_path']) == effective['path'] else '来源不同'
 
 
 def compare_formal_member(snapshot, history, effective):

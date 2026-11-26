@@ -1,18 +1,23 @@
 """Local three-level workbench app factory assembling modular page, action, and API routes."""
 import hmac
+import ipaddress
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from flask import Flask, abort, request, session
+from flask import Flask, abort, g, has_request_context, request, session
 
+from ai_lib_qor.application.path_storage import StorageStatsCache
 from ai_lib_qor.sources.layout import library_folder
+from ai_lib_qor.sources.config_reader import load_work_config, raw_root_values
 from .jobs import JobManager
+from .read_cache import WorkbenchReadCache
 from .routes_actions import register_action_routes
 from .routes_api import register_api_routes
 from .routes_pages import register_page_routes
 
 
-def create_path_app(work_root):
+def create_path_app(work_root, *, subprocess_jobs: bool | None = None):
     work = Path(work_root).resolve(strict=True)
     if not work.is_dir():
         raise ValueError('工作目录不存在')
@@ -21,12 +26,50 @@ def create_path_app(work_root):
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
-    jobs = JobManager(max_workers=2, work_root=work)
+    settings = load_work_config(work).get('workbench', {})
+    if not isinstance(settings, dict):
+        raise ValueError('workbench 必须为对象')
+    host, port = settings.get('host', '127.0.0.1'), settings.get('port', 5050)
+    if not isinstance(host, str) or not host.strip() or type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('workbench.host 或 workbench.port 无效')
+    clients = settings.get('allowed_clients', [])
+    hosts = settings.get('allowed_hosts', [])
+    if any(not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values)
+           for values in (clients, hosts)):
+        raise ValueError('workbench.allowed_clients 和 allowed_hosts 必须为字符串数组')
+    networks = tuple(ipaddress.ip_network(value) for value in ['127.0.0.0/8', '::1/128', *clients])
+    allowed_hosts = {'localhost', '127.0.0.1', '::1', *(value.lower().strip('[]') for value in hosts)}
+    from ai_lib_qor.application.path_config import workbench_runtime_settings
+    runtime_cfg = workbench_runtime_settings(work)
+    app.config.update(
+        QOR_BIND_HOST=host,
+        QOR_BIND_PORT=port,
+        QOR_MAX_WORKERS=runtime_cfg['max_workers'],
+        QOR_INDEX_PAGE_SIZE=runtime_cfg['index_page_size'],
+        QOR_JSON_INVENTORY_PAGE_SIZE=runtime_cfg['json_inventory_page_size'],
+    )
+    env_sub = os.environ.get('AI_LIB_QOR_SUBPROCESS_JOBS')
+    if subprocess_jobs is not None:
+        use_subprocess = bool(subprocess_jobs)
+    elif env_sub is not None and env_sub.strip() != '':
+        use_subprocess = env_sub.strip().lower() in ('1', 'true', 'yes', 'on')
+    else:
+        use_subprocess = bool(settings.get('subprocess_jobs', False))
+    jobs = JobManager(max_workers=runtime_cfg['max_workers'], work_root=work, subprocess_jobs=use_subprocess)
+    read_cache = WorkbenchReadCache(work)
     app.extensions['jobs'] = jobs
+    app.extensions['read_cache'] = read_cache
 
     @app.before_request
     def security():
-        if request.remote_addr not in ('127.0.0.1', '::1') or request.host.split(':', 1)[0] not in ('localhost', '127.0.0.1', '['):
+        try:
+            addr = ipaddress.ip_address(request.remote_addr)
+            request_host = urlsplit('//' + request.host).hostname
+        except ValueError:
+            abort(403)
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
+        if request_host not in allowed_hosts or not any(addr in network for network in networks):
             abort(403)
         if 'csrf' not in session:
             session['csrf'] = os.urandom(32).hex()
@@ -55,7 +98,9 @@ def create_path_app(work_root):
     def source_config():
         from ai_lib_qor.application.path_config import load_path_config, update_options
         value = load_path_config(work)
-        return {**value, **update_options(value)}
+        raw_paths = raw_root_values(value)
+        return {**value, **update_options(value),
+                'raw_roots': [raw_paths] if isinstance(raw_paths, str) else raw_paths or []}
 
     @app.template_filter('clean_warning')
     def _clean_warning_filter(text):
@@ -95,6 +140,14 @@ def create_path_app(work_root):
         }
         key = str(state or '').strip()
         return mapping.get(key, key or '未知')
+
+    @app.template_filter('baseline_label')
+    def _baseline_label_filter(baseline):
+        if baseline == '__prev_file__':
+            return '按文件上一时间版本'
+        if baseline in (None, '', '__none__'):
+            return '无基线'
+        return str(baseline)
 
     @app.template_filter('parse_status_label')
     def _parse_status_label_filter(state):
@@ -142,25 +195,90 @@ def create_path_app(work_root):
         key = str(status or '').strip()
         return mapping.get(key, key or '未核验历史快照')
 
+    def request_signature():
+        if has_request_context():
+            sig = getattr(g, '_work_signature', None)
+            if sig is None:
+                sig = read_cache.signature()
+                g._work_signature = sig
+            return sig
+        return read_cache.signature()
+
+    def sidebar_signature():
+        if has_request_context():
+            sig = getattr(g, '_sidebar_signature', None)
+            if sig is None:
+                sig = read_cache.sidebar_signature()
+                g._sidebar_signature = sig
+            return sig
+        return read_cache.sidebar_signature()
+
+    def library_signature(vendor: str, library: str):
+        if has_request_context():
+            cache_map = getattr(g, '_library_signatures', None)
+            if cache_map is None:
+                cache_map = {}
+                g._library_signatures = cache_map
+            key = (vendor, library)
+            if key not in cache_map:
+                cache_map[key] = read_cache.library_signature(vendor, library)
+            return cache_map[key]
+        return read_cache.library_signature(vendor, library)
+
+    @app.after_request
+    def _invalidate_cache_after_write(response):
+        if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+            read_cache.invalidate()
+            if has_request_context():
+                g._work_signature = None
+                g._sidebar_signature = None
+                g._library_signatures = None
+        return response
+
     @app.context_processor
     def common():
-        lib_list = []
-        try:
-            for f in sorted((work / 'libraries').glob('*/*')):
-                if f.is_dir() and not f.is_symlink() and not f.parent.is_symlink():
-                    lib_list.append({'vendor': f.parent.name, 'library': f.name})
-        except OSError:
-            pass
+        def _load_libs():
+            out = []
+            try:
+                for f in sorted((work / 'libraries').glob('*/*')):
+                    if f.is_dir() and not f.is_symlink() and not f.parent.is_symlink():
+                        out.append({'vendor': f.parent.name, 'library': f.name})
+            except OSError:
+                pass
+            return out
+
+        lib_list = read_cache.get_or_compute('sidebar_all_libraries', _load_libs, sig=sidebar_signature())
+        total_libs = len(lib_list)
+        sidebar_compact = total_libs > 50
+        if sidebar_compact:
+            cur_v = request.args.get('vendor') or ''
+            cur_l = request.args.get('library') or ''
+            compact_list = [x for x in lib_list if x['vendor'] == cur_v and x['library'] == cur_l]
+            for item in lib_list:
+                if len(compact_list) >= 24:
+                    break
+                if item not in compact_list:
+                    compact_list.append(item)
+            sidebar_libs = compact_list
+        else:
+            sidebar_libs = lib_list
         return {
             'csrf': session.get('csrf'),
             'work_root': str(work),
             'notice': session.pop('path_notice', None),
-            'all_libraries': lib_list,
+            'all_libraries': sidebar_libs,
+            'all_libraries_total': total_libs,
+            'sidebar_compact': sidebar_compact,
         }
 
     ctx = {
         'work': work,
         'jobs': jobs,
+        'read_cache': read_cache,
+        'request_signature': request_signature,
+        'sidebar_signature': sidebar_signature,
+        'library_signature': library_signature,
+        'storage_cache': StorageStatsCache(),
         'scope': scope,
         'index_state': index_state,
         'source_config': source_config,

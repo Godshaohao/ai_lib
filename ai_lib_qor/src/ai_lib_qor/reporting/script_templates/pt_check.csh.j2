@@ -1,0 +1,116 @@
+#!/bin/csh -f
+# ==============================================================================
+# AI LIB QoR · PrimeTime 库检查脚本（自动生成自有效版本，供手动/LSF 执行）
+# ==============================================================================
+# Vendor         : {{ vendor }}
+# Library        : {{ library }}
+{% if business_ip -%}
+# Business IP    : {{ business_ip }} ({{ ip_type or 'N/A' }})
+{% endif -%}
+# Effective Rev  : {{ revision }}
+# Generated At   : {{ generated_at }}
+# Template       : {{ template }} ({{ template_source }})
+# Deliveries Used: {{ deliveries_used | join(', ') if deliveries_used else 'N/A' }}
+# Members Summary: DB={{ counts.DB }} | LIB={{ counts.LIBERTY }} | LEF={{ counts.LEF }}
+# ==============================================================================
+
+# ---------- [TODO: 按公司 EDA 环境修改以下变量] ----------
+setenv PT_BIN    "pt_shell"
+setenv RUN_DIR   "{{ output_dir }}"
+# 如需走 LSF 提交，可取消注释并按集群队列修改：
+# setenv BSUB_CMD "bsub -q normal -n 4 -R 'rusage[mem=16000]' -Is"
+# ---------------------------------------------------------
+
+mkdir -p "$RUN_DIR"
+set LOG_FILE     = "$RUN_DIR/pt_check.log"
+set SUMMARY_FILE = "$RUN_DIR/pt_summary.txt"
+set TCL_FILE     = "$RUN_DIR/run_pt.tcl"
+
+{% if not db_files %}
+echo "[WARN] 当前有效版本 {{ revision }} 未包含 .db 文件（LIB={{ counts.LIBERTY }}）。"
+echo "[WARN] 如需先用 Library Compiler 将 .lib 转 .db，或改用 read_lib，请调整下方 Tcl 模板。"
+{% endif %}
+
+cat << 'EOF_PT_TCL' > "$TCL_FILE"
+# Auto-generated PrimeTime library check script
+# Scope: {{ vendor }}/{{ library }}{% if business_ip %}::{{ business_ip }}{% endif %} ({{ revision }})
+
+set run_dir "{{ output_dir }}"
+set db_files [list \
+{% for item in db_files %}
+    "{{ item.absolute_path }}" \
+{% endfor %}
+]
+
+set lib_files_ref [list \
+{% for item in lib_files %}
+    "{{ item.absolute_path }}" \
+{% endfor %}
+]
+
+set lef_files_ref [list \
+{% for item in lef_files %}
+    "{{ item.absolute_path }}" \
+{% endfor %}
+]
+
+puts "=== \[AI_LIB_QOR\] PrimeTime Check Start: {{ vendor }}/{{ library }}{% if business_ip %}::{{ business_ip }}{% endif %} {{ revision }} ==="
+puts "DB files  : [llength $db_files]"
+puts "LIB files : [llength $lib_files_ref] (reference only)"
+puts "LEF files : [llength $lef_files_ref] (reference only)"
+
+if {[llength $db_files] == 0} {
+    puts "ERROR: No .db files found in effective revision {{ revision }}."
+    exit 2
+}
+
+# ---------- [TODO: 按公司 Sign-off 规则补充 PT 变量与检查项] ----------
+set_app_var target_library $db_files
+set_app_var link_library   [concat * $db_files]
+
+set total_libs 0
+set failed_libs 0
+
+foreach db_path $db_files {
+    puts "\n--- Checking DB: $db_path ---"
+    if {[catch {read_db $db_path} err]} {
+        puts "ERROR: read_db failed for $db_path : $err"
+        incr failed_libs
+        continue
+    }
+    incr total_libs
+}
+
+# 1. 库一致性与基础检查（check_library / report_lib）
+redirect -file "$run_dir/pt_check_library.rpt" {
+    catch {check_library}
+}
+
+foreach lib_obj [get_libs *] {
+    set lib_name [get_object_name $lib_obj]
+    puts "--- report_lib: $lib_name ---"
+    redirect -append -file "$run_dir/pt_report_lib.rpt" {
+        catch {report_lib $lib_name}
+    }
+}
+
+# 2. [TODO] 如需执行额外自定义规则（如 cell list / operating_conditions / CCS 检查），在此追加：
+# source /path/to/company_pt_lib_audit.tcl
+
+puts "=== \[AI_LIB_QOR\] PrimeTime Check Finished: loaded=$total_libs failed=$failed_libs ==="
+exit [expr {$failed_libs > 0 ? 1 : 0}]
+EOF_PT_TCL
+
+echo "[INFO] Running PrimeTime check in $RUN_DIR ..."
+echo "[INFO] Command: $PT_BIN -f $TCL_FILE"
+$PT_BIN -f "$TCL_FILE" |& tee "$LOG_FILE"
+set PT_STATUS = $status
+
+echo "=== PrimeTime Check Summary ({{ vendor }}/{{ library }}{% if business_ip %}::{{ business_ip }}{% endif %} {{ revision }}) ===" > "$SUMMARY_FILE"
+echo "Exit Status : $PT_STATUS" >> "$SUMMARY_FILE"
+echo "Error Count : `grep -ci 'error' $LOG_FILE`" >> "$SUMMARY_FILE"
+echo "Warn Count  : `grep -ci 'warning' $LOG_FILE`" >> "$SUMMARY_FILE"
+echo "Log File    : $LOG_FILE" >> "$SUMMARY_FILE"
+cat "$SUMMARY_FILE"
+
+exit $PT_STATUS

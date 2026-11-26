@@ -1,0 +1,74 @@
+{% if organizer_state %}
+<section class="card" aria-label="分轨与版本顺序编排器">
+  <div class="card-head">
+    <div>
+      <h2>{% if organizer_state.mode == 'multi_track' %}业务 IP 分轨与版本顺序编排{% else %}供应商交付顺序编排{% endif %}</h2>
+      <p>
+        {% if organizer_state.mode == 'multi_track' %}
+          支持拖拽手柄 ⋮⋮、下拉切轨、批量勾选或右键版本行调整归属与演进顺序；修改先暂存草稿，确认后写回 <code>libraries/{{ vendor }}/{{ library }}/ip_partition.json</code> 并刷新 L2/L3。
+        {% else %}
+          目录日期优先：支持同日版本排序、无日期版本拖拽/↑↓ 定位及排除版本（写入 <code>path_sources.json</code> 的 <code>version_registration_times</code>）；修改先暂存草稿后统一刷新 L2/L3。
+        {% endif %}
+      </p>
+    </div>
+    <div class="search-wrap">
+      <svg class="ico ico-sm search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" id="org-search-input" class="search-input ctrl-sm" aria-label="搜索编排列表中的版本、轨道或 View" placeholder="搜索版本、轨道或 View…" autocomplete="off" spellcheck="false">
+    </div>
+  </div>
+
+  {% if organizer_state.order_error %}
+  <div class="org-toast org-toast-warn" role="status">当前存在待确认排序：{{ organizer_state.order_error }}。请在下方调整顺序后点击「保存并刷新 L2/L3」。</div>
+  {% endif %}
+  <div id="org-inline-toast" class="org-toast" hidden role="status" aria-live="polite"></div>
+
+  <!-- 批量操作工具条（勾选 >=1 行时自动浮现） -->
+  <div id="org-batch-bar" class="org-batch-bar" hidden>
+    <div class="toolbar-group">
+      <strong id="org-batch-count" class="num">已选 0 个版本</strong>
+      <label for="org-batch-target" class="context-field-label">批量移动到</label>
+      <select id="org-batch-target" class="ctrl-sm" aria-label="选择批量移动目标"></select>
+      <button type="button" id="org-batch-apply" class="btn-sm">应用到草稿</button>
+    </div>
+    <button type="button" id="org-batch-clear" class="ghost btn-xs">取消勾选</button>
+  </div>
+
+  <!-- 编排主体（由 sequence_organizer.js 渲染分组与交互） -->
+  <div id="org-board" class="org-board" aria-label="版本分轨与顺序列表"></div>
+
+  <!-- 底部草稿预览与 Policy A 刷新确认条 -->
+  <div id="org-draft-bar" class="org-draft-bar" hidden>
+    <div class="org-draft-info">
+      <strong id="org-draft-summary">待保存草稿</strong>
+      <div id="org-draft-impact" class="org-draft-impact"></div>
+      <label id="org-rebuild-wrap" class="check-inline org-rebuild-opt" hidden>
+        <input type="checkbox" id="org-rebuild-checkbox">
+        <span id="org-rebuild-label">归档旧版并按新顺序重建 L2/L3（无损移入 archive/）</span>
+      </label>
+    </div>
+    <div class="toolbar-group">
+      <button type="button" id="org-reset-btn" class="secondary btn-sm">撤销全部</button>
+      <button type="button" id="org-apply-btn" class="btn-sm">保存并刷新 L2/L3</button>
+    </div>
+  </div>
+</section>
+
+<div id="org-context-menu" class="org-ctx-menu" role="menu" aria-label="版本快捷操作菜单" hidden></div>
+<div id="org-inspector-backdrop" class="org-drawer-backdrop" hidden></div>
+<aside id="org-inspector-drawer" class="org-drawer" role="dialog" aria-labelledby="org-drawer-title" hidden>
+  <div class="org-drawer-head">
+    <div class="min-w-0">
+      <div class="org-drawer-eyebrow">交付文件与命中证据预览（不打断草稿）</div>
+      <h3 id="org-drawer-title" class="mono" translate="no">—</h3>
+    </div>
+    <button type="button" id="org-drawer-close" class="ghost btn-xs" aria-label="关闭证据抽屉">关闭 ✕</button>
+  </div>
+  <div id="org-drawer-body" class="org-drawer-body"></div>
+</aside>
+<script id="organizer-initial-data" type="application/json">{{ organizer_state|tojson }}</script>
+<script src="{{ url_for('static', filename='sequence_organizer.js') }}"></script>
+{% else %}
+<div class="empty-state">
+  <p class="empty-state-title">暂无可编排的交付记录</p>
+</div>
+{% endif %}

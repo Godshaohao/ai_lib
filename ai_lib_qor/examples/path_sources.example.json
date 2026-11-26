@@ -1,14 +1,43 @@
 {
-  "raw_root": "/path/to/RAW",
+  "raw_roots": ["/path/to/RAW", "/path/to/second-RAW"],
+  "raw_link_roots": [],
   "nl_root": "/path/to/NL2.5.3",
   "nl_version": "NL2.5.3",
   "update_raw": true,
   "update_formal": true,
   "update_index": true,
   "auto_effective": true,
+  "initial_delivery_tail": 3,
+  "workbench": {
+    "host": "127.0.0.1",
+    "port": 5050,
+    "allowed_clients": [],
+    "allowed_hosts": []
+  },
+  "skip_parse_views": ["CDL", "SPICE", "VERILOG"],
+  "liberty_parse_filter": {
+    "enabled": true,
+    "threshold": 6,
+    "keywords": ["tt", "ss", "ff"],
+    "exclude_keywords": ["ccs", "ecsm", "lvf"],
+    "max_selected": 4,
+    "fallback": "first_n"
+  },
   "libraries": {
     "example_vendor": {
       "example_library": {
+        "ip_type": "SRAM",
+        "liberty_parse_filter": {
+          "threshold": 8,
+          "keywords": ["tt_25c", "ss_125c"],
+          "max_selected": 4
+        },
+        "version_registration_times": {},
+        "excluded_versions": []
+      },
+      "example_multi_ip_phy": {
+        "ip_type": "PHY",
+        "ip_list": ["DDR5_PHY", "DDR5_PHY_LITE", "PCIE5_PHY"],
         "version_registration_times": {},
         "excluded_versions": []
       }

@@ -1,5 +1,4 @@
-"""Read-only HTML pages and file download routes for the path workbench."""
-from datetime import datetime, timezone
+"""Read-only HTML pages and file download routes for the path workbench (thin adapter over application/reporting)."""
 from io import BytesIO
 import json
 from pathlib import Path
@@ -8,489 +7,146 @@ import tempfile
 
 from flask import abort, render_template, request, send_file
 
-from ai_lib_qor.application.path_acceptance import acceptance_status
-from ai_lib_qor.application.path_query import latest_check_for_scope, unadopted_new_files
-from ai_lib_qor.application.path_refresh import read_refresh_history, refresh_status
+from ai_lib_qor.application.facts_pool import load_check_bundle
+from ai_lib_qor.application.path_acceptance import acceptance_status, report_cache_is_current
+from ai_lib_qor.application.path_config import liberty_parse_filter, select_liberty_files, skip_parse_views
+from ai_lib_qor.application.path_query import (
+    collect_json_inventory as _collect_json_inventory,
+    format_bytes as _fmt_bytes,
+    latest_check_for_scope,
+    query_file_index,
+    query_json_inventory,
+    source_verification_note as _source_verification_note,
+    unadopted_new_files,
+)
+from ai_lib_qor.application.path_refresh import refresh_status
 from ai_lib_qor.application.path_storage import storage_stats
 from ai_lib_qor.sources.layout import archive_files, library_folder
 
 
-def _fmt_bytes(n):
-    val = float(n)
-    for unit in ('B', 'KB', 'MB', 'GB'):
-        if val < 1024 or unit == 'GB':
-            return f'{val:.1f} {unit}' if unit != 'B' else f'{int(val)} B'
-        val /= 1024.0
-    return f'{n} B'
+def _resolve_library_track(work, vendor, library, folder, index):
+    """Read-only helper: resolve optional multi-track ?ip= param and project file_index onto the active track."""
+    from ai_lib_qor.application.ip_partition import active_tracks_for_library
+    from ai_lib_qor.application.minimal_effective import _norm_business_ip, list_track_effective_ips
+    from ai_lib_qor.application.path_query import PathDataQuery, build_track_index_view
 
+    track_info = active_tracks_for_library(work, vendor, library)
+    requested_raw = (request.args.get('ip') or request.args.get('business_ip') or '').strip()
+    if not track_info['is_multi_track']:
+        if requested_raw:
+            abort(400)
+        return index, None, track_info, []
 
-def _fmt_mtime_utc(path):
     try:
-        st = path.stat()
-    except OSError:
-        return '—', 0, '—', 0
-    dt = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-    return dt, int(st.st_mtime), _fmt_bytes(st.st_size), int(st.st_size)
+        requested_ip = _norm_business_ip(requested_raw) if requested_raw else None
+    except ValueError:
+        abort(400)
+    available_ips = list(dict.fromkeys([
+        *track_info['ip_list'],
+        *track_info['tracks'].keys(),
+        *list_track_effective_ips(folder, library),
+    ]))
+    if requested_ip is not None and requested_ip not in available_ips:
+        abort(400)
 
+    track_rows = PathDataQuery(work).list_tracks(vendor=vendor, library=library, include_checks=False)['tracks']
+    track_map = {t['business_ip']: t for t in track_rows}
+    if requested_ip is not None:
+        active_ip = requested_ip
+    else:
+        first_with_rev = next((t['business_ip'] for t in track_rows if t.get('revisions')), None)
+        active_ip = first_with_rev or (available_ips[0] if available_ips else None)
 
-def _resolve_pointer_in_folder(folder, pointer_name):
-    ptr = folder / pointer_name
-    if not ptr.is_symlink():
-        return None
-    try:
-        target = ptr.resolve(strict=True)
-        if target.is_relative_to(folder.resolve()) and target.is_file():
-            return target
-    except (OSError, ValueError):
-        return None
-    return None
+    available_tracks = []
+    for ip_name in available_ips:
+        t = track_map.get(ip_name) or {}
+        available_tracks.append({
+            'business_ip': ip_name,
+            'version_count': len(track_info['tracks'].get(ip_name) or []),
+            'revision_count': len(t.get('revisions') or []),
+            'latest_revision': t.get('latest_revision'),
+            'accepted_revision': t.get('accepted_revision'),
+            'is_active': ip_name == active_ip,
+        })
 
-
-def _source_verification_note(source, evidence):
-    if not evidence or not evidence.get('at'):
-        return '暂无本库来源核验记录'
-    at = evidence['at'].replace('T', ' ').removesuffix('Z')
-    verified = evidence.get('verified_at')
-    last_full = f" · 上次完整核验 {verified.replace('T', ' ').removesuffix('Z')} UTC" if verified and verified != evidence['at'] else ''
-    if source == 'RAW':
-        if evidence['versions_incomplete']:
-            return f'最近 RAW 盘点 {at} UTC（有版本未完成）{last_full}'
-        if evidence['versions_reused']:
-            return f"最近 RAW 盘点 {at} UTC（复用 {evidence['versions_reused']} 个已归档版本）{last_full}"
-    elif evidence['status'] == 'PARTIAL':
-        return f'最近 Formal 盘点 {at} UTC（观察不完整）{last_full}'
-    elif evidence['status'] == 'NO_MATCH':
-        return f'最近 Formal 盘点 {at} UTC（本库没有匹配链接）{last_full}'
-    return f'最近 {source} 核验 {at} UTC'
-
-
-def _collect_json_inventory(work, refresh_info, libraries, *, include_workspace=True, filters=None, page_size=100):
-    """Filter and order all saved JSON entries before taking the requested page."""
-    root = Path(work)
-    filters = filters or {}
-    last_by = (refresh_info or {}).get('last_by_layer') or {}
-    r1, r2, r3 = (last_by.get(layer) for layer in ('L1', 'L2', 'L3'))
-
-    changed_deliveries = {}
-    changed_formals = {}
-    if r1:
-        for item in r1.get('libraries_changed') or []:
-            key = (item.get('vendor'), item.get('library'))
-            if item.get('new_deliveries'):
-                changed_deliveries[key] = set(item['new_deliveries'])
-            if item.get('new_formals'):
-                changed_formals[key] = set(item['new_formals'])
-
-    changed_revs = {}
-    if r2:
-        for item in r2.get('libraries_changed') or []:
-            key = (item.get('vendor'), item.get('library'))
-            rev_map = changed_revs.setdefault(key, {})
-            for ev in item.get('events') or []:
-                if ev.get('revision'):
-                    rev_map[ev['revision']] = ev.get('action') or 'UPDATE'
-
-    rows = []
-
-    if include_workspace:
-        cfg_path = root / 'path_sources.json'
-        if cfg_path.is_file() and not cfg_path.is_symlink():
-            dt, ts, sz_txt, sz = _fmt_mtime_utc(cfg_path)
-            rows.append({
-                'layer': 'WORKSPACE',
-                'layer_label': '工作区',
-                'category': '来源目录配置',
-                'filename': 'path_sources.json',
-                'rel_path': 'path_sources.json',
-                'vendor': '',
-                'library': '',
-                'scope_label': '工作区全局',
-                'sync_group': 'unchanged',
-                'status_label': '已生效',
-                'tag_cls': 'tag-inherited',
-                'status_note': '记录 RAW 与 Formal 根目录及默认同步选项',
-                'pointer_badge': '',
-                'updated_at': dt,
-                'updated_ts': ts,
-                'size_text': sz_txt,
-                'size_bytes': sz,
-                'exists': True,
-                'action_kind': 'config',
-            })
-        else:
-            rows.append({
-                'layer': 'WORKSPACE',
-                'layer_label': '工作区',
-                'category': '来源目录配置',
-                'filename': 'path_sources.json',
-                'rel_path': 'path_sources.json',
-                'vendor': '',
-                'library': '',
-                'scope_label': '工作区全局',
-                'sync_group': 'issue',
-                'status_label': '未配置',
-                'tag_cls': 'tag-partial',
-                'status_note': '请前往「目录配置」设置来源根目录',
-                'pointer_badge': '',
-                'updated_at': '—',
-                'updated_ts': 0,
-                'size_text': '—',
-                'size_bytes': 0,
-                'exists': False,
-                'action_kind': 'config',
-            })
-
-        hist_path = root / 'refresh_history.jsonl'
-        if hist_path.is_file() and not hist_path.is_symlink():
-            dt, ts, sz_txt, sz = _fmt_mtime_utc(hist_path)
-            runs_cnt = len((refresh_info or {}).get('recent_runs') or [])
-            rows.append({
-                'layer': 'WORKSPACE',
-                'layer_label': '工作区',
-                'category': '同步审计日志',
-                'filename': 'refresh_history.jsonl',
-                'rel_path': 'refresh_history.jsonl',
-                'vendor': '',
-                'library': '',
-                'scope_label': '工作区全局',
-                'sync_group': 'unchanged',
-                'status_label': '持续记录',
-                'tag_cls': 'tag-inherited',
-                'status_note': f'最近 {runs_cnt} 条同步批次已留痕',
-                'pointer_badge': '',
-                'updated_at': dt,
-                'updated_ts': ts,
-                'size_text': sz_txt,
-                'size_bytes': sz,
-                'exists': True,
-                'action_kind': 'history',
-            })
-
-    for lib_item in libraries or []:
-        v = lib_item['vendor']
-        lib = lib_item['library']
-        try:
-            folder = library_folder(root, v, lib)
-        except ValueError:
-            continue
-        if not folder.is_dir():
-            continue
-
-        key = (v, lib)
-        scope_label = f'{v}/{lib}'
-        latest_deliv = _resolve_pointer_in_folder(folder, 'latest_delivery.json')
-        latest_eff = _resolve_pointer_in_folder(folder, 'latest_effective.json')
-        accepted_eff = _resolve_pointer_in_folder(folder, 'accepted_effective.json')
-        latest_formals = set()
-        for fptr in folder.glob('latest_formal_*.json'):
-            resolved = _resolve_pointer_in_folder(folder, fptr.name)
-            if resolved:
-                latest_formals.add(resolved)
-
-        sources = lib_item.get('source_verifications', {})
-        raw_note = _source_verification_note('RAW', sources.get('RAW'))
-        formal_evidence = sources.get('FORMAL', {})
-        index_attempt = lib_item.get('index_attempt') or {}
-        index_failure = index_attempt.get('reason') if index_attempt.get('status') == 'FAILED' else None
-
-        # L1: RAW deliveries
-        deliv_changed_versions = changed_deliveries.get(key) or set()
-        for p in archive_files(folder, 'delivery', 'delivery_*.json'):
-            if p.is_symlink() or not p.is_file():
-                continue
-            dt, ts, sz_txt, sz = _fmt_mtime_utc(p)
-            rel_in_lib = str(p.relative_to(folder))
-            is_new = False
-            if deliv_changed_versions:
-                try:
-                    d_ver = json.loads(p.read_text(encoding='utf-8')).get('version')
-                    is_new = d_ver in deliv_changed_versions
-                except (OSError, ValueError, TypeError):
-                    is_new = False
-            if is_new:
-                sg, sl, tc = 'updated', '本轮新增', 'tag-new'
-            else:
-                sg, sl, tc = 'unchanged', '已归档', 'tag-inherited'
-            rows.append({
-                'layer': 'L1',
-                'layer_label': 'L1 来源',
-                'category': 'RAW 交付归档',
-                'filename': p.name,
-                'rel_path': f'{scope_label}/{rel_in_lib}',
-                'vendor': v,
-                'library': lib,
-                'scope_label': scope_label,
-                'sync_group': sg,
-                'status_label': sl,
-                'tag_cls': tc,
-                'status_note': raw_note,
-                'pointer_badge': '最新交付' if (latest_deliv and p.resolve() == latest_deliv) else '',
-                'updated_at': dt,
-                'updated_ts': ts,
-                'size_text': sz_txt,
-                'size_bytes': sz,
-                'exists': True,
-                'action_kind': 'library',
-            })
-
-        # L1: Formal snapshots
-        formal_changed_names = changed_formals.get(key) or set()
-        for p in archive_files(folder, 'formal', 'formal_*.json'):
-            if p.is_symlink() or not p.is_file():
-                continue
-            dt, ts, sz_txt, sz = _fmt_mtime_utc(p)
-            rel_in_lib = str(p.relative_to(folder))
-            match = re.fullmatch(r'formal_(.+?)_(?:\d{8}T\d{6}Z_)?\d+\.json', p.name)
-            note = _source_verification_note('Formal', formal_evidence.get(match[1]) if match else None)
-            if p.name in formal_changed_names:
-                sg, sl, tc = 'updated', '本轮新增', 'tag-new'
-            else:
-                sg, sl, tc = 'unchanged', '已归档', 'tag-inherited'
-            rows.append({
-                'layer': 'L1',
-                'layer_label': 'L1 来源',
-                'category': 'Formal 快照',
-                'filename': p.name,
-                'rel_path': f'{scope_label}/{rel_in_lib}',
-                'vendor': v,
-                'library': lib,
-                'scope_label': scope_label,
-                'sync_group': sg,
-                'status_label': sl,
-                'tag_cls': tc,
-                'status_note': note,
-                'pointer_badge': '最新快照' if (p.resolve() in latest_formals) else '',
-                'updated_at': dt,
-                'updated_ts': ts,
-                'size_text': sz_txt,
-                'size_bytes': sz,
-                'exists': True,
-                'action_kind': 'index',
-            })
-
-        # L2: Effective revisions
-        eff_files = [p for p in archive_files(folder, 'effective', f'effective_{lib}_*.json') if not p.is_symlink() and p.is_file()]
-        rev_changed_map = changed_revs.get(key) or {}
-        if eff_files:
-            for p in eff_files:
-                dt, ts, sz_txt, sz = _fmt_mtime_utc(p)
-                rel_in_lib = str(p.relative_to(folder))
-                m_rev = re.search(r'_(\d+)\.json$', p.name)
-                rev_id = f'rev_{int(m_rev.group(1)):04d}' if m_rev else ''
-                act = rev_changed_map.get(rev_id)
-                if act == 'INITIALIZE':
-                    sg, sl, tc, sn = 'updated', '本轮初始化', 'tag-new', '最近 L2 推进自动初始化'
-                elif act:
-                    sg, sl, tc, sn = 'updated', '本轮发布', 'tag-new', '最近 L2 推进自动演进'
-                else:
-                    sg, sl, tc, sn = 'unchanged', '已归档', 'tag-inherited', '只读有效版本归档'
-                p_res = p.resolve()
-                badges = []
-                if latest_eff and p_res == latest_eff:
-                    badges.append('最新有效版')
-                if accepted_eff and p_res == accepted_eff:
-                    badges.append('已采纳')
-                rows.append({
-                    'layer': 'L2',
-                    'layer_label': 'L2 版本',
-                    'category': f'有效版本 {rev_id}' if rev_id else '有效版本归档',
-                    'filename': p.name,
-                    'rel_path': f'{scope_label}/{rel_in_lib}',
-                    'vendor': v,
-                    'library': lib,
-                    'scope_label': scope_label,
-                    'sync_group': sg,
-                    'status_label': sl,
-                    'tag_cls': tc,
-                    'status_note': sn,
-                    'pointer_badge': ' · '.join(badges),
-                    'updated_at': dt,
-                    'updated_ts': ts,
-                    'size_text': sz_txt,
-                    'size_bytes': sz,
-                    'exists': True,
-                    'action_kind': 'library',
-                    'revision': rev_id,
-                })
-        else:
-            has_formal = (lib_item.get('formal_count') or 0) > 0
-            rows.append({
-                'layer': 'L2',
-                'layer_label': 'L2 版本',
-                'category': '有效版本归档',
-                'filename': f'effective_{lib}_001.json',
-                'rel_path': f'{scope_label}/effective/effective_{lib}_001.json',
-                'vendor': v,
-                'library': lib,
-                'scope_label': scope_label,
-                'sync_group': 'issue',
-                'status_label': '未建有效版',
-                'tag_cls': 'tag-partial',
-                'status_note': '已有 Formal 快照，可推进 L2 初始化' if has_formal else '尚无 Formal 快照，待初始化',
-                'pointer_badge': '',
-                'updated_at': '—',
-                'updated_ts': 0,
-                'size_text': '—',
-                'size_bytes': 0,
-                'exists': False,
-                'action_kind': 'library',
-            })
-
-        # L3: File index
-        idx_path = folder / 'file_index.json'
-        idx_status = lib_item.get('index_status') or ('MISSING' if not idx_path.is_file() else 'UNVERIFIED')
-        if idx_status == 'MISSING' or idx_path.is_symlink() or not idx_path.is_file():
-            rows.append({
-                'layer': 'L3',
-                'layer_label': 'L3 索引',
-                'category': '跨版本文件索引',
-                'filename': 'file_index.json',
-                'rel_path': f'{scope_label}/file_index.json',
-                'vendor': v,
-                'library': lib,
-                'scope_label': scope_label,
-                'sync_group': 'issue',
-                'status_label': '刷新失败' if index_failure else '未生成',
-                'tag_cls': 'tag-failed',
-                'status_note': index_failure or '索引缺失，需确认顺序后刷新 L3',
-                'pointer_badge': '',
-                'updated_at': '—',
-                'updated_ts': 0,
-                'size_text': '—',
-                'size_bytes': 0,
-                'exists': False,
-                'action_kind': 'library',
-            })
-        else:
-            dt, ts, sz_txt, sz = _fmt_mtime_utc(idx_path)
-            if index_failure:
-                sg, sl, tc, sn = 'issue', '刷新失败', 'tag-failed', index_failure
-            elif idx_status in ('STALE', 'UNVERIFIED'):
-                sg = 'issue'
-                sl = '待刷新'
-                tc = 'tag-partial'
-                sn = '归档已变动，需刷新 L3' if idx_status == 'STALE' else '未校验指纹，建议刷新 L3'
-            elif index_attempt.get('status') == 'UPDATED' and r3 and index_attempt.get('at') == r3.get('at'):
-                sg = 'updated'
-                sl = '本轮更新'
-                tc = 'tag-new'
-                sn = '最近 L3 同步已重建索引'
-            else:
-                sg = 'unchanged'
-                sl = '同步一致'
-                tc = 'tag-new'
-                sn = '与来源归档指纹一致'
-            rows.append({
-                'layer': 'L3',
-                'layer_label': 'L3 索引',
-                'category': '跨版本文件索引',
-                'filename': 'file_index.json',
-                'rel_path': f'{scope_label}/file_index.json',
-                'vendor': v,
-                'library': lib,
-                'scope_label': scope_label,
-                'sync_group': sg,
-                'status_label': sl,
-                'tag_cls': tc,
-                'status_note': sn,
-                'pointer_badge': '',
-                'updated_at': dt,
-                'updated_ts': ts,
-                'size_text': sz_txt,
-                'size_bytes': sz,
-                'exists': True,
-                'action_kind': 'download_index',
-            })
-
-    group_rank = {'updated': 0, 'issue': 1, 'unchanged': 2}
-    layer_rank = {'L1': 0, 'L2': 1, 'L3': 2, 'WORKSPACE': 3}
-    counts = {'total': len(rows), **dict.fromkeys(group_rank, 0), **dict.fromkeys(layer_rank, 0)}
-    for row in rows:
-        counts[row['layer']] += 1
-        counts[row['sync_group']] += 1
-
-    query = {key: filters.get(key, '').strip() for key in ('json_layer', 'json_status', 'json_scope', 'json_q', 'json_sort')}
-    if query['json_layer'] not in layer_rank:
-        query['json_layer'] = ''
-    if query['json_status'] not in group_rank:
-        query['json_status'] = ''
-    if query['json_sort'] not in ('newest', 'layer'):
-        query['json_sort'] = 'priority'
-    q = query['json_q'].casefold()
-    search_fields = ('filename', 'rel_path', 'category', 'scope_label', 'status_label', 'status_note')
-    rows = [
-        row for row in rows
-        if (not query['json_layer'] or row['layer'] == query['json_layer'])
-        and (not query['json_status'] or row['sync_group'] == query['json_status'])
-        and (not query['json_scope'] or row['scope_label'] == query['json_scope'])
-        and (not q or q in ' '.join(row[key] for key in search_fields).casefold())
-    ]
-
-    def sort_key(row):
-        layer = layer_rank[row['layer']]
-        scope, filename = row['scope_label'], row['rel_path']
-        newest = -row['updated_ts']
-        if query['json_sort'] == 'newest':
-            return newest, layer, scope, filename
-        if query['json_sort'] == 'layer':
-            return layer, scope, newest, filename
-        return group_rank[row['sync_group']], newest, layer, scope, filename
-
-    rows.sort(key=sort_key)
-    try:
-        page = int(filters.get('json_page', 1))
-    except (ValueError, TypeError):
-        page = 1
-    pages = max(1, (len(rows) + page_size - 1) // page_size)
-    page = max(1, min(page, pages))
-    return {
-        'rows': rows[(page - 1) * page_size : page * page_size],
-        'counts': counts,
-        'matched': len(rows),
-        'page': page,
-        'pages': pages,
-        'query': query,
-    }
+    projected = index
+    if index and active_ip:
+        projected, _, _ = build_track_index_view(folder, vendor, library, index, active_ip)
+    return projected, active_ip, track_info, available_tracks
 
 
 def register_page_routes(app, ctx):
     work = ctx['work']
+    read_cache = ctx['read_cache']
+    request_signature = ctx['request_signature']
+    library_signature = ctx['library_signature']
+    storage_cache = ctx['storage_cache']
     scope = ctx['scope']
     index_state = ctx['index_state']
     source_config = ctx['source_config']
 
     @app.get('/')
     def overview():
-        status = refresh_status(work, limit=8)
-        libraries = []
-        for item in status['libraries']:
-            err = None
-            attempt = item['index_attempt'] or {}
-            if attempt.get('status') == 'FAILED':
-                err = attempt['reason']
-            elif item['index_status'] == 'MISSING':
-                err = '索引未生成，请刷新 L3'
-            elif item['index_status'] == 'STALE':
-                err = '归档已更新，索引待刷新 (L3)'
-            sources = item['source_verifications']
-            libraries.append({
-                **item, 'error': err,
-                'raw_verification_note': _source_verification_note('RAW', sources.get('RAW')),
-                'formal_verification_notes': {
-                    version: _source_verification_note('Formal', evidence)
-                    for version, evidence in sorted(sources.get('FORMAL', {}).items())
-                },
-            })
-        summary = {
-            'vendors': status['totals']['vendors'],
-            'libraries': status['totals']['libraries'],
-            'with_effective': status['totals']['libraries_with_effective'],
-            'accepted': sum(1 for x in libraries if x.get('accepted_revision')),
-            'revisions': status['totals']['revisions'],
-            'issues': sum(1 for x in libraries if x.get('error')),
-        }
+        from ai_lib_qor.application.path_query import PathDataQuery, workspace_activity_and_readiness
+
+        sig = request_signature()
+
+        def _compute_core():
+            status = refresh_status(work, limit=8)
+            query = PathDataQuery(work)
+            libraries = []
+            for item in status['libraries']:
+                err = None
+                attempt = item['index_attempt'] or {}
+                if attempt.get('status') == 'FAILED':
+                    err = attempt['reason']
+                elif item['index_status'] == 'MISSING':
+                    err = '索引未生成，请刷新 L3'
+                elif item['index_status'] == 'STALE':
+                    err = '归档已更新，索引待刷新 (L3)'
+                sources = item['source_verifications']
+                track_items = []
+                accepted_track_count = 0
+                if item.get('is_multi_track'):
+                    try:
+                        track_items = query.list_tracks(
+                            vendor=item['vendor'],
+                            library=item['library'],
+                            include_checks=False,
+                        )['tracks']
+                        accepted_track_count = sum(1 for t in track_items if t.get('accepted_revision'))
+                    except (OSError, ValueError):
+                        track_items = []
+                libraries.append({
+                    **item,
+                    'error': err,
+                    'track_items': track_items,
+                    'accepted_track_count': accepted_track_count,
+                    'raw_verification_note': _source_verification_note('RAW', sources.get('RAW')),
+                    'formal_verification_notes': {
+                        version: _source_verification_note('Formal', evidence)
+                        for version, evidence in sorted(sources.get('FORMAL', {}).items())
+                    },
+                })
+            ip_types = sorted({x['ip_type'] for x in libraries if x.get('ip_type')})
+            needs_review_libraries = [x for x in libraries if int(x.get('needs_review_count', 0)) > 0]
+            summary = {
+                'vendors': status['totals']['vendors'],
+                'libraries': status['totals']['libraries'],
+                'with_effective': status['totals']['libraries_with_effective'],
+                'accepted': sum(1 for x in libraries if x.get('accepted_revision') or x.get('accepted_track_count', 0) > 0),
+                'revisions': status['totals']['revisions'],
+                'issues': sum(1 for x in libraries if x.get('error') or int(x.get('needs_review_count', 0)) > 0),
+                'multi_track_libraries': sum(1 for x in libraries if x.get('is_multi_track')),
+                'needs_review_total': sum(int(x.get('needs_review_count', 0)) for x in libraries),
+            }
+            return status, libraries, ip_types, needs_review_libraries, summary
+
+        status, libraries, ip_types, needs_review_libraries, summary = read_cache.get_or_compute(
+            'overview_core', _compute_core, sig=sig,
+        )
         try:
-            st = storage_stats(work)
+            st = storage_stats(work, cache=storage_cache)
             storage_display = {
                 'total': _fmt_bytes(st['total_bytes']),
                 'auth': _fmt_bytes(st['authoritative_bytes']),
@@ -498,15 +154,157 @@ def register_page_routes(app, ctx):
             }
         except (OSError, ValueError):
             storage_display = None
-        json_inventory = _collect_json_inventory(work, status, libraries, filters=request.args)
+
+        req_view = (request.args.get('view') or '').strip().lower()
+        req_pipe = (request.args.get('pipe_tab') or '').strip().lower()
+        has_json_q = any(request.args.get(k) for k in ('json_layer', 'json_status', 'json_scope', 'json_lib', 'json_q', 'json_page', 'json_sort'))
+        has_lib_q = any(request.args.get(k) for k in ('lib_page', 'lib_q', 'lib_vendor', 'lib_status', 'lib_iptype'))
+        if req_view in ('layers', 'json', 'history'):
+            active_domain = 'pipeline'
+            active_pipeline_tab = req_view
+        elif req_view == 'pipeline':
+            active_domain = 'pipeline'
+            active_pipeline_tab = req_pipe if req_pipe in ('layers', 'json', 'history') else ('json' if has_json_q else 'layers')
+        elif req_view in ('activity', 'libraries', 'catalog', 'config'):
+            active_domain = req_view
+            active_pipeline_tab = 'json' if has_json_q else 'layers'
+        elif has_json_q:
+            active_domain = 'pipeline'
+            active_pipeline_tab = 'json'
+        elif has_lib_q:
+            active_domain = 'libraries'
+            active_pipeline_tab = 'layers'
+        else:
+            active_domain = 'activity'
+            active_pipeline_tab = 'layers'
+        active_view = active_pipeline_tab if active_domain == 'pipeline' else active_domain
+
+        large_workspace = len(libraries) > 50
+        json_inventory = None
+        json_inventory_lazy = bool(large_workspace and active_pipeline_tab != 'json')
+        if not json_inventory_lazy:
+            json_filter_key = tuple(
+                (k, request.args.get(k, ''))
+                for k in ('json_layer', 'json_status', 'json_scope', 'json_lib', 'json_q', 'json_sort', 'json_page')
+            )
+            json_inventory = read_cache.get_or_compute(
+                ('overview_json_inventory', json_filter_key),
+                lambda: _collect_json_inventory(work, status, libraries, filters=request.args),
+                sig=sig,
+            )
+
+        activity = None
+        activity_lazy = bool(large_workspace and active_domain != 'activity')
+        if not activity_lazy:
+            raw_days = (request.args.get('days') or '7').strip().lower()
+            if raw_days == 'all':
+                activity_days = None
+            else:
+                try:
+                    activity_days = max(1, int(raw_days))
+                except ValueError:
+                    activity_days = 7
+            raw_basis = (request.args.get('basis') or 'delivery').strip().lower()
+            activity_basis = raw_basis if raw_basis in ('delivery', 'archived') else 'delivery'
+            import time
+            time_bucket = int(time.time() // 60)
+            activity = read_cache.get_or_compute(
+                ('overview_activity', activity_days, activity_basis, time_bucket),
+                lambda: workspace_activity_and_readiness(
+                    work, days=activity_days, time_basis=activity_basis, refresh_info=status,
+                ),
+                sig=sig,
+            )
+
+        # Lightweight server-side library table pagination for large workspaces (>50 libraries)
+        libraries_lazy = bool(large_workspace and active_domain != 'libraries')
+        libraries_pagination = None
+        vendor_counts = {}
+        for row in libraries:
+            vendor_counts[row['vendor']] = vendor_counts.get(row['vendor'], 0) + 1
+        vendor_summary = sorted(vendor_counts.items())
+        if libraries_lazy:
+            libraries_rows = []
+        elif large_workspace:
+            lib_status = (request.args.get('lib_status') or 'all').strip().lower()
+            lib_vendor = (request.args.get('lib_vendor') or '').strip()
+            lib_iptype = (request.args.get('lib_iptype') or '').strip()
+            lib_q = (request.args.get('lib_q') or '').strip().lower()
+            try:
+                lib_page = max(1, int(request.args.get('lib_page') or '1'))
+            except ValueError:
+                lib_page = 1
+            lib_page_size = 50
+            filtered_libs = []
+            for row in libraries:
+                if lib_status == 'has_rev' and not (row.get('revision_count') or 0) > 0:
+                    continue
+                if lib_status == 'no_rev' and (row.get('revision_count') or 0) > 0:
+                    continue
+                if lib_status == 'issue' and not (row.get('error') or int(row.get('needs_review_count') or 0) > 0):
+                    continue
+                if lib_vendor and row.get('vendor') != lib_vendor:
+                    continue
+                if lib_iptype and (row.get('ip_type') or '') != lib_iptype:
+                    continue
+                if lib_q:
+                    hay = f"{row.get('vendor', '')} {row.get('library', '')} {row.get('ip_type') or ''} {' '.join(row.get('ip_list') or [])}".lower()
+                    if lib_q not in hay:
+                        continue
+                filtered_libs.append(row)
+            total_filtered = len(filtered_libs)
+            total_pages = max(1, (total_filtered + lib_page_size - 1) // lib_page_size)
+            lib_page = min(lib_page, total_pages)
+            start_i = (lib_page - 1) * lib_page_size
+            libraries_rows = filtered_libs[start_i:start_i + lib_page_size]
+            libraries_pagination = {
+                'page': lib_page,
+                'page_size': lib_page_size,
+                'total': total_filtered,
+                'total_all': len(libraries),
+                'total_pages': total_pages,
+                'has_prev': lib_page > 1,
+                'has_next': lib_page < total_pages,
+                'status': lib_status,
+                'vendor': lib_vendor,
+                'ip_type': lib_iptype,
+                'q': request.args.get('lib_q') or '',
+            }
+        else:
+            libraries_rows = libraries
+
+        from ai_lib_qor.application.path_config import workbench_runtime_settings
+        try:
+            runtime_settings = workbench_runtime_settings(work)
+        except (OSError, ValueError, TypeError):
+            runtime_settings = None
+        try:
+            effective_liberty_filter = liberty_parse_filter(work)
+        except (OSError, ValueError, TypeError):
+            effective_liberty_filter = None
         return render_template(
             'path_overview.html',
-            libraries=libraries,
+            libraries=libraries_rows,
+            libraries_total=len(libraries),
+            libraries_lazy=libraries_lazy,
+            libraries_pagination=libraries_pagination,
+            vendor_summary=vendor_summary,
+            large_workspace=large_workspace,
             config=source_config(),
+            runtime_settings=runtime_settings,
+            effective_liberty_filter=effective_liberty_filter,
             summary=summary,
             refresh_info=status,
             storage_display=storage_display,
             json_inventory=json_inventory,
+            json_inventory_lazy=json_inventory_lazy,
+            activity=activity,
+            activity_lazy=activity_lazy,
+            active_view=active_view,
+            active_domain=active_domain,
+            active_pipeline_tab=active_pipeline_tab,
+            ip_types=ip_types,
+            needs_review_libraries=needs_review_libraries,
         )
 
     @app.get('/path/overview/export.xlsx')
@@ -514,7 +312,7 @@ def register_page_routes(app, ctx):
         from ai_lib_qor.reporting.work_overview_excel import render_work_overview_excel
         with tempfile.TemporaryDirectory() as tmpdir:
             out = Path(tmpdir) / 'workspace_overview.xlsx'
-            render_work_overview_excel(work, out, overwrite=True)
+            render_work_overview_excel(work, out, overwrite=True, storage_cache=storage_cache)
             data = out.read_bytes()
         return send_file(
             BytesIO(data),
@@ -526,17 +324,35 @@ def register_page_routes(app, ctx):
     @app.get('/path/library')
     def library_page():
         vendor, library, folder = scope()
-        index, error = index_state(vendor, library, folder)
+        raw_index, error = index_state(vendor, library, folder)
+        index, business_ip, track_info, available_tracks = _resolve_library_track(work, vendor, library, folder, raw_index)
         revision = request.args.get('revision', '')
         baseline = request.args.get('baseline', '')
         members = []
         removed = []
         delivery_rows = []
         member_views = []
+        liberty_preview = None
+        rev_meta = {}
         prev_rev = None
         next_rev = None
         baseline_rev = None
+        check_baseline_param = '__prev_file__'
         rev_idx = -1
+        ver_to_track = {}
+        conflict_vers = set()
+        unassigned_vers = set()
+        if track_info['is_multi_track']:
+            for ip_name, vers in (track_info.get('tracks') or {}).items():
+                for ver in vers:
+                    ver_to_track[ver] = ip_name
+            nr = track_info.get('needs_review') or {}
+            conflict_vers = {c['version'] for c in (nr.get('conflicts') or []) if isinstance(c, dict) and c.get('version')}
+            unassigned_vers = {
+                (u['version'] if isinstance(u, dict) else str(u))
+                for u in (nr.get('unassigned') or [])
+                if (isinstance(u, dict) and u.get('version')) or isinstance(u, str)
+            }
         if index:
             if revision and revision not in index['revisions']:
                 abort(400)
@@ -548,27 +364,81 @@ def register_page_routes(app, ctx):
                 next_rev = index['revisions'][rev_idx + 1] if rev_idx < len(index['revisions']) - 1 else None
             if baseline == '__none__':
                 baseline_rev = None
+                check_baseline_param = '__none__'
+            elif baseline == '__prev_file__':
+                baseline_rev = prev_rev
+                check_baseline_param = '__prev_file__'
             elif baseline:
                 if baseline not in index['revisions'] or index['revisions'].index(baseline) >= rev_idx:
                     abort(400)
                 baseline_rev = baseline
+                check_baseline_param = baseline
             else:
                 baseline_rev = prev_rev
+                check_baseline_param = '__prev_file__'
 
+            # Single-pass member, delivery & per-revision source mapping: O(F) instead of O(D * F * R)
+            deliv_order = {d['version']: i for i, d in enumerate(index.get('deliveries') or [])}
+            rev_latest_deliv: dict[str, tuple[int, str]] = {}
+            deliv_total_counts: dict[str, int] = {}
+            deliv_view_counts: dict[str, dict[str, int]] = {}
             for view, group in index['views'].items():
                 for path, row in group.items():
+                    curr_entry = None
+                    base_entry = None
                     for entry in row['effective']:
-                        if entry['revision'] == revision:
-                            diff_status = 'NEW' if baseline_rev else 'CURRENT'
-                            if baseline_rev:
-                                prev_entry = next((e for e in row['effective'] if e['revision'] == baseline_rev), None)
-                                if prev_entry:
-                                    diff_status = 'INHERITED' if prev_entry['version'] == entry['version'] else 'UPDATED'
-                            members.append({'view': view, 'relative_path': path, 'diff_status': diff_status, **entry})
-                    old = next((e for e in row['effective'] if e['revision'] == baseline_rev), None) if baseline_rev else None
-                    if old and not any(e['revision'] == revision for e in row['effective']):
-                        removed.append({'view': view, 'relative_path': path, **old})
+                        er = entry['revision']
+                        ev_ver = entry.get('version') or ''
+                        if ev_ver:
+                            ord_idx = deliv_order.get(ev_ver, -1)
+                            prev_best = rev_latest_deliv.get(er)
+                            if prev_best is None or ord_idx > prev_best[0]:
+                                rev_latest_deliv[er] = (ord_idx, ev_ver)
+                        if er == revision:
+                            curr_entry = entry
+                        if baseline_rev and er == baseline_rev:
+                            base_entry = entry
+                    if curr_entry is not None:
+                        if baseline_rev:
+                            if base_entry is not None:
+                                diff_status = 'INHERITED' if base_entry['version'] == curr_entry['version'] else 'UPDATED'
+                            else:
+                                diff_status = 'NEW'
+                        else:
+                            diff_status = 'CURRENT'
+                        members.append({'view': view, 'relative_path': path, 'diff_status': diff_status, **curr_entry})
+                    elif base_entry is not None:
+                        removed.append({'view': view, 'relative_path': path, **base_entry})
+
+                    seen_vers = {entry['version'] for entry in row['raw']}
+                    for dv in seen_vers:
+                        deliv_total_counts[dv] = deliv_total_counts.get(dv, 0) + 1
+                        vmap = deliv_view_counts.setdefault(dv, {})
+                        vmap[view] = vmap.get(view, 0) + 1
+
+            rev_meta = {}
+            for idx_r, rev_id in enumerate(index['revisions'], 1):
+                src_ver = rev_latest_deliv.get(rev_id, (-1, ''))[1]
+                rev_meta[rev_id] = {
+                    'seq': idx_r,
+                    'source_version': src_ver,
+                    'short': f'有效版 #{idx_r} ({rev_id})',
+                    'label': f'有效版 #{idx_r} ({rev_id}) · {src_ver}' if src_ver else f'有效版 #{idx_r} ({rev_id})',
+                }
+
             member_views = sorted({m['view'] for m in members} | {r['view'] for r in removed})
+            if revision and not error:
+                liberty_paths = [m['relative_path'] for m in members if m['view'] == 'LIBERTY']
+                skipped_views = skip_parse_views(work, vendor, library)
+                lf_policy = liberty_parse_filter(work, vendor, library)
+                liberty_preview = select_liberty_files(
+                    [] if 'LIBERTY' in skipped_views else liberty_paths,
+                    lf_policy,
+                )
+                liberty_preview['member_count'] = len(liberty_paths)
+                liberty_preview['skipped_by_view_policy'] = 'LIBERTY' in skipped_views
+                liberty_preview['lef_skipped_by_view_policy'] = 'LEF' in skipped_views
+                liberty_preview['skipped_views'] = skipped_views
             diff_counts = {
                 'NEW': sum(1 for m in members if m['diff_status'] == 'NEW'),
                 'UPDATED': sum(1 for m in members if m['diff_status'] == 'UPDATED'),
@@ -577,26 +447,76 @@ def register_page_routes(app, ctx):
             }
             diff_counts['CHANGED'] = diff_counts['NEW'] + diff_counts['UPDATED'] + diff_counts['REMOVED']
             for delivery in index['deliveries']:
-                kinds = {}
-                count = 0
-                for kind, group in index['views'].items():
-                    for row in group.values():
-                        if any(entry['version'] == delivery['version'] for entry in row['raw']):
-                            count += 1
-                            kinds[kind] = kinds.get(kind, 0) + 1
-                delivery_rows.append({**delivery, 'file_count': count, 'view_counts': kinds})
+                dv = delivery['version']
+                delivery_rows.append({
+                    **delivery,
+                    'file_count': deliv_total_counts.get(dv, 0),
+                    'view_counts': deliv_view_counts.get(dv, {}),
+                    'track_ip': ver_to_track.get(dv),
+                    'review_status': 'CONFLICT' if dv in conflict_vers else ('UNASSIGNED' if dv in unassigned_vers else None),
+                })
         else:
             diff_counts = {'NEW': 0, 'UPDATED': 0, 'INHERITED': 0, 'REMOVED': 0, 'CHANGED': 0}
 
+        from ai_lib_qor.checks.path_plugins import evaluate_check_verdict
+        from ai_lib_qor.versions.store import read_json_readonly
         artifacts = []
-        for path in sorted([*folder.glob('check_run_*.json'), *(folder / 'log').glob('check_rev_*_run_*.json')], key=lambda p: p.stat().st_mtime_ns, reverse=True):
+        log_dir = folder / 'log'
+        if business_ip:
+            check_candidates = [
+                *folder.glob('check_run_*.json'),
+                *(log_dir.glob(f'check__{business_ip}__*.json') if log_dir.is_dir() else ()),
+            ]
+        else:
+            check_candidates = [
+                *folder.glob('check_run_*.json'),
+                *(p for p in (log_dir.glob('check_*.json') if log_dir.is_dir() else ()) if not p.name.startswith('check__')),
+            ]
+        for path in sorted(check_candidates, key=lambda p: p.stat().st_mtime_ns, reverse=True):
             if path.is_symlink():
                 continue
             try:
-                d = json.loads(path.read_text(encoding='utf-8'))
-                if d.get('schema_version') == 'check_result.path.v1':
+                d = read_json_readonly(path, 'check_result_path')
+            except ValueError as exc:
+                raw_rev = ''
+                raw_ip = None
+                try:
+                    raw_d = read_json_readonly(path)
+                    if isinstance(raw_d, dict):
+                        raw_rev = str(raw_d.get('revision') or '')
+                        raw_ip = raw_d.get('business_ip')
+                except (OSError, ValueError):
+                    pass
+                if raw_ip == business_ip:
+                    artifacts.append({
+                        'kind': 'SINGLE',
+                        'name': path.name,
+                        'raw_name': path.name,
+                        'check': None,
+                        'revision': raw_rev or '损坏记录',
+                        'baseline': None,
+                        'business_ip': business_ip,
+                        'run_at': '',
+                        'run_state': 'CORRUPT',
+                        'quality_code': 'CORRUPT',
+                        'quality_cls': 'tag-removed',
+                        'quality_text': '记录损坏（Schema 无效）',
+                        'failed_checks': 0,
+                        'inconclusive_checks': 0,
+                        'failed_files': 0,
+                        'facts_files': [],
+                        'corrupt': True,
+                        'corrupt_reason': str(exc),
+                        'label': f'{path.name} · 记录损坏（已排除汇总）',
+                        'excel_cached': False,
+                        'available': False,
+                    })
+                continue
+            except OSError:
+                continue
+            try:
+                if d.get('schema_version') == 'check_result.path.v1' and d.get('business_ip') == business_ip:
                     report = path.with_suffix('.xlsx').name if path.parent.name == 'log' else 'report_' + d['run_id'] + '.xlsx'
-                    from ai_lib_qor.checks.path_plugins import evaluate_check_verdict
                     verdict = evaluate_check_verdict(d)
                     failed_checks = verdict['failed_checks']
                     inconclusive_checks = verdict['inconclusive_checks']
@@ -610,6 +530,7 @@ def register_page_routes(app, ctx):
                         'check': path.name,
                         'revision': d['revision'],
                         'baseline': d.get('baseline'),
+                        'business_ip': d.get('business_ip'),
                         'run_at': d.get('run_at', ''),
                         'run_state': run_state,
                         'quality_code': q_code,
@@ -619,34 +540,57 @@ def register_page_routes(app, ctx):
                         'inconclusive_checks': inconclusive_checks,
                         'failed_files': failed_files,
                         'facts_files': facts_files,
+                        'corrupt': False,
                         'label': d['revision'] + ' · 运行 ' + run_state + ' · 失败 ' + str(failed_checks) + ' · 无结论 ' + str(inconclusive_checks) + ' · 文件失败 ' + str(failed_files),
                         'excel_cached': (path.parent / report).is_file(),
                         'available': (path.parent / report).is_file() or path.parent.name == 'log',
                     })
             except (OSError, ValueError, KeyError):
                 continue
-        for path in sorted([*folder.glob('overall_run_*.xlsx'), *(folder / 'log').glob('overall_run_*.xlsx')], key=lambda p: p.stat().st_mtime_ns, reverse=True):
+        overall_candidates = (
+            list((folder / 'log').glob(f'overall__{business_ip}__*.xlsx'))
+            if business_ip
+            else [
+                *folder.glob('overall_*.xlsx'),
+                *(p for p in (folder / 'log').glob('overall_*.xlsx') if not p.name.startswith('overall__')),
+            ]
+        )
+        for path in sorted(overall_candidates, key=lambda p: p.stat().st_mtime_ns, reverse=True):
             if not path.is_symlink():
                 artifacts.append({
                     'kind': 'OVERALL',
                     'name': path.name,
+                    'business_ip': business_ip,
                     'label': '整体报告 · ' + path.name,
                     'overall_json': path.with_suffix('.json').name if path.with_suffix('.json').is_file() and not path.with_suffix('.json').is_symlink() else None,
                     'available': True,
                 })
-        audit_available = any(p.is_file() and not p.is_symlink() for p in (folder / 'effective_operations.tsv', folder / 'log/effective_operations.tsv'))
+        audit_filename = f'effective_operations__{business_ip}.tsv' if business_ip else 'effective_operations.tsv'
+        audit_available = any(p.is_file() and not p.is_symlink() for p in (folder / audit_filename, folder / 'log' / audit_filename))
         latest_check = None
-        latest_path = folder / 'latest_check.json'
+        latest_path = folder / (f'latest_check__{business_ip}.json' if business_ip else 'latest_check.json')
         if latest_path.is_symlink():
             try:
                 target = latest_path.resolve(strict=True)
                 if target.is_relative_to(folder.resolve()) and target.is_file():
-                    row = json.loads(target.read_text(encoding='utf-8'))
-                    if (row.get('vendor'), row.get('library')) == (vendor, library):
+                    row = read_json_readonly(target, 'check_result_path')
+                    if (row.get('vendor'), row.get('library')) == (vendor, library) and row.get('business_ip') == business_ip:
                         latest_check = {'revision': row['revision'], 'run_at': row['run_at'], 'name': target.name}
             except (OSError, ValueError, KeyError):
                 pass
-        matched_check = latest_check_for_scope(work, vendor, library, revision, baseline_rev) if index and revision else None
+        matched_check = None
+        if index and revision:
+            if baseline == '__prev_file__':
+                matched_check = latest_check_for_scope(work, vendor, library, revision, '__prev_file__', business_ip=business_ip)
+            elif baseline == '__none__':
+                matched_check = latest_check_for_scope(work, vendor, library, revision, None, business_ip=business_ip)
+            elif baseline:
+                matched_check = latest_check_for_scope(work, vendor, library, revision, baseline_rev, business_ip=business_ip)
+            else:
+                matched_check = (
+                    latest_check_for_scope(work, vendor, library, revision, '__prev_file__', business_ip=business_ip)
+                    or latest_check_for_scope(work, vendor, library, revision, baseline_rev, business_ip=business_ip)
+                )
         if matched_check:
             fmap = matched_check['files']
             for m in members:
@@ -654,51 +598,146 @@ def register_page_routes(app, ctx):
                 if info:
                     m.update(info)
         try:
-            acceptance = acceptance_status(work, vendor, library, limit=10)
+            acceptance = acceptance_status(work, vendor, library, limit=10, business_ip=business_ip) if (business_ip or not track_info['is_multi_track']) else None
         except (OSError, ValueError):
             acceptance = None
-        unadopted = unadopted_new_files(work, vendor, library, sample_limit=10)
+        unadopted = unadopted_new_files(work, vendor, library, sample_limit=10, business_ip=business_ip) if (business_ip or not track_info['is_multi_track']) else None
+        lib_sig = library_signature(vendor, library)
         try:
-            from ai_lib_qor.application.minimal_file_index import index_manifest_matches
-            idx_path = folder / 'file_index.json'
-            if idx_path.is_symlink() or not idx_path.is_file():
-                lib_idx_status = 'MISSING'
-            else:
-                matched_m, manifest_m = index_manifest_matches(work, vendor, library, fast=True)
-                lib_idx_status = 'FRESH' if matched_m else ('UNVERIFIED' if manifest_m is None else 'STALE')
-            _, last_by_layer, verifications, index_attempts = read_refresh_history(work, limit=0)
-            key = (vendor, library)
-            single_lib_item = {
-                'vendor': vendor,
-                'library': library,
-                'formal_count': len([p for p in archive_files(folder, 'formal', 'formal_*.json') if not p.is_symlink()]),
-                'index_status': lib_idx_status,
-                'source_verifications': verifications.get(key, {}),
-                'index_attempt': index_attempts.get(key),
-            }
-            library_json_inventory = _collect_json_inventory(
-                work,
-                {'last_by_layer': last_by_layer},
-                [single_lib_item],
-                include_workspace=False,
-                filters=request.args,
+            lib_json_key = tuple(
+                (k, request.args.get(k, ''))
+                for k in ('json_layer', 'json_status', 'json_scope', 'json_q', 'json_sort', 'json_page')
+            )
+            library_json_inventory = read_cache.get_or_compute(
+                ('lib_json_inventory', vendor, library, lib_json_key),
+                lambda: query_json_inventory(work, vendor=vendor, library=library, filters=request.args),
+                sig=lib_sig,
             )
         except (OSError, ValueError, TypeError):
             library_json_inventory = None
+        organizer_state = None
+        try:
+            from ai_lib_qor.application.sequence_organizer import get_organizer_state
+            organizer_state = read_cache.get_or_compute(
+                ('organizer_state', vendor, library),
+                lambda: get_organizer_state(work, vendor, library),
+                sig=lib_sig,
+            )
+        except (OSError, ValueError, TypeError):
+            organizer_state = None
+        active_check_view = None
+        active_check_candidate = matched_check['check_name'] if matched_check else None
+        if active_check_candidate:
+            try:
+                from ai_lib_qor.reporting.qor_views import build_check_view
+                active_check_view = build_check_view(work, vendor, library, active_check_candidate, live_index=index)
+            except (OSError, ValueError, TypeError):
+                active_check_view = None
+        active_overall_view = None
+        latest_overall_json = next((a['overall_json'] for a in artifacts if a.get('kind') == 'OVERALL' and a.get('overall_json')), None)
+        if latest_overall_json:
+            try:
+                from ai_lib_qor.reporting.qor_views import build_overall_view
+                active_overall_view = read_cache.get_or_compute(
+                    ('overall_view', vendor, library, latest_overall_json),
+                    lambda: build_overall_view(work, vendor, library, latest_overall_json),
+                    sig=lib_sig,
+                )
+            except (OSError, ValueError, TypeError):
+                active_overall_view = None
+        library_ip_overview = None
+        if track_info and track_info.get('is_multi_track') and available_tracks:
+            def _compute_ip_overview():
+                from ai_lib_qor.application.path_query import PathDataQuery
+                rows_out = []
+                counts = {'total': 0, 'pass': 0, 'fail': 0, 'partial': 0, 'unchecked': 0, 'no_rev': 0}
+                t_res = PathDataQuery(work).list_tracks(vendor=vendor, library=library, include_checks=True)
+                by_ip = {t['business_ip']: t for t in (t_res.get('tracks') or []) if t.get('business_ip')}
+                for t in available_tracks:
+                    ip_name = t['business_ip']
+                    info = by_ip.get(ip_name, {})
+                    lc = info.get('latest_check')
+                    latest_r = t.get('latest_revision') or info.get('latest_revision')
+                    rev_cnt = t.get('revision_count') or 0
+                    if not latest_r:
+                        status_code = 'NO_REV'
+                        counts['no_rev'] += 1
+                    elif not lc:
+                        status_code = 'UNCHECKED'
+                        counts['unchecked'] += 1
+                    else:
+                        qcode = lc.get('quality_code') or 'PARTIAL'
+                        status_code = qcode
+                        if qcode == 'FAIL':
+                            counts['fail'] += 1
+                        elif qcode == 'SCOPE_PASS':
+                            counts['pass'] += 1
+                        else:
+                            counts['partial'] += 1
+                    counts['total'] += 1
+                    rows_out.append({
+                        'business_ip': ip_name,
+                        'version_count': t.get('version_count') or 0,
+                        'revision_count': rev_cnt,
+                        'latest_revision': latest_r,
+                        'accepted_revision': t.get('accepted_revision') or info.get('accepted_revision'),
+                        'latest_check': lc,
+                        'status_code': status_code,
+                    })
+                return {'rows': rows_out, 'counts': counts}
+            try:
+                library_ip_overview = read_cache.get_or_compute(
+                    ('lib_ip_overview', vendor, library),
+                    _compute_ip_overview,
+                    sig=lib_sig,
+                )
+            except (OSError, ValueError, TypeError):
+                library_ip_overview = None
+        from ai_lib_qor.reporting.timeline_excel import build_timeline_model, timeline_excel_filename
+        timeline_excel_name = timeline_excel_filename(business_ip) if (index and index.get('revisions')) else None
+        timeline_excel_exists = bool(
+            timeline_excel_name
+            and (folder / 'log' / timeline_excel_name).is_file()
+            and not (folder / 'log' / timeline_excel_name).is_symlink()
+        )
+        timeline_model = None
+        if index and index.get('revisions') and (business_ip or not track_info['is_multi_track']):
+            try:
+                timeline_model = read_cache.get_or_compute(
+                    ('timeline_model', vendor, library, business_ip),
+                    lambda: build_timeline_model(work, vendor, library, business_ip=business_ip, raw_index=index),
+                    sig=lib_sig,
+                )
+            except (OSError, ValueError, TypeError):
+                timeline_model = None
         return render_template(
             'path_library.html',
             vendor=vendor,
             library=library,
+            business_ip=business_ip,
+            track_info=track_info,
+            available_tracks=available_tracks,
             index=index,
             error=error,
             revision=revision,
+            rev_meta=rev_meta,
             members=members,
+            organizer_state=organizer_state,
+            active_check_view=active_check_view,
+            active_overall_view=active_overall_view,
+            timeline_model=timeline_model,
+            timeline_excel_name=timeline_excel_name,
+            timeline_excel_exists=timeline_excel_exists,
+            check_baseline_param=check_baseline_param,
+            library_ip_overview=library_ip_overview,
             removed=removed,
             diff_counts=diff_counts,
             delivery_rows=delivery_rows,
             artifacts=artifacts,
             audit_available=audit_available,
+            audit_filename=audit_filename,
             member_views=member_views,
+            liberty_preview=liberty_preview,
             prev_rev=prev_rev,
             next_rev=next_rev,
             baseline_rev=baseline_rev,
@@ -712,87 +751,53 @@ def register_page_routes(app, ctx):
 
     @app.get('/path/index')
     def index_page():
-        from ai_lib_qor.application.formal_comparison import compare_formal_member, latest_formal_snapshot
         vendor, library, folder = scope()
-        index, error = index_state(vendor, library, folder)
-        query = request.args.get('q', '').strip()
-        view = request.args.get('view', '')
-        delivery = request.args.get('delivery', '')
-        nl_version = request.args.get('nl_version', '')
-        adoption = request.args.get('adoption', '')
-        nl_rel = request.args.get('nl_rel', '')
-        rows = []
-        views = []
-        nl_versions = []
-        revision = request.args.get('revision', '')
-        if index:
-            views = sorted(index['views'])
-            nl_versions = sorted({n['nl_version'] for n in index['nl_snapshots']})
-            if nl_version and nl_version not in nl_versions:
-                abort(400)
-            if not nl_version and index['nl_snapshots']:
-                nl_version = index['nl_snapshots'][-1]['nl_version']
-            latest = latest_formal_snapshot(index, nl_version or None)
-            if delivery and delivery not in [d['version'] for d in index['deliveries']]:
-                abort(400)
-            if view and view not in views:
-                abort(400)
-            if revision and revision not in index['revisions']:
-                abort(400)
-            if adoption not in ('', 'adopted', 'unadopted'):
-                abort(400)
-            if nl_rel not in ('', '来源相同', '来源不同', '无法确认', '无法对照', '最新快照未观察到', '尚无 Formal 快照'):
-                abort(400)
-            if not revision and index['revisions']:
-                revision = index['revisions'][-1]
-            for kind, group in index['views'].items():
-                if view and kind != view:
-                    continue
-                for path, history in group.items():
-                    if delivery and not any(r['version'] == delivery for r in history['raw']):
-                        continue
-                    if query:
-                        hay = (kind + ' ' + path + ' ' + ' '.join(r['version'] for r in history['raw'])).casefold()
-                        if query.casefold() not in hay:
-                            continue
-                    effective_in_rev = None
-                    if revision:
-                        effective_in_rev = next((e for e in history['effective'] if e['revision'] == revision), None)
-                    if adoption == 'adopted' and not effective_in_rev:
-                        continue
-                    if adoption == 'unadopted' and effective_in_rev:
-                        continue
-                    nl_latest, nl_relation = compare_formal_member(latest, history['nl'], effective_in_rev)
-                    if nl_rel and nl_relation != nl_rel:
-                        continue
-                    rows.append({'view': kind, 'path': path, 'effective_in_rev': effective_in_rev, 'nl_latest': nl_latest, 'nl_relation': nl_relation, **history})
+        raw_index, error = index_state(vendor, library, folder)
+        index, business_ip, track_info, available_tracks = _resolve_library_track(work, vendor, library, folder, raw_index)
         try:
             page = max(1, int(request.args.get('page', '1')))
         except ValueError:
             abort(400)
-        total = len(rows)
-        pages = max(1, (total + 79) // 80)
-        page = min(page, pages)
-        rows = rows[(page - 1) * 80 : page * 80]
+        try:
+            idx_view = query_file_index(
+                work,
+                vendor,
+                library,
+                business_ip=business_ip,
+                q=request.args.get('q', ''),
+                view=request.args.get('view', ''),
+                delivery=request.args.get('delivery', ''),
+                nl_version=request.args.get('nl_version', ''),
+                adoption=request.args.get('adoption', ''),
+                nl_rel=request.args.get('nl_rel', ''),
+                revision=request.args.get('revision', ''),
+                page=page,
+                index=index if index is not None else {'views': {}, 'nl_snapshots': [], 'deliveries': [], 'revisions': []},
+            )
+        except ValueError:
+            abort(400)
         return render_template(
             'path_index.html',
             vendor=vendor,
             library=library,
+            business_ip=business_ip,
+            track_info=track_info,
+            available_tracks=available_tracks,
             index=index,
             error=error,
-            rows=rows,
-            views=views,
-            view=view,
-            q=query,
-            delivery=delivery,
-            nl_version=nl_version,
-            nl_versions=nl_versions,
-            adoption=adoption,
-            nl_rel=nl_rel,
-            page=page,
-            pages=pages,
-            total=total,
-            revision=revision,
+            rows=idx_view['rows'],
+            views=idx_view['views'],
+            view=idx_view['view'],
+            q=idx_view['q'],
+            delivery=idx_view['delivery'],
+            nl_version=idx_view['nl_version'],
+            nl_versions=idx_view['nl_versions'],
+            adoption=idx_view['adoption'],
+            nl_rel=idx_view['nl_rel'],
+            page=idx_view['page'],
+            pages=idx_view['pages'],
+            total=idx_view['total'],
+            revision=idx_view['revision'],
         )
 
     @app.get('/path/check/view')
@@ -804,7 +809,71 @@ def register_page_routes(app, ctx):
             view_data = build_check_view(work, vendor, library, name)
         except ValueError:
             abort(404)
-        return render_template('path_analysis.html', mode='check', vendor=vendor, library=library, data=view_data)
+        return render_template(
+            'path_analysis.html',
+            mode='check',
+            vendor=vendor,
+            library=library,
+            business_ip=view_data.get('business_ip'),
+            revision=view_data['report'].get('revision'),
+            data=view_data,
+        )
+
+    @app.get('/path/check/export.html')
+    def check_export_html():
+        from ai_lib_qor.reporting.html_report import render_check_html_report
+        from ai_lib_qor.reporting.qor_views import build_check_view
+        vendor, library, _ = scope()
+        name = request.args.get('name', '')
+        try:
+            view_data = build_check_view(work, vendor, library, name)
+            html_str = render_check_html_report(view_data)
+        except ValueError:
+            abort(404)
+        dl_name = Path(view_data['check_name']).with_suffix('.html').name
+        return send_file(
+            BytesIO(html_str.encode('utf-8')),
+            mimetype='text/html; charset=utf-8',
+            as_attachment=True,
+            download_name=dl_name,
+        )
+
+    @app.get('/path/overall/view')
+    def overall_view_page():
+        from ai_lib_qor.reporting.qor_views import build_overall_view
+        vendor, library, _ = scope()
+        name = request.args.get('name', '')
+        try:
+            ov_data = build_overall_view(work, vendor, library, name)
+        except ValueError:
+            abort(404)
+        return render_template(
+            'path_analysis.html',
+            mode='overall',
+            vendor=vendor,
+            library=library,
+            business_ip=ov_data.get('business_ip'),
+            data=ov_data,
+        )
+
+    @app.get('/path/overall/export.html')
+    def overall_export_html():
+        from ai_lib_qor.reporting.html_report import render_overall_html_report
+        from ai_lib_qor.reporting.qor_views import build_overall_view
+        vendor, library, _ = scope()
+        name = request.args.get('name', '')
+        try:
+            ov_data = build_overall_view(work, vendor, library, name)
+            html_str = render_overall_html_report(ov_data)
+        except ValueError:
+            abort(404)
+        dl_name = Path(ov_data['overall_name']).with_suffix('.html').name
+        return send_file(
+            BytesIO(html_str.encode('utf-8')),
+            mimetype='text/html; charset=utf-8',
+            as_attachment=True,
+            download_name=dl_name,
+        )
 
     @app.get('/path/facts/view')
     def facts_view_page():
@@ -814,7 +883,8 @@ def register_page_routes(app, ctx):
         check_name = request.args.get('check', '') or None
         ref = request.args.get('ref', '') or None
         try:
-            fact, label, _ = load_fact_object(work, vendor, library, name=name, check=check_name, ref=ref)
+            bundle = load_check_bundle(work, vendor, library, check_name) if check_name and ref else None
+            fact, label, _ = load_fact_object(work, vendor, library, name=name, check=check_name, ref=ref, bundle=bundle)
             entity_page = int(request.args.get('entity_page', '1'))
             pin_page = int(request.args.get('pin_page', '1'))
             per_page = int(request.args.get('per_page', '100'))
@@ -830,7 +900,12 @@ def register_page_routes(app, ctx):
             pin_page=pin_page,
             per_page=per_page,
         )
-        return render_template('path_analysis.html', mode='facts', vendor=vendor, library=library, data=view_data, check_name=check_name, fact_ref=ref, fact_name=name)
+        report = bundle['report'] if bundle else {}
+        return render_template(
+            'path_analysis.html', mode='facts', vendor=vendor, library=library, data=view_data,
+            check_name=check_name, fact_ref=ref, fact_name=name, origin_report=report,
+            business_ip=report.get('business_ip'), revision=report.get('revision'),
+        )
 
     @app.get('/path/facts/compare')
     def facts_compare_page():
@@ -842,8 +917,9 @@ def register_page_routes(app, ctx):
         if not old_ref or not new_ref:
             abort(400)
         try:
-            old_fact, old_label, _ = load_fact_object(work, vendor, library, name=None if check_name else old_ref, check=check_name, ref=old_ref if check_name else None)
-            new_fact, new_label, _ = load_fact_object(work, vendor, library, name=None if check_name else new_ref, check=check_name, ref=new_ref if check_name else None)
+            bundle = load_check_bundle(work, vendor, library, check_name) if check_name else None
+            old_fact, old_label, _ = load_fact_object(work, vendor, library, name=old_ref, check=check_name, ref=old_ref, bundle=bundle)
+            new_fact, new_label, _ = load_fact_object(work, vendor, library, name=new_ref, check=check_name, ref=new_ref, bundle=bundle)
             raw_diff = build_facts_diff(old_fact, new_fact, old_label=old_label, new_label=new_label)
             pin_page = int(request.args.get('pin_page', '1'))
             per_page = int(request.args.get('per_page', '100'))
@@ -856,7 +932,12 @@ def register_page_routes(app, ctx):
             pin_page=pin_page,
             per_page=per_page,
         )
-        return render_template('path_analysis.html', mode='compare', vendor=vendor, library=library, data=diff, check_name=check_name, old_ref=old_ref, new_ref=new_ref)
+        report = bundle['report'] if bundle else {}
+        return render_template(
+            'path_analysis.html', mode='compare', vendor=vendor, library=library, data=diff,
+            check_name=check_name, old_ref=old_ref, new_ref=new_ref, origin_report=report,
+            business_ip=report.get('business_ip'), revision=report.get('revision'),
+        )
 
     @app.get('/path/facts/download')
     def facts_download():
@@ -877,22 +958,44 @@ def register_page_routes(app, ctx):
     def artifact():
         vendor, library, folder = scope()
         name = request.args.get('name', '')
+        _ip_seg = r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}'
+        _run_tag = r'(?:run_[a-f0-9]{32}|[0-9]{8}(?:_[0-9]+)?)'
         if not re.fullmatch(
-            r'(?:report_run_[a-f0-9]{32}\.xlsx|overall_run_[a-f0-9]{32}\.(?:xlsx|json)|check_run_[a-f0-9]{32}\.json|check_rev_[0-9]+_run_[a-f0-9]{32}\.(?:xlsx|json)|facts_[A-Z]+_[A-Za-z0-9_]+\.json|file_index\.json|effective_operations\.tsv|file_index_reconciliation\.tsv|formal_observations\.tsv)',
+            rf'(?:report_run_[a-f0-9]{{32}}\.xlsx|timeline(?:__{_ip_seg})?\.xlsx|overall(?:__{_ip_seg}__|_{_ip_seg}_|_){_run_tag}\.(?:xlsx|json)|check_run_[a-f0-9]{{32}}\.json|check(?:__{_ip_seg}__|_{_ip_seg}_|_)rev_[0-9]+_{_run_tag}\.(?:xlsx|json)|facts_[A-Z]+_[A-Za-z0-9_]+\.json|file_index\.json|effective_operations(?:__{_ip_seg})?\.tsv|file_index_reconciliation\.tsv|formal_observations\.tsv)',
             name,
         ):
             abort(400)
         if (folder / 'log').is_symlink():
             abort(400)
         path = folder / 'log' / name if (folder / 'log' / name).is_file() else folder / name
-        if not path.is_file() and re.fullmatch(r'check_rev_[0-9]+_run_[a-f0-9]{32}\.xlsx', name):
-            json_path = folder / 'log' / (Path(name).stem + '.json')
+        if name.startswith('timeline') and name.endswith('.xlsx') and not path.is_symlink():
+            from ai_lib_qor.reporting.check_renderer import render_timeline_excel_for_scope
+            m_tl = re.fullmatch(rf'timeline(?:__({_ip_seg}))?\.xlsx', name)
+            tl_ip = m_tl.group(1) if m_tl else None
             target_xlsx = folder / 'log' / name
-            if json_path.is_file() and not json_path.is_symlink() and not target_xlsx.is_symlink():
-                from ai_lib_qor.reporting.check_renderer import render_excel_from_check
+            try:
+                if not report_cache_is_current(folder, target_xlsx, tl_ip, include_latest=True):
+                    render_timeline_excel_for_scope(work, vendor, library, business_ip=tl_ip, excel_path=target_xlsx)
+            except (OSError, ValueError, KeyError, TypeError):
+                abort(404)
+            path = target_xlsx
+        elif name.endswith('.xlsx') and not path.is_symlink():
+            from ai_lib_qor.reporting.check_renderer import render_excel_from_check, render_overall_excel_from_saved
+            legacy = name.startswith('report_run_')
+            stem = Path(name).stem
+            json_name = ('check_' + stem.removeprefix('report_') if legacy else stem) + '.json'
+            json_path = next((p for p in (folder / 'log' / json_name, folder / json_name)
+                              if p.is_file() and not p.is_symlink()), None)
+            if json_path is not None:
+                overall = name.startswith('overall_')
+                target_xlsx = path if path.is_file() or legacy else json_path.with_suffix('.xlsx')
                 try:
-                    if not target_xlsx.is_file():
-                        render_excel_from_check(work, vendor, library, json_path.name, target_xlsx)
+                    report = json.loads(json_path.read_text(encoding='utf-8'))
+                    if (report.get('vendor'), report.get('library')) != (vendor, library):
+                        abort(404)
+                    if not report_cache_is_current(folder, target_xlsx, report.get('business_ip'), include_latest=overall):
+                        renderer = render_overall_excel_from_saved if overall else render_excel_from_check
+                        renderer(work, vendor, library, json_path.name, target_xlsx)
                 except (OSError, ValueError, KeyError, TypeError):
                     abort(404)
                 path = target_xlsx

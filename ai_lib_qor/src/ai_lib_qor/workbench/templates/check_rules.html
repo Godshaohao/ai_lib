@@ -1,0 +1,115 @@
+{% macro rule_results(checks, vendor, library, check_name) %}
+{% set result_labels = {'PASS': '通过', 'FAIL': '失败', 'INCONCLUSIVE': '无结论'} %}
+{% set result_styles = {'PASS': 'tag-new', 'FAIL': 'tag-failed', 'INCONCLUSIVE': 'tag-partial'} %}
+{% set coverage_labels = {'FULL': '完整覆盖', 'COMPLETE': '完整覆盖', 'PARTIAL': '部分覆盖', 'UNKNOWN': '覆盖范围未知', 'MANIFEST': '清单级'} %}
+{% set category_labels = {'MANIFEST': '清单级', 'FACTS': '结构级', 'DIFF': '差异对比'} %}
+{% if checks %}
+  {% set groups = namespace(items=[], cat_counts={'MANIFEST': 0, 'FACTS': 0, 'DIFF': 0}, status_counts={'FAIL': 0, 'INCONCLUSIVE': 0, 'PASS': 0}) %}
+  {% for c in checks %}
+    {% if c.result in groups.status_counts %}
+      {% set _ = groups.status_counts.update({c.result: groups.status_counts[c.result] + 1}) %}
+    {% endif %}
+  {% endfor %}
+  {% for rule_id, entries in checks|groupby('check_id') %}
+    {% set counts = entries|groupby('result') %}
+    {% set priority = 2 if entries|selectattr('result', 'equalto', 'FAIL')|first else (1 if entries|selectattr('result', 'equalto', 'INCONCLUSIVE')|first else 0) %}
+    {% set cat = entries[0].category or ('MANIFEST' if entries[0].coverage == 'MANIFEST' else 'FACTS') %}
+    {% if cat in groups.cat_counts %}
+      {% set _ = groups.cat_counts.update({cat: groups.cat_counts[cat] + 1}) %}
+    {% endif %}
+    {% set groups.items = groups.items + [{'id': rule_id, 'entries': entries, 'counts': counts, 'priority': priority, 'category': cat}] %}
+  {% endfor %}
+  <div class="check-rules-widget" data-check-rules-widget data-total-rules="{{ groups.items|length }}" data-total-entries="{{ checks|length }}">
+    <div class="check-rules-toolbar" role="region" aria-label="规则结论筛选">
+      <div class="toolbar-group">
+        <div class="seg" data-rule-cat-seg role="group" aria-label="按规则分类切换">
+          <button type="button" class="active" aria-pressed="true" data-cat="all">全部 <span class="num">{{ groups.items|length }}</span></button>
+          <button type="button" aria-pressed="false" data-cat="MANIFEST">清单级 <span class="num">{{ groups.cat_counts.MANIFEST }}</span></button>
+          <button type="button" aria-pressed="false" data-cat="FACTS">结构级 <span class="num">{{ groups.cat_counts.FACTS }}</span></button>
+          <button type="button" aria-pressed="false" data-cat="DIFF">差异对比 <span class="num">{{ groups.cat_counts.DIFF }}</span></button>
+        </div>
+        <div class="seg" data-rule-status-seg role="group" aria-label="按结论状态筛选">
+          <button type="button" class="active" aria-pressed="true" data-status="all">全部状态</button>
+          <button type="button" aria-pressed="false" data-status="FAIL">仅失败 <span class="num">{{ groups.status_counts.FAIL }}</span></button>
+          <button type="button" aria-pressed="false" data-status="INCONCLUSIVE">仅无结论 <span class="num">{{ groups.status_counts.INCONCLUSIVE }}</span></button>
+          <button type="button" aria-pressed="false" data-status="PASS">仅通过 <span class="num">{{ groups.status_counts.PASS }}</span></button>
+        </div>
+      </div>
+      <span class="muted text-xs num" data-rule-summary aria-live="polite">共 {{ groups.items|length }} 项规则 · {{ checks|length }} 条结论</span>
+    </div>
+    <div class="check-rule-list">
+      {% for group in groups.items|sort(attribute='priority', reverse=true) %}
+      <details class="check-rule" data-rule-id="{{ group.id }}" data-rule-cat="{{ group.category }}" data-entry-total="{{ group.entries|length }}">
+        <summary>
+          <span class="check-rule-title">
+            <strong>{{ group.entries[0].description or group.id }}</strong>
+            {% if group.entries[0].description %}<span class="mono muted text-xs" translate="no">{{ group.id }}</span>{% endif %}
+          </span>
+          <span class="check-rule-tags">
+            <span class="chip" title="{{ group.category }}">{{ category_labels.get(group.category, group.category) }}</span>
+            {% for result, entries in group.counts %}
+            <span class="tag {{ result_styles.get(result, 'tag-inherited') }} tag-sm" title="{{ result }}">{{ result_labels.get(result, result) }} {{ entries|length }}</span>
+            {% endfor %}
+            {% set coverages = group.entries|map(attribute='coverage')|unique|list %}
+            {% if coverages|length == 1 and coverages[0] != group.category %}<span class="chip" title="{{ coverages[0] }}">{{ coverage_labels.get(coverages[0], coverages[0] or '覆盖范围未知') }}</span>{% endif %}
+            <span class="muted text-xs disclosure-label">规则详情</span>
+          </span>
+        </summary>
+        {% if group.entries|length > 1 %}
+        <div class="check-rule-inner-bar">
+          <input type="search" class="ctrl-sm check-rule-inner-search" data-rule-inner-search
+                 aria-label="在 {{ group.id }} 中搜索文件或原因"
+                 placeholder="在 {{ group.entries|length }} 条结论中搜索文件路径、Cell/Macro 或原因…"
+                 autocomplete="off" spellcheck="false">
+          <span class="muted text-xs num" data-rule-inner-count aria-live="polite">{% if group.entries|length > 20 %}显示前 20 / {{ group.entries|length }} 条{% else %}共 {{ group.entries|length }} 条{% endif %}</span>
+        </div>
+        {% endif %}
+        <ol class="check-rule-evidence" data-page-limit="20">
+          {% for c in group.entries|sort(attribute='result') %}
+          <li data-result="{{ c.result }}"
+              data-search="{{ ((c.detail or '') ~ ' ' ~ (c.scope_file_keys|join(' ')) ~ ' ' ~ (c.resolved_refs|map(attribute='name')|join(' ')))|lower }}"
+              {% if loop.index0 >= 20 %}data-overflow="1" hidden{% endif %}>
+            <div class="check-rule-tags">
+              <span class="tag {{ result_styles.get(c.result, 'tag-inherited') }} tag-sm" title="{{ c.result }}">{{ result_labels.get(c.result, c.result) }}</span>
+              <span class="chip" title="{{ c.coverage }}">{{ coverage_labels.get(c.coverage, c.coverage or '覆盖范围未知') }}</span>
+            </div>
+            <p>{{ c.detail or '本条结论未记录原因。' }}</p>
+            <dl class="check-rule-scope">
+              <dt>范围文件</dt>
+              <dd>
+                {% for path in c.scope_file_keys %}
+                <div class="mono" translate="no">{{ path }}</div>
+                {% else %}<span class="muted">本条结论未关联文件</span>{% endfor %}
+              </dd>
+              <dt>结构证据</dt>
+              <dd>
+                {% for ref in c.resolved_refs %}
+                  {% if ref.available %}
+                  <div><a href="{{ url_for('facts_view_page',vendor=vendor,library=library,check=check_name,ref=ref.name) }}" title="{{ ref.name }}">查看结构证据 · <span class="mono" translate="no">{{ ref.label or ref.name }}</span></a></div>
+                  {% else %}
+                  <div><span class="tag tag-partial tag-sm">证据不可用</span> <span class="mono" translate="no" title="{{ ref.name }}">{{ ref.label or ref.name }}</span></div>
+                  {% endif %}
+                {% else %}<span class="muted">本条结论无结构证据</span>{% endfor %}
+              </dd>
+            </dl>
+          </li>
+          {% endfor %}
+        </ol>
+        {% if group.entries|length > 20 %}
+        <div class="check-rule-more-bar" data-rule-more-bar>
+          <button type="button" class="secondary btn-xs" data-rule-toggle-more data-expanded="0">展开其余 {{ group.entries|length - 20 }} 条结论</button>
+        </div>
+        {% endif %}
+        <p class="muted text-xs check-rule-inner-empty" data-rule-inner-empty hidden>当前规则下没有匹配该搜索条件的结论。</p>
+      </details>
+      {% endfor %}
+    </div>
+    <div class="check-rules-empty" data-rule-empty hidden>
+      <span class="muted text-xs">当前分类与状态条件下没有匹配的规则结论。</span>
+      <button type="button" class="ghost btn-xs" data-rule-reset>重置筛选</button>
+    </div>
+  </div>
+{% else %}
+  <p class="empty">本次运行未产生规则检查条目。</p>
+{% endif %}
+{% endmacro %}

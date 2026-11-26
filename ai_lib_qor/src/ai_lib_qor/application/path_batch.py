@@ -5,7 +5,10 @@ from pathlib import Path
 from ai_lib_qor.checks.path_plugins import resolve_path_plugins
 from ai_lib_qor.sources.layout import SAFE, library_folder
 from ai_lib_qor.versions.runtime import check_cancel, emit_progress
+from .ip_partition import active_tracks_for_library
 from .minimal_checks import run_revision
+from .minimal_effective import _history, _norm_business_ip, list_track_effective_ips
+from .path_config import effective_check_plugins, library_ip_config
 from .path_query import PathDataQuery, latest_check_for_scope
 
 
@@ -36,7 +39,10 @@ def check_pending(
     *,
     vendor=None,
     library=None,
+    business_ip=None,
+    ip_type=None,
     render_excel=False,
+    single_renderer=None,
     rerun=False,
     include_outdated=False,
     plugins=None,
@@ -44,13 +50,33 @@ def check_pending(
     progress_cb=None,
     cancel_event=None,
 ):
-    """Run single-revision checks for libraries whose latest effective revision lacks a saved check (or has stale tooling when include_outdated=True)."""
+    """Run single-revision checks for libraries/tracks whose latest effective revision lacks a saved check."""
     root = Path(work).resolve(strict=True)
     query = PathDataQuery(root)
-    expected_plugins = [name for name, _ in resolve_path_plugins(plugins)]
-    targets = _iter_targets(root, vendor=vendor, library=library)
-    total = len(targets)
+    wanted_ip = _norm_business_ip(business_ip)
+    wanted_type = ip_type.strip().casefold() if isinstance(ip_type, str) and ip_type.strip() else None
+    lib_targets = _iter_targets(root, vendor=vendor, library=library)
 
+    # Expand multi-track libraries into per-(vendor, library, business_ip) units while preserving single-track libraries.
+    work_units = []
+    for v, lib in lib_targets:
+        ip_cfg = library_ip_config(root, v, lib)
+        if wanted_type is not None and (ip_cfg['ip_type'] or '').casefold() != wanted_type:
+            continue
+        if ip_cfg['is_multi_track']:
+            folder = library_folder(root, v, lib)
+            tinfo = active_tracks_for_library(root, v, lib)
+            ips = list(dict.fromkeys([*tinfo['tracks'].keys(), *list_track_effective_ips(folder, lib)]))
+            for ip in ips:
+                if wanted_ip is not None and ip != wanted_ip:
+                    continue
+                work_units.append((v, lib, ip, ip_cfg['ip_type']))
+        else:
+            if wanted_ip is not None:
+                continue
+            work_units.append((v, lib, None, ip_cfg['ip_type']))
+
+    total = len(work_units)
     checked = []
     skipped_already_checked = []
     skipped_no_revision = []
@@ -58,25 +84,47 @@ def check_pending(
     failed_checks_total = 0
     outdated_tooling_count = 0
 
-    for idx, (v, lib) in enumerate(targets, 1):
+    for idx, (v, lib, ip, lib_ip_type) in enumerate(work_units, 1):
+        scope_tag = f'{v}/{lib}::{ip}' if ip else f'{v}/{lib}'
         check_cancel(cancel_event, '增量批量检查已由用户终止')
-        emit_progress(progress_cb, 'CHECK', f'检查进度 {v}/{lib} ({idx}/{total})', completed=idx - 1, total=total)
+        emit_progress(progress_cb, 'CHECK', f'检查进度 {scope_tag} ({idx}/{total})', completed=idx - 1, total=total)
         if limit is not None and len(checked) >= limit:
             break
         try:
             index = query.index(v, lib)
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            errors.append({'vendor': v, 'library': lib, 'error': str(exc)})
+            err_row = {'vendor': v, 'library': lib, 'error': str(exc)}
+            if ip is not None:
+                err_row['business_ip'] = ip
+            errors.append(err_row)
             continue
-        revs = index.get('revisions') or []
+
+        if ip is not None:
+            folder = library_folder(root, v, lib)
+            try:
+                hist = _history(folder, lib, business_ip=ip)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                errors.append({'vendor': v, 'library': lib, 'business_ip': ip, 'error': str(exc)})
+                continue
+            revs = [r[2]['revision'] for r in hist]
+        else:
+            revs = index.get('revisions') or []
+
         if not revs:
-            skipped_no_revision.append({'vendor': v, 'library': lib})
+            row = {'vendor': v, 'library': lib}
+            if ip is not None:
+                row['business_ip'] = ip
+                row['ip_type'] = lib_ip_type
+            skipped_no_revision.append(row)
             continue
+
         latest = revs[-1]
         baseline = revs[-2] if len(revs) >= 2 else None
         rerun_reason = 'FORCED_RERUN' if rerun else None
+        eff_plugins = effective_check_plugins(root, v, lib, ip_type=lib_ip_type, explicit_plugins=plugins)
+        expected_plugins = [name for name, _ in resolve_path_plugins(eff_plugins)]
         if not rerun:
-            existing = latest_check_for_scope(root, v, lib, latest, baseline, plugins=expected_plugins)
+            existing = latest_check_for_scope(root, v, lib, latest, baseline, plugins=expected_plugins, business_ip=ip)
             if existing:
                 tooling = existing.get('tooling_status') or {'status': 'CURRENT', 'is_stale': False, 'reasons': []}
                 if tooling['is_stale']:
@@ -84,7 +132,7 @@ def check_pending(
                     if include_outdated:
                         rerun_reason = 'STALE_TOOLING'
                     else:
-                        skipped_already_checked.append({
+                        skip_row = {
                             'vendor': v,
                             'library': lib,
                             'revision': latest,
@@ -93,10 +141,14 @@ def check_pending(
                             'state': existing['state'],
                             'tooling_status': tooling['status'],
                             'tooling_reasons': tooling['reasons'],
-                        })
+                        }
+                        if ip is not None:
+                            skip_row['business_ip'] = ip
+                            skip_row['ip_type'] = lib_ip_type
+                        skipped_already_checked.append(skip_row)
                         continue
                 else:
-                    skipped_already_checked.append({
+                    skip_row = {
                         'vendor': v,
                         'library': lib,
                         'revision': latest,
@@ -104,7 +156,11 @@ def check_pending(
                         'check_name': existing['check_name'],
                         'state': existing['state'],
                         'tooling_status': tooling['status'],
-                    })
+                    }
+                    if ip is not None:
+                        skip_row['business_ip'] = ip
+                        skip_row['ip_type'] = lib_ip_type
+                    skipped_already_checked.append(skip_row)
                     continue
         try:
             res = run_revision(
@@ -113,8 +169,10 @@ def check_pending(
                 lib,
                 latest,
                 baseline=baseline,
+                business_ip=ip,
                 plugins=plugins,
                 render=render_excel,
+                single_renderer=single_renderer,
                 cancel_event=cancel_event,
             )
             report = json.loads(Path(res['check']).read_text(encoding='utf-8'))
@@ -133,11 +191,17 @@ def check_pending(
                 'failed_files': report.get('summary', {}).get('failed_files', 0),
                 'inconclusive_checks': report.get('summary', {}).get('inconclusive_checks', 0),
             }
+            if ip is not None:
+                entry['business_ip'] = ip
+                entry['ip_type'] = lib_ip_type
             if rerun_reason:
                 entry['rerun_reason'] = rerun_reason
             checked.append(entry)
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            errors.append({'vendor': v, 'library': lib, 'revision': latest, 'error': str(exc)})
+            err_row = {'vendor': v, 'library': lib, 'revision': latest, 'error': str(exc)}
+            if ip is not None:
+                err_row['business_ip'] = ip
+            errors.append(err_row)
 
     emit_progress(progress_cb, 'CHECK', f'批量检查完成：新检查 {len(checked)} 库 · 跳过 {len(skipped_already_checked)} 库', completed=total, total=total)
 

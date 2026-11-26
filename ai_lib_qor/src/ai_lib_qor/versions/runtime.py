@@ -1,4 +1,16 @@
-"""Zero-dependency runtime progress & cooperative cancellation primitives."""
+"""Zero-dependency runtime progress, cooperative cancellation, and DI hook registry primitives."""
+
+_HOOKS: dict = {}
+
+
+def register_hook(name: str, fn) -> None:
+    """Register an application/reporting composition-root hook without creating upward layer imports."""
+    _HOOKS[name] = fn
+
+
+def get_hook(name: str):
+    """Return a registered composition-root hook or None."""
+    return _HOOKS.get(name)
 
 
 class JobCancelledError(RuntimeError):

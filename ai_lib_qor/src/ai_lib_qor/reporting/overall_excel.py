@@ -53,7 +53,8 @@ def render_overall_excel(owner, rows, output, *, acceptance=None):
         if owner.get('ip')
         else f"库多版本检查汇总 · {owner['vendor']} / {owner['library']}"
     )
-    acc_note = f"当前已采纳: {accepted_rev or '尚未人工采纳'}  |  最新计算: {latest_rev or '无'}"
+    ip_type_note = f"  |  IP 类型: {owner['ip_type']}" if owner.get('ip_type') else ''
+    acc_note = f"当前已采纳: {accepted_rev or '尚未人工采纳'}  |  最新计算: {latest_rev or '无'}{ip_type_note}"
     subtitle = (
         f"{acc_note}  |  仅汇总列出的版本与已检查范围；来源变化不等于内容变化；质检通过不代表全库通过或自动采纳。"
     )
